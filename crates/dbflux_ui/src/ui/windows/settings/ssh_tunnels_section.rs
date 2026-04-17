@@ -7,13 +7,13 @@ use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
+use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::{Label, Text};
 use dbflux_core::SshTunnelProfile;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState};
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable};
 use uuid::Uuid;
 

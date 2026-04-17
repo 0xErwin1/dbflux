@@ -1,6 +1,6 @@
 use super::*;
 use crate::platform;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Text, overlay_bg};
 
 impl Workspace {
     fn render_panel_header(
@@ -779,7 +779,7 @@ impl Render for Workspace {
                             .id("delete-modal-overlay")
                             .absolute()
                             .inset_0()
-                            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+                            .bg(overlay_bg())
                             .flex()
                             .items_center()
                             .justify_center()

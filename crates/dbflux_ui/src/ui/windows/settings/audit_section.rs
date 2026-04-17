@@ -5,13 +5,13 @@ use super::SettingsSectionId;
 use crate::app::AppStateEntity;
 use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::components::toast::ToastExt;
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, Sizable};
 

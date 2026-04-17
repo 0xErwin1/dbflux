@@ -32,7 +32,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use std::collections::{HashMap, HashSet};

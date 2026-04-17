@@ -2,6 +2,7 @@ use crate::app::AppStateEntity;
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::Text;
 use dbflux_core::{
     ColumnInfo, MutationRequest, MutationTemplateOperation, MutationTemplateRequest, QueryLanguage,
@@ -10,7 +11,6 @@ use dbflux_core::{
 };
 use gpui::*;
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputState};
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use uuid::Uuid;

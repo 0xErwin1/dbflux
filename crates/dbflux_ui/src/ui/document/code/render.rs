@@ -1,6 +1,6 @@
 use super::*;
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::{Badge, BadgeVariant, Text};
+use dbflux_components::primitives::{overlay_bg, surface_panel, Badge, BadgeVariant, Text};
 use gpui_component::scroll::ScrollableElement;
 
 impl CodeDocument {
@@ -566,7 +566,7 @@ impl CodeDocument {
             .id("dangerous-query-modal-overlay")
             .absolute()
             .inset_0()
-            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+            .bg(overlay_bg())
             .flex()
             .items_center()
             .justify_center()
@@ -574,17 +574,14 @@ impl CodeDocument {
                 cx.stop_propagation();
             })
             .child(
-                div()
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
+                surface_panel(cx)
                     .rounded(Radii::MD)
-                    .p(Spacing::MD)
                     .min_w(px(350.0))
                     .max_w(px(500.0))
                     .flex()
                     .flex_col()
                     .gap(Spacing::MD)
+                    .p(Spacing::MD)
                     .child(
                         div()
                             .flex()

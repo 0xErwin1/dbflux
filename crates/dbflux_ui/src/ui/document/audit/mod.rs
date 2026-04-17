@@ -25,7 +25,7 @@ const FILTER_BAR_IDX_CLEAR: usize = 7;
 use crate::ui::components::toast::{PendingToast, flush_pending_toast};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::primitives::{Label, Text, surface_raised};
 use dbflux_core::{
     Pagination, RefreshPolicy,
     observability::{EventCategory, EventOutcome, EventSeverity},
@@ -36,7 +36,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::input::{Input, InputEvent, InputState};
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 
 use super::chrome::{compact_top_bar, workspace_footer_bar};
@@ -1687,16 +1687,11 @@ impl AuditDocument {
         let position = menu.position;
 
         let element = deferred(
-            div()
+            surface_raised(cx)
                 .absolute()
-                // Position at the stored coordinates (mouse position or keyboard estimate).
                 .top(position.y)
                 .left(position.x)
                 .w(px(200.0))
-                .bg(theme.popover)
-                .border_1()
-                .border_color(theme.border)
-                .rounded(Radii::MD)
                 .shadow_lg()
                 .py(Spacing::XS)
                 .occlude()
@@ -2268,16 +2263,12 @@ impl AuditDocument {
 
         // Identical to DataGridPanel::render_export_menu container.
         deferred(
-            div()
+            surface_raised(cx)
                 .absolute()
                 .bottom_full()
                 .right_0()
                 .mb(Spacing::XS)
                 .w(px(160.0))
-                .bg(theme.popover)
-                .border_1()
-                .border_color(theme.border)
-                .rounded(Radii::MD)
                 .shadow_lg()
                 .py(Spacing::XS)
                 .occlude()

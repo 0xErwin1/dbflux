@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use dbflux_components::controls::{InputEvent, InputState};
 use gpui::{
-    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
-    Size, UniformListScrollHandle, Window, px,
+    px, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point,
+    ScrollHandle, Size, UniformListScrollHandle, Window,
 };
-use gpui_component::input::{InputEvent, InputState};
 
 use super::clipboard;
 use super::events::{DataTableEvent, Direction, Edge, SortState};

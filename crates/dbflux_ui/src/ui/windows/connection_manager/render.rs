@@ -9,7 +9,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputState};
+use dbflux_components::controls::{GpuiInput as Input, InputState};
 use gpui_component::{Icon, IconName};
 
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};

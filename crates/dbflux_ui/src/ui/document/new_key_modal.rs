@@ -6,11 +6,11 @@ use crate::ui::components::form_navigation::{
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::Text;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_component::input::{Input, InputState};
 use gpui_component::{ActiveTheme, Sizable};
 
 // ---------------------------------------------------------------------------

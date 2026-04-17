@@ -10,7 +10,7 @@ use dbflux_core::{
     ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
 use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
+use dbflux_components::controls::{InputEvent, InputState};
 
 impl super::KeyValueDocument {
     // -- Delete confirmation --

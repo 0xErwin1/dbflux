@@ -1,10 +1,10 @@
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Text, surface_card};
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
 
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use crate::ui::tokens::{FontSizes, Spacing};
 
 use dbflux_core::{PipelineState, StateWatcher};
 
@@ -147,15 +147,11 @@ impl Render for PipelineProgress {
         let current_label = active_stage_label(&self.state);
         let is_waiting_sso = matches!(self.state, PipelineState::WaitingForLogin { .. });
 
-        div()
+        surface_card(cx)
             .flex()
             .flex_col()
             .gap(Spacing::XS)
             .p(Spacing::SM)
-            .bg(theme.secondary)
-            .rounded(Radii::LG)
-            .border_1()
-            .border_color(theme.border)
             .child(
                 // Header row
                 div()

@@ -10,7 +10,7 @@ use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
     RowIdentity, RowInsert, RowPatch, Value,
@@ -1085,7 +1085,7 @@ impl DataGridPanel {
             .id("delete-modal-overlay")
             .absolute()
             .inset_0()
-            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+            .bg(overlay_bg())
             .flex()
             .items_center()
             .justify_center()
@@ -1093,16 +1093,13 @@ impl DataGridPanel {
                 cx.stop_propagation();
             })
             .child(
-                div()
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
+                surface_panel(cx)
                     .rounded(Radii::MD)
-                    .p(Spacing::MD)
                     .min_w(px(300.0))
                     .flex()
                     .flex_col()
                     .gap(Spacing::MD)
+                    .p(Spacing::MD)
                     .child(
                         div()
                             .flex()
@@ -2087,16 +2084,12 @@ impl DataGridPanel {
                     }),
                 )
                 .child(
-                    div()
+                    surface_raised(cx)
                         .id("context-menu")
                         .absolute()
                         .left(menu_x)
                         .top(menu_y)
                         .w(menu_width)
-                        .bg(theme.popover)
-                        .border_1()
-                        .border_color(theme.border)
-                        .rounded(Radii::MD)
                         .shadow_lg()
                         .py(Spacing::XS)
                         .occlude()

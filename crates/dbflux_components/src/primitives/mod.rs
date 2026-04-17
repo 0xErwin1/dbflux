@@ -11,5 +11,8 @@ pub use icon::Icon;
 pub use icon_button::IconButton;
 pub use label::Label;
 pub use status_indicator::{Status, StatusIndicator};
-pub use surface::{Surface, SurfaceVariant};
+pub use surface::{
+    overlay_bg, surface, surface_card, surface_overlay, surface_panel, surface_raised,
+    SurfaceVariant,
+};
 pub use text::{Text, TextVariant};

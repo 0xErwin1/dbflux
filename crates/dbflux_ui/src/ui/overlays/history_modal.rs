@@ -3,11 +3,11 @@ use crate::keymap::ContextId;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::primitives::Text;
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::primitives::{surface_panel, Text};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use uuid::Uuid;
@@ -459,13 +459,9 @@ impl HistoryModal {
                 this.close(cx);
             }))
             .child(
-                div()
+                surface_panel(cx)
                     .w(px(620.0))
                     .max_h(px(520.0))
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(Radii::LG)
                     .shadow_lg()
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -807,12 +803,8 @@ impl HistoryModal {
                 this.close(cx);
             }))
             .child(
-                div()
+                surface_panel(cx)
                     .w(px(420.0))
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(Radii::LG)
                     .shadow_lg()
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| {

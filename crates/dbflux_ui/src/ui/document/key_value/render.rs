@@ -4,7 +4,7 @@ use super::{KeyValueDocumentEvent, KeyValueFocusMode, KvValueViewMode, TtlState}
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::Input;
-use dbflux_components::primitives::{IconButton, Text};
+use dbflux_components::primitives::{IconButton, Text, overlay_bg, surface_panel, surface_raised};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -844,7 +844,7 @@ fn render_delete_confirm_modal(
         .id("kv-delete-modal-overlay")
         .absolute()
         .inset_0()
-        .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+        .bg(overlay_bg())
         .flex()
         .items_center()
         .justify_center()
@@ -852,16 +852,13 @@ fn render_delete_confirm_modal(
             cx.stop_propagation();
         })
         .child(
-            div()
-                .bg(theme.background)
-                .border_1()
-                .border_color(theme.border)
+            surface_panel(cx)
                 .rounded(Radii::MD)
-                .p(Spacing::MD)
                 .min_w(px(300.0))
                 .flex()
                 .flex_col()
                 .gap(Spacing::MD)
+                .p(Spacing::MD)
                 .child(
                     div()
                         .flex()
@@ -1054,16 +1051,12 @@ fn render_kv_context_menu(
                 }),
             )
             .child(
-                div()
+                surface_raised(cx)
                     .id("kv-context-menu")
                     .absolute()
                     .left(menu_x)
                     .top(menu_y)
                     .w(menu_width)
-                    .bg(theme.popover)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(Radii::MD)
                     .shadow_lg()
                     .py(Spacing::XS)
                     .occlude()

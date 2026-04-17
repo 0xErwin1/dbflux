@@ -11,7 +11,7 @@ use dbflux_core::{
 };
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
+use dbflux_components::controls::{InputEvent, InputState};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -142,8 +142,8 @@ impl DriversSection {
         let drv_refresh_input_sub = cx.subscribe_in(
             &drv_refresh_interval_input,
             window,
-            |this, _, event: &gpui_component::input::InputEvent, _window, cx| {
-                if matches!(event, gpui_component::input::InputEvent::Change) {
+            |this, _, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
                     if this.drv_loading_selected_editor {
                         return;
                     }

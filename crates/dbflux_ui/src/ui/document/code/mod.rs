@@ -26,8 +26,8 @@ use gpui_component::ActiveTheme;
 use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
 };
-use gpui_component::input::{
-    CompletionProvider, Input, InputEvent, InputState, Position as InputPosition, Rope,
+use dbflux_components::controls::{
+    CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
 };
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use lsp_types::{

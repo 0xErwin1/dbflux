@@ -27,9 +27,9 @@
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::InputState;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::InputState;
 use gpui_component::ActiveTheme;
 
 // ── Item kinds ────────────────────────────────────────────────────────────────

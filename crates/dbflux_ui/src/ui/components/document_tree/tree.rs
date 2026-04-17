@@ -2,7 +2,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
