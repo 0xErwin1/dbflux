@@ -848,8 +848,9 @@ impl AuditDocument {
 
     /// Renders a null placeholder matching the DataTable convention: italic muted "NULL".
     fn null_display(theme: &gpui_component::Theme) -> Div {
-        let _ = theme;
-        div().italic().child(Text::caption("NULL"))
+        div()
+            .italic()
+            .child(Text::caption("NULL").text_color(theme.muted_foreground))
     }
 
     fn short_category_label(category: Option<&str>) -> &'static str {
