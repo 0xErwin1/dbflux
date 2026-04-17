@@ -1846,7 +1846,7 @@ impl AuditDocument {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.clear_filters(window, cx);
             }))
-            .child(Text::caption("Clear").text_color(theme.muted_foreground));
+            .child(Text::caption("Clear"));
 
         let _ = window;
 
@@ -2228,7 +2228,7 @@ impl AuditDocument {
                     .size_4()
                     .text_color(theme.muted_foreground),
             )
-            .child(Text::caption("Export").text_color(theme.muted_foreground))
+            .child(Text::caption("Export"))
             .child(
                 svg()
                     .path(AppIcon::ChevronDown.path())

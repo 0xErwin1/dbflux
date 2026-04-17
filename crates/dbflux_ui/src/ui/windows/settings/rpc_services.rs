@@ -1,7 +1,7 @@
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::ServiceConfig;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::prelude::FluentBuilder;
@@ -887,10 +887,7 @@ impl ServicesSection {
             .overflow_hidden()
             .child(
                 div().p_4().border_b_1().border_color(border).child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(title),
+                    Text::body(title).font_weight(FontWeight::MEDIUM),
                 ),
             )
             .child(
@@ -1020,10 +1017,7 @@ impl ServicesSection {
             .flex_col()
             .gap_1()
             .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label.to_string()),
+                Label::new(label.to_string()),
             )
             .child(
                 div()
@@ -1099,10 +1093,7 @@ impl ServicesSection {
             .flex_col()
             .gap_2()
             .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Arguments"),
+                Label::new("Arguments"),
             )
             .children(self.svc_arg_inputs.iter().enumerate().map(|(idx, input)| {
                 let is_row_at_cursor =
@@ -1218,10 +1209,7 @@ impl ServicesSection {
             .flex_col()
             .gap_2()
             .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Environment Variables"),
+                Label::new("Environment Variables"),
             )
             .children(
                 self.svc_env_key_inputs

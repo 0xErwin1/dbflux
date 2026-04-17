@@ -7,7 +7,7 @@ use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::SshTunnelProfile;
 use gpui::prelude::*;
 use gpui::*;
@@ -343,12 +343,7 @@ impl SshTunnelsSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label.to_string()),
-            )
+            .child(Label::new(label.to_string()))
             .child(
                 div()
                     .rounded(px(4.0))
@@ -391,12 +386,7 @@ impl SshTunnelsSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Authentication"),
-            )
+            .child(Label::new("Authentication"))
             .child(
                 div()
                     .flex()
@@ -738,12 +728,7 @@ impl SshTunnelsSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(tunnel.name.clone()),
-                                            )
+                                            .child(Label::new(tunnel.name.clone()))
                                             .child(Text::caption(subtitle))
                                             .child(Text::caption(auth_label)),
                                     ),
@@ -803,12 +788,11 @@ impl SshTunnelsSection {
             .flex_col()
             .overflow_hidden()
             .child(
-                div().p_4().border_b_1().border_color(border).child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(title),
-                ),
+                div()
+                    .p_4()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(Text::body(title).font_weight(FontWeight::MEDIUM)),
             )
             .child(
                 div()

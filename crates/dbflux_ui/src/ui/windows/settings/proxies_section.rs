@@ -6,7 +6,7 @@ use super::SettingsSection;
 use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use gpui::prelude::*;
 use gpui::*;
@@ -251,12 +251,7 @@ impl ProxiesSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label.to_string()),
-            )
+            .child(Label::new(label.to_string()))
             .child(
                 div()
                     .rounded(px(4.0))
@@ -301,12 +296,7 @@ impl ProxiesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Protocol"),
-            )
+            .child(Label::new("Protocol"))
             .child(div().flex().gap_4().children(kinds.into_iter().map(
                 |(form_field, kind, label)| {
                     let is_focused = is_form_focused && current_field == form_field;
@@ -362,12 +352,7 @@ impl ProxiesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Authentication"),
-            )
+            .child(Label::new("Authentication"))
             .child(
                 div()
                     .flex()
@@ -629,12 +614,7 @@ impl ProxiesSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(proxy.name.clone()),
-                                            )
+                                            .child(Label::new(proxy.name.clone()))
                                             .child(Text::caption(subtitle)),
                                     ),
                             )
@@ -669,12 +649,11 @@ impl ProxiesSection {
             .flex_col()
             .overflow_hidden()
             .child(
-                div().p_4().border_b_1().border_color(border).child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(title),
-                ),
+                div()
+                    .p_4()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(Text::body(title).font_weight(FontWeight::MEDIUM)),
             )
             .child(
                 div()

@@ -3,7 +3,7 @@ use crate::platform;
 use crate::ui::icons::AppIcon;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
@@ -37,12 +37,7 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Password"),
-            )
+            .child(Label::new("Password"))
             .child(
                 div()
                     .flex()
@@ -150,11 +145,11 @@ impl ConnectionManagerWindow {
             .flex()
             .items_center()
             .gap_3()
-            .child(
-                div()
-                    .w(px(100.0))
-                    .child(Text::caption(label.to_string()).font_weight(FontWeight::MEDIUM)),
-            )
+             .child(
+                 div()
+                     .w(px(100.0))
+                     .child(Label::new(label.to_string())),
+             )
             .child(Text::body(value.to_string()))
     }
 
@@ -393,7 +388,6 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let danger_color = cx.theme().danger;
         if !is_ssh_tab && field_def.id == "profile" && self.selected_driver_id() == Some("dynamodb")
         {
             let field_enabled = self.is_field_enabled(field_def);
@@ -402,13 +396,10 @@ impl ConnectionManagerWindow {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .when(!field_enabled, |d| d.opacity(0.5))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(field_def.label.clone()),
-                )
+                 .when(!field_enabled, |d| d.opacity(0.5))
+                 .child(
+                     Label::new(field_def.label.clone()),
+                 )
                 .child(
                     div()
                         .when(field_enabled, |d| {
@@ -465,16 +456,10 @@ impl ConnectionManagerWindow {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child(field_def.label.clone()),
-                                )
-                                .when(field_def.required && field_enabled, |d| {
-                                    d.child(div().text_sm().text_color(danger_color).child("*"))
-                                }),
+                                 .gap_1()
+                                 .child(
+                                     Label::new(field_def.label.clone()).required(field_def.required && field_enabled),
+                                 )
                         )
                         .child(
                             div()
@@ -551,19 +536,13 @@ impl ConnectionManagerWindow {
                             .h(px(28.0))
                             .mb_1()
                             .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(field_def.label.clone()),
-                                    )
-                                    .when(field_def.required && field_enabled, |d| {
-                                        d.child(div().text_sm().text_color(danger_color).child("*"))
-                                    }),
+                                 div()
+                                     .flex()
+                                     .items_center()
+                                     .gap_1()
+                                     .child(
+                                         Label::new(field_def.label.clone()).required(field_def.required && field_enabled),
+                                     )
                             ),
                     )
                     .child(
@@ -614,14 +593,8 @@ impl ConnectionManagerWindow {
                             .items_center()
                             .gap_1()
                             .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(field_def.label.clone()),
+                                Label::new(field_def.label.clone()).required(field_def.required),
                             )
-                            .when(field_def.required, |d| {
-                                d.child(div().text_sm().text_color(danger_color).child("*"))
-                            }),
                     )
                     .child(
                         div()
@@ -713,10 +686,7 @@ impl ConnectionManagerWindow {
                         .flex_col()
                         .gap_1()
                         .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(field_def.label.clone()),
+                            Label::new(field_def.label.clone()),
                         )
                         .child(
                             div()
@@ -857,7 +827,6 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let danger_color = cx.theme().danger;
         let Some(host_input) = self.input_state_for_field("host") else {
             return div().into_any_element();
         };
@@ -915,14 +884,8 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_1()
                     .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(primary_label),
+                        Label::new(primary_label).required(primary_required && primary_enabled),
                     )
-                    .when(primary_required && primary_enabled, |d| {
-                        d.child(div().text_sm().text_color(danger_color).child("*"))
-                    }),
             )
             .child(
                 div()
@@ -1014,7 +977,6 @@ impl ConnectionManagerWindow {
         field: FormFocus,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let danger_color = cx.theme().danger;
         div()
             .rounded(px(4.0))
             .border_2()
@@ -1034,14 +996,8 @@ impl ConnectionManagerWindow {
                     .gap_1()
                     .mb_1()
                     .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(label.to_string()),
+                        Label::new(label.to_string()).required(required),
                     )
-                    .when(required, |d| {
-                        d.child(div().text_sm().text_color(danger_color).child("*"))
-                    }),
             )
             .child(Input::new(input))
     }
@@ -1060,10 +1016,7 @@ impl ConnectionManagerWindow {
             .items_center()
             .gap_2()
             .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(format!("{}:", label)),
+                Label::new(format!("{}:", label)),
             )
             .child(
                 div()

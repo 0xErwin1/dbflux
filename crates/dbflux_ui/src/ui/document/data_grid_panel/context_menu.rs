@@ -1122,7 +1122,7 @@ impl DataGridPanel {
                                             .size_4()
                                             .text_color(theme.muted_foreground),
                                     )
-                                    .child(Text::caption("Cancel").text_color(theme.muted_foreground)),
+                                    .child(Text::caption("Cancel")),
                             )
                             .child(
                                 div()
