@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use dbflux_components::icon::IconSource;
-use dbflux_components::primitives::IconButton;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::{surface_panel, IconButton};
+use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use gpui::*;
 use gpui_component::ActiveTheme;
 
@@ -117,12 +117,8 @@ impl ModalFrame {
         let close_for_action = self.on_close.clone();
 
         // Build the container with width and height
-        let mut container = div()
+        let mut container = surface_panel(cx)
             .w(self.width)
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(Radii::LG)
             .shadow_lg()
             .overflow_hidden()
             .flex()

@@ -3,7 +3,7 @@ use super::SettingsSectionId;
 use crate::keymap::{ContextId, KeyChord, Modifiers, key_chord_from_gpui};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::InputState;
+use dbflux_components::controls::InputState;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, PartialEq, Debug)]

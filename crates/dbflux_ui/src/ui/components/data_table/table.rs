@@ -8,7 +8,7 @@ use gpui::{
     ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement,
     Styled, Window, actions, canvas, div, px, uniform_list,
 };
-use gpui_component::input::{Input, InputState};
+use dbflux_components::controls::{GpuiInput as Input, InputState};
 use gpui_component::scroll::Scrollbar;
 use gpui_component::{ActiveTheme, Sizable};
 

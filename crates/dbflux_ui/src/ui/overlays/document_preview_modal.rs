@@ -1,8 +1,8 @@
 use crate::ui::components::json_editor_view::{self, JsonEditorView};
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
+use dbflux_components::controls::InputState;
 use gpui::*;
-use gpui_component::input::InputState;
 
 /// Sentinel value for `doc_index` when opening the modal in insert (new document) mode.
 /// When the modal saves with this index, the handler should call `insert_document` instead

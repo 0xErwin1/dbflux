@@ -9,7 +9,7 @@ use dbflux_core::AuthProfile;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::InputState;
+use dbflux_components::controls::InputState;
 use uuid::Uuid;
 
 #[cfg(feature = "aws")]

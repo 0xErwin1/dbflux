@@ -1,6 +1,6 @@
+use dbflux_components::controls::InputState;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::InputState;
 
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::Input;

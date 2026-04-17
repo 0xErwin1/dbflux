@@ -1,6 +1,6 @@
+use dbflux_components::controls::{InputEvent, InputState};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
 
 use crate::keymap::Command;
 

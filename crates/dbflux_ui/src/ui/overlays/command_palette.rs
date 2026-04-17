@@ -1,12 +1,12 @@
 use crate::keymap::ContextId;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Text, surface_panel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Sizable};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -711,14 +711,10 @@ impl Render for CommandPalette {
                 this.execute_selected(window, cx);
             }))
             .child(
-                div()
+                surface_panel(cx)
                     .id("command-palette-container")
                     .w(px(500.0))
                     .max_h(px(400.0))
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(Radii::LG)
                     .shadow_lg()
                     .flex()
                     .flex_col()

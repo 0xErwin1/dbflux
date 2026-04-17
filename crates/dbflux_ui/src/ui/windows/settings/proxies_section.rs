@@ -6,13 +6,13 @@ use super::SettingsSection;
 use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components::controls::Button;
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::{Label, Text};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable};
 use uuid::Uuid;
 

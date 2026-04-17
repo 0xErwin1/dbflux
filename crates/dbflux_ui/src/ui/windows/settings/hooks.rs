@@ -10,7 +10,7 @@ use dbflux_core::{
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::InputState;
+use dbflux_components::controls::{InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -56,8 +56,8 @@ impl HooksSection {
         let sub = cx.subscribe_in(
             &input,
             window,
-            |_, _, event: &gpui_component::input::InputEvent, _window, cx| {
-                if matches!(event, gpui_component::input::InputEvent::Change) {
+            |_, _, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
             },

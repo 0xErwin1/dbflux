@@ -447,7 +447,7 @@ impl ConnectionManagerWindow {
     fn render_ssm_value_field(
         &self,
         label: &str,
-        input: &Entity<gpui_component::input::InputState>,
+        input: &Entity<dbflux_components::controls::InputState>,
         selector: Entity<crate::ui::components::value_source_selector::ValueSourceSelector>,
         required: bool,
         selector_focused: bool,

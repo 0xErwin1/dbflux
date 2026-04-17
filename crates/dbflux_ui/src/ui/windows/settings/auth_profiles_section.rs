@@ -12,7 +12,7 @@ use dbflux_core::{AccessKind, AuthProfile, FormFieldKind, ImportableProfile};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::InputState;
+use dbflux_components::controls::InputState;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, Icon, IconName};
 use std::collections::{HashMap, HashSet};

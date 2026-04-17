@@ -1,14 +1,14 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::AppStateEntity;
-use crate::keymap::{Modifiers, key_chord_from_gpui};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
+use dbflux_components::controls::InputState;
 use dbflux_core::ServiceConfig;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::InputState;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum ServiceFocus {

@@ -4,7 +4,7 @@ use dbflux_core::{QueryResult, Value};
 use gpui::{
     AppContext, Context, EventEmitter, FocusHandle, Focusable, UniformListScrollHandle, Window,
 };
-use gpui_component::input::{InputEvent, InputState};
+use dbflux_components::controls::{InputEvent, InputState};
 
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};

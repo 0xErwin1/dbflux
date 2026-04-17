@@ -1,12 +1,12 @@
+use super::section_trait::SectionFocusEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
-use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{GeneralSettings, RefreshPolicySetting, StartupFocus, ThemeSetting};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum GeneralFormRow {

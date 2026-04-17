@@ -30,7 +30,7 @@ use dbflux_core::{
 };
 use gpui::*;
 use gpui_component::Sizable;
-use gpui_component::input::{InputEvent, InputState};
+use dbflux_components::controls::{InputEvent, InputState};
 use std::sync::Arc;
 use uuid::Uuid;
 

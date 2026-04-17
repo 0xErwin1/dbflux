@@ -15,7 +15,7 @@ use dbflux_core::{
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::InputEvent;
+use dbflux_components::controls::InputEvent;
 
 const CAPABILITY_CATALOG: &[(DriverCapabilities, &str)] = &[
     (DriverCapabilities::MULTIPLE_DATABASES, "Multiple Databases"),

@@ -22,7 +22,7 @@ use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionC
 use context_menu::KvContextMenu;
 use dbflux_core::{CancelToken, KeyEntry, KeyGetResult, KeyType, RefreshPolicy};
 use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
+use dbflux_components::controls::{InputEvent, InputState};
 use parsing::{MemberEntry, parse_database_name};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

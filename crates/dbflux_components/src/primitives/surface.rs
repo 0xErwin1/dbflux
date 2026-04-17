@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, AnyElement, App, Hsla, Pixels, Window};
+use gpui::{div, App, Hsla, Pixels};
 use gpui_component::ActiveTheme;
 
 use crate::tokens::Radii;
@@ -17,128 +17,94 @@ pub enum SurfaceVariant {
     Overlay,
 }
 
-/// Stateless surface primitive. Applies the correct background, optional
-/// border, and corner radius from the active theme.
-#[derive(IntoElement)]
-pub struct Surface {
-    variant: SurfaceVariant,
-    bg_override: Option<Hsla>,
-    border_color_override: Option<Hsla>,
-    rounded_override: Option<Pixels>,
-    show_border: bool,
-    children: Vec<AnyElement>,
-}
-
-impl Surface {
-    pub fn panel() -> Self {
-        Self {
-            variant: SurfaceVariant::Panel,
-            bg_override: None,
-            border_color_override: None,
-            rounded_override: None,
-            show_border: true,
-            children: Vec::new(),
-        }
-    }
-
-    pub fn card() -> Self {
-        Self {
-            variant: SurfaceVariant::Card,
-            bg_override: None,
-            border_color_override: None,
-            rounded_override: None,
-            show_border: true,
-            children: Vec::new(),
-        }
-    }
-
-    pub fn raised() -> Self {
-        Self {
-            variant: SurfaceVariant::Raised,
-            bg_override: None,
-            border_color_override: None,
-            rounded_override: None,
-            show_border: true,
-            children: Vec::new(),
-        }
-    }
-
-    pub fn overlay() -> Self {
-        Self {
-            variant: SurfaceVariant::Overlay,
-            bg_override: None,
-            border_color_override: None,
-            rounded_override: None,
-            show_border: false,
-            children: Vec::new(),
-        }
-    }
-
-    /// Override the background color (replaces the variant default).
-    pub fn bg(mut self, color: impl Into<Hsla>) -> Self {
-        self.bg_override = Some(color.into());
-        self
-    }
-
-    /// Override the border color (replaces the theme default).
-    pub fn border_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.border_color_override = Some(color.into());
-        self
-    }
-
-    /// Override the corner radius (replaces the variant default).
-    pub fn rounded(mut self, radius: Pixels) -> Self {
-        self.rounded_override = Some(radius);
-        self
-    }
-
-    /// Disable the border.
-    pub fn no_border(mut self) -> Self {
-        self.show_border = false;
-        self
-    }
-
-    fn default_bg(&self, theme: &gpui_component::Theme) -> Hsla {
-        match self.variant {
-            SurfaceVariant::Panel => theme.background,
-            SurfaceVariant::Card => theme.secondary,
-            SurfaceVariant::Raised => theme.popover,
-            SurfaceVariant::Overlay => gpui::black().opacity(0.5),
-        }
-    }
-
-    fn default_radius(&self) -> Pixels {
-        match self.variant {
-            SurfaceVariant::Panel => Radii::LG,
-            SurfaceVariant::Card => Radii::LG,
-            SurfaceVariant::Raised => Radii::MD,
-            SurfaceVariant::Overlay => Radii::LG,
-        }
+fn variant_bg(variant: SurfaceVariant, theme: &gpui_component::Theme) -> Hsla {
+    match variant {
+        SurfaceVariant::Panel => theme.background,
+        SurfaceVariant::Card => theme.secondary,
+        SurfaceVariant::Raised => theme.popover,
+        SurfaceVariant::Overlay => gpui::black().opacity(0.5),
     }
 }
 
-impl gpui::ParentElement for Surface {
-    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-        self.children.extend(elements);
+fn variant_radius(variant: SurfaceVariant) -> Pixels {
+    match variant {
+        SurfaceVariant::Panel => Radii::LG,
+        SurfaceVariant::Card => Radii::LG,
+        SurfaceVariant::Raised => Radii::MD,
+        SurfaceVariant::Overlay => Radii::LG,
     }
 }
 
-impl RenderOnce for Surface {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-        let bg = self.bg_override.unwrap_or_else(|| self.default_bg(theme));
-        let radius = self
-            .rounded_override
-            .unwrap_or_else(|| self.default_radius());
+/// Create a panel surface (`theme.background`, border, large radius).
+///
+/// Returns a `Div` so callers can chain `.shadow_lg()`, `.overflow_hidden()`,
+/// `.child(...)`, and any other GPUI attributes. Chain `.rounded()` to
+/// override the default radius.
+pub fn surface_panel(cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    div()
+        .bg(theme.background)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(Radii::LG)
+}
 
-        let mut el = div().bg(bg).rounded(radius);
+/// Create a card surface (`theme.secondary`, border, large radius).
+///
+/// Returns a `Div` so callers can chain additional GPUI attributes.
+/// Chain `.rounded()` to override the default radius.
+pub fn surface_card(cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    div()
+        .bg(theme.secondary)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(Radii::LG)
+}
 
-        if self.show_border {
-            let border_color = self.border_color_override.unwrap_or(theme.border);
-            el = el.border_1().border_color(border_color);
-        }
+/// Create a raised surface (`theme.popover`, border, medium radius).
+///
+/// Returns a `Div` so callers can chain additional GPUI attributes.
+/// Chain `.rounded()` to override the default radius.
+pub fn surface_raised(cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    div()
+        .bg(theme.popover)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(Radii::MD)
+}
 
-        el = el.children(self.children);
-        el
+/// Create an overlay surface (semi-transparent black, no border, large radius).
+///
+/// Returns a `Div` so callers can chain additional GPUI attributes.
+/// Chain `.rounded()` to override the default radius.
+pub fn surface_overlay(_cx: &App) -> gpui::Div {
+    div().bg(gpui::black().opacity(0.5)).rounded(Radii::LG)
+}
+
+/// Create a surface with a specific variant.
+///
+/// Returns a `Div` so callers can chain additional GPUI attributes.
+pub fn surface(variant: SurfaceVariant, cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    let bg = variant_bg(variant, theme);
+    let radius = variant_radius(variant);
+
+    let mut el = div().bg(bg).rounded(radius);
+
+    if variant != SurfaceVariant::Overlay {
+        el = el.border_1().border_color(theme.border);
     }
+
+    el
+}
+
+/// Returns the default overlay background color (semi-transparent black at 0.5 opacity).
+///
+/// Use this when building overlay containers that need their own element ID,
+/// click handlers, or key contexts — situations where `surface_overlay` cannot
+/// be used directly because it returns an un-styled `Div` without an ID.
+pub fn overlay_bg() -> Hsla {
+    gpui::black().opacity(0.5)
 }
