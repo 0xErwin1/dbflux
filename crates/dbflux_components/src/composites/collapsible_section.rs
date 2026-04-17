@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, SharedString, Window, div};
+use gpui::{div, App, SharedString, Window};
 use gpui_component::ActiveTheme;
 use gpui_component::IconName;
 

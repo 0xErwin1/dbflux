@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Hsla, Pixels, Window, div};
+use gpui::{div, AnyElement, App, Hsla, Pixels, Window};
 use gpui_component::ActiveTheme;
 
 use crate::tokens::Radii;
@@ -122,7 +122,6 @@ impl gpui::ParentElement for Surface {
         self.children.extend(elements);
     }
 }
-
 impl RenderOnce for Surface {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();

@@ -4,8 +4,8 @@ use dbflux_components::controls::{Button, Input};
 use dbflux_components::primitives::{Label, Status, StatusIndicator, Text};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
+use gpui_component::ActiveTheme;
 use gpui_component::{Icon, IconName};
 
 use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus};
@@ -35,8 +35,8 @@ impl ConnectionManagerWindow {
             !self.auth_profile_login_in_progress && self.selected_auth_profile_needs_login(cx);
         let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
 
-        let mut sections = vec![
-            self.render_section(
+        let mut sections = vec![self
+            .render_section(
                 "Access",
                 div().flex().flex_col().gap_2().child(
                     div()
@@ -52,8 +52,7 @@ impl ConnectionManagerWindow {
                 ),
                 &theme,
             )
-            .into_any_element(),
-        ];
+            .into_any_element()];
 
         match self.access_tab_mode {
             AccessTabMode::Direct => {
