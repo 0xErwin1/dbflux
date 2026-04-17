@@ -228,9 +228,7 @@ impl Render for super::KeyValueDocument {
                             .justify_center()
                             .border_l_1()
                             .border_color(theme.border)
-                            .text_color(theme.muted_foreground)
-                            .text_size(FontSizes::SM)
-                            .child("No data"),
+                            .child(Text::muted("No data")),
                     );
                 }
             } else if is_structured {
@@ -461,9 +459,7 @@ impl Render for super::KeyValueDocument {
                             d.child(
                                 div()
                                     .pt(Spacing::SM)
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .child("Click or press Enter to edit"),
+                                    .child(Text::caption("Click or press Enter to edit")),
                             )
                         }),
                 );
@@ -478,13 +474,11 @@ impl Render for super::KeyValueDocument {
                 .justify_center()
                 .border_l_1()
                 .border_color(theme.border)
-                .text_color(theme.muted_foreground)
-                .text_size(FontSizes::SM)
-                .child(if self.runner.is_primary_active() {
+                .child(Text::muted(if self.runner.is_primary_active() {
                     "Loading..."
                 } else {
                     "Select a key to inspect"
-                })
+                }))
                 .into_any_element()
         };
 
@@ -716,14 +710,7 @@ impl Render for super::KeyValueDocument {
                     )
             })
             .when_some(error_message, |this, message| {
-                this.child(
-                    div()
-                        .px(Spacing::SM)
-                        .py(Spacing::XS)
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.muted_foreground)
-                        .child(format!("Error: {}", message)),
-                )
+                this.child(Text::caption(format!("Error: {}", message)))
             })
             // Keys list
             .child(div().flex_1().overflow_y_scrollbar().children(
@@ -905,20 +892,9 @@ fn render_delete_confirm_modal(
                                 .size_5()
                                 .text_color(theme.warning),
                         )
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.foreground)
-                                .child(title.to_string()),
-                        ),
+                        .child(Text::heading(title.to_string())),
                 )
-                .child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child(message.to_string()),
-                )
+                .child(Text::muted(message.to_string()))
                 .child(
                     div()
                         .flex()

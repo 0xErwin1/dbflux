@@ -25,6 +25,7 @@ const FILTER_BAR_IDX_CLEAR: usize = 7;
 use crate::ui::components::toast::{PendingToast, flush_pending_toast};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::{
     Pagination, RefreshPolicy,
     observability::{EventCategory, EventOutcome, EventSeverity},
@@ -848,10 +849,8 @@ impl AuditDocument {
     /// Renders a null placeholder matching the DataTable convention: italic muted "NULL".
     fn null_display(theme: &gpui_component::Theme) -> Div {
         div()
-            .text_sm()
             .italic()
-            .text_color(theme.muted_foreground)
-            .child("NULL")
+            .child(Text::caption("NULL").text_color(theme.muted_foreground))
     }
 
     fn short_category_label(category: Option<&str>) -> &'static str {
@@ -1878,12 +1877,7 @@ impl AuditDocument {
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("Loading audit events..."),
-                )
+                .child(Text::muted("Loading audit events..."))
                 .into_any_element();
         }
 
@@ -1906,11 +1900,7 @@ impl AuditDocument {
                         .child("Failed to load audit events"),
                 )
                 .child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .text_sm()
-                        .text_center()
-                        .child(self.status_message.clone().unwrap_or_default()),
+                    Text::muted(self.status_message.clone().unwrap_or_default()),
                 )
                 .child(
                     Button::new("audit-retry")
@@ -1930,12 +1920,7 @@ impl AuditDocument {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .text_sm()
-                        .child("No audit events match the current filters."),
-                )
+                .child(Text::muted("No audit events match the current filters."))
                 .into_any_element();
         }
 
@@ -1990,11 +1975,7 @@ impl AuditDocument {
         let summary_display: AnyElement = if summary.is_empty() {
             Self::null_display(theme).into_any_element()
         } else {
-            div()
-                .text_sm()
-                .text_color(theme.foreground)
-                .child(summary)
-                .into_any_element()
+            Text::body(summary).into_any_element()
         };
         let category = Self::short_category_label(event.category.as_deref());
         let connection_driver =
@@ -2097,24 +2078,14 @@ impl AuditDocument {
         theme: &gpui_component::Theme,
     ) -> Div {
         let value_element: AnyElement = match value {
-            Some(ref v) if !v.is_empty() => div()
-                .text_sm()
-                .text_color(theme.foreground)
-                .child(v.clone())
-                .into_any_element(),
+            Some(ref v) if !v.is_empty() => Text::body(v.clone()).into_any_element(),
             _ => Self::null_display(theme).into_any_element(),
         };
         div()
             .flex_col()
             .gap_1p5()
             .min_w(px(120.0))
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.muted_foreground)
-                    .child(label),
-            )
+            .child(Label::new(label))
             .child(value_element)
     }
 
@@ -2204,14 +2175,8 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.muted_foreground)
-                                .child("Summary"),
-                        )
-                        .child(div().text_sm().text_color(theme.foreground).child(value)),
+                        .child(Label::new("Summary"))
+                        .child(Text::body(value)),
                 )
             })
             .when_some(error_message, |root, value| {
@@ -2220,13 +2185,9 @@ impl AuditDocument {
                         .flex_col()
                         .gap_1p5()
                         .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.danger)
-                                .child("Error"),
+                            Label::new("Error").text_color(theme.danger),
                         )
-                        .child(div().text_sm().text_color(theme.danger).child(value)),
+                        .child(Text::body(value).text_color(theme.danger)),
                 )
             })
             .when_some(details_json, |root, value| {
@@ -2234,13 +2195,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.muted_foreground)
-                                .child("Details"),
-                        )
+                        .child(Label::new("Details"))
                         .child(
                             div()
                                 .text_xs()
@@ -2260,13 +2215,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.muted_foreground)
-                                .child("Correlation ID"),
-                        )
+                        .child(Label::new("Correlation ID"))
                         .child(
                             div()
                                 .text_sm()

@@ -1,6 +1,7 @@
 use crate::ui::components::form_renderer;
 use crate::ui::icons::AppIcon;
 use dbflux_components::controls::Input;
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
@@ -368,7 +369,7 @@ impl ConnectionManagerWindow {
                             .min_w(px(160.0))
                             .child(self.conn_confirm_dangerous_dropdown.clone()),
                     )
-                    .child(div().text_xs().text_color(muted).child(format!(
+                    .child(Text::caption(format!(
                         "Default: {}",
                         if effective.confirm_dangerous {
                             "On"
@@ -400,7 +401,7 @@ impl ConnectionManagerWindow {
                             .min_w(px(160.0))
                             .child(self.conn_requires_where_dropdown.clone()),
                     )
-                    .child(div().text_xs().text_color(muted).child(format!(
+                    .child(Text::caption(format!(
                         "Default: {}",
                         if effective.requires_where {
                             "On"
@@ -432,7 +433,7 @@ impl ConnectionManagerWindow {
                             .min_w(px(160.0))
                             .child(self.conn_requires_preview_dropdown.clone()),
                     )
-                    .child(div().text_xs().text_color(muted).child(format!(
+                    .child(Text::caption(format!(
                         "Default: {}",
                         if effective.requires_preview {
                             "On"
@@ -622,10 +623,7 @@ impl ConnectionManagerWindow {
 
         if sections.len() == 1 {
             sections.push(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("This driver has no custom settings.")
+                Text::muted("This driver has no custom settings.")
                     .into_any_element(),
             );
         }
@@ -693,18 +691,8 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .opacity(opacity)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Trusted Client (Actor)"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("AI agent identity — configure in Settings → MCP"),
-                    )
+                    .child(Label::new("Trusted Client (Actor)"))
+                    .child(Text::caption("AI agent identity — configure in Settings → MCP"))
                     .child(self.conn_mcp_actor_dropdown.clone()),
             )
             .child(
@@ -713,25 +701,10 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .opacity(opacity)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Role"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("Configure roles in Settings → MCP → Roles"),
-                    )
+                    .child(Label::new("Role"))
+                    .child(Text::caption("Configure roles in Settings → MCP → Roles"))
                     .child(self.conn_mcp_role_dropdown.clone())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("Additional roles (optional)"),
-                    )
+                    .child(Text::caption("Additional roles (optional)"))
                     .child(self.conn_mcp_role_multi_select.clone()),
             )
             .child(
