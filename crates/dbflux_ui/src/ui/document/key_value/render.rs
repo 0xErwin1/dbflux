@@ -7,8 +7,8 @@ use dbflux_components::controls::Input;
 use dbflux_components::primitives::{IconButton, Text};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
 
 impl Render for super::KeyValueDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -179,14 +179,12 @@ impl Render for super::KeyValueDocument {
                     .border_b_1()
                     .border_l_1()
                     .border_color(theme.border)
-                    .text_size(FontSizes::XS)
-                    .text_color(theme.muted_foreground)
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(Spacing::XS)
-                            .child(type_label),
+                            .child(Text::caption(type_label)),
                     )
                     .child(
                         div()
@@ -199,10 +197,9 @@ impl Render for super::KeyValueDocument {
                                     .size(Heights::ICON_SM)
                                     .text_color(ttl_color),
                             )
-                            .text_color(ttl_color)
-                            .child(self.ttl_display.clone()),
+                            .child(div().text_color(ttl_color).child(self.ttl_display.clone())),
                     )
-                    .child(size_label),
+                    .child(Text::caption(size_label)),
             );
 
             if is_structured
@@ -281,19 +278,21 @@ impl Render for super::KeyValueDocument {
                     .border_b_1()
                     .border_l_1()
                     .border_color(theme.border)
-                    .bg(theme.secondary)
-                    .text_size(FontSizes::XS)
-                    .text_color(theme.muted_foreground);
+                    .bg(theme.secondary);
 
                 let is_stream = self.is_stream_type();
-                header = header.child(div().w(px(30.0)).child("#"));
-                header = header.child(div().flex_1().child(if is_stream { "ID" } else { "Value" }));
+                header = header.child(div().w(px(30.0)).child(Text::caption("#")));
+                header = header.child(div().flex_1().child(Text::caption(if is_stream {
+                    "ID"
+                } else {
+                    "Value"
+                })));
                 if needs_value_col {
-                    header = header.child(div().w(px(200.0)).child(if is_stream {
+                    header = header.child(div().w(px(200.0)).child(Text::caption(if is_stream {
                         "Fields"
                     } else {
                         "Field/Score"
-                    }));
+                    })));
                 }
                 header = header.child(div().w(Heights::ICON_MD));
 
@@ -338,13 +337,7 @@ impl Render for super::KeyValueDocument {
                             }),
                         );
 
-                    row = row.child(
-                        div()
-                            .w(px(30.0))
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
-                            .child(format!("{}", idx)),
-                    );
+                    row = row.child(div().w(px(30.0)).child(Text::caption(format!("{}", idx))));
 
                     if is_editing {
                         if let Some(input) = &self.member_edit_input {
@@ -375,13 +368,13 @@ impl Render for super::KeyValueDocument {
 
                         if needs_value_col {
                             row = row.child(
-                                div().w(px(200.0)).text_color(theme.muted_foreground).child(
+                                div().w(px(200.0)).child(Text::caption(
                                     member
                                         .field
                                         .clone()
                                         .or(member.score.map(|s| s.to_string()))
                                         .unwrap_or_default(),
-                                ),
+                                )),
                             );
                         }
 
@@ -618,19 +611,17 @@ impl Render for super::KeyValueDocument {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
                             .child(
                                 svg()
                                     .path(AppIcon::Rows3.path())
                                     .size_3()
                                     .text_color(theme.muted_foreground),
                             )
-                            .child(if self.runner.is_primary_active() {
+                            .child(Text::caption(if self.runner.is_primary_active() {
                                 "Loading...".to_string()
                             } else {
                                 format!("{} keys", key_count)
-                            }),
+                            })),
                     )
                     .child(
                         div()
@@ -669,12 +660,7 @@ impl Render for super::KeyValueDocument {
                                     )
                                     .child("Prev"),
                             )
-                            .child(
-                                div()
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .child(format!("Page {}", current_page)),
-                            )
+                            .child(Text::caption(format!("Page {}", current_page)))
                             .child(
                                 div()
                                     .id("kv-next-page")
@@ -782,16 +768,11 @@ impl Render for super::KeyValueDocument {
                                 .child(key.key.clone()),
                         );
 
-                        row = row.child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .child(
-                                    key.key_type
-                                        .map(|t| key_type_label(t).to_string())
-                                        .unwrap_or_else(|| "?".to_string()),
-                                ),
-                        );
+                        row = row.child(Text::caption(
+                            key.key_type
+                                .map(|t| key_type_label(t).to_string())
+                                .unwrap_or_else(|| "?".to_string()),
+                        ));
                     }
 
                     row

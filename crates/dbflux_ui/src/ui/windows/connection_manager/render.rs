@@ -3,6 +3,7 @@ use crate::platform;
 use crate::ui::icons::AppIcon;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_components::controls::Button;
+use dbflux_components::primitives::Text;
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
@@ -143,7 +144,7 @@ impl ConnectionManagerWindow {
         &self,
         label: &str,
         value: &str,
-        theme: &gpui_component::Theme,
+        _theme: &gpui_component::Theme,
     ) -> impl IntoElement {
         div()
             .flex()
@@ -152,36 +153,22 @@ impl ConnectionManagerWindow {
             .child(
                 div()
                     .w(px(100.0))
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.muted_foreground)
-                    .child(label.to_string()),
+                    .child(Text::caption(label.to_string()).font_weight(FontWeight::MEDIUM)),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(value.to_string()),
-            )
+            .child(Text::body(value.to_string()))
     }
 
     pub(super) fn render_section(
         &self,
         title: &str,
         content: impl IntoElement,
-        theme: &gpui_component::Theme,
+        _theme: &gpui_component::Theme,
     ) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.muted_foreground)
-                    .child(title.to_uppercase()),
-            )
+            .child(Text::caption(title.to_uppercase()))
             .child(content)
     }
 
@@ -245,11 +232,14 @@ impl ConnectionManagerWindow {
                     .border_b_1()
                     .border_color(border_color)
                     .when(!is_editing, |d| {
-                        d.child(Button::new("back", "<").ghost().small().on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.back_to_driver_select(window, cx);
-                            }),
-                        ))
+                        d.child(
+                            Button::new("back", "<")
+                                .ghost()
+                                .small()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.back_to_driver_select(window, cx);
+                                })),
+                        )
                     })
                     .child({
                         let brand_icon = self
@@ -303,10 +293,7 @@ impl ConnectionManagerWindow {
                             div().p_2().rounded(px(4.0)).bg(danger_bg).child(
                                 div().flex().flex_col().gap_1().children(
                                     validation_errors.iter().map(|err| {
-                                        div()
-                                            .text_sm()
-                                            .text_color(danger_color)
-                                            .child(err.clone())
+                                        Text::body(err.clone()).text_color(danger_color)
                                     }),
                                 ),
                             ),
@@ -324,11 +311,9 @@ impl ConnectionManagerWindow {
                     .border_color(border_color)
                     .when(test_status != TestStatus::None, |d| {
                         let (bg, text_color, message) = match test_status {
-                            TestStatus::Testing => (
-                                info_bg,
-                                info_color,
-                                "Testing connection...".to_string(),
-                            ),
+                            TestStatus::Testing => {
+                                (info_bg, info_color, "Testing connection...".to_string())
+                            }
                             TestStatus::Success => (
                                 success_bg,
                                 success_color,
@@ -339,11 +324,9 @@ impl ConnectionManagerWindow {
                                 danger_color,
                                 test_error.unwrap_or_else(|| "Connection failed".to_string()),
                             ),
-                            TestStatus::None => (
-                                muted_bg,
-                                muted_fg,
-                                "No test status available".to_string(),
-                            ),
+                            TestStatus::None => {
+                                (muted_bg, muted_fg, "No test status available".to_string())
+                            }
                         };
 
                         d.child(
@@ -351,7 +334,7 @@ impl ConnectionManagerWindow {
                                 .p_2()
                                 .rounded(px(4.0))
                                 .bg(bg)
-                                .child(div().text_sm().text_color(text_color).child(message)),
+                                .child(Text::body(message).text_color(text_color)),
                         )
                     })
                     .child(
@@ -490,9 +473,7 @@ impl ConnectionManagerWindow {
                                         .child(field_def.label.clone()),
                                 )
                                 .when(field_def.required && field_enabled, |d| {
-                                    d.child(
-                                        div().text_sm().text_color(danger_color).child("*"),
-                                    )
+                                    d.child(div().text_sm().text_color(danger_color).child("*"))
                                 }),
                         )
                         .child(
@@ -581,12 +562,7 @@ impl ConnectionManagerWindow {
                                             .child(field_def.label.clone()),
                                     )
                                     .when(field_def.required && field_enabled, |d| {
-                                        d.child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(danger_color)
-                                                .child("*"),
-                                        )
+                                        d.child(div().text_sm().text_color(danger_color).child("*"))
                                     }),
                             ),
                     )
@@ -809,7 +785,6 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let theme = cx.theme().clone();
         let mut sections: Vec<AnyElement> = Vec::new();
 
         for section in &tab.sections {
@@ -864,13 +839,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.muted_foreground)
-                            .child(section.title.to_uppercase()),
-                    )
+                    .child(Text::caption(section.title.to_uppercase()))
                     .children(field_elements)
                     .into_any_element(),
             );

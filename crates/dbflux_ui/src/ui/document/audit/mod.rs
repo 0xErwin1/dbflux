@@ -1899,9 +1899,7 @@ impl AuditDocument {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("Failed to load audit events"),
                 )
-                .child(
-                    Text::muted(self.status_message.clone().unwrap_or_default()),
-                )
+                .child(Text::muted(self.status_message.clone().unwrap_or_default()))
                 .child(
                     Button::new("audit-retry")
                         .label("Retry")
@@ -2036,34 +2034,13 @@ impl AuditDocument {
                             .size_3()
                             .text_color(theme.muted_foreground),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_family("monospace")
-                            .text_color(theme.muted_foreground)
-                            .flex_shrink_0()
-                            .child(timestamp),
-                    )
+                    .child(Text::code(timestamp))
                     .child(level_display)
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .flex_shrink_0()
-                            .child(category),
-                    )
+                    .child(Text::caption(category.to_string()))
                     .child(div().text_sm().flex_1().truncate().child(summary_display))
                     .when_some(
                         connection_driver.filter(|value| !value.is_empty()),
-                        |row, value| {
-                            row.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .flex_shrink_0()
-                                    .child(value),
-                            )
-                        },
+                        |row, value| row.child(Text::caption(value)),
                     ),
             )
             .when(is_expanded, |root| {
@@ -2184,9 +2161,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(
-                            Label::new("Error").text_color(theme.danger),
-                        )
+                        .child(Label::new("Error").text_color(theme.danger))
                         .child(Text::body(value).text_color(theme.danger)),
                 )
             })
@@ -2198,13 +2173,10 @@ impl AuditDocument {
                         .child(Label::new("Details"))
                         .child(
                             div()
-                                .text_xs()
-                                .font_family("monospace")
-                                .text_color(theme.foreground)
                                 .bg(theme.secondary)
                                 .p_2()
                                 .rounded(px(4.0))
-                                .child(Self::pretty_json(&value)),
+                                .child(Text::code(Self::pretty_json(&value))),
                         ),
                 )
             })
@@ -2353,15 +2325,13 @@ impl AuditDocument {
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
                 .child(
                     svg()
                         .path(AppIcon::Rows3.path())
                         .size_3()
                         .text_color(theme.muted_foreground),
                 )
-                .child(row_count_label)
+                .child(Text::caption(row_count_label))
         };
 
         // Center: pagination — identical to DataGridPanel.
@@ -2403,16 +2373,11 @@ impl AuditDocument {
                             ))
                             .child("Prev"),
                     )
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
-                            .child(if total_pages > 1 {
-                                format!("Page {}/{} ({}-{})", page, total_pages, start, end)
-                            } else {
-                                format!("Page {}/{}", page, total_pages)
-                            }),
-                    )
+                    .child(Text::caption(if total_pages > 1 {
+                        format!("Page {}/{} ({}-{})", page, total_pages, start, end)
+                    } else {
+                        format!("Page {}/{}", page, total_pages)
+                    }))
                     .child(
                         div()
                             .id("audit-next-page")
@@ -2460,10 +2425,7 @@ impl AuditDocument {
                 self.status_message.clone().filter(|_| self.is_loading),
                 |d, _| {
                     d.child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground.opacity(0.5))
-                            .child("Loading..."),
+                        Text::caption("Loading...").text_color(theme.muted_foreground.opacity(0.5)),
                     )
                 },
             );

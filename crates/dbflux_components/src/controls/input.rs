@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{App, Entity, IntoElement, Window};
-use gpui_component::input::{Input as GpuiInput, InputState};
 use gpui_component::Sizable;
+use gpui_component::input::{Input as GpuiInput, InputState};
 
 /// Thin wrapper around `gpui_component::input::Input` that pre-applies
 /// DBFlux design token defaults (height, size).

@@ -232,13 +232,7 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_3()
                     .child(div().w(px(200.0)))
-                    .child(
-                        div()
-                            .w(px(160.0))
-                            .text_xs()
-                            .text_color(muted)
-                            .child("Override Value"),
-                    ),
+                    .child(div().w(px(160.0)).child(Text::caption("Override Value"))),
             )
             // Refresh policy row
             .child(
@@ -287,12 +281,7 @@ impl ConnectionManagerWindow {
                                 )
                             }),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(format!("Default: {}", policy_label)),
-                    ),
+                    .child(Text::caption(format!("Default: {}", policy_label))),
             )
             // Refresh interval row
             .child(
@@ -334,12 +323,10 @@ impl ConnectionManagerWindow {
                                     .disabled(!self.conn_override_refresh_interval),
                             ),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(format!("Default: {}s", effective.refresh_interval_secs)),
-                    ),
+                    .child(Text::caption(format!(
+                        "Default: {}s",
+                        effective.refresh_interval_secs
+                    ))),
             )
             // Confirm dangerous queries
             .child(
@@ -524,12 +511,7 @@ impl ConnectionManagerWindow {
                                                 },
                                             )),
                                         )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(muted)
-                                                .child(format!("Default: {}", default_val)),
-                                        )
+                                        .child(Text::caption(format!("Default: {}", default_val)))
                                         .into_any_element(),
                                 )
                             }
@@ -562,12 +544,10 @@ impl ConnectionManagerWindow {
                                                 .items_center()
                                                 .gap_2()
                                                 .child(div().text_sm().child(field.label.clone()))
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(muted)
-                                                        .child(format!("Default: {}", default_val)),
-                                                ),
+                                                .child(Text::caption(format!(
+                                                    "Default: {}",
+                                                    default_val
+                                                ))),
                                         )
                                         .child(div().w(px(240.0)).child(dropdown))
                                         .into_any_element(),
@@ -600,12 +580,10 @@ impl ConnectionManagerWindow {
                                                 .items_center()
                                                 .gap_2()
                                                 .child(div().text_sm().child(field.label.clone()))
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(muted)
-                                                        .child(format!("Default: {}", default_val)),
-                                                ),
+                                                .child(Text::caption(format!(
+                                                    "Default: {}",
+                                                    default_val
+                                                ))),
                                         )
                                         .child(Input::new(&input).small().disabled(!enabled))
                                         .into_any_element(),
@@ -622,10 +600,7 @@ impl ConnectionManagerWindow {
         }
 
         if sections.len() == 1 {
-            sections.push(
-                Text::muted("This driver has no custom settings.")
-                    .into_any_element(),
-            );
+            sections.push(Text::muted("This driver has no custom settings.").into_any_element());
         }
 
         sections
@@ -692,7 +667,9 @@ impl ConnectionManagerWindow {
                     .gap_1()
                     .opacity(opacity)
                     .child(Label::new("Trusted Client (Actor)"))
-                    .child(Text::caption("AI agent identity — configure in Settings → MCP"))
+                    .child(Text::caption(
+                        "AI agent identity — configure in Settings → MCP",
+                    ))
                     .child(self.conn_mcp_actor_dropdown.clone()),
             )
             .child(
@@ -702,7 +679,9 @@ impl ConnectionManagerWindow {
                     .gap_1()
                     .opacity(opacity)
                     .child(Label::new("Role"))
-                    .child(Text::caption("Configure roles in Settings → MCP → Roles"))
+                    .child(Text::caption(
+                        "Configure roles in Settings \u{2192} MCP \u{2192} Roles",
+                    ))
                     .child(self.conn_mcp_role_dropdown.clone())
                     .child(Text::caption("Additional roles (optional)"))
                     .child(self.conn_mcp_role_multi_select.clone()),
@@ -719,32 +698,19 @@ impl ConnectionManagerWindow {
                             .font_weight(FontWeight::MEDIUM)
                             .child("Policy"),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("Configure policies in Settings → MCP → Policies"),
-                    )
+                    .child(Text::caption(
+                        "Configure policies in Settings \u{2192} MCP \u{2192} Policies",
+                    ))
                     .child(self.conn_mcp_policy_dropdown.clone())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("Additional policies (optional)"),
-                    )
+                    .child(Text::caption("Additional policies (optional)"))
                     .child(self.conn_mcp_policy_multi_select.clone()),
             )
+            .child(Text::caption("Scope/policy assignment preview").into_any_element())
             .child(
                 div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Scope/policy assignment preview")
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(preview_text),
-                    ),
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(preview_text),
             );
 
         vec![

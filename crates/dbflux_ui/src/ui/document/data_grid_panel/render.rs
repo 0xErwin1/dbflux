@@ -111,7 +111,6 @@ impl Render for DataGridPanel {
             || self.result.raw_bytes.is_some();
         let has_columns = !self.result.columns.is_empty();
         let is_loading = self.state == GridState::Loading;
-        let _muted_fg = theme.muted_foreground;
 
         let show_panel_controls = self.show_panel_controls;
         let is_maximized = self.is_maximized;
@@ -429,7 +428,7 @@ impl DataGridPanel {
                                             });
                                             this.refresh(window, cx);
                                         }))
-                                        .child("×"),
+                                        .child("\u{00d7}"),
                                 )
                             }),
                     ),
@@ -553,12 +552,7 @@ impl DataGridPanel {
                                 .size_4()
                                 .text_color(theme.muted_foreground),
                         )
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .child(mode.label()),
-                        ),
+                        .child(Text::caption(mode.label())),
                 )
             })
     }
@@ -843,13 +837,7 @@ impl DataGridPanel {
             .flex()
             .pl(indent)
             .gap(Spacing::SM)
-            .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.muted_foreground)
-                    .child(format!("{}:", name)),
-            )
+            .child(Text::caption(format!("{}:", name)).font_weight(FontWeight::MEDIUM))
             .child(self.render_value(value, theme, depth))
     }
 
@@ -872,22 +860,26 @@ impl DataGridPanel {
             Value::Null => div()
                 .text_size(FontSizes::SM)
                 .text_color(text_color)
-                .child("null"),
+                .child("null")
+                .into_any_element(),
 
             Value::Bool(b) => div()
                 .text_size(FontSizes::SM)
                 .text_color(text_color)
-                .child(if *b { "true" } else { "false" }),
+                .child(if *b { "true" } else { "false" })
+                .into_any_element(),
 
             Value::Int(i) => div()
                 .text_size(FontSizes::SM)
                 .text_color(text_color)
-                .child(i.to_string()),
+                .child(i.to_string())
+                .into_any_element(),
 
             Value::Float(f) => div()
                 .text_size(FontSizes::SM)
                 .text_color(text_color)
-                .child(f.to_string()),
+                .child(f.to_string())
+                .into_any_element(),
 
             Value::Text(s) => {
                 let display: String = s.replace('\n', "\\n").replace('\r', "\\r");
@@ -895,77 +887,57 @@ impl DataGridPanel {
                     .text_size(FontSizes::SM)
                     .text_color(text_color)
                     .child(format!("\"{}\"", display))
+                    .into_any_element()
             }
 
             Value::ObjectId(oid) => div()
                 .text_size(FontSizes::SM)
                 .text_color(text_color)
-                .child(format!("ObjectId(\"{}\")", oid)),
+                .child(format!("ObjectId(\"{}\")", oid))
+                .into_any_element(),
 
             Value::DateTime(dt) => div()
                 .text_size(FontSizes::SM)
                 .text_color(text_color)
-                .child(dt.to_rfc3339()),
+                .child(dt.to_rfc3339())
+                .into_any_element(),
 
             Value::Array(arr) => {
                 if arr.is_empty() {
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child("[]")
+                    Text::caption("[]").into_any_element()
                 } else if arr.len() <= 3 && depth < 2 {
                     div()
                         .flex()
                         .gap(Spacing::XS)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .child("["),
-                        )
+                        .child(Text::caption("["))
                         .children(arr.iter().enumerate().map(|(i, v)| {
                             div()
                                 .flex()
                                 .child(self.render_value(v, theme, depth + 1))
-                                .when(i < arr.len() - 1, |d| {
-                                    d.child(
-                                        div()
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.muted_foreground)
-                                            .child(","),
-                                    )
-                                })
+                                .when(i < arr.len() - 1, |d| d.child(Text::caption(",")))
                         }))
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .child("]"),
-                        )
+                        .child(Text::caption("]"))
+                        .into_any_element()
                 } else {
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child(format!("[{} items]", arr.len()))
+                    Text::caption(format!("[{} items]", arr.len())).into_any_element()
                 }
             }
 
             Value::Document(doc) => {
                 if doc.is_empty() {
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child("{}")
+                    Text::caption("{}").into_any_element()
                 } else if depth < 2 {
-                    div().flex().flex_col().pl(Spacing::MD).children(
-                        doc.iter()
-                            .map(|(k, v)| self.render_document_field(k, v, theme, depth + 1)),
-                    )
-                } else {
                     div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child(format!("{{{} fields}}", doc.len()))
+                        .flex()
+                        .flex_col()
+                        .pl(Spacing::MD)
+                        .children(
+                            doc.iter()
+                                .map(|(k, v)| self.render_document_field(k, v, theme, depth + 1)),
+                        )
+                        .into_any_element()
+                } else {
+                    Text::caption(format!("{{{} fields}}", doc.len())).into_any_element()
                 }
             }
 
@@ -977,6 +949,7 @@ impl DataGridPanel {
                     .text_size(FontSizes::SM)
                     .text_color(theme.foreground)
                     .child(display)
+                    .into_any_element()
             }
         }
     }
@@ -1216,15 +1189,13 @@ impl DataGridPanel {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
                                 .child(
                                     svg()
                                         .path(arrow_icon.path())
                                         .size_3()
                                         .text_color(theme.muted_foreground),
                                 )
-                                .child(format!("{} ({})", col_name, mode)),
+                                .child(Text::caption(format!("{} ({})", col_name, mode))),
                         )
                     }),
             )
