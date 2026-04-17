@@ -1,5 +1,6 @@
 use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
+use dbflux_components::primitives::Text;
 
 impl Sidebar {
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -129,7 +130,7 @@ impl Sidebar {
                         .py(Spacing::XS)
                         .border_b_1()
                         .border_color(theme.border)
-                        .bg(gpui::rgb(0x5C1F1F))
+                        .bg(theme.danger.opacity(0.15))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -147,7 +148,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let has_entries = self.visible_entry_count > 0;
-        let theme = cx.theme();
+        let _theme = cx.theme();
         let sidebar_for_root_drop = sidebar_entity.clone();
         let sidebar_for_clear_drop = sidebar_entity.clone();
 
@@ -194,20 +195,8 @@ impl Sidebar {
                         .justify_center()
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .text_center()
-                                .child("No connections yet"),
-                        )
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .text_center()
-                                .child("Use + to add a new connection"),
-                        ),
+                        .child(Text::muted("No connections yet"))
+                        .child(Text::caption("Use + to add a new connection")),
                 )
             })
     }
@@ -308,20 +297,10 @@ impl Sidebar {
                         .justify_center()
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .text_center()
-                                .child("No scripts yet"),
-                        )
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .text_center()
-                                .child("Use + to create a new script or import an existing file"),
-                        ),
+                        .child(Text::muted("No scripts yet"))
+                        .child(Text::caption(
+                            "Use + to create a new script or import an existing file",
+                        )),
                 )
             })
     }

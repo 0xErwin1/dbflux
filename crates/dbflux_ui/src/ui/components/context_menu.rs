@@ -1,8 +1,10 @@
-use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::Text;
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+
+use crate::ui::icons::AppIcon;
 
 /// Purely visual menu item — consumers map clicked indices to their own action types.
 pub struct MenuItem {
@@ -207,7 +209,12 @@ fn render_menu_item(
             d.child(svg().path(icon.path()).size_4().text_color(icon_color))
         })
         .when(icon.is_none(), |d| d.pl(px(20.0)))
-        .child(div().flex_1().truncate().child(label))
+        .child(
+            div()
+                .flex_1()
+                .truncate()
+                .child(Text::body(label).text_color(fg)),
+        )
         .when(has_submenu, |d| {
             d.child(
                 svg()

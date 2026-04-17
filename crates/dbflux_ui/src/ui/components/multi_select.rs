@@ -1,4 +1,5 @@
 use crate::ui::tokens::Heights;
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::{
     Corner, ElementId, EventEmitter, IntoElement, MouseButton, ParentElement, Render, ScrollHandle,
@@ -168,12 +169,7 @@ impl MultiSelect {
                         Checkbox::new(SharedString::from(format!("ms-item-{}", index)))
                             .checked(checked),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(item.label.clone()),
-                    )
+                    .child(Text::body(item.label.clone()))
                     .into_any_element()
             })
             .collect();
@@ -185,18 +181,16 @@ impl MultiSelect {
                     .w_full()
                     .px_2()
                     .py_1()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
                     .cursor_pointer()
                     .rounded_sm()
-                    .hover(|s| s.bg(theme.list_active).text_color(theme.foreground))
+                    .hover(|s| s.bg(theme.list_active))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _event, _window, cx| {
                             this.clear_selection(cx);
                         }),
                     )
-                    .child("Clear all"),
+                    .child(Text::caption("Clear all")),
             )
         });
 
@@ -248,25 +242,17 @@ impl Render for MultiSelect {
             .bg(theme.background)
             .border_1()
             .border_color(theme.input)
-            .text_sm()
-            .when(is_empty, |el| {
-                el.text_color(theme.muted_foreground)
-                    .cursor_not_allowed()
-                    .opacity(0.5)
-            })
+            .when(is_empty, |el| el.cursor_not_allowed().opacity(0.5))
             .when(!is_empty, |el| {
                 el.cursor_pointer()
                     .hover(|s| s.bg(theme.accent.opacity(0.1)))
             })
-            .when(has_selection, |el| el.text_color(theme.foreground))
-            .when(!has_selection, |el| el.text_color(theme.muted_foreground))
-            .child(div().flex_1().truncate().child(label))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(if self.open { "▴" } else { "▾" }),
-            )
+            .child(div().flex_1().truncate().child(if has_selection {
+                Text::body(label)
+            } else {
+                Text::muted(label)
+            }))
+            .child(Text::caption(if self.open { "▴" } else { "▾" }))
             .when(!is_empty, |el| {
                 el.on_click(cx.listener(|this, _event, _window, cx| {
                     this.toggle_open(cx);

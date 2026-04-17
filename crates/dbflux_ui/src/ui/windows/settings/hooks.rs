@@ -2,16 +2,14 @@ use crate::app::AppStateChanged;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
+use dbflux_components::controls::{Button, Checkbox, Input};
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::{
     ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::input::Input;
 use gpui_component::input::InputState;
 use gpui_component::scroll::ScrollableElement;
 use std::collections::HashMap;
@@ -1217,8 +1215,7 @@ impl HooksSection {
                             gpui::transparent_black()
                         })
                         .child(
-                            Button::new("new-hook")
-                                .label("New Hook")
+                            Button::new("new-hook", "New Hook")
                                 .small()
                                 .w_full()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -1240,13 +1237,7 @@ impl HooksSection {
                     .flex_col()
                     .gap_1()
                     .when(hook_ids.is_empty(), |container| {
-                        container.child(
-                            div()
-                                .p_4()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child("No hooks defined"),
-                        )
+                        container.child(Text::muted("No hooks defined"))
                     })
                     .children(hook_ids.into_iter().enumerate().map(|(idx, hook_id)| {
                         let selected = self.editing_hook_id.as_deref() == Some(hook_id.as_str());
@@ -1289,19 +1280,9 @@ impl HooksSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(hook_id.clone()),
-                                            )
+                                            .child(Label::new(hook_id.clone()))
                                             .when_some(hook, |container, hook| {
-                                                container.child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(theme.muted_foreground)
-                                                        .child(hook.summary()),
-                                                )
+                                                container.child(Text::caption(hook.summary()))
                                             }),
                                     ),
                             )
@@ -1337,10 +1318,7 @@ impl HooksSection {
             )
             .child(
                 div().p_4().border_b_1().border_color(theme.border).child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(title),
+                    Label::new(title),
                 ),
             )
             .child(
@@ -1357,12 +1335,7 @@ impl HooksSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Hook ID"),
-                            )
+                            .child(Label::new("Hook ID"))
                             .child(Input::new(&self.input_hook_id).small()),
                     )
                     .child(
@@ -1370,12 +1343,7 @@ impl HooksSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Type"),
-                            )
+                            .child(Label::new("Type"))
                             .child(div().w(px(220.0)).child(self.hook_kind_dropdown.clone())),
                     )
                     .when(hook_kind == HookKindSelection::Command, |container| {
@@ -1389,12 +1357,7 @@ impl HooksSection {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child("Command"),
-                                        )
+                                        .child(Label::new("Command"))
                                         .child(Input::new(&self.input_hook_command).small()),
                                 )
                                 .child(
@@ -1402,18 +1365,8 @@ impl HooksSection {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child("Arguments"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.muted_foreground)
-                                                .child("Arguments separated by spaces"),
-                                        )
+                                        .child(Label::new("Arguments"))
+                                        .child(Text::caption("Arguments separated by spaces"))
                                         .child(Input::new(&self.input_hook_args).small()),
                                 ),
                         )
@@ -1430,12 +1383,7 @@ impl HooksSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child("Language"),
-                                            )
+                                            .child(Label::new("Language"))
                                             .child(
                                                 div()
                                                     .w(px(220.0))
@@ -1448,24 +1396,14 @@ impl HooksSection {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child("File Path"),
-                                        ),
+                                        .child(Label::new("File Path")),
                                 )
                                 .child(
                                     div()
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.muted_foreground)
-                                                .child("Scripts are edited in the app editor and stored under hooks/ by default"),
-                                        )
+                                        .child(Text::caption("Scripts are edited in the app editor and stored under hooks/ by default"))
                                         .child(
                                             Input::new(&self.input_hook_script_file_path).small(),
                                         )
@@ -1474,16 +1412,14 @@ impl HooksSection {
                                                 .flex()
                                                 .gap_2()
                                                 .child(
-                                                    Button::new("open-script-app")
-                                                        .label("Open in App")
+                                                    Button::new("open-script-app", "Open in App")
                                                         .small()
                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                             this.open_script_in_app(window, cx);
                                                         })),
                                                 )
                                                 .child(
-                                                    Button::new("open-script-editor")
-                                                        .label("Open in Editor")
+                                                    Button::new("open-script-editor", "Open in Editor")
                                                         .small()
                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                             this.open_script_in_default_editor(window, cx);
@@ -1497,18 +1433,8 @@ impl HooksSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child("Interpreter"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(format!("Leave empty for {default_interpreter}")),
-                                            )
+                                            .child(Label::new("Interpreter"))
+                                            .child(Text::caption(format!("Leave empty for {default_interpreter}")))
                                             .child(Input::new(&self.input_hook_interpreter).small()),
                                     )
                                 })
@@ -1518,12 +1444,7 @@ impl HooksSection {
                                             .flex()
                                             .flex_col()
                                             .gap_2()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child("Capabilities"),
-                                            )
+                                            .child(Label::new("Capabilities"))
                                             .child(
                                                 div()
                                                     .flex()
@@ -1537,7 +1458,7 @@ impl HooksSection {
                                                                 cx.notify();
                                                             })),
                                                     )
-                                                    .child(div().text_sm().child("Logging")),
+                                                    .child(Text::body("Logging")),
                                             )
                                             .child(
                                                 div()
@@ -1552,7 +1473,7 @@ impl HooksSection {
                                                                 cx.notify();
                                                             })),
                                                     )
-                                                    .child(div().text_sm().child("Environment read")),
+                                                    .child(Text::body("Environment read")),
                                             )
                                             .child(
                                                 div()
@@ -1567,7 +1488,7 @@ impl HooksSection {
                                                                 cx.notify();
                                                             })),
                                                     )
-                                                    .child(div().text_sm().child("Connection metadata")),
+                                                    .child(Text::body("Connection metadata")),
                                             )
                                             .child(
                                                 div()
@@ -1582,14 +1503,11 @@ impl HooksSection {
                                                                 cx.notify();
                                                             })),
                                                     )
-                                                    .child(div().text_sm().child("Controlled process run")),
+                                                    .child(Text::body("Controlled process run")),
                                             )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child("Enables `dbflux.process.run(...)` without exposing the Lua `os` library"),
-                                            ),
+                                            .child(Text::caption(
+                                                "Enables `dbflux.process.run(...)` without exposing the Lua `os` library",
+                                            )),
                                     )
                                 }),
                         )
@@ -1600,18 +1518,8 @@ impl HooksSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Execution Mode"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("Detached runs in background and does not block connect/disconnect"),
-                            )
+                            .child(Label::new("Execution Mode"))
+                            .child(Text::caption("Detached runs in background and does not block connect/disconnect"))
                             .child(div().w(px(220.0)).child(self.hook_execution_mode_dropdown.clone())),
                     )
                     })
@@ -1621,18 +1529,8 @@ impl HooksSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Ready Signal"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("DBFlux waits for this text in hook output before continuing. Required for detached pre-connect hooks."),
-                            )
+                            .child(Label::new("Ready Signal"))
+                            .child(Text::caption("DBFlux waits for this text in hook output before continuing. Required for detached pre-connect hooks."))
                             .child(Input::new(&self.input_hook_ready_signal).small()),
                     )
                     })
@@ -1642,12 +1540,7 @@ impl HooksSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Working Directory"),
-                            )
+                            .child(Label::new("Working Directory"))
                             .child(Input::new(&self.input_hook_cwd).small()),
                     )
                     })
@@ -1657,18 +1550,8 @@ impl HooksSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Environment"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("Comma-separated KEY=value pairs"),
-                            )
+                            .child(Label::new("Environment"))
+                            .child(Text::caption("Comma-separated KEY=value pairs"))
                             .child(Input::new(&self.input_hook_env).small()),
                     )
                     })
@@ -1677,12 +1560,7 @@ impl HooksSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Timeout (ms)"),
-                            )
+                            .child(Label::new("Timeout (ms)"))
                             .child(Input::new(&self.input_hook_timeout).small()),
                     )
                     .child(
@@ -1690,18 +1568,8 @@ impl HooksSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Resolved Command"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(preview),
-                            ),
+                            .child(Label::new("Resolved Command"))
+                            .child(Text::caption(preview)),
                     )
                     .when(!warnings.is_empty(), |container| {
                         container.child(
@@ -1724,10 +1592,8 @@ impl HooksSection {
                                             .mt(px(1.0)),
                                     )
                                     .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.warning)
-                                            .child(warning.clone()),
+                                        Text::body(warning.clone())
+                                            .text_color(theme.warning),
                                     )
                             })),
                         )
@@ -1745,7 +1611,7 @@ impl HooksSection {
                                         cx.notify();
                                     })),
                             )
-                            .child(div().text_sm().child("Enabled")),
+                            .child(Text::body("Enabled")),
                     )
                     .when(!is_lua, |container| {
                         container.child(
@@ -1761,7 +1627,7 @@ impl HooksSection {
                                             cx.notify();
                                         })),
                                 )
-                                .child(div().text_sm().child("Inherit parent environment")),
+                                .child(Text::body("Inherit parent environment")),
                         )
                     })
                     .child(
@@ -1769,12 +1635,7 @@ impl HooksSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("On Failure"),
-                            )
+                            .child(Label::new("On Failure"))
                             .child(div().w(px(220.0)).child(self.hook_failure_dropdown.clone())),
                     ),
             )
@@ -1790,8 +1651,7 @@ impl HooksSection {
                     .when(editing, |container| {
                         let hook_id = self.editing_hook_id.clone().unwrap_or_default();
                         container.child(
-                            Button::new("delete-hook")
-                                .label("Delete")
+                            Button::new("delete-hook", "Delete")
                                 .small()
                                 .danger()
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -1801,8 +1661,7 @@ impl HooksSection {
                     })
                     .child(div().flex_1())
                     .child(
-                        Button::new("save-hook")
-                            .label(if editing { "Update" } else { "Create" })
+                        Button::new("save-hook", if editing { "Update" } else { "Create" })
                             .small()
                             .primary()
                             .on_click(cx.listener(|this, _, window, cx| {

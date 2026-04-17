@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui::AsyncUpdateResultExt;
+use dbflux_components::primitives::Text;
 
 impl CodeDocument {
     // === Context dropdown creation ===
@@ -766,15 +767,13 @@ impl CodeDocument {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
                     .child(
                         svg()
                             .path(AppIcon::Database.path())
                             .size_3()
                             .text_color(theme.muted_foreground),
                     )
-                    .child("Connection:"),
+                    .child(Text::caption("Connection:")),
             )
             .child(
                 div()
@@ -782,37 +781,19 @@ impl CodeDocument {
                     .child(self.connection_dropdown.clone()),
             )
             .when(show_db, |el| {
-                el.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Database:"),
-                )
-                .child(div().min_w(px(120.0)).child(self.database_dropdown.clone()))
+                el.child(Text::caption("Database:"))
+                    .child(div().min_w(px(120.0)).child(self.database_dropdown.clone()))
             })
             .when(show_schema, |el| {
-                el.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Schema:"),
-                )
-                .child(div().min_w(px(100.0)).child(self.schema_dropdown.clone()))
+                el.child(Text::caption("Schema:"))
+                    .child(div().min_w(px(100.0)).child(self.schema_dropdown.clone()))
             })
             .child(div().flex_1())
             .when_some(self.path.as_ref(), |el, path| {
                 el.child(
                     div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
                         .overflow_x_hidden()
-                        .child(path.display().to_string()),
+                        .child(Text::caption(path.display().to_string())),
                 )
             })
             .into_any_element()

@@ -3,6 +3,7 @@ use crate::keymap::ContextId;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::Text;
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -638,10 +639,8 @@ impl HistoryModal {
                             div()
                                 .px(Spacing::SM)
                                 .py(Spacing::LG)
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
                                 .text_center()
-                                .child("No history yet"),
+                                .child(Text::muted("No history yet")),
                         )
                     })
                     .into_any_element()
@@ -720,7 +719,7 @@ impl HistoryModal {
                                                 .rounded(Radii::SM)
                                                 .text_size(FontSizes::SM)
                                                 .when(is_favorite, |d| {
-                                                    d.text_color(gpui::rgb(0xF59E0B))
+                                                    d.text_color(cx.theme().warning)
                                                 })
                                                 .when(!is_favorite, |d| {
                                                     d.text_color(theme.muted_foreground)
@@ -757,10 +756,8 @@ impl HistoryModal {
                             div()
                                 .px(Spacing::SM)
                                 .py(Spacing::LG)
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
                                 .text_center()
-                                .child("No saved queries"),
+                                .child(Text::muted("No saved queries")),
                         )
                     })
                     .into_any_element()

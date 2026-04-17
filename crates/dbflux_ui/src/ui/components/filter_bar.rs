@@ -339,8 +339,7 @@ fn render_item(
     theme: &gpui_component::theme::Theme,
     _cx: &App,
 ) -> AnyElement {
-    use gpui_component::Sizable;
-    use gpui_component::input::Input;
+    use dbflux_components::controls::Input;
 
     match item {
         FilterBarItem::Input { label, input } => div()

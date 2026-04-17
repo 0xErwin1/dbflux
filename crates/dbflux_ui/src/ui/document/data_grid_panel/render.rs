@@ -5,11 +5,13 @@ use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::Input;
+use dbflux_components::primitives::Text;
 use dbflux_core::{Pagination, SortDirection, Value};
-use gpui::prelude::FluentBuilder;
+use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme, Sizable};
+use gpui_component::ActiveTheme;
+use gpui_component::input::InputState;
 
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -109,7 +111,7 @@ impl Render for DataGridPanel {
             || self.result.raw_bytes.is_some();
         let has_columns = !self.result.columns.is_empty();
         let is_loading = self.state == GridState::Loading;
-        let muted_fg = theme.muted_foreground;
+        let _muted_fg = theme.muted_foreground;
 
         let show_panel_controls = self.show_panel_controls;
         let is_maximized = self.is_maximized;
@@ -194,10 +196,8 @@ impl Render for DataGridPanel {
                                 .text_color(theme.warning),
                         )
                         .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.warning)
-                                .child("This table has no primary key - editing is disabled"),
+                            Text::caption("This table has no primary key - editing is disabled")
+                                .text_color(theme.warning),
                         ),
                 )
             })
@@ -289,12 +289,14 @@ impl Render for DataGridPanel {
                         }),
                     )
                     .when(!has_data && !uses_result_view, |d| {
-                        d.flex().items_center().justify_center().child(
-                            div()
-                                .text_size(FontSizes::BASE)
-                                .text_color(muted_fg)
-                                .child(if is_loading { "Loading..." } else { "No data" }),
-                        )
+                        d.flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Text::muted(if is_loading {
+                                "Loading..."
+                            } else {
+                                "No data"
+                            }))
                     })
                     .when(uses_result_view, |d| {
                         d.child(self.render_result_view(result_view_mode, &theme, cx))
@@ -374,31 +376,15 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child(source_query_prefix.to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.foreground)
-                            .child(source_name.to_string()),
-                    ),
+                    .child(Text::caption(source_query_prefix.to_string()))
+                    .child(Text::body(source_name.to_string()).font_weight(FontWeight::MEDIUM)),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child("WHERE"),
-                    )
+                    .child(Text::caption("WHERE"))
                     .child(
                         div()
                             .flex()
@@ -453,12 +439,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child("LIMIT"),
-                    )
+                    .child(Text::caption("LIMIT"))
                     .child(
                         div()
                             .w(px(60.0))
@@ -601,22 +582,20 @@ impl DataGridPanel {
             .border_color(theme.border)
             // Left: status text
             .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(if has_changes {
-                        theme.warning
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .child(if has_changes {
-                        format!(
-                            "{} unsaved change{}",
-                            dirty_count,
-                            if dirty_count == 1 { "" } else { "s" }
-                        )
-                    } else {
-                        "No unsaved changes".to_string()
-                    }),
+                Text::caption(if has_changes {
+                    format!(
+                        "{} unsaved change{}",
+                        dirty_count,
+                        if dirty_count == 1 { "" } else { "s" }
+                    )
+                } else {
+                    "No unsaved changes".to_string()
+                })
+                .text_color(if has_changes {
+                    theme.warning
+                } else {
+                    theme.muted_foreground
+                }),
             )
             // Right: buttons
             .child(
@@ -752,16 +731,11 @@ impl DataGridPanel {
                                     .text_color(theme.muted_foreground)
                             })
                             .child("Save")
-                            .child(
-                                div()
-                                    .text_size(FontSizes::XS)
-                                    .text_color(if has_changes {
-                                        theme.primary_foreground.opacity(0.7)
-                                    } else {
-                                        theme.muted_foreground.opacity(0.5)
-                                    })
-                                    .child("Ctrl+↵"),
-                            ),
+                            .child(Text::caption("Ctrl+↵").text_color(if has_changes {
+                                theme.primary_foreground.opacity(0.7)
+                            } else {
+                                theme.muted_foreground.opacity(0.5)
+                            })),
                     )
                     // Revert button
                     .child(
@@ -1100,14 +1074,7 @@ impl DataGridPanel {
                     .child(display_text),
             )
             .when(truncated, |d| {
-                d.child(
-                    div()
-                        .px(Spacing::MD)
-                        .pb(Spacing::SM)
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.muted_foreground)
-                        .child(format!("(truncated at {} lines)", MAX_LINES)),
-                )
+                d.child(Text::caption(format!("(truncated at {} lines)", MAX_LINES)))
             })
     }
 
@@ -1223,27 +1190,20 @@ impl DataGridPanel {
                             dbflux_core::QueryResultShape::Text => "text",
                             dbflux_core::QueryResultShape::Binary => "binary",
                         };
-                        d.child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .child(label.to_string()),
-                        )
+                        d.child(Text::caption(label.to_string()))
                     })
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_1()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
                             .child(
                                 svg()
                                     .path(AppIcon::Rows3.path())
                                     .size_3()
                                     .text_color(theme.muted_foreground),
                             )
-                            .child(format!("{} rows", row_count)),
+                            .child(Text::caption(format!("{} rows", row_count))),
                     )
                     .when_some(sort_info, |d, (col_name, direction, is_server)| {
                         let arrow_icon = match direction {
@@ -1360,10 +1320,7 @@ impl DataGridPanel {
                     .child({
                         let mut muted = theme.muted_foreground;
                         muted.a = 0.5;
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(muted)
-                            .child(exec_time.to_string())
+                        Text::caption(exec_time.to_string()).text_color(muted)
                     }),
             )
     }

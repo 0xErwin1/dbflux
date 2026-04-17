@@ -1,5 +1,6 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::theme::ghost_border_color;
+use dbflux_components::primitives::Text;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{ActiveTheme, IconName, IconNamed};
@@ -163,10 +164,8 @@ impl Render for StatusBar {
                                 )
                                 .child(
                                     div()
-                                        .text_xs()
                                         .font_family("monospace")
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(connection_name),
+                                        .child(Text::caption(connection_name)),
                                 )
                             })
                             .when(!is_connected, |this| {
@@ -180,10 +179,8 @@ impl Render for StatusBar {
                                 )
                                 .child(
                                     div()
-                                        .text_xs()
                                         .font_family("monospace")
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("disconnected"),
+                                        .child(Text::caption("disconnected")),
                                 )
                             }),
                     )
@@ -195,19 +192,16 @@ impl Render for StatusBar {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("|")
-                                .child(description)
+                                .child(Text::caption("|"))
+                                .child(Text::caption(description))
                                 .child(
-                                    div()
-                                        .text_xs()
-                                        .font_family("monospace")
-                                        .text_color(cx.theme().primary)
-                                        .child(format!(
+                                    div().font_family("monospace").child(
+                                        Text::caption(format!(
                                             "({})",
                                             Self::format_elapsed(task.elapsed_secs)
-                                        )),
+                                        ))
+                                        .text_color(cx.theme().primary),
+                                    ),
                                 ),
                         )
                     })
@@ -217,10 +211,8 @@ impl Render for StatusBar {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("|")
-                                .child(Self::format_completed_task(&task)),
+                                .child(Text::caption("|"))
+                                .child(Text::caption(Self::format_completed_task(&task))),
                         )
                     }),
             )
@@ -247,20 +239,10 @@ impl Render for StatusBar {
                                     .size_3()
                                     .text_color(cx.theme().primary),
                             )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(format!("{} running", running_count)),
-                            )
+                            .child(Text::caption(format!("{} running", running_count)))
                         })
                         .when(running_count == 0, |this| {
-                            this.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Tasks"),
-                            )
+                            this.child(Text::caption("Tasks"))
                         }),
                 ),
             )

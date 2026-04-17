@@ -1,5 +1,6 @@
 use super::*;
 use crate::platform;
+use dbflux_components::primitives::Text;
 
 impl Workspace {
     fn render_panel_header(
@@ -233,17 +234,10 @@ impl Render for Workspace {
                                         .size_16()
                                         .text_color(muted_fg.opacity(0.5)),
                                 )
+                                .child(Text::muted("No documents open"))
                                 .child(
-                                    div()
-                                        .text_color(muted_fg)
-                                        .text_sm()
-                                        .child("No documents open"),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(muted_fg.opacity(0.7))
-                                        .text_xs()
-                                        .child("Press Ctrl+N to create a new query"),
+                                    Text::caption("Press Ctrl+N to create a new query")
+                                        .text_color(muted_fg.opacity(0.7)),
                                 ),
                         ),
                 )
@@ -577,7 +571,7 @@ impl Render for Workspace {
                 #[cfg(feature = "mcp")]
                 {
                     root.when_some(self.active_governance_panel, |root, panel| {
-                        let close_entity = cx.entity().clone();
+                        let _close_entity = cx.entity().clone();
                         let title = match panel {
                             super::GovernancePanel::Approvals => "MCP Approvals",
                         };
@@ -620,30 +614,7 @@ impl Render for Workspace {
                                                 .justify_between()
                                                 .border_b_1()
                                                 .border_color(theme.border)
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .child(title),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .cursor_pointer()
-                                                        .px(Spacing::SM)
-                                                        .py(Spacing::XS)
-                                                        .rounded(Radii::SM)
-                                                        .hover(|div| div.bg(theme.secondary))
-                                                        .on_mouse_down(
-                                                            MouseButton::Left,
-                                                            cx.listener(move |_, _, _, cx| {
-                                                                close_entity.update(cx, |this, cx| {
-                                                            this.active_governance_panel = None;
-                                                            cx.notify();
-                                                        });
-                                                            }),
-                                                        )
-                                                        .child("Close"),
-                                                ),
+                                                .child(Text::heading(title)),
                                         )
                                         .child(div().flex_1().min_h_0().child(content)),
                                 ),
@@ -833,12 +804,7 @@ impl Render for Workspace {
                                                     .size_5()
                                                     .text_color(theme.warning),
                                             )
-                                            .child(
-                                                div()
-                                                    .text_size(FontSizes::SM)
-                                                    .text_color(theme.foreground)
-                                                    .child(message),
-                                            ),
+                                            .child(Text::body(message)),
                                     )
                                     .child(
                                         div()

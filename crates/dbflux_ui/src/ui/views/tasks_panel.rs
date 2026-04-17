@@ -1,5 +1,6 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::icons::AppIcon;
+use dbflux_components::primitives::Text;
 use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -182,8 +183,8 @@ impl TasksPanel {
 
         let status_color = match &task.status {
             TaskStatus::Running => theme.accent,
-            TaskStatus::Completed => gpui::rgb(0x22C55E).into(),
-            TaskStatus::Failed(_) => gpui::rgb(0xDC2626).into(),
+            TaskStatus::Completed => theme.success,
+            TaskStatus::Failed(_) => theme.danger,
             TaskStatus::Cancelled => theme.muted_foreground,
         };
 
@@ -227,25 +228,21 @@ impl TasksPanel {
                                         .text_color(theme.muted_foreground),
                                 )
                             })
-                            .child(div().text_sm().text_color(status_color).child(status_icon))
+                            .child(Text::caption(status_icon.to_string()).text_color(status_color))
                             .child(
                                 div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
+                                    .flex_1()
                                     .text_ellipsis()
-                                    .child(task.description.clone()),
+                                    .child(Text::body(task.description.clone())),
                             )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(format!(
-                                        "({})",
-                                        Self::format_elapsed(task.elapsed_secs)
-                                    )),
-                            ),
+                            .child(Text::caption(format!(
+                                "({})",
+                                Self::format_elapsed(task.elapsed_secs)
+                            ))),
                     )
                     .when(is_running, |el| {
+                        let danger = theme.danger;
+                        let danger_bg = theme.danger.opacity(0.1);
                         el.child(
                             div()
                                 .id(SharedString::from(format!("cancel-task-{}", task_id)))
@@ -255,8 +252,8 @@ impl TasksPanel {
                                 .size_5()
                                 .rounded(px(2.0))
                                 .cursor_pointer()
-                                .text_color(gpui::rgb(0xDC2626))
-                                .hover(|s| s.bg(gpui::rgb(0xFEE2E2)))
+                                .text_color(danger)
+                                .hover(move |s| s.bg(danger_bg))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.cancel_task(task_id, task_kind, task_profile_id, cx);
                                 }))
@@ -264,7 +261,7 @@ impl TasksPanel {
                                     svg()
                                         .path(AppIcon::Power.path())
                                         .size_3()
-                                        .text_color(gpui::rgb(0xDC2626)),
+                                        .text_color(danger),
                                 ),
                         )
                     }),
@@ -289,12 +286,7 @@ impl TasksPanel {
                         .flex_col()
                         .gap_1()
                         .bg(theme.secondary)
-                        .children(lines.into_iter().map(|line| {
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(line)
-                        })),
+                        .children(lines.into_iter().map(|line| Text::caption(line))),
                 )
             })
     }
@@ -339,9 +331,7 @@ impl Render for TasksPanel {
                         .items_center()
                         .justify_center()
                         .py_4()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("No background tasks"),
+                        .child(Text::muted("No background tasks")),
                 )
             })
             .children(task_rows)
