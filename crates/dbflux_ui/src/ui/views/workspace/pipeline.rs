@@ -162,16 +162,13 @@ impl Render for PipelineProgress {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .text_size(FontSizes::SM)
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.foreground)
                     .child(
                         gpui::svg()
                             .path(AppIcon::Loader.path())
                             .size(px(14.0))
                             .text_color(theme.primary),
                     )
-                    .child(format!("Connecting: {}", self.profile_name)),
+                    .child(Text::body(format!("Connecting: {}", self.profile_name)).font_weight(gpui::FontWeight::MEDIUM)),
             )
             // Completed stages (checkmarks)
             .children(self.completed_stages.iter().map(|stage| {
@@ -195,15 +192,13 @@ impl Render for PipelineProgress {
                         .flex()
                         .items_center()
                         .gap(Spacing::XS)
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.foreground)
                         .child(
                             gpui::svg()
                                 .path(AppIcon::Loader.path())
                                 .size(px(12.0))
                                 .text_color(theme.info),
                         )
-                        .child(label),
+                        .child(Text::caption(label).font_size(FontSizes::XS).text_color(theme.foreground)),
                 )
             })
             // SSO waiting message

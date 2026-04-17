@@ -485,8 +485,6 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.foreground)
                             .cursor_pointer()
                             .hover(|d| d.bg(theme.accent.opacity(0.08)))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -510,7 +508,7 @@ impl DataGridPanel {
                                     .size_4()
                                     .text_color(theme.foreground),
                             )
-                            .child(refresh_label),
+                            .child(Text::caption(refresh_label).text_color(theme.foreground)),
                     )
                     .child(div().w(px(1.0)).h_full().bg(theme.input))
                     .child(
@@ -636,7 +634,6 @@ impl DataGridPanel {
                             })
                             .when(!can_undo, |d| {
                                 d.border_color(theme.border)
-                                    .text_color(theme.muted_foreground)
                             })
                             .child(svg().path(AppIcon::Undo.path()).size_4().text_color(
                                 if can_undo {
@@ -702,12 +699,10 @@ impl DataGridPanel {
                             .px(Spacing::MD)
                             .h(px(28.0))
                             .rounded(Radii::MD)
-                            .text_size(FontSizes::SM)
                             .border_1()
                             .when(has_changes, |d| {
                                 d.border_color(theme.primary)
                                     .bg(theme.primary)
-                                    .text_color(theme.primary_foreground)
                                     .cursor_pointer()
                                     .hover(|d| d.opacity(0.9))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -722,9 +717,12 @@ impl DataGridPanel {
                             })
                             .when(!has_changes, |d| {
                                 d.border_color(theme.border)
-                                    .text_color(theme.muted_foreground)
                             })
-                            .child("Save")
+                            .child(Text::caption("Save").text_color(if has_changes {
+                                theme.primary_foreground
+                            } else {
+                                theme.muted_foreground
+                            }))
                             .child(Text::caption("Ctrl+↵").text_color(if has_changes {
                                 theme.primary_foreground.opacity(0.7)
                             } else {
@@ -740,12 +738,10 @@ impl DataGridPanel {
                             .px(Spacing::MD)
                             .h(px(28.0))
                             .rounded(Radii::MD)
-                            .text_size(FontSizes::SM)
                             .border_1()
+                            .border_color(theme.border)
                             .when(has_changes, |d| {
-                                d.border_color(theme.border)
-                                    .text_color(theme.foreground)
-                                    .cursor_pointer()
+                                d.cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         if let Some(table_state) = &this.table_state {
@@ -757,11 +753,11 @@ impl DataGridPanel {
                                         window.focus(&this.focus_handle);
                                     }))
                             })
-                            .when(!has_changes, |d| {
-                                d.border_color(theme.border)
-                                    .text_color(theme.muted_foreground)
-                            })
-                            .child("Revert"),
+                            .child(Text::caption("Revert").text_color(if has_changes {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })),
                     ),
             )
     }
@@ -1035,7 +1031,7 @@ impl DataGridPanel {
         raw_bytes: Option<&[u8]>,
         text_body: Option<&str>,
         theme: &gpui_component::theme::Theme,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let hex_dump = if let Some(bytes) = raw_bytes {
             format_hex_dump(bytes)
@@ -1051,11 +1047,30 @@ impl DataGridPanel {
             .p(Spacing::MD)
             .overflow_y_scroll()
             .bg(theme.background)
-            .child(
-                div()
-                    .whitespace_nowrap()
-                    .child(Text::code(hex_dump)),
-            )
+                        .child(
+                            div()
+                                .id("clear-filter")
+                                .w(px(20.0))
+                                .h(px(20.0))
+                                .mr(Spacing::XS)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(Radii::SM)
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.muted_foreground)
+                                .cursor_pointer()
+                                .hover(|d| {
+                                    d.bg(theme.secondary).text_color(theme.foreground)
+                                })
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.filter_input.update(cx, |input, cx| {
+                                        input.set_value("", window, cx);
+                                    });
+                                    this.refresh(window, cx);
+                                }))
+                                .child("\u{00d7}"),
+                        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1192,17 +1207,15 @@ impl DataGridPanel {
                             .gap_1()
                             .px(Spacing::XS)
                             .rounded(Radii::SM)
-                            .text_size(FontSizes::XS)
                             .when(can_prev, |d| {
                                 d.cursor_pointer()
-                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.go_to_prev_page(window, cx);
                                     }))
                             })
                             .when(!can_prev, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
+                                d.opacity(0.5)
                             })
                             .child(svg().path(AppIcon::ChevronLeft.path()).size_3().text_color(
                                 if can_prev {
@@ -1211,7 +1224,13 @@ impl DataGridPanel {
                                     theme.muted_foreground
                                 },
                             ))
-                            .child("Prev"),
+                            .child(Text::caption("Prev").font_size(FontSizes::XS).text_color(
+                                if can_prev {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )),
                     )
                     .child(
                         Text::caption(if let Some(total) = total_pages {
@@ -1229,19 +1248,23 @@ impl DataGridPanel {
                             .gap_1()
                             .px(Spacing::XS)
                             .rounded(Radii::SM)
-                            .text_size(FontSizes::XS)
                             .when(can_next, |d| {
                                 d.cursor_pointer()
-                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.go_to_next_page(window, cx);
                                     }))
                             })
                             .when(!can_next, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
+                                d.opacity(0.5)
                             })
-                            .child("Next")
+                            .child(Text::caption("Next").font_size(FontSizes::XS).text_color(
+                                if can_next {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            ))
                             .child(
                                 svg()
                                     .path(AppIcon::ChevronRight.path())

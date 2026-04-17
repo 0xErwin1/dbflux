@@ -1917,11 +1917,6 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if copy_query_selected && !copy_submenu_open {
-                        theme.accent_foreground
-                    } else {
-                        submenu_fg
-                    })
                     .when(copy_submenu_open, |d| d.bg(submenu_hover))
                     .when(copy_query_selected && !copy_submenu_open, |d| {
                         d.bg(theme.accent)
@@ -1997,6 +1992,11 @@ impl DataGridPanel {
                                     .enumerate()
                                     .map(|(idx, (label, action))| {
                                         let is_submenu_selected = idx == submenu_selected_index;
+                                        let copy_item_color = if is_submenu_selected {
+                                            theme.accent_foreground
+                                        } else {
+                                            submenu_fg
+                                        };
                                         div()
                                             .id(SharedString::from(format!("copy-{}", label)))
                                             .flex()
@@ -2008,11 +2008,6 @@ impl DataGridPanel {
                                             .rounded(Radii::SM)
                                             .cursor_pointer()
                                             .text_size(FontSizes::SM)
-                                            .text_color(if is_submenu_selected {
-                                                theme.accent_foreground
-                                            } else {
-                                                submenu_fg
-                                            })
                                             .when(is_submenu_selected, |d| d.bg(theme.accent))
                                             .when(!is_submenu_selected, |d| {
                                                 d.hover(|d| d.bg(submenu_hover))
@@ -2038,7 +2033,7 @@ impl DataGridPanel {
                                                         theme.muted_foreground
                                                     }),
                                             )
-                                            .child(label)
+                                            .child(Text::caption(label).text_color(copy_item_color))
                                     })
                                     .collect::<Vec<_>>(),
                                 ),
