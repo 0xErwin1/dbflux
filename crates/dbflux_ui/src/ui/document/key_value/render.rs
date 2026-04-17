@@ -7,8 +7,8 @@ use dbflux_components::controls::Input;
 use dbflux_components::primitives::{IconButton, Text};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
 
 impl Render for super::KeyValueDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

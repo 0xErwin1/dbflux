@@ -384,6 +384,7 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let danger_color = cx.theme().danger;
         if !is_ssh_tab && field_def.id == "profile" && self.selected_driver_id() == Some("dynamodb")
         {
             let field_enabled = self.is_field_enabled(field_def);
@@ -809,6 +810,7 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let danger_color = cx.theme().danger;
         let Some(host_input) = self.input_state_for_field("host") else {
             return div().into_any_element();
         };
@@ -957,6 +959,7 @@ impl ConnectionManagerWindow {
         field: FormFocus,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let danger_color = cx.theme().danger;
         div()
             .rounded(px(4.0))
             .border_2()
