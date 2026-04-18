@@ -1,6 +1,6 @@
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::FontSizes;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::list::ListItem;
@@ -31,12 +31,7 @@ impl ConnectionManagerWindow {
                     .p_3()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("New Connection"),
-                    ),
+                    .child(Text::heading("New Connection").font_size(FontSizes::LG)),
             )
             .child(
                 div().flex_1().p_3().child(
@@ -70,10 +65,9 @@ impl ConnectionManagerWindow {
                                                 .items_center()
                                                 .gap_3()
                                                 .child(
-                                                    svg()
-                                                        .path(AppIcon::from_icon(icon).path())
-                                                        .size_8()
-                                                        .text_color(theme.foreground),
+                                                    Icon::new(AppIcon::from_icon(icon))
+                                                        .size(px(32.0))
+                                                        .color(theme.foreground),
                                                 )
                                                 .child(
                                                     div()
@@ -81,10 +75,8 @@ impl ConnectionManagerWindow {
                                                         .flex_col()
                                                         .gap_1()
                                                         .child(
-                                                            div()
-                                                                .text_sm()
-                                                                .font_weight(FontWeight::SEMIBOLD)
-                                                                .child(driver_info.name),
+                                                            Text::heading(driver_info.name)
+                                                                .font_size(FontSizes::SM),
                                                         )
                                                         .child(
                                                             Text::muted(driver_info.description)
@@ -97,13 +89,10 @@ impl ConnectionManagerWindow {
                 ),
             )
             .child(
-                div()
-                    .p_3()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("j/k Navigate  h/l Horizontal  Enter Select  Esc Close"),
+                div().p_3().border_t_1().border_color(theme.border).child(
+                    Text::muted("j/k Navigate  h/l Horizontal  Enter Select  Esc Close")
+                        .font_size(FontSizes::XS),
+                ),
             )
     }
 }

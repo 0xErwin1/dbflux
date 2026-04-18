@@ -1,12 +1,13 @@
 use crate::keymap::ContextId;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::helpers::text_color_for_selected;
 use dbflux_components::primitives::{Text, surface_panel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Sizable};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -255,6 +256,52 @@ struct FilteredItem {
 }
 
 const VISIBLE_ITEMS: usize = 8;
+
+fn palette_item_name(
+    name: impl Into<SharedString>,
+    is_selected: bool,
+    theme: &gpui_component::theme::Theme,
+) -> Text {
+    Text::label_sm(name).color(if is_selected {
+        theme.primary_foreground
+    } else {
+        theme.foreground
+    })
+}
+
+fn palette_category_text(
+    label: impl Into<SharedString>,
+    is_selected: bool,
+    theme: &gpui_component::theme::Theme,
+) -> Text {
+    Text::caption(label).color(if is_selected {
+        theme.primary_foreground.opacity(0.7)
+    } else {
+        theme.muted_foreground
+    })
+}
+
+fn palette_qualifier_text(
+    label: impl Into<SharedString>,
+    is_selected: bool,
+    theme: &gpui_component::theme::Theme,
+) -> Text {
+    Text::caption(label).color(if is_selected {
+        theme.primary_foreground.opacity(0.6)
+    } else {
+        theme.muted_foreground
+    })
+}
+
+fn palette_shortcut_text(
+    shortcut: impl Into<SharedString>,
+    is_selected: bool,
+    theme: &gpui_component::theme::Theme,
+) -> Text {
+    Text::caption(shortcut)
+        .font_size(FontSizes::XS)
+        .color(text_color_for_selected(is_selected, theme))
+}
 
 pub struct CommandPalette {
     visible: bool,
@@ -566,16 +613,11 @@ impl CommandPalette {
                     .px(Spacing::SM)
                     .py(Spacing::XS)
                     .rounded(Radii::SM)
-                    .text_size(FontSizes::XS)
                     .font_family("monospace")
-                    .when(is_selected, |d| {
-                        d.bg(theme.primary_foreground.opacity(0.2))
-                            .text_color(theme.primary_foreground)
-                    })
-                    .when(!is_selected, |d| {
-                        d.bg(theme.secondary).text_color(theme.muted_foreground)
-                    })
-                    .child(s)
+                    .when(is_selected, |d| d.bg(theme.primary_foreground.opacity(0.2)))
+                    .when(!is_selected, |d| d.bg(theme.secondary))
+                    .child(palette_shortcut_text(s, is_selected, theme))
+                    .into_any_element()
             }),
             PaletteItem::Connection { is_connected, .. } => {
                 let indicator = if *is_connected {
@@ -593,26 +635,14 @@ impl CommandPalette {
                         .rounded_full()
                         .bg(theme.muted_foreground.opacity(0.4))
                 };
-                Some(indicator)
+                Some(indicator.into_any_element())
             }
-            PaletteItem::Resource(_) => item.qualifier().map(|q| {
-                div()
-                    .text_size(FontSizes::XS)
-                    .when(is_selected, |d| {
-                        d.text_color(theme.primary_foreground.opacity(0.6))
-                    })
-                    .when(!is_selected, |d| d.text_color(theme.muted_foreground))
-                    .child(q)
-            }),
-            PaletteItem::Script { .. } => item.qualifier().map(|q| {
-                div()
-                    .text_size(FontSizes::XS)
-                    .when(is_selected, |d| {
-                        d.text_color(theme.primary_foreground.opacity(0.6))
-                    })
-                    .when(!is_selected, |d| d.text_color(theme.muted_foreground))
-                    .child(q)
-            }),
+            PaletteItem::Resource(_) => item
+                .qualifier()
+                .map(|q| palette_qualifier_text(q, is_selected, theme).into_any_element()),
+            PaletteItem::Script { .. } => item
+                .qualifier()
+                .map(|q| palette_qualifier_text(q, is_selected, theme).into_any_element()),
         };
 
         div()
@@ -625,12 +655,9 @@ impl CommandPalette {
             .justify_between()
             .rounded(Radii::SM)
             .cursor_pointer()
-            .when(is_selected, |d| {
-                d.bg(theme.primary).text_color(theme.primary_foreground)
-            })
+            .when(is_selected, |d| d.bg(theme.primary))
             .when(!is_selected, |d| {
                 d.bg(theme.background)
-                    .text_color(theme.foreground)
                     .hover(|d| d.bg(theme.secondary))
             })
             .child(
@@ -639,20 +666,9 @@ impl CommandPalette {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .when(is_selected, |d| {
-                                d.text_color(theme.primary_foreground.opacity(0.7))
-                            })
-                            .when(!is_selected, |d| d.text_color(theme.muted_foreground))
-                            .child(category),
+                        palette_category_text(category, is_selected, theme),
                     )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(name),
-                    ),
+                    .child(palette_item_name(name, is_selected, theme)),
             )
             .when_some(right_el, |d, el| d.child(el))
     }

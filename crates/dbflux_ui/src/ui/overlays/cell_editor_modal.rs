@@ -1,8 +1,8 @@
 use crate::ui::components::json_editor_view::{self, JsonEditorView};
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
-use gpui::*;
 use dbflux_components::controls::InputState;
+use gpui::*;
 
 /// Event emitted when the modal editor saves.
 #[derive(Clone)]

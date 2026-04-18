@@ -1,4 +1,30 @@
 use super::*;
+use dbflux_components::primitives::{Icon, Text};
+
+fn sidebar_tree_label(
+    label: SharedString,
+    node_kind: SchemaNodeKind,
+    is_active: bool,
+    is_active_database: bool,
+    color: Hsla,
+) -> Text {
+    if (node_kind == SchemaNodeKind::Profile && is_active) || is_active_database {
+        Text::heading(label).font_size(FontSizes::BASE).color(color)
+    } else if matches!(
+        node_kind,
+        SchemaNodeKind::TablesFolder
+            | SchemaNodeKind::ViewsFolder
+            | SchemaNodeKind::TypesFolder
+            | SchemaNodeKind::ColumnsFolder
+            | SchemaNodeKind::IndexesFolder
+            | SchemaNodeKind::ForeignKeysFolder
+            | SchemaNodeKind::ConstraintsFolder
+    ) {
+        Text::label(label).font_size(FontSizes::BASE).color(color)
+    } else {
+        Text::body(label).font_size(FontSizes::BASE).color(color)
+    }
+}
 
 pub(super) struct TreeRenderParams {
     pub connections: Vec<Uuid>,
@@ -263,12 +289,7 @@ pub(super) fn render_tree_item(
                                         this.handle_chevron_click(&item_id_for_chevron, cx);
                                     });
                                 })
-                                .child(
-                                    svg()
-                                        .path(icon.path())
-                                        .size_3p5()
-                                        .text_color(theme.muted_foreground),
-                                )
+                                .child(Icon::new(icon).size(px(14.0)).muted())
                         }),
                 )
                 .child(
@@ -278,12 +299,14 @@ pub(super) fn render_tree_item(
                         .flex()
                         .justify_center()
                         .when_some(node_icon, |el, icon| {
-                            el.child(svg().path(icon.path()).size_4().text_color(icon_color))
+                            el.child(Icon::new(icon).small().color(icon_color))
                         })
                         .when(node_icon.is_none() && !unicode_icon.is_empty(), |el| {
-                            el.text_size(FontSizes::SM)
-                                .text_color(icon_color)
-                                .child(unicode_icon)
+                            el.child(
+                                Text::body(unicode_icon)
+                                    .font_size(FontSizes::SM)
+                                    .color(icon_color),
+                            )
                         }),
                 )
                 .when(is_being_renamed, |el| {
@@ -303,32 +326,15 @@ pub(super) fn render_tree_item(
                     )
                 })
                 .when(!is_being_renamed, |el| {
-                    el.child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .text_size(FontSizes::BASE)
-                            .text_color(label_color)
-                            .when(node_kind == SchemaNodeKind::Profile && is_active, |d| {
-                                d.font_weight(FontWeight::SEMIBOLD)
-                            })
-                            .when(is_active_database, |d| d.font_weight(FontWeight::SEMIBOLD))
-                            .when(
-                                matches!(
-                                    node_kind,
-                                    SchemaNodeKind::TablesFolder
-                                        | SchemaNodeKind::ViewsFolder
-                                        | SchemaNodeKind::TypesFolder
-                                        | SchemaNodeKind::ColumnsFolder
-                                        | SchemaNodeKind::IndexesFolder
-                                        | SchemaNodeKind::ForeignKeysFolder
-                                        | SchemaNodeKind::ConstraintsFolder
-                                ),
-                                |d| d.font_weight(FontWeight::MEDIUM),
-                            )
-                            .child(item.label.clone()),
-                    )
+                    el.child(div().flex_1().overflow_hidden().text_ellipsis().child(
+                        sidebar_tree_label(
+                            item.label.clone(),
+                            node_kind,
+                            is_active,
+                            is_active_database,
+                            label_color,
+                        ),
+                    ))
                 })
                 .when(
                     matches!(
@@ -854,7 +860,11 @@ fn resolve_node_icon(
                 theme.muted_foreground
             };
             let unicode = if icon.is_none() {
-                if is_connected { "\u{25CF}" } else { "\u{25CB}" }
+                if is_connected {
+                    "\u{25CF}"
+                } else {
+                    "\u{25CB}"
+                }
             } else {
                 ""
             };

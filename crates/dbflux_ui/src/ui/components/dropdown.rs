@@ -4,7 +4,7 @@ use crate::ui::tokens::{FontSizes, Heights};
 use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::{
-    Corner, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement, MouseButton,
+    Corner, Div, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement, MouseButton,
     ParentElement, Render, ScrollHandle, ScrollWheelEvent, SharedString,
     StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
 };
@@ -353,17 +353,21 @@ impl Dropdown {
                     .py_1p5()
                     .text_sm()
                     .whitespace_nowrap()
-                    .text_color(theme.foreground)
                     .when(is_highlighted, |el| {
-                        el.bg(theme.accent).text_color(theme.accent_foreground)
+                        el.bg(theme.accent)
                     })
                     .when(!is_highlighted && !is_disabled, |el| {
                         el.hover(|s| s.bg(theme.list_active))
                     })
-                    .child(item.label.clone());
+                    .child(render_dropdown_menu_label(
+                        item.label.clone(),
+                        is_disabled,
+                        is_highlighted,
+                        theme,
+                    ));
 
                 if is_disabled {
-                    row = row.text_color(theme.muted_foreground).cursor_not_allowed();
+                    row = row.cursor_not_allowed();
                 } else {
                     row = row.cursor_pointer().on_mouse_down(
                         MouseButton::Left,
@@ -422,15 +426,9 @@ impl Render for Dropdown {
             .flex()
             .items_center()
             .w_full()
-            .when(disabled, |el| {
-                el.text_color(theme.muted_foreground)
-                    .cursor_not_allowed()
-                    .opacity(0.5)
-            })
+            .when(disabled, |el| el.cursor_not_allowed().opacity(0.5))
             .when(!disabled, |el| {
-                el.text_color(theme.foreground)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.accent.opacity(0.1)))
+                el.cursor_pointer().hover(|s| s.bg(theme.accent.opacity(0.1)))
             });
 
         if self.compact_trigger {
@@ -448,7 +446,11 @@ impl Render for Dropdown {
                 .gap_1()
                 .px_1p5()
                 .text_xs()
-                .child(div().flex_1().truncate().child(label))
+                .child(render_dropdown_trigger_label(
+                    label.clone(),
+                    disabled,
+                    FontSizes::XS,
+                ))
                 .child(Text::caption("▾").font_size(FontSizes::XS));
         } else {
             trigger = trigger
@@ -461,7 +463,11 @@ impl Render for Dropdown {
                 .border_1()
                 .border_color(theme.input)
                 .text_sm()
-                .child(div().flex_1().truncate().child(label))
+                .child(render_dropdown_trigger_label(
+                    label.clone(),
+                    disabled,
+                    FontSizes::SM,
+                ))
                 .child(Text::caption("▾").font_size(FontSizes::XS));
         }
 
@@ -526,3 +532,36 @@ impl Render for Dropdown {
 
 impl EventEmitter<DropdownSelectionChanged> for Dropdown {}
 impl EventEmitter<DropdownDismissed> for Dropdown {}
+
+fn render_dropdown_menu_label(
+    label: SharedString,
+    is_disabled: bool,
+    is_highlighted: bool,
+    theme: &gpui_component::Theme,
+) -> Div {
+    let text = if is_disabled {
+        Text::muted(label).font_size(FontSizes::SM)
+    } else if is_highlighted {
+        Text::body(label)
+            .font_size(FontSizes::SM)
+            .color(theme.accent_foreground)
+    } else {
+        Text::body(label).font_size(FontSizes::SM)
+    };
+
+    div().w_full().truncate().child(text)
+}
+
+fn render_dropdown_trigger_label(
+    label: SharedString,
+    disabled: bool,
+    font_size: gpui::Pixels,
+) -> Div {
+    let text = if disabled {
+        Text::muted(label).font_size(font_size)
+    } else {
+        Text::body(label).font_size(font_size)
+    };
+
+    div().flex_1().truncate().child(text)
+}

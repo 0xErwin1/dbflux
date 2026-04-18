@@ -1,9 +1,9 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::theme::ghost_border_color;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::{ActiveTheme, IconName, IconNamed};
+use gpui_component::ActiveTheme;
 use std::time::Duration;
 
 pub struct ToggleTasksPanel;
@@ -200,7 +200,7 @@ impl Render for StatusBar {
                                             "({})",
                                             Self::format_elapsed(task.elapsed_secs)
                                         ))
-                                        .text_color(cx.theme().primary),
+                                        .primary(),
                                     ),
                                 ),
                         )
@@ -234,10 +234,9 @@ impl Render for StatusBar {
                         }))
                         .when(running_count > 0, |this| {
                             this.child(
-                                svg()
-                                    .path(IconName::Loader.path())
-                                    .size_3()
-                                    .text_color(cx.theme().primary),
+                                Icon::new(crate::ui::icons::AppIcon::Loader)
+                                    .size(px(12.0))
+                                    .primary(),
                             )
                             .child(Text::caption(format!("{} running", running_count)))
                         })

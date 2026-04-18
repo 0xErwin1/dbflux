@@ -1,9 +1,9 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
 use crate::keymap::{ContextId, KeyChord, Modifiers, key_chord_from_gpui};
+use dbflux_components::controls::InputState;
 use gpui::prelude::*;
 use gpui::*;
-use dbflux_components::controls::InputState;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, PartialEq, Debug)]

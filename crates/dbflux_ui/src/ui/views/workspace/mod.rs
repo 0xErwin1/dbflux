@@ -30,7 +30,7 @@ use crate::ui::overlays::login_modal::{LoginModal, LoginModalEvent};
 use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
 use crate::ui::overlays::sql_preview_modal::SqlPreviewModal;
 use crate::ui::overlays::sso_wizard::{SsoWizard, SsoWizardEvent};
-use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::ui::tokens::{Heights, Radii, Spacing};
 use crate::ui::views::sidebar::{Sidebar, SidebarEvent, SidebarTab};
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::TasksPanel;

@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, App, Hsla, Pixels};
+use gpui::{App, Hsla, Pixels, div};
 use gpui_component::ActiveTheme;
 
 use crate::tokens::Radii;

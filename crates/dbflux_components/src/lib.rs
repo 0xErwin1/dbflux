@@ -6,6 +6,7 @@
 #![allow(clippy::type_complexity)]
 
 pub mod actions;
+pub mod helpers;
 pub mod icon;
 pub mod tokens;
 

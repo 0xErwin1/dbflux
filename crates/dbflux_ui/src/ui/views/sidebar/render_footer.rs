@@ -1,5 +1,6 @@
 use super::*;
 use crate::platform;
+use dbflux_components::primitives::Icon;
 
 impl Sidebar {
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -25,8 +26,7 @@ impl Sidebar {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(theme.muted_foreground)
-                    .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                    .hover(|d| d.bg(theme.secondary))
                     .on_click(move |_, _, cx| {
                         let sidebar = sidebar.clone();
 
@@ -74,13 +74,8 @@ impl Sidebar {
                             },
                         );
                     })
-                    .child(
-                        svg()
-                            .path(AppIcon::Settings.path())
-                            .size_4()
-                            .text_color(theme.muted_foreground),
-                    )
-                    .child("Settings"),
+                    .child(Icon::new(AppIcon::Settings).size(px(16.0)).muted())
+                    .child(Text::caption("Settings")),
             )
     }
 }

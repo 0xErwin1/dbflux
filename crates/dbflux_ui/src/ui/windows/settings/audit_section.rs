@@ -5,6 +5,7 @@ use super::SettingsSectionId;
 use crate::app::AppStateEntity;
 use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::components::toast::ToastExt;
+use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
@@ -633,9 +634,9 @@ impl AuditSection {
         _muted_fg: Hsla,
     ) -> impl IntoElement {
         div().pt_2().pb_1().border_b_1().border_color(border).child(
-            Text::body(label.to_string())
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(_muted_fg),
+            Text::heading(label.to_string())
+                .font_size(FontSizes::BASE)
+                .color(_muted_fg),
         )
     }
 
@@ -740,8 +741,6 @@ impl AuditSection {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let primary = theme.primary;
-        let muted_fg = theme.muted_foreground;
-
         // Row is non-interactive: no cursor movement on activation,
         // checkbox cannot be toggled. Only visual focus state is shown.
         div()
@@ -765,14 +764,8 @@ impl AuditSection {
                 }),
             )
             .child(Checkbox::new(id).checked(checked))
-            .child(div().text_sm().text_color(muted_fg).child(label))
-            .child(
-                div()
-                    .text_xs()
-                    .italic()
-                    .text_color(muted_fg.opacity(0.7))
-                    .child("(not yet wired)"),
-            )
+            .child(Text::muted(label))
+            .child(div().italic().child(Text::dim_secondary("(not yet wired)")))
     }
 
     /// Internal implementation for input fields; `unsupported` dims the label
@@ -788,9 +781,6 @@ impl AuditSection {
         cx: &mut Context<Self>,
         unsupported: bool,
     ) -> impl IntoElement {
-        let theme = cx.theme();
-        let muted_fg = theme.muted_foreground;
-
         div()
             .flex()
             .flex_col()
@@ -800,22 +790,13 @@ impl AuditSection {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(if unsupported {
-                        muted_fg
+                    .child(if unsupported {
+                        Text::label_sm(label.to_string()).muted_foreground()
                     } else {
-                        theme.foreground
+                        Text::label_sm(label.to_string())
                     })
-                    .child(label.to_string())
                     .when(unsupported, |this| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .italic()
-                                .text_color(muted_fg.opacity(0.7))
-                                .child("(not yet wired)"),
-                        )
+                        this.child(div().italic().child(Text::dim_secondary("(not yet wired)")))
                     }),
             )
             .child(

@@ -6,13 +6,13 @@ use super::section_trait::SectionFocusEvent;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_core::{AccessKind, AuthProfile, FormFieldKind, ImportableProfile};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
-use dbflux_components::controls::InputState;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, Icon, IconName};
 use std::collections::{HashMap, HashSet};
@@ -847,7 +847,7 @@ impl AuthProfilesSection {
                     .flex()
                     .items_start()
                     .gap_2()
-                    .child(Icon::new(IconName::Info).size_4().text_color(theme.primary))
+                    .child(FluxIcon::new(IconName::Info).size(px(16.0)).color(theme.primary))
                     .child(
                         div()
                             .flex()
@@ -1565,7 +1565,7 @@ impl AuthProfilesSection {
                                                     "Account listing failed: {}",
                                                     error
                                                 ))
-                                                .text_color(theme.warning),
+                                                .warning(),
                                             )
                                         },
                                     )
@@ -1575,17 +1575,15 @@ impl AuthProfilesSection {
                                                 "Role listing failed: {}",
                                                 error
                                             ))
-                                            .text_color(theme.warning),
+                                            .warning(),
                                         )
                                     })
                                     .when_some(self.sso_login_status.as_ref(), |content, status| {
-                                        content.child(Text::caption(status.0.clone()).text_color(
-                                            if status.1 {
-                                                theme.success
-                                            } else {
-                                                theme.warning
-                                            },
-                                        ))
+                                        content.child(if status.1 {
+                                            Text::caption(status.0.clone()).success()
+                                        } else {
+                                            Text::caption(status.0.clone()).warning()
+                                        })
                                     })
                             }
 

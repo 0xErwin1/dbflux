@@ -7,15 +7,16 @@ use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
+use crate::ui::tokens::FontSizes;
+use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::primitives::{Icon, Label, Text};
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use dbflux_components::controls::InputEvent;
 
 const CAPABILITY_CATALOG: &[(DriverCapabilities, &str)] = &[
     (DriverCapabilities::MULTIPLE_DATABASES, "Multiple Databases"),
@@ -745,11 +746,11 @@ impl DriversSection {
                                     .items_start()
                                     .gap_2()
                                     .child(
-                                        svg()
-                                            .path(AppIcon::from_icon(entry.metadata.icon).path())
-                                            .size_4()
-                                            .mt(px(2.0))
-                                            .text_color(theme.muted_foreground),
+                                        div().mt(px(2.0)).child(
+                                            Icon::new(AppIcon::from_icon(entry.metadata.icon))
+                                                .size(px(16.0))
+                                                .muted(),
+                                        ),
                                     )
                                     .child(
                                         div()
@@ -789,10 +790,9 @@ impl DriversSection {
                     .items_start()
                     .gap_3()
                     .child(
-                        svg()
-                            .path(AppIcon::from_icon(entry.metadata.icon).path())
-                            .size_8()
-                            .text_color(theme.foreground),
+                        Icon::new(AppIcon::from_icon(entry.metadata.icon))
+                            .size(px(32.0))
+                            .color(theme.foreground),
                     )
                     .child(
                         div()
@@ -1244,7 +1244,6 @@ impl DriversSection {
         entry: &DriverSettingsEntry,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let Some(schema) = &entry.settings_schema else {
             return div()
                 .flex()
@@ -1270,11 +1269,9 @@ impl DriversSection {
                             .flex_col()
                             .gap_2()
                             .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.muted_foreground)
-                                    .child(section.title.to_uppercase()),
+                                Text::heading(section.title.to_uppercase())
+                                    .font_size(FontSizes::XS)
+                                    .muted_foreground(),
                             )
                             .children(section.fields.iter().filter_map(|field| {
                                 let enabled = form_renderer::is_field_enabled(

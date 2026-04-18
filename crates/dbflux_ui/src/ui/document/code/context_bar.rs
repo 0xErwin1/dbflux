@@ -1,6 +1,6 @@
 use super::*;
 use crate::ui::AsyncUpdateResultExt;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 
 impl CodeDocument {
     // === Context dropdown creation ===
@@ -767,12 +767,7 @@ impl CodeDocument {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(
-                        svg()
-                            .path(AppIcon::Database.path())
-                            .size_3()
-                            .text_color(theme.muted_foreground),
-                    )
+                    .child(Icon::new(AppIcon::Database).size(px(12.0)).muted())
                     .child(Text::caption("Connection:")),
             )
             .child(

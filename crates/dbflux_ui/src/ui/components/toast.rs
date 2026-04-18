@@ -1,11 +1,10 @@
 use std::time::Duration;
 
 use dbflux_components::icon::IconSource;
-use dbflux_components::primitives::{IconButton, Text};
+use dbflux_components::primitives::{Icon, IconButton, Text};
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, Global, Hsla, Window, px, rems};
 use gpui_component::ActiveTheme;
-use gpui_component::IconNamed;
 
 use crate::ui::AsyncUpdateResultExt;
 use crate::ui::icons::AppIcon;
@@ -178,18 +177,15 @@ impl Render for ToastHost {
                     .rounded(Radii::LG)
                     .shadow_lg()
                     .child(match icon_source {
-                        IconSource::Svg(path) => gpui::svg()
-                            .path(path)
+                        IconSource::Svg(path) => Icon::new(IconSource::Svg(path))
                             .size(px(18.0))
+                            .color(accent)
+                            .into_any_element(),
+                        IconSource::Named(name) => gpui::div()
                             .flex_shrink_0()
                             .mt(px(2.0))
-                            .text_color(accent),
-                        IconSource::Named(name) => gpui::svg()
-                            .path(name.path())
-                            .size(px(18.0))
-                            .flex_shrink_0()
-                            .mt(px(2.0))
-                            .text_color(accent),
+                            .child(Icon::new(name).size(px(18.0)).color(accent))
+                            .into_any_element(),
                     })
                     .child(
                         gpui::div()

@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, App, SharedString};
+use gpui::{App, SharedString, div};
 use gpui_component::ActiveTheme;
 
 use crate::primitives::Text;

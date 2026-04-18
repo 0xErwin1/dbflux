@@ -214,10 +214,7 @@ impl Render for McpApprovalsView {
                                         this.load_detail(&entry_id, cx);
                                         cx.notify();
                                     }))
-                                    .child(
-                                        Text::body(entry.tool_id.clone())
-                                            .font_weight(FontWeight::MEDIUM),
-                                    )
+                                    .child(Text::label(entry.tool_id.clone()))
                                     .child(Text::caption(format!("actor: {}", entry.actor_id)))
                             })),
                     ),
@@ -268,7 +265,7 @@ impl Render for McpApprovalsView {
                         root.child(Text::muted("Select a pending request to review details."))
                     })
                     .when_some(self.status_message.clone(), |root, message| {
-                        root.child(Text::body(message).text_color(theme.danger))
+                        root.child(Text::body(message).danger())
                     }),
             )
     }

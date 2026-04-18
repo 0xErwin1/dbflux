@@ -24,6 +24,8 @@
 //! 3. Call `state.dispatch()` from `dispatch_command` when toolbar is active.
 //! 4. In render, build the element with `FilterBar::new(&state).render(cx)`.
 
+use dbflux_components::primitives::Icon;
+
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -386,18 +388,11 @@ fn render_item(
                 .border_1()
                 .border_color(border_color)
                 .cursor_pointer()
-                .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
                 .hover(|d| d.bg(theme.accent.opacity(0.08)))
                 .when_some(*icon, |d, icon| {
-                    d.child(
-                        svg()
-                            .path(icon.path())
-                            .size_4()
-                            .text_color(theme.muted_foreground),
-                    )
+                    d.child(Icon::new(icon).size(px(16.0)).muted())
                 })
-                .child(label.clone())
+                .child(Text::body(label.clone()).font_size(FontSizes::SM))
                 .into_any_element()
         }
     }

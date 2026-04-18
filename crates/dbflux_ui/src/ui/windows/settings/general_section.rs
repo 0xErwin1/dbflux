@@ -1,6 +1,6 @@
-use super::section_trait::SectionFocusEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};

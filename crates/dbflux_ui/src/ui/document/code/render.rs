@@ -1,6 +1,7 @@
 use super::*;
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::{overlay_bg, surface_panel, Badge, BadgeVariant, Text};
+use dbflux_components::helpers::text_color_for_active;
+use dbflux_components::primitives::{overlay_bg, surface_panel, Badge, BadgeVariant, Icon, Text};
 use gpui_component::scroll::ScrollableElement;
 
 impl CodeDocument {
@@ -78,21 +79,16 @@ impl CodeDocument {
                             this.run_query(window, cx);
                         }
                     }))
-                    .child(
-                        svg()
-                            .path(run_icon.path())
-                            .size_3()
-                            .text_color(if run_enabled {
-                                theme.background
-                            } else {
-                                theme.muted_foreground
-                            }),
-                    )
-                    .child(Text::caption(run_label).text_color(if run_enabled {
+                    .child(Icon::new(run_icon).size(px(12.0)).color(if run_enabled {
                         theme.background
                     } else {
                         theme.muted_foreground
-                    })),
+                    }))
+                    .child(if run_enabled {
+                        Text::caption(run_label).color(theme.background)
+                    } else {
+                        Text::caption(run_label).muted_foreground()
+                    }),
             )
             .when(is_db_language && !is_executing, |el| {
                 el.child(
@@ -111,12 +107,11 @@ impl CodeDocument {
                             this.run_query_in_new_tab(window, cx);
                         }))
                         .child(
-                            svg()
-                                .path(AppIcon::SquarePlay.path())
-                                .size_3()
-                                .text_color(theme.foreground),
+                            Icon::new(AppIcon::SquarePlay)
+                                .size(px(12.0))
+                                .color(theme.foreground),
                         )
-                        .child(Text::caption("New tab").text_color(theme.foreground)),
+                        .child(Text::body("New tab").font_size(FontSizes::SM)),
                 )
                 .child(
                     div()
@@ -134,12 +129,11 @@ impl CodeDocument {
                             this.run_selected_query(window, cx);
                         }))
                         .child(
-                            svg()
-                                .path(AppIcon::ScrollText.path())
-                                .size_3()
-                                .text_color(theme.foreground),
+                            Icon::new(AppIcon::ScrollText)
+                                .size(px(12.0))
+                                .color(theme.foreground),
                         )
-                        .child(Text::caption("Selection").text_color(theme.foreground)),
+                        .child(Text::body("Selection").font_size(FontSizes::SM)),
                 )
             })
             .child(Text::caption(shortcut_hint))
@@ -173,10 +167,9 @@ impl CodeDocument {
                                     }
                                 }))
                                 .child(
-                                    svg()
-                                        .path(refresh_icon.path())
-                                        .size_3()
-                                        .text_color(theme.foreground),
+                                    Icon::new(refresh_icon)
+                                        .size(px(12.0))
+                                        .color(theme.foreground),
                                 )
                                 .child(Text::body(refresh_label)),
                         )
@@ -301,7 +294,7 @@ impl CodeDocument {
                     .py(Spacing::SM)
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(Text::body(status).font_weight(FontWeight::MEDIUM))
+                    .child(Text::label(status))
                     .child(Text::caption(format!("{} lines", line_count)))
                     .when(live_output.has_stderr(), |el| {
                         el.child(Badge::new("stderr", BadgeVariant::Warning))
@@ -364,11 +357,10 @@ impl CodeDocument {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.activate_result_tab(i, cx);
                             }))
-                            .child(Text::caption(tab.title.clone()).text_color(if is_active {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            }))
+                            .child(
+                                Text::caption(tab.title.clone())
+                                    .color(text_color_for_active(is_active, theme)),
+                            )
                             .child(
                                 div()
                                     .id(ElementId::Name(
@@ -384,12 +376,7 @@ impl CodeDocument {
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.close_result_tab(tab_id, cx);
                                     }))
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::X.path())
-                                            .size_3()
-                                            .text_color(theme.muted_foreground),
-                                    ),
+                                    .child(Icon::new(AppIcon::X).size(px(12.0)).muted()),
                             )
                     })),
             )
@@ -419,14 +406,13 @@ impl CodeDocument {
                         this.toggle_maximize_results(cx);
                     }))
                     .child(
-                        svg()
-                            .path(if is_maximized {
-                                AppIcon::Minimize2.path()
-                            } else {
-                                AppIcon::Maximize2.path()
-                            })
-                            .size_3p5()
-                            .text_color(theme.muted_foreground),
+                        Icon::new(if is_maximized {
+                            AppIcon::Minimize2
+                        } else {
+                            AppIcon::Maximize2
+                        })
+                        .size(px(14.0))
+                        .muted(),
                     ),
             )
             .child(
@@ -442,12 +428,7 @@ impl CodeDocument {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.hide_results(cx);
                     }))
-                    .child(
-                        svg()
-                            .path(AppIcon::PanelBottomClose.path())
-                            .size_3p5()
-                            .text_color(theme.muted_foreground),
-                    ),
+                    .child(Icon::new(AppIcon::PanelBottomClose).size(px(14.0)).muted()),
             )
     }
 
@@ -490,19 +471,11 @@ impl CodeDocument {
                         this.layout = SqlQueryLayout::Split;
                         cx.notify();
                     }))
-                    .child(
-                        svg()
-                            .path(AppIcon::PanelBottomOpen.path())
-                            .size_3p5()
-                            .text_color(theme.muted_foreground),
-                    ),
+                    .child(Icon::new(AppIcon::PanelBottomOpen).size(px(14.0)).muted()),
             )
     }
 
-    fn render_error_state(&self, error: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let error_color = cx.theme().danger;
-        let muted_fg = cx.theme().muted_foreground;
-
+    fn render_error_state(&self, error: &str, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
@@ -510,16 +483,12 @@ impl CodeDocument {
             .items_center()
             .justify_center()
             .gap_2()
-            .child(
-                Text::body("Query Error")
-                    .text_color(error_color)
-                    .font_weight(FontWeight::MEDIUM),
-            )
+            .child(Text::label("Query Error").danger())
             .child(
                 div()
                     .max_w(px(500.0))
                     .text_center()
-                    .child(Text::body(error.to_string()).text_color(muted_fg)),
+                    .child(Text::body(error.to_string()).muted_foreground()),
             )
     }
 
@@ -587,12 +556,7 @@ impl CodeDocument {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                svg()
-                                    .path(AppIcon::TriangleAlert.path())
-                                    .size_5()
-                                    .text_color(theme.warning),
-                            )
+                            .child(Icon::new(AppIcon::TriangleAlert).size(px(20.0)).warning())
                             .child(Text::heading(title)),
                     )
                     .child(Text::caption(message))

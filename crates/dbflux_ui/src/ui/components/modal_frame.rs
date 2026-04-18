@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use dbflux_components::icon::IconSource;
-use dbflux_components::primitives::{surface_panel, IconButton};
-use dbflux_components::tokens::{FontSizes, Heights, Spacing};
+use dbflux_components::primitives::{surface_panel, Icon, IconButton, Text};
+use dbflux_components::tokens::{Heights, Spacing};
 use gpui::*;
 use gpui_component::ActiveTheme;
 
@@ -137,19 +137,8 @@ impl ModalFrame {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .child(
-                svg()
-                    .path(self.icon.path())
-                    .size_4()
-                    .text_color(theme.primary),
-            )
-            .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.foreground)
-                    .child(self.title),
-            );
+            .child(Icon::new(self.icon).size(px(16.0)).primary())
+            .child(Text::label_sm(self.title));
 
         if let Some(extra) = self.header_extra {
             header_left = header_left.child(extra);

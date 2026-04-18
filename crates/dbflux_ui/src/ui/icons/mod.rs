@@ -8,7 +8,7 @@ use dbflux_core::Icon;
 ///
 /// Usage:
 /// ```rust,ignore
-/// svg().path(AppIcon::Folder.path()).size_4().text_color(theme.foreground)
+/// Icon::new(AppIcon::Folder).size_4().color(theme.foreground)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]

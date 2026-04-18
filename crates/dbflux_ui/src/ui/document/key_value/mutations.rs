@@ -3,6 +3,7 @@ use super::new_key_modal::{NewKeyCreatedEvent, NewKeyType, NewKeyValue};
 use super::parsing::{MemberEntry, parse_database_name};
 use super::{KeyValueFocusMode, PendingKeyDelete, PendingMemberDelete};
 use crate::ui::AsyncUpdateResultExt;
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     DbError, HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeyRenameRequest, KeySetRequest,
     KeyType, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest,
@@ -10,7 +11,6 @@ use dbflux_core::{
     ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
 use gpui::*;
-use dbflux_components::controls::{InputEvent, InputState};
 
 impl super::KeyValueDocument {
     // -- Delete confirmation --

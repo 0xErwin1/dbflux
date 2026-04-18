@@ -18,6 +18,8 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
+use dbflux_components::primitives::Text;
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
     CollectionIndexInfo, CollectionRef, ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind,
@@ -32,7 +34,6 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
 use gpui_component::Sizable;
-use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use std::collections::{HashMap, HashSet};
@@ -337,9 +338,8 @@ impl Render for ScriptsDragPreview {
             .px(Spacing::SM)
             .py(Spacing::XS)
             .text_size(FontSizes::SM)
-            .text_color(theme.foreground)
             .shadow_md()
-            .child(self.label.clone())
+            .child(Text::body(self.label.clone()).font_size(FontSizes::SM))
     }
 }
 
@@ -372,9 +372,8 @@ impl Render for DragPreview {
             .px(Spacing::SM)
             .py(Spacing::XS)
             .text_size(FontSizes::SM)
-            .text_color(theme.foreground)
             .shadow_md()
-            .child(self.label.clone())
+            .child(Text::body(self.label.clone()).font_size(FontSizes::SM))
     }
 }
 

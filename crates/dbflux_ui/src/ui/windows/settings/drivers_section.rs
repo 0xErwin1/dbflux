@@ -6,12 +6,12 @@ use crate::app::AppStateEntity;
 use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::form_renderer::FormRendererState;
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     DriverFormDef, DriverKey, DriverMetadata, FormValues, GeneralSettings, GlobalOverrides,
 };
 use gpui::prelude::*;
 use gpui::*;
-use dbflux_components::controls::{InputEvent, InputState};
 use std::collections::HashMap;
 use std::sync::Arc;
 

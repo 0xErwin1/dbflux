@@ -4,9 +4,10 @@
 /// This module provides helpers to detect the current platform and
 /// adjust window creation accordingly.
 use crate::ui::icons::AppIcon;
+use dbflux_components::primitives::{Icon, Text};
 use gpui::{
-    App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement, Stateful, Styled,
-    Window, WindowDecorations, WindowKind, WindowOptions, div, px, svg,
+    div, px, App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement,
+    Stateful, Styled, Window, WindowDecorations, WindowKind, WindowOptions,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::InteractiveElementExt;
@@ -96,12 +97,7 @@ pub fn render_csd_title_bar(
                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, _cx| {
                     handler(window);
                 })
-                .child(
-                    svg()
-                        .path(icon.path())
-                        .size_4()
-                        .text_color(theme.muted_foreground),
-                )
+                .child(Icon::new(icon).size(px(16.0)).muted())
         };
 
         let mut title_bar = div()
@@ -135,13 +131,7 @@ pub fn render_csd_title_bar(
             .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
                 window.start_window_move();
             })
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(title_text),
-            );
+            .child(Text::label_sm(title_text));
 
         title_bar = title_bar.child(drag_area);
 

@@ -7,7 +7,7 @@ use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use gpui::prelude::*;
 use gpui::*;
@@ -232,9 +232,9 @@ impl ProxiesSection {
                 move |div| div.bg(secondary)
             })
             .child(
-                Icon::new(icon_name)
-                    .size_4()
-                    .text_color(theme.muted_foreground),
+                FluxIcon::new(icon_name)
+                    .size(px(16.0))
+                    .color(theme.muted_foreground),
             )
     }
 
@@ -601,9 +601,9 @@ impl ProxiesSection {
                                             .gap_1()
                                             .mt(px(2.0))
                                             .child(
-                                                Icon::new(IconName::Globe)
+                                                FluxIcon::new(IconName::Globe)
                                                     .size(px(14.0))
-                                                    .text_color(theme.muted_foreground),
+                                                    .color(theme.muted_foreground),
                                             )
                                             .when(!proxy.enabled, |root| {
                                                 root.child(Text::caption("off"))
@@ -653,7 +653,7 @@ impl ProxiesSection {
                     .p_4()
                     .border_b_1()
                     .border_color(border)
-                    .child(Text::body(title).font_weight(FontWeight::MEDIUM)),
+                    .child(Text::label(title)),
             )
             .child(
                 div()

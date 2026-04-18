@@ -1,5 +1,6 @@
 use super::*;
 use crate::platform;
+use dbflux_components::primitives::Icon;
 
 impl Sidebar {
     pub(super) fn render_add_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -70,12 +71,7 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(
-                            svg()
-                                .path(AppIcon::Folder.path())
-                                .size_4()
-                                .text_color(theme.muted_foreground),
-                        )
+                        .child(Icon::new(AppIcon::Folder).size(px(16.0)).muted())
                         .child("New Folder"),
                 ),
         )
@@ -119,12 +115,7 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(
-                            svg()
-                                .path(AppIcon::Plug.path())
-                                .size_4()
-                                .text_color(theme.muted_foreground),
-                        )
+                        .child(Icon::new(AppIcon::Plug).size(px(16.0)).muted())
                         .child("New Connection"),
                 ),
         )
@@ -158,12 +149,7 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(
-                            svg()
-                                .path(AppIcon::ScrollText.path())
-                                .size_4()
-                                .text_color(theme.muted_foreground),
-                        )
+                        .child(Icon::new(AppIcon::ScrollText).size(px(16.0)).muted())
                         .child("New File"),
                 ),
         )
@@ -186,12 +172,7 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(
-                            svg()
-                                .path(AppIcon::Folder.path())
-                                .size_4()
-                                .text_color(theme.muted_foreground),
-                        )
+                        .child(Icon::new(AppIcon::Folder).size(px(16.0)).muted())
                         .child("New Folder"),
                 ),
         )
@@ -214,12 +195,7 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(
-                            svg()
-                                .path(AppIcon::Download.path())
-                                .size_4()
-                                .text_color(theme.muted_foreground),
-                        )
+                        .child(Icon::new(AppIcon::Download).size(px(16.0)).muted())
                         .child("Import File"),
                 ),
         )

@@ -178,7 +178,7 @@ impl ConnectionManagerWindow {
                         .p_2()
                         .child(
                             Text::caption("Selected hook enables Lua process.run and can execute external programs with your user permissions")
-                                .text_color(theme.warning),
+                                .warning(),
                         ),
                 )
             })

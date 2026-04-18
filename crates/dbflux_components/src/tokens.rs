@@ -1,4 +1,4 @@
-use gpui::{Pixels, px};
+use gpui::{Hsla, Pixels, px, rgb};
 
 pub struct Spacing;
 
@@ -43,4 +43,36 @@ impl Radii {
     pub const MD: Pixels = px(4.0);
     pub const LG: Pixels = px(6.0);
     pub const FULL: Pixels = px(9999.0);
+}
+
+pub struct SyntaxColors;
+
+impl SyntaxColors {
+    pub fn table() -> Hsla {
+        rgb(0x4EC9B0).into()
+    }
+
+    pub fn view() -> Hsla {
+        rgb(0xDCDCAA).into()
+    }
+
+    pub fn column() -> Hsla {
+        rgb(0x9CDCFE).into()
+    }
+
+    pub fn type_item() -> Hsla {
+        rgb(0xC586C0).into()
+    }
+
+    pub fn folder_dim() -> Hsla {
+        rgb(0x808080).into()
+    }
+
+    pub fn database() -> Hsla {
+        rgb(0xCE9178).into()
+    }
+
+    pub fn schema() -> Hsla {
+        rgb(0x569CD6).into()
+    }
 }

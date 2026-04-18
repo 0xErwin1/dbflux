@@ -1,21 +1,30 @@
 use crate::platform;
 use crate::ui::components::tree_nav::{self, FlatRow};
 use crate::ui::theme::ghost_border_color;
-use crate::ui::tokens::Heights;
+use crate::ui::tokens::{FontSizes, Heights};
 use dbflux_components::controls::Button;
+use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::dialog::Dialog;
+use gpui_component::ActiveTheme;
 
 use super::{
-    SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
-    SettingsCoordinator, SettingsFocus,
+    SettingsCoordinator, SettingsFocus, SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH,
+    SETTINGS_SIDEBAR_MIN_WIDTH,
 };
 
 const INDENT_PX: f32 = 16.0;
 
 impl SettingsCoordinator {
+    fn settings_nav_row_label(label: SharedString, is_active: bool, text_color: Hsla) -> Text {
+        if is_active {
+            Text::label_sm(label).color(text_color)
+        } else {
+            Text::body(label).font_size(FontSizes::SM).color(text_color)
+        }
+    }
+
     fn section_display_name(section: super::SettingsSectionId) -> &'static str {
         match section {
             super::SettingsSectionId::General => "General",
@@ -101,7 +110,7 @@ impl SettingsCoordinator {
         &self,
         row: &FlatRow,
         _is_cursor: bool,
-        theme: &gpui_component::Theme,
+        _theme: &gpui_component::Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let row_id = row.id.clone();
@@ -121,14 +130,9 @@ impl SettingsCoordinator {
                 cx.notify();
             }))
             .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.muted_foreground)
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(row.label.to_uppercase()),
+                Text::heading(row.label.to_uppercase())
+                    .font_size(FontSizes::XS)
+                    .muted_foreground(),
             )
             .into_any_element()
     }
@@ -161,7 +165,7 @@ impl SettingsCoordinator {
             .items_center()
             .gap_2()
             .when_some(row.icon, |div, icon| {
-                div.child(svg().path(icon.path()).size_4().text_color(icon_color))
+                div.child(Icon::new(icon).small().color(icon_color))
             })
             .child(
                 div()
@@ -169,8 +173,11 @@ impl SettingsCoordinator {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .text_color(text_color)
-                    .child(row.label.clone()),
+                    .child(Self::settings_nav_row_label(
+                        row.label.clone(),
+                        show_active,
+                        text_color,
+                    )),
             );
 
         div()
@@ -181,7 +188,6 @@ impl SettingsCoordinator {
             .flex()
             .items_center()
             .rounded(px(4.0))
-            .text_sm()
             .cursor_pointer()
             .border_1()
             .border_color(if is_cursor {
@@ -191,7 +197,6 @@ impl SettingsCoordinator {
             })
             .when(show_active, |div| {
                 div.bg(theme.secondary)
-                    .font_weight(FontWeight::MEDIUM)
                     .border_l_2()
                     .border_color(theme.primary)
             })
@@ -353,8 +358,7 @@ impl SettingsCoordinator {
                 div()
                     .text_xs()
                     .font_family("monospace")
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("v{} | UTF-8", VERSION)),
+                    .child(Text::muted(format!("v{} | UTF-8", VERSION)).font_size(FontSizes::XS)),
             )
             .child(
                 div().flex().items_center().gap_2().child(

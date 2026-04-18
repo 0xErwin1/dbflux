@@ -32,6 +32,11 @@ impl Label {
         self.color_override = Some(color.into());
         self
     }
+
+    /// Override the label color (replaces the default `muted_foreground`).
+    pub fn color(self, color: impl Into<Hsla>) -> Self {
+        self.text_color(color)
+    }
 }
 
 impl RenderOnce for Label {

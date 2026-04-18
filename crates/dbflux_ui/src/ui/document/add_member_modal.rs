@@ -6,7 +6,7 @@ use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_core::KeyType;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -522,12 +522,7 @@ impl Render for AddMemberModal {
                                 this.remove_value_row(index, cx);
                             }),
                         )
-                        .child(
-                            svg()
-                                .path(AppIcon::Delete.path())
-                                .size(Heights::ICON_SM)
-                                .text_color(theme.muted_foreground),
-                        ),
+                        .child(Icon::new(AppIcon::Delete).size(Heights::ICON_SM).muted()),
                 ),
             );
 
@@ -557,10 +552,9 @@ impl Render for AddMemberModal {
                             }),
                         )
                         .child(
-                            svg()
-                                .path(AppIcon::Plus.path())
+                            Icon::new(AppIcon::Plus)
                                 .size(Heights::ICON_SM)
-                                .text_color(theme.primary_foreground),
+                                .color(theme.primary_foreground),
                         ),
                 ),
             ),

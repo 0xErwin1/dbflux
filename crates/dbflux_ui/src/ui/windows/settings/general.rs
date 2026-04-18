@@ -1,7 +1,9 @@
 use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
+use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::primitives::Text;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
@@ -594,14 +596,12 @@ impl GeneralSection {
         &self,
         label: &str,
         border: Hsla,
-        muted_fg: Hsla,
+        _muted_fg: Hsla,
     ) -> impl IntoElement {
         div().pt_2().pb_1().border_b_1().border_color(border).child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(muted_fg)
-                .child(label.to_string()),
+            Text::heading(label.to_string())
+                .font_size(FontSizes::SM)
+                .muted_foreground(),
         )
     }
 
@@ -707,12 +707,7 @@ impl GeneralSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label.to_string()),
-            )
+            .child(Text::label_sm(label.to_string()))
             .child(
                 div()
                     .rounded(px(4.0))

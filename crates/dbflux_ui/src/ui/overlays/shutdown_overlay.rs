@@ -1,7 +1,7 @@
 use crate::app::AppStateEntity;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Spacing};
-use dbflux_components::primitives::surface_panel;
+use crate::ui::tokens::Spacing;
+use dbflux_components::primitives::{Icon, Text, surface_panel};
 use gpui::*;
 use gpui_component::ActiveTheme;
 
@@ -101,21 +101,14 @@ impl Render for ShutdownOverlay {
                     .items_center()
                     .gap(Spacing::MD)
                     .child(
-                        svg()
-                            .path(AppIcon::Loader.path())
-                            .size_8()
-                            .text_color(theme.primary)
+                        Icon::new(AppIcon::Loader)
+                            .size(px(32.0))
+                            .color(theme.primary)
                             .with_transformation(Transformation::rotate(gpui::radians(
                                 self.spin_angle.to_radians(),
                             ))),
                     )
-                    .child(
-                        div()
-                            .text_size(FontSizes::BASE)
-                            .text_color(theme.foreground)
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(message),
-                    ),
+                    .child(Text::label(message)),
             )
             .into_any_element()
     }

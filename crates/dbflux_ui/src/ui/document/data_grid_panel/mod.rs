@@ -24,13 +24,13 @@ use crate::ui::overlays::document_preview_modal::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     CollectionRef, OrderByColumn, Pagination, QueryResult, RefreshPolicy, SortDirection, TableRef,
     Value,
 };
 use gpui::*;
 use gpui_component::Sizable;
-use dbflux_components::controls::{InputEvent, InputState};
 use std::sync::Arc;
 use uuid::Uuid;
 

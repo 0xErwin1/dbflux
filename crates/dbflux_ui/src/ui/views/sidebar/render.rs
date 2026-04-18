@@ -1,6 +1,17 @@
 use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
 use dbflux_components::primitives::Text;
+use dbflux_components::tokens::SyntaxColors;
+
+fn sidebar_tab_text(label: &'static str, active: bool, focused: bool, color: Hsla) -> Text {
+    if active && focused {
+        Text::title(label).font_size(FontSizes::XS).color(color)
+    } else if active {
+        Text::heading(label).font_size(FontSizes::XS).color(color)
+    } else {
+        Text::label_sm(label).font_size(FontSizes::XS).color(color)
+    }
+}
 
 impl Sidebar {
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -27,16 +38,6 @@ impl Sidebar {
                 theme.primary
             } else {
                 gpui::transparent_black()
-            }
-        };
-
-        let tab_font_weight = |active: bool| {
-            if active && focused {
-                FontWeight::BOLD
-            } else if active {
-                FontWeight::SEMIBOLD
-            } else {
-                FontWeight::MEDIUM
             }
         };
 
@@ -67,16 +68,12 @@ impl Sidebar {
                                     this.set_active_tab(SidebarTab::Connections, cx);
                                 });
                             })
-                            .child(
-                                Text::caption("CONNECTIONS")
-                                    .font_size(FontSizes::XS)
-                                    .font_weight(tab_font_weight(
-                                        active_tab == SidebarTab::Connections,
-                                    ))
-                                    .text_color(tab_text_color(
-                                        active_tab == SidebarTab::Connections,
-                                    )),
-                            ),
+                            .child(sidebar_tab_text(
+                                "CONNECTIONS",
+                                active_tab == SidebarTab::Connections,
+                                focused,
+                                tab_text_color(active_tab == SidebarTab::Connections),
+                            )),
                     )
                     .child(
                         div()
@@ -94,12 +91,12 @@ impl Sidebar {
                                     this.set_active_tab(SidebarTab::Scripts, cx);
                                 });
                             })
-                            .child(
-                                Text::caption("SCRIPTS")
-                                    .font_size(FontSizes::XS)
-                                    .font_weight(tab_font_weight(active_tab == SidebarTab::Scripts))
-                                    .text_color(tab_text_color(active_tab == SidebarTab::Scripts)),
-                            ),
+                            .child(sidebar_tab_text(
+                                "SCRIPTS",
+                                active_tab == SidebarTab::Scripts,
+                                focused,
+                                tab_text_color(active_tab == SidebarTab::Scripts),
+                            )),
                     ),
             )
             .child({
@@ -141,8 +138,8 @@ impl Sidebar {
                         .items_center()
                         .justify_center()
                         .child(
-                            Text::caption("Press x to confirm delete, ESC to cancel")
-                                .text_color(theme.foreground),
+                            Text::body("Press x to confirm delete, ESC to cancel")
+                                .font_size(FontSizes::SM),
                         ),
                 )
             })
@@ -239,13 +236,13 @@ impl Sidebar {
             rename_input: self.rename_input.clone(),
             gutter_metadata: self.scripts_gutter_metadata.clone(),
             line_color: tree_nav::tree_line_color(theme),
-            color_teal: gpui::rgb(0x4EC9B0).into(),
-            color_yellow: gpui::rgb(0xDCDCAA).into(),
-            color_blue: gpui::rgb(0x9CDCFE).into(),
-            color_purple: gpui::rgb(0xC586C0).into(),
-            color_gray: gpui::rgb(0x808080).into(),
-            color_orange: gpui::rgb(0xCE9178).into(),
-            color_schema: gpui::rgb(0x569CD6).into(),
+            color_teal: SyntaxColors::table(),
+            color_yellow: SyntaxColors::view(),
+            color_blue: SyntaxColors::column(),
+            color_purple: SyntaxColors::type_item(),
+            color_gray: SyntaxColors::folder_dim(),
+            color_orange: SyntaxColors::database(),
+            color_schema: SyntaxColors::schema(),
             color_green: gpui::green(),
         };
 
@@ -357,13 +354,13 @@ impl Render for Sidebar {
             rename_input: self.rename_input.clone(),
             gutter_metadata: self.gutter_metadata.clone(),
             line_color: tree_nav::tree_line_color(theme),
-            color_teal: gpui::rgb(0x4EC9B0).into(),
-            color_yellow: gpui::rgb(0xDCDCAA).into(),
-            color_blue: gpui::rgb(0x9CDCFE).into(),
-            color_purple: gpui::rgb(0xC586C0).into(),
-            color_gray: gpui::rgb(0x808080).into(),
-            color_orange: gpui::rgb(0xCE9178).into(),
-            color_schema: gpui::rgb(0x569CD6).into(),
+            color_teal: SyntaxColors::table(),
+            color_yellow: SyntaxColors::view(),
+            color_blue: SyntaxColors::column(),
+            color_purple: SyntaxColors::type_item(),
+            color_gray: SyntaxColors::folder_dim(),
+            color_orange: SyntaxColors::database(),
+            color_schema: SyntaxColors::schema(),
             color_green: gpui::green(),
         };
 

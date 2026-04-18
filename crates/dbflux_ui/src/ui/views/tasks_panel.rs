@@ -1,6 +1,6 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::icons::AppIcon;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -218,17 +218,16 @@ impl TasksPanel {
                             .overflow_hidden()
                             .when(has_details, |el| {
                                 el.child(
-                                    svg()
-                                        .path(if is_expanded {
-                                            AppIcon::ChevronDown.path()
-                                        } else {
-                                            AppIcon::ChevronRight.path()
-                                        })
-                                        .size_3()
-                                        .text_color(theme.muted_foreground),
+                                    Icon::new(if is_expanded {
+                                        AppIcon::ChevronDown
+                                    } else {
+                                        AppIcon::ChevronRight
+                                    })
+                                    .size(px(12.0))
+                                    .muted(),
                                 )
                             })
-                            .child(Text::caption(status_icon.to_string()).text_color(status_color))
+                            .child(Text::caption(status_icon.to_string()).color(status_color))
                             .child(
                                 div()
                                     .flex_1()
@@ -241,7 +240,6 @@ impl TasksPanel {
                             ))),
                     )
                     .when(is_running, |el| {
-                        let danger = theme.danger;
                         let danger_bg = theme.danger.opacity(0.1);
                         el.child(
                             div()
@@ -252,17 +250,11 @@ impl TasksPanel {
                                 .size_5()
                                 .rounded(px(2.0))
                                 .cursor_pointer()
-                                .text_color(danger)
                                 .hover(move |s| s.bg(danger_bg))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.cancel_task(task_id, task_kind, task_profile_id, cx);
                                 }))
-                                .child(
-                                    svg()
-                                        .path(AppIcon::Power.path())
-                                        .size_3()
-                                        .text_color(danger),
-                                ),
+                                .child(Icon::new(AppIcon::Power).size(px(12.0)).danger()),
                         )
                     }),
             )

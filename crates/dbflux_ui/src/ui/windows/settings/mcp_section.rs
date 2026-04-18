@@ -779,20 +779,11 @@ impl McpSection {
                                     .justify_between()
                                     .items_center()
                                     .child(Label::new(client.name.clone()))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(if client.active {
-                                                theme.success
-                                            } else {
-                                                theme.muted_foreground
-                                            })
-                                            .child(if client.active {
-                                                "active"
-                                            } else {
-                                                "inactive"
-                                            }),
-                                    ),
+                                    .child(if client.active {
+                                        Text::caption("active").success()
+                                    } else {
+                                        Text::caption("inactive")
+                                    }),
                             )
                             .child(Text::caption(client.id.clone()))
                     })),
@@ -982,8 +973,10 @@ impl McpSection {
                                                 .rounded_sm()
                                                 .text_xs()
                                                 .bg(theme.accent.opacity(0.2))
-                                                .text_color(theme.accent_foreground)
-                                                .child("built-in"),
+                                                .child(
+                                                    Text::caption("built-in")
+                                                        .color(theme.accent_foreground),
+                                                ),
                                         )
                                     }),
                             )
@@ -1159,8 +1152,10 @@ impl McpSection {
                                                 .rounded_sm()
                                                 .text_xs()
                                                 .bg(theme.accent.opacity(0.2))
-                                                .text_color(theme.accent_foreground)
-                                                .child("built-in"),
+                                                .child(
+                                                    Text::caption("built-in")
+                                                        .color(theme.accent_foreground),
+                                                ),
                                         )
                                     }),
                             )
@@ -1253,7 +1248,7 @@ impl McpSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(Text::caption(*group_name).font_weight(FontWeight::MEDIUM))
+                            .child(Text::label_sm(*group_name).muted_foreground())
                             .child(div().flex().flex_col().gap_2().pl_2().children(
                                 tools.iter().map(|&tool| {
                                     let checked = self.draft_policy_tools.contains(tool);

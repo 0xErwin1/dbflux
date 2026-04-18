@@ -9,6 +9,9 @@ use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::history_modal::{HistoryModal, HistoryQuerySelected};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::{
+    CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
+};
 use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
     AuditAction, AuditContext, EventActorType, EventCategory, EventOrigin, EventOutcome,
@@ -25,9 +28,6 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
-};
-use dbflux_components::controls::{
-    CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
 };
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use lsp_types::{

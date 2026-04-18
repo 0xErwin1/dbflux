@@ -8,7 +8,7 @@ use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_core::SshTunnelProfile;
 use gpui::prelude::*;
 use gpui::*;
@@ -324,9 +324,9 @@ impl SshTunnelsSection {
                 move |div| div.bg(secondary)
             })
             .child(
-                Icon::new(icon_name)
-                    .size_4()
-                    .text_color(theme.muted_foreground),
+                FluxIcon::new(icon_name)
+                    .size(px(16.0))
+                    .color(theme.muted_foreground),
             )
     }
 
@@ -719,9 +719,9 @@ impl SshTunnelsSection {
                                     .items_start()
                                     .gap_2()
                                     .child(
-                                        Icon::new(IconName::Globe)
+                                        FluxIcon::new(IconName::Globe)
                                             .size(px(14.0))
-                                            .text_color(theme.muted_foreground),
+                                            .color(theme.muted_foreground),
                                     )
                                     .child(
                                         div()
@@ -737,9 +737,7 @@ impl SshTunnelsSection {
             )
     }
 
-    fn render_test_status(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let theme = cx.theme();
-
+    fn render_test_status(&self, _cx: &mut Context<Self>) -> Option<AnyElement> {
         match self.ssh_test_status {
             SshTestStatus::None => None,
             SshTestStatus::Testing => {
@@ -747,7 +745,7 @@ impl SshTunnelsSection {
             }
             SshTestStatus::Success => Some(
                 Text::body("SSH connection successful")
-                    .text_color(theme.success)
+                    .success()
                     .into_any_element(),
             ),
             SshTestStatus::Failed => Some(
@@ -756,7 +754,7 @@ impl SshTunnelsSection {
                         .clone()
                         .unwrap_or_else(|| "SSH connection failed".to_string()),
                 )
-                .text_color(theme.danger)
+                .danger()
                 .into_any_element(),
             ),
         }
@@ -792,7 +790,7 @@ impl SshTunnelsSection {
                     .p_4()
                     .border_b_1()
                     .border_color(border)
-                    .child(Text::body(title).font_weight(FontWeight::MEDIUM)),
+                    .child(Text::label(title)),
             )
             .child(
                 div()

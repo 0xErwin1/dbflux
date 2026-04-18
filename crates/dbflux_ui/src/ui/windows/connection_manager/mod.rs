@@ -15,6 +15,7 @@ use crate::ui::components::multi_select::MultiSelect;
 use crate::ui::components::value_source_selector::ValueSourceSelector;
 use crate::ui::overlays::sso_wizard::SsoWizard;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
@@ -23,7 +24,6 @@ use dbflux_core::{
 };
 use gpui::*;
 use gpui_component::Root;
-use dbflux_components::controls::{InputEvent, InputState};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;

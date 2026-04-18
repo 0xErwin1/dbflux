@@ -304,7 +304,7 @@ impl Render for LoginModal {
                                 .child(div().mt_1().child(Text::body(url_display))),
                         )
                         .when_some(launch_error.clone(), |el, error| {
-                            el.child(Text::caption(error).text_color(theme.warning))
+                            el.child(Text::caption(error).warning())
                         })
                         .child(Text::caption(format!(
                             "Login can take up to 5 minutes. Elapsed: {}s",
@@ -351,7 +351,7 @@ impl Render for LoginModal {
                     .flex()
                     .flex_col()
                     .gap(Spacing::MD)
-                    .child(Text::body("Connection failed").text_color(theme.warning))
+                    .child(Text::body("Connection failed").warning())
                     .child(Text::body(error.clone()))
                     .child(div().flex().justify_end().child(
                         Button::new("sso-failed-close", "Close").on_click(cx.listener(
@@ -381,7 +381,7 @@ impl Render for LoginModal {
                     .flex()
                     .flex_col()
                     .gap(Spacing::MD)
-                    .child(Text::body("Login completed").text_color(theme.success))
+                    .child(Text::body("Login completed").success())
                     .child(Text::body(
                         "Authentication succeeded. Closing this dialog...",
                     )),

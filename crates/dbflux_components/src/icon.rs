@@ -17,3 +17,9 @@ impl std::fmt::Debug for IconSource {
         }
     }
 }
+
+impl From<gpui_component::IconName> for IconSource {
+    fn from(name: gpui_component::IconName) -> Self {
+        Self::Named(name)
+    }
+}

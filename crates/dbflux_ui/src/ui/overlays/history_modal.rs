@@ -4,7 +4,8 @@ use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
-use dbflux_components::primitives::{surface_panel, Text};
+use dbflux_components::helpers::text_color_for_active;
+use dbflux_components::primitives::{surface_panel, Icon, Text};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -487,17 +488,6 @@ impl HistoryModal {
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        let recent_color = if self.active_tab == HistoryTab::Recent {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        };
-        let saved_color = if self.active_tab == HistoryTab::Saved {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        };
-
         div()
             .flex()
             .gap(Spacing::XS)
@@ -511,21 +501,23 @@ impl HistoryModal {
                     .py(Spacing::XS)
                     .rounded(Radii::MD)
                     .cursor_pointer()
-                    .text_size(FontSizes::SM)
                     .when(self.active_tab == HistoryTab::Recent, |this| {
-                        this.bg(theme.secondary).text_color(theme.foreground)
+                        this.bg(theme.secondary)
                     })
                     .when(self.active_tab != HistoryTab::Recent, |this| {
-                        this.text_color(theme.muted_foreground)
-                            .hover(|d| d.bg(theme.secondary))
+                        this.hover(|d| d.bg(theme.secondary))
                     })
                     .child(
-                        svg()
-                            .path(AppIcon::Clock.path())
-                            .size_3()
-                            .text_color(recent_color),
+                        Icon::new(AppIcon::Clock)
+                            .size(px(12.0))
+                            .color(text_color_for_active(
+                                self.active_tab == HistoryTab::Recent,
+                                theme,
+                            )),
                     )
-                    .child("Recent")
+                    .child(Text::body("Recent").font_size(FontSizes::SM).color(
+                        text_color_for_active(self.active_tab == HistoryTab::Recent, theme),
+                    ))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -545,21 +537,23 @@ impl HistoryModal {
                     .py(Spacing::XS)
                     .rounded(Radii::MD)
                     .cursor_pointer()
-                    .text_size(FontSizes::SM)
                     .when(self.active_tab == HistoryTab::Saved, |this| {
-                        this.bg(theme.secondary).text_color(theme.foreground)
+                        this.bg(theme.secondary)
                     })
                     .when(self.active_tab != HistoryTab::Saved, |this| {
-                        this.text_color(theme.muted_foreground)
-                            .hover(|d| d.bg(theme.secondary))
+                        this.hover(|d| d.bg(theme.secondary))
                     })
                     .child(
-                        svg()
-                            .path(AppIcon::Star.path())
-                            .size_3()
-                            .text_color(saved_color),
+                        Icon::new(AppIcon::Star)
+                            .size(px(12.0))
+                            .color(text_color_for_active(
+                                self.active_tab == HistoryTab::Saved,
+                                theme,
+                            )),
                     )
-                    .child("Saved")
+                    .child(Text::body("Saved").font_size(FontSizes::SM).color(
+                        text_color_for_active(self.active_tab == HistoryTab::Saved, theme),
+                    ))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -713,13 +707,6 @@ impl HistoryModal {
                                                 .items_center()
                                                 .justify_center()
                                                 .rounded(Radii::SM)
-                                                .text_size(FontSizes::SM)
-                                                .when(is_favorite, |d| {
-                                                    d.text_color(cx.theme().warning)
-                                                })
-                                                .when(!is_favorite, |d| {
-                                                    d.text_color(theme.muted_foreground)
-                                                })
                                                 .hover(|d| d.bg(theme.secondary))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.app_state.update(cx, |state, _| {
@@ -727,7 +714,19 @@ impl HistoryModal {
                                                     });
                                                     cx.notify();
                                                 }))
-                                                .child(if is_favorite { "★" } else { "☆" }),
+                                                .child(
+                                                    Text::body(if is_favorite {
+                                                        "★"
+                                                    } else {
+                                                        "☆"
+                                                    })
+                                                    .font_size(FontSizes::SM)
+                                                    .color(if is_favorite {
+                                                        cx.theme().warning
+                                                    } else {
+                                                        theme.muted_foreground
+                                                    }),
+                                                ),
                                         ),
                                     ),
                             )

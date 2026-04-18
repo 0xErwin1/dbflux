@@ -3,14 +3,14 @@ use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::primitives::{Icon, Label, Text};
 use dbflux_core::{
     ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use dbflux_components::controls::{InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -53,15 +53,11 @@ impl HooksSection {
             state
         });
 
-        let sub = cx.subscribe_in(
-            &input,
-            window,
-            |_, _, event: &InputEvent, _window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            },
-        );
+        let sub = cx.subscribe_in(&input, window, |_, _, event: &InputEvent, _window, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
 
         self.input_hook_script_content = input;
         self.hook_script_content_subscription = Some(sub);
@@ -1269,11 +1265,11 @@ impl HooksSection {
                                     .items_start()
                                     .gap_2()
                                     .child(
-                                        svg()
-                                            .path(AppIcon::SquareTerminal.path())
-                                            .size_4()
-                                            .text_color(theme.muted_foreground)
-                                            .mt(px(2.0)),
+                                        div().mt(px(2.0)).child(
+                                            Icon::new(AppIcon::SquareTerminal)
+                                                .size(px(16.0))
+                                                .muted(),
+                                        ),
                                     )
                                     .child(
                                         div()
@@ -1585,15 +1581,14 @@ impl HooksSection {
                                     .border_1()
                                     .border_color(theme.warning.opacity(0.3))
                                     .child(
-                                        svg()
-                                            .path(AppIcon::TriangleAlert.path())
-                                            .size_4()
-                                            .text_color(theme.warning)
-                                            .mt(px(1.0)),
+                                        div().mt(px(1.0)).child(
+                                            Icon::new(AppIcon::TriangleAlert)
+                                                .size(px(16.0))
+                                                .warning(),
+                                        ),
                                     )
                                     .child(
-                                        Text::body(warning.clone())
-                                            .text_color(theme.warning),
+                                        Text::body(warning.clone()).warning(),
                                     )
                             })),
                         )

@@ -3,13 +3,13 @@ use crate::platform;
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Spacing;
+use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::primitives::Text;
 use dbflux_core::AuthProfile;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use dbflux_components::controls::InputState;
 use uuid::Uuid;
 
 #[cfg(feature = "aws")]

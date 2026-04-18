@@ -1,6 +1,9 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
+use crate::ui::tokens::FontSizes;
+use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::primitives::Text;
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -8,7 +11,6 @@ use gpui::{
     ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement,
     Styled, Window, actions, canvas, div, px, uniform_list,
 };
-use dbflux_components::controls::{GpuiInput as Input, InputState};
 use gpui_component::scroll::Scrollbar;
 use gpui_component::{ActiveTheme, Sizable};
 
@@ -683,28 +685,28 @@ impl DataTable {
                             .overflow_hidden()
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(if is_sorted {
-                                        theme.primary
-                                    } else {
-                                        theme.table_head_foreground
-                                    })
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .whitespace_nowrap()
-                                    .child(col_spec.title.to_string()),
+                                    .child(
+                                        Text::label_sm(col_spec.title.to_string()).color(
+                                            if is_sorted {
+                                                theme.primary
+                                            } else {
+                                                theme.table_head_foreground
+                                            },
+                                        ),
+                                    ),
                             ),
                     )
                     .child(
-                        div()
-                            .text_sm()
-                            .text_color(if is_sorted {
-                                theme.primary
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .child(sort_indicator),
+                        div().child(if is_sorted {
+                            Text::body(sort_indicator).font_size(FontSizes::SM).color(theme.primary)
+                        } else {
+                            Text::body(sort_indicator)
+                                .font_size(FontSizes::SM)
+                                .color(theme.muted_foreground)
+                        }),
                     )
                     // Resize handle: mouse-down starts the drag; move/up are
                     // handled on the DataTable root div so the drag survives
@@ -964,12 +966,6 @@ fn render_rows(
                                 .border_color(theme.table_active_border)
                         })
                         .when(is_active, |d| d.border_1().border_color(theme.ring))
-                        .text_sm()
-                        .text_color(if is_pending_delete || is_null || is_auto_generated {
-                            theme.muted_foreground
-                        } else {
-                            theme.foreground
-                        })
                         .when(is_null || is_auto_generated, |d| d.italic())
                         .when(is_pending_delete, |d| d.line_through())
                         .on_click(move |event: &ClickEvent, window, cx| {
@@ -1009,7 +1005,15 @@ fn render_rows(
                                 });
                             },
                         )
-                        .child(display_text.to_string())
+                        .child(
+                            Text::body(display_text.to_string())
+                                .font_size(FontSizes::SM)
+                                .color(if is_pending_delete || is_null || is_auto_generated {
+                                    theme.muted_foreground
+                                } else {
+                                    theme.foreground
+                                }),
+                        )
                         .into_any_element()
                 })
                 .collect();

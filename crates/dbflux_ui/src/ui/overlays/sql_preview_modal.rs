@@ -3,7 +3,7 @@ use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_core::{
     ColumnInfo, MutationRequest, MutationTemplateOperation, MutationTemplateRequest, QueryLanguage,
     ReadTemplateOperation, ReadTemplateRequest, SqlGenerationOptions, SqlGenerationRequest,
@@ -677,7 +677,7 @@ impl Render for SqlPreviewModal {
                     .flex()
                     .items_center()
                     .gap(Spacing::LG)
-                    .child(Text::caption("Options").font_weight(FontWeight::MEDIUM))
+                    .child(Text::label_sm("Options").muted_foreground())
                     .child(
                         div()
                             .flex()
@@ -736,18 +736,11 @@ impl Render for SqlPreviewModal {
                     .cursor_pointer()
                     .bg(theme.secondary)
                     .hover(|d| d.bg(theme.muted))
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.regenerate_sql(window, cx);
                     }))
-                    .child(
-                        svg()
-                            .path(AppIcon::RefreshCcw.path())
-                            .size_4()
-                            .text_color(theme.muted_foreground),
-                    )
-                    .child("Refresh"),
+                    .child(Icon::new(AppIcon::RefreshCcw).size(px(16.0)).muted())
+                    .child(Text::body("Refresh").font_size(FontSizes::SM)),
             );
         }
 
@@ -765,18 +758,16 @@ impl Render for SqlPreviewModal {
                     .bg(theme.primary)
                     .hover(|d| d.opacity(0.9))
                     .text_size(FontSizes::SM)
-                    .text_color(theme.primary_foreground)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.copy_to_clipboard(cx);
                         this.close(cx);
                     }))
                     .child(
-                        svg()
-                            .path(AppIcon::Layers.path())
-                            .size_4()
-                            .text_color(theme.primary_foreground),
+                        Icon::new(AppIcon::Layers)
+                            .size(px(16.0))
+                            .color(theme.primary_foreground),
                     )
-                    .child("Copy"),
+                    .child(Text::caption("Copy").color(theme.primary_foreground)),
             )
             .child(
                 div()
@@ -790,12 +781,10 @@ impl Render for SqlPreviewModal {
                     .cursor_pointer()
                     .bg(theme.secondary)
                     .hover(|d| d.bg(theme.muted))
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.close(cx);
                     }))
-                    .child("Close"),
+                    .child(Text::body("Close").font_size(FontSizes::SM)),
             );
 
         frame = frame.child(footer);

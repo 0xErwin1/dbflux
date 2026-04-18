@@ -1,9 +1,11 @@
-use crate::keymap::{ContextId, KeyChord, default_keymap};
+use crate::keymap::{default_keymap, ContextId, KeyChord};
+use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::Input;
+use dbflux_components::primitives::{Icon as FluxIcon, Text};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::{Icon, IconName};
+use gpui_component::IconName;
 
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};
 use super::layout;
@@ -114,9 +116,9 @@ impl KeybindingsSection {
                         .items_center()
                         .gap_2()
                         .child(
-                            Icon::new(IconName::Search)
+                            FluxIcon::new(IconName::Search)
                                 .size(px(16.0))
-                                .text_color(muted_foreground),
+                                .color(muted_foreground),
                         )
                         .child(
                             div()
@@ -186,13 +188,13 @@ impl KeybindingsSection {
                                         .items_center()
                                         .justify_center()
                                         .child(
-                                            Icon::new(if is_expanded {
+                                            FluxIcon::new(if is_expanded {
                                                 IconName::ChevronDown
                                             } else {
                                                 IconName::ChevronRight
                                             })
                                             .size(px(16.0))
-                                            .text_color(muted_foreground),
+                                            .color(muted_foreground),
                                         ),
                                 )
                                 // Context name and bindings count
@@ -202,25 +204,17 @@ impl KeybindingsSection {
                                         .flex()
                                         .items_center()
                                         .gap_2()
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(context.display_name()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(muted_foreground)
-                                                .child(format!("({} bindings)", binding_count)),
-                                        ),
+                                        .child(Text::label(context.display_name()))
+                                        .child(Text::muted(format!(
+                                            "({} bindings)",
+                                            binding_count
+                                        ))),
                                 )
                                 // Inherits info
                                 .when(has_parent, |d| {
                                     d.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted_foreground)
-                                            .child(format!("inherits from {}", parent_name)),
+                                        Text::muted(format!("inherits from {}", parent_name))
+                                            .font_size(FontSizes::XS),
                                     )
                                 })
                         }
@@ -293,23 +287,21 @@ impl KeybindingsSection {
                 muted_foreground,
                 secondary,
             )))
-            .child(
-                div()
-                    .flex_1()
-                    .text_sm()
-                    .when(is_inherited, |d| d.text_color(muted_foreground))
-                    .child(cmd_name.to_string()),
-            )
+            .child(div().flex_1().child(if is_inherited {
+                Text::body(cmd_name.to_string())
+                    .font_size(FontSizes::SM)
+                    .color(muted_foreground)
+            } else {
+                Text::body(cmd_name.to_string()).font_size(FontSizes::SM)
+            }))
             .when(is_inherited, |d| {
                 d.child(
                     div()
-                        .text_xs()
-                        .text_color(muted_foreground)
                         .px_2()
                         .py(px(2.0))
                         .rounded(px(4.0))
                         .bg(secondary)
-                        .child("inherited"),
+                        .child(Text::muted("inherited").font_size(FontSizes::XS)),
                 )
             })
     }
@@ -362,9 +354,7 @@ impl KeybindingsSection {
             .bg(secondary)
             .border_1()
             .border_color(muted_foreground.opacity(0.3))
-            .text_xs()
-            .font_weight(FontWeight::MEDIUM)
-            .child(key.to_string())
+            .child(Text::label_sm(key.to_string()).font_size(FontSizes::XS))
     }
 
     fn format_key(&self, key: &str) -> String {

@@ -1,6 +1,7 @@
 use super::{layout, SettingsSection, SettingsSectionId};
 use crate::ui::icons::AppIcon;
-use dbflux_components::primitives::Text;
+use crate::ui::tokens::FontSizes;
+use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
@@ -60,23 +61,13 @@ impl Render for AboutSection {
                                 .flex()
                                 .items_center()
                                 .gap_3()
-                                .child(
-                                    svg()
-                                        .path(AppIcon::DbFlux.path())
-                                        .size(px(65.0))
-                                        .text_color(theme.primary),
-                                )
+                                .child(Icon::new(AppIcon::DbFlux).size(px(65.0)).primary())
                                 .child(
                                     div()
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(
-                                            div()
-                                                .text_xl()
-                                                .font_weight(FontWeight::BOLD)
-                                                .child("DBFlux"),
-                                        )
+                                        .child(Text::title("DBFlux").font_size(FontSizes::XL))
                                         .child(Text::caption(format!("{} ({})", VERSION, PROFILE))),
                                 ),
                         )
@@ -88,25 +79,23 @@ impl Render for AboutSection {
                                     .child(
                                         div()
                                             .id("about-link-issues")
-                                            .text_color(theme.link)
                                             .cursor_pointer()
                                             .hover(|d| d.underline())
                                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                                 cx.open_url(&issues_url);
                                             })
-                                            .child("Report a bug"),
+                                            .child(Text::body("Report a bug").link()),
                                     )
                                     .child("or")
                                     .child(
                                         div()
                                             .id("about-link-repo")
-                                            .text_color(theme.link)
                                             .cursor_pointer()
                                             .hover(|d| d.underline())
                                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                 cx.open_url(REPOSITORY);
                                             })
-                                            .child("view the source code"),
+                                            .child(Text::body("view the source code").link()),
                                     )
                                     .child("on GitHub."),
                             ),
@@ -129,8 +118,8 @@ impl Render for AboutSection {
                                 .flex_col()
                                 .gap_2()
                                 .child(
-                                    Text::body("Third-Party Licenses")
-                                        .font_weight(FontWeight::SEMIBOLD),
+                                    Text::heading("Third-Party Licenses")
+                                        .font_size(FontSizes::BASE),
                                 )
                                 .child(Text::caption("UI icons from Lucide (ISC License)"))
                                 .child(Text::caption("Brand icons from Simple Icons (CC0 1.0)")),

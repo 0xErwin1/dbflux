@@ -6,7 +6,7 @@ use super::types::{DocumentId, DocumentMetaSnapshot, DocumentState};
 use crate::ui::components::context_menu::MenuItem;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Radii, Spacing};
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -253,16 +253,16 @@ impl TabBar {
 
         let tab_manager = self.tab_manager.clone();
 
-        let icon_path = match meta.icon {
-            super::types::DocumentIcon::Sql => AppIcon::Code.path(),
-            super::types::DocumentIcon::Table => AppIcon::Table.path(),
-            super::types::DocumentIcon::Redis => AppIcon::Database.path(),
-            super::types::DocumentIcon::RedisKey => AppIcon::Hash.path(),
-            super::types::DocumentIcon::Terminal => AppIcon::SquareTerminal.path(),
-            super::types::DocumentIcon::Mongo => AppIcon::Database.path(),
-            super::types::DocumentIcon::Collection => AppIcon::Folder.path(),
-            super::types::DocumentIcon::Script => AppIcon::ScrollText.path(),
-            super::types::DocumentIcon::Audit => AppIcon::ScrollText.path(),
+        let icon = match meta.icon {
+            super::types::DocumentIcon::Sql => AppIcon::Code,
+            super::types::DocumentIcon::Table => AppIcon::Table,
+            super::types::DocumentIcon::Redis => AppIcon::Database,
+            super::types::DocumentIcon::RedisKey => AppIcon::Hash,
+            super::types::DocumentIcon::Terminal => AppIcon::SquareTerminal,
+            super::types::DocumentIcon::Mongo => AppIcon::Database,
+            super::types::DocumentIcon::Collection => AppIcon::Folder,
+            super::types::DocumentIcon::Script => AppIcon::ScrollText,
+            super::types::DocumentIcon::Audit => AppIcon::ScrollText,
         };
 
         let center_x = self.active_tab_center_x.clone();
@@ -332,21 +332,23 @@ impl TabBar {
                 }),
             )
             // Icon
-            .child(svg().path(icon_path).size_4().text_color(if is_active {
-                cx.theme().foreground
-            } else {
-                cx.theme().muted_foreground
-            }))
+            .child(
+                Icon::new(icon).size(px(16.0)).color(if is_active {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                }),
+            )
             // Title
             .child(
                 div()
                     .flex_1()
                     .truncate()
-                    .child(Text::caption(title).text_color(if is_active {
-                        cx.theme().foreground
+                    .child(if is_active {
+                        Text::caption(title).color(cx.theme().foreground)
                     } else {
-                        cx.theme().muted_foreground
-                    })),
+                        Text::caption(title)
+                    }),
             )
             // Spinner or close button
             .child(self.render_tab_action(id, is_executing, cx))
@@ -370,10 +372,9 @@ impl TabBar {
             .justify_center()
             .rounded(Radii::SM)
             .child(if is_executing {
-                svg()
-                    .path(AppIcon::Loader.path())
+                Icon::new(AppIcon::Loader)
                     .size(px(12.0))
-                    .text_color(accent)
+                    .color(accent)
                     .into_any_element()
             } else {
                 div()
@@ -385,12 +386,7 @@ impl TabBar {
                     .items_center()
                     .justify_center()
                     .hover(move |el| el.bg(secondary))
-                    .child(
-                        svg()
-                            .path(AppIcon::X.path())
-                            .size(px(12.0))
-                            .text_color(muted_fg),
-                    )
+                    .child(Icon::new(AppIcon::X).size(px(12.0)).color(muted_fg))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _event, _window, cx| {
@@ -414,12 +410,7 @@ impl TabBar {
             .justify_center()
             .cursor_pointer()
             .hover(|el| el.bg(cx.theme().secondary))
-            .child(
-                svg()
-                    .path(AppIcon::Plus.path())
-                    .size(px(14.0))
-                    .text_color(cx.theme().muted_foreground),
-            )
+            .child(Icon::new(AppIcon::Plus).size(px(14.0)).muted())
             .on_click(cx.listener(|_this, _event, _window, cx| {
                 cx.emit(TabBarEvent::NewTabRequested);
             }))

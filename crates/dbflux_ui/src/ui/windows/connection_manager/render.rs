@@ -1,15 +1,16 @@
 use crate::keymap::ContextId;
 use crate::platform;
 use crate::ui::icons::AppIcon;
+use crate::ui::tokens::FontSizes;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::primitives::{Icon as AppIconElement, Label, Text};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
-use dbflux_components::controls::{GpuiInput as Input, InputState};
 use gpui_component::{Icon, IconName};
 
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};
@@ -243,19 +244,9 @@ impl ConnectionManagerWindow {
                             .items_center()
                             .gap_2()
                             .when_some(brand_icon, |el, icon| {
-                                el.child(
-                                    svg()
-                                        .path(icon.path())
-                                        .size_6()
-                                        .text_color(theme.foreground),
-                                )
+                                el.child(AppIconElement::new(icon).size(px(24.0)).color(theme.foreground))
                             })
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(title),
-                            )
+                            .child(Text::heading(title).font_size(FontSizes::LG))
                     })
                     .child(div().flex_1())
                     .child(self.form_field_input_inline(
@@ -284,7 +275,7 @@ impl ConnectionManagerWindow {
                             div().p_2().rounded(px(4.0)).bg(danger_bg).child(
                                 div().flex().flex_col().gap_1().children(
                                     validation_errors.iter().map(|err| {
-                                        Text::body(err.clone()).text_color(danger_color)
+                                        Text::body(err.clone()).color(danger_color)
                                     }),
                                 ),
                             ),
@@ -325,7 +316,7 @@ impl ConnectionManagerWindow {
                                 .p_2()
                                 .rounded(px(4.0))
                                 .bg(bg)
-                                .child(Text::body(message).text_color(text_color)),
+                                .child(Text::body(message).color(text_color)),
                         )
                     })
                     .child(
@@ -1023,10 +1014,10 @@ impl ConnectionManagerWindow {
         let secondary = theme.secondary;
         let muted_foreground = theme.muted_foreground;
 
-        let icon_path = if show {
-            AppIcon::EyeOff.path()
+        let icon = if show {
+            AppIcon::EyeOff
         } else {
-            AppIcon::Eye.path()
+            AppIcon::Eye
         };
 
         div()
@@ -1039,7 +1030,7 @@ impl ConnectionManagerWindow {
             .rounded(px(4.0))
             .cursor_pointer()
             .hover(move |d| d.bg(secondary))
-            .child(svg().path(icon_path).size_4().text_color(muted_foreground))
+            .child(AppIconElement::new(icon).size(px(16.0)).color(muted_foreground))
     }
 }
 

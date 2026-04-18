@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, App, ClickEvent, ElementId, Pixels, Window};
+use gpui::{App, ClickEvent, ElementId, Pixels, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::icon::IconSource;
