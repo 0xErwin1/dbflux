@@ -2,6 +2,25 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.6] – 2026-04-18
+
+### Features
+
+* Add sidebar refresh and drop actions for schema nodes (#29)
+* Add a new app icon and fix the About section display
+
+### Fixes
+
+* Improve small app icon rendering in packaging assets
+* Persist all pending row changes on save, not just the first (#28)
+* Keep column resize drag active until mouse release
+
+### Improvements
+
+* Restore plural-aware delete confirmation copy for multi-row deletes after the main/dev merge
+
+---
+
 ## [0.4.5] – 2026-04-15
 
 ### Features

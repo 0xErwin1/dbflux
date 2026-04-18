@@ -1065,18 +1065,18 @@ impl DataGridPanel {
             .map(|c| c.row_indices.len())
             .unwrap_or(1);
 
-        let title = if count == 1 {
-            "Delete row?".to_string()
+        let (title, description) = if count == 1 {
+            (
+                "Delete row?".to_string(),
+                "This action cannot be undone.".to_string(),
+            )
         } else {
-            format!("Delete {} rows?", count)
-        };
-
-        let description = if count == 1 {
-            "This action cannot be undone.".to_string()
-        } else {
-            format!(
-                "{} rows will be permanently deleted. This cannot be undone.",
-                count
+            (
+                format!("Delete {} rows?", count),
+                format!(
+                    "{} rows will be permanently deleted. This cannot be undone.",
+                    count
+                ),
             )
         };
 
@@ -1113,9 +1113,9 @@ impl DataGridPanel {
                                     .medium()
                                     .color(theme.warning),
                             )
-                            .child(Text::heading("Delete row?")),
+                            .child(Text::heading(title)),
                     )
-                    .child(Text::muted("This action cannot be undone."))
+                    .child(Text::muted(description))
                     .child(
                         div()
                             .flex()
