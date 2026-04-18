@@ -45,7 +45,11 @@ pub fn render_menu_container(
         .enumerate()
         .map(|(idx, item)| {
             if item.is_separator {
-                return render_components_separator(cx).into_any_element();
+                let separator_selector = format!("{}-separator-{}", panel_id, idx);
+
+                return render_components_separator(cx)
+                    .debug_selector(move || separator_selector.clone())
+                    .into_any_element();
             }
 
             let on_click = on_click.clone();
@@ -65,6 +69,7 @@ pub fn render_menu_container(
         .collect();
 
     render_components_menu_container(children, cx)
+        .debug_selector(move || format!("{panel_id}-panel"))
 }
 
 #[cfg(test)]
