@@ -1,13 +1,14 @@
-use super::form_section::{create_blur_subscription, FormSection};
+use super::SettingsSection;
+use super::SettingsSectionId;
+use super::form_section::{FormSection, create_blur_subscription};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use super::ssh_tunnels::SshFormNav;
-use super::SettingsSection;
-use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_core::SshTunnelProfile;
 use gpui::prelude::*;
@@ -345,25 +346,22 @@ impl SshTunnelsSection {
             .gap_1()
             .child(Label::new(label.to_string()))
             .child(
-                div()
-                    .rounded(px(4.0))
-                    .border_1()
-                    .border_color(if is_focused {
-                        primary
-                    } else {
-                        transparent_black()
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.switching_input = true;
-                            this.ssh_focus = SshFocus::Form;
-                            this.ssh_form_field = field;
-                            this.focus_current_field(window, cx);
-                            cx.notify();
-                        }),
-                    )
-                    .child(Input::new(input).small()),
+                focus_frame(
+                    is_focused,
+                    Some(primary),
+                    layout::compact_input_shell(Input::new(input).small()),
+                    cx,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        this.switching_input = true;
+                        this.ssh_focus = SshFocus::Form;
+                        this.ssh_form_field = field;
+                        this.focus_current_field(window, cx);
+                        cx.notify();
+                    }),
+                ),
             )
     }
 
@@ -373,7 +371,7 @@ impl SshTunnelsSection {
         current_field: SshFormField,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let primary = theme.primary;
         let border = theme.border;
         let current_auth = self.ssh_auth_method;
@@ -766,177 +764,148 @@ impl SshTunnelsSection {
         keyring_available: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let primary = theme.primary;
-        let border = theme.border;
 
         let is_form_focused = self.ssh_focus == SshFocus::Form;
         let field = self.ssh_form_field;
 
-        let title = if editing_id.is_some() {
-            "Edit SSH Tunnel"
-        } else {
-            "New SSH Tunnel"
-        };
+        layout::sticky_form_shell(
+            Text::label(layout::editor_panel_title(
+                "SSH Tunnel",
+                editing_id.is_some(),
+            )),
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(self.render_ssh_field(
+                    "Name",
+                    &self.input_tunnel_name,
+                    is_form_focused && field == SshFormField::Name,
+                    primary,
+                    SshFormField::Name,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .gap_3()
+                        .child(div().flex_1().child(self.render_ssh_field(
+                            "Host",
+                            &self.input_ssh_host,
+                            is_form_focused && field == SshFormField::Host,
+                            primary,
+                            SshFormField::Host,
+                            cx,
+                        )))
+                        .child(div().w(px(80.0)).child(self.render_ssh_field(
+                            "Port",
+                            &self.input_ssh_port,
+                            is_form_focused && field == SshFormField::Port,
+                            primary,
+                            SshFormField::Port,
+                            cx,
+                        ))),
+                )
+                .child(self.render_ssh_field(
+                    "Username",
+                    &self.input_ssh_user,
+                    is_form_focused && field == SshFormField::User,
+                    primary,
+                    SshFormField::User,
+                    cx,
+                ))
+                .child(self.render_ssh_auth_selector(is_form_focused, field, cx))
+                .child(match self.ssh_auth_method {
+                    SshAuthSelection::PrivateKey => self
+                        .render_private_key_fields(keyring_available, is_form_focused, field, cx)
+                        .into_any_element(),
+                    SshAuthSelection::Password => self
+                        .render_password_fields(keyring_available, is_form_focused, field, cx)
+                        .into_any_element(),
+                })
+                .when_some(self.render_test_status(cx), |div, status| div.child(status)),
+            div()
+                .flex()
+                .gap_2()
+                .justify_end()
+                .when(editing_id.is_some(), |root| {
+                    let tunnel_id = editing_id.expect("checked is_some");
+                    let is_delete_focused = is_form_focused && field == SshFormField::DeleteButton;
 
-        div()
-            .flex_1()
-            .h_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(Text::label(title)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(self.render_ssh_field(
-                        "Name",
-                        &self.input_tunnel_name,
-                        is_form_focused && field == SshFormField::Name,
-                        primary,
-                        SshFormField::Name,
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_3()
-                            .child(div().flex_1().child(self.render_ssh_field(
-                                "Host",
-                                &self.input_ssh_host,
-                                is_form_focused && field == SshFormField::Host,
-                                primary,
-                                SshFormField::Host,
-                                cx,
-                            )))
-                            .child(div().w(px(80.0)).child(self.render_ssh_field(
-                                "Port",
-                                &self.input_ssh_port,
-                                is_form_focused && field == SshFormField::Port,
-                                primary,
-                                SshFormField::Port,
-                                cx,
-                            ))),
-                    )
-                    .child(self.render_ssh_field(
-                        "Username",
-                        &self.input_ssh_user,
-                        is_form_focused && field == SshFormField::User,
-                        primary,
-                        SshFormField::User,
-                        cx,
-                    ))
-                    .child(self.render_ssh_auth_selector(is_form_focused, field, cx))
-                    .child(match self.ssh_auth_method {
-                        SshAuthSelection::PrivateKey => self
-                            .render_private_key_fields(
-                                keyring_available,
-                                is_form_focused,
-                                field,
-                                cx,
-                            )
-                            .into_any_element(),
-                        SshAuthSelection::Password => self
-                            .render_password_fields(keyring_available, is_form_focused, field, cx)
-                            .into_any_element(),
-                    })
-                    .when_some(self.render_test_status(cx), |div, status| div.child(status)),
-            )
-            .child(
-                div()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(border)
-                    .flex()
-                    .gap_2()
-                    .justify_end()
-                    .when(editing_id.is_some(), |root| {
-                        let tunnel_id = editing_id.expect("checked is_some");
-                        let is_delete_focused =
-                            is_form_focused && field == SshFormField::DeleteButton;
-
-                        root.child(
-                            div()
-                                .rounded(px(4.0))
-                                .border_1()
-                                .border_color(if is_delete_focused {
-                                    primary
-                                } else {
-                                    transparent_black()
-                                })
-                                .child(
-                                    Button::new("delete-ssh-tunnel", "Delete")
-                                        .small()
-                                        .danger()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.request_delete_tunnel(tunnel_id, cx);
-                                        })),
-                                ),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .child({
-                        let is_test_focused = is_form_focused && field == SshFormField::TestButton;
-
+                    root.child(
                         div()
                             .rounded(px(4.0))
                             .border_1()
-                            .border_color(if is_test_focused {
+                            .border_color(if is_delete_focused {
                                 primary
                             } else {
                                 transparent_black()
                             })
                             .child(
-                                Button::new("test-ssh-tunnel", "Test")
+                                Button::new("delete-ssh-tunnel", "Delete")
                                     .small()
-                                    .ghost()
-                                    .disabled(self.ssh_test_status == SshTestStatus::Testing)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.test_ssh_tunnel(cx);
+                                    .danger()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.request_delete_tunnel(tunnel_id, cx);
                                     })),
-                            )
-                    })
-                    .child({
-                        let is_save_focused = is_form_focused && field == SshFormField::SaveButton;
+                            ),
+                    )
+                })
+                .child(div().flex_1())
+                .child({
+                    let is_test_focused = is_form_focused && field == SshFormField::TestButton;
 
-                        div()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_save_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .child(
-                                Button::new(
-                                    "save-ssh-tunnel",
-                                    if editing_id.is_some() {
-                                        "Update"
-                                    } else {
-                                        "Create"
-                                    },
-                                )
+                    div()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_test_focused {
+                            primary
+                        } else {
+                            transparent_black()
+                        })
+                        .child(
+                            Button::new("test-ssh-tunnel", "Test")
                                 .small()
-                                .primary()
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| {
-                                        this.save_tunnel(window, cx);
-                                    },
-                                )),
+                                .ghost()
+                                .disabled(self.ssh_test_status == SshTestStatus::Testing)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.test_ssh_tunnel(cx);
+                                })),
+                        )
+                })
+                .child({
+                    let is_save_focused = is_form_focused && field == SshFormField::SaveButton;
+
+                    div()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_save_focused {
+                            primary
+                        } else {
+                            transparent_black()
+                        })
+                        .child(
+                            Button::new(
+                                "save-ssh-tunnel",
+                                if editing_id.is_some() {
+                                    "Update"
+                                } else {
+                                    "Create"
+                                },
                             )
-                    }),
-            )
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.save_tunnel(window, cx);
+                                },
+                            )),
+                        )
+                }),
+            &theme,
+        )
     }
 }
 

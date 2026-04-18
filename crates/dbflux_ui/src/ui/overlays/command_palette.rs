@@ -657,17 +657,14 @@ impl CommandPalette {
             .cursor_pointer()
             .when(is_selected, |d| d.bg(theme.primary))
             .when(!is_selected, |d| {
-                d.bg(theme.background)
-                    .hover(|d| d.bg(theme.secondary))
+                d.bg(theme.background).hover(|d| d.bg(theme.secondary))
             })
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
-                    .child(
-                        palette_category_text(category, is_selected, theme),
-                    )
+                    .child(palette_category_text(category, is_selected, theme))
                     .child(palette_item_name(name, is_selected, theme)),
             )
             .when_some(right_el, |d, el| d.child(el))

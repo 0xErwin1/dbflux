@@ -3,9 +3,9 @@ use crate::ui::tokens::{FontSizes, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::{Icon, Text};
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
+use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 

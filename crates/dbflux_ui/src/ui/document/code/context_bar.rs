@@ -1,6 +1,23 @@
 use super::*;
 use crate::ui::AsyncUpdateResultExt;
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::composites::control_shell;
+use dbflux_components::primitives::{Icon, Text, focus_frame};
+
+fn context_dropdown_min_width(index: usize) -> Pixels {
+    match index {
+        0 => px(140.0),
+        1 => px(120.0),
+        _ => px(100.0),
+    }
+}
+
+fn context_dropdown_is_keyboard_focused(
+    focus_mode: SqlQueryFocus,
+    context_bar_index: usize,
+    dropdown_index: usize,
+) -> bool {
+    focus_mode == SqlQueryFocus::ContextBar && context_bar_index == dropdown_index
+}
 
 impl CodeDocument {
     // === Context dropdown creation ===
@@ -23,6 +40,7 @@ impl CodeDocument {
                 .items(items)
                 .selected_index(selected_index)
                 .placeholder("No connection")
+                .toolbar_style(true)
         });
 
         let sub = cx.subscribe_in(
@@ -227,6 +245,7 @@ impl CodeDocument {
                 .items(items)
                 .selected_index(selected_index)
                 .placeholder("Database")
+                .toolbar_style(true)
         });
 
         let sub = cx.subscribe_in(
@@ -258,6 +277,7 @@ impl CodeDocument {
                 .items(items)
                 .selected_index(selected_index)
                 .placeholder("Schema")
+                .toolbar_style(true)
         });
 
         let sub = cx.subscribe_in(
@@ -772,16 +792,49 @@ impl CodeDocument {
             )
             .child(
                 div()
-                    .min_w(px(140.0))
-                    .child(self.connection_dropdown.clone()),
+                    .min_w(context_dropdown_min_width(0))
+                    .child(focus_frame(
+                        context_dropdown_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_index,
+                            0,
+                        ),
+                        Some(theme.ring),
+                        control_shell(self.connection_dropdown.clone(), cx),
+                        cx,
+                    )),
             )
             .when(show_db, |el| {
-                el.child(Text::caption("Database:"))
-                    .child(div().min_w(px(120.0)).child(self.database_dropdown.clone()))
+                el.child(Text::caption("Database:")).child(
+                    div()
+                        .min_w(context_dropdown_min_width(1))
+                        .child(focus_frame(
+                            context_dropdown_is_keyboard_focused(
+                                self.focus_mode,
+                                self.context_bar_index,
+                                1,
+                            ),
+                            Some(theme.ring),
+                            control_shell(self.database_dropdown.clone(), cx),
+                            cx,
+                        )),
+                )
             })
             .when(show_schema, |el| {
-                el.child(Text::caption("Schema:"))
-                    .child(div().min_w(px(100.0)).child(self.schema_dropdown.clone()))
+                el.child(Text::caption("Schema:")).child(
+                    div()
+                        .min_w(context_dropdown_min_width(2))
+                        .child(focus_frame(
+                            context_dropdown_is_keyboard_focused(
+                                self.focus_mode,
+                                self.context_bar_index,
+                                2,
+                            ),
+                            Some(theme.ring),
+                            control_shell(self.schema_dropdown.clone(), cx),
+                            cx,
+                        )),
+                )
             })
             .child(div().flex_1())
             .when_some(self.path.as_ref(), |el, path| {
@@ -792,5 +845,41 @@ impl CodeDocument {
                 )
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SqlQueryFocus, context_dropdown_is_keyboard_focused, context_dropdown_min_width};
+    use gpui::px;
+
+    #[test]
+    fn connection_dropdown_keeps_widest_shell() {
+        assert_eq!(context_dropdown_min_width(0), px(140.0));
+    }
+
+    #[test]
+    fn database_and_schema_dropdown_shells_keep_compact_widths() {
+        assert_eq!(context_dropdown_min_width(1), px(120.0));
+        assert_eq!(context_dropdown_min_width(2), px(100.0));
+    }
+
+    #[test]
+    fn only_active_context_bar_dropdown_reports_keyboard_focus() {
+        assert!(context_dropdown_is_keyboard_focused(
+            SqlQueryFocus::ContextBar,
+            1,
+            1,
+        ));
+        assert!(!context_dropdown_is_keyboard_focused(
+            SqlQueryFocus::ContextBar,
+            1,
+            0,
+        ));
+        assert!(!context_dropdown_is_keyboard_focused(
+            SqlQueryFocus::Editor,
+            1,
+            1,
+        ));
     }
 }

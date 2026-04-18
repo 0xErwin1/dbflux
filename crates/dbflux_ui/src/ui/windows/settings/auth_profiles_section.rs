@@ -8,12 +8,12 @@ use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
+use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_core::{AccessKind, AuthProfile, FormFieldKind, ImportableProfile};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, Icon, IconName};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -847,7 +847,11 @@ impl AuthProfilesSection {
                     .flex()
                     .items_start()
                     .gap_2()
-                    .child(FluxIcon::new(IconName::Info).size(px(16.0)).color(theme.primary))
+                    .child(
+                        FluxIcon::new(IconName::Info)
+                            .size(px(16.0))
+                            .color(theme.primary),
+                    )
                     .child(
                         div()
                             .flex()
@@ -891,25 +895,22 @@ impl AuthProfilesSection {
             .gap_1()
             .child(Label::new(label.to_string()))
             .child(
-                div()
-                    .rounded(px(4.0))
-                    .border_1()
-                    .border_color(if is_focused {
-                        primary
-                    } else {
-                        transparent_black()
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.switching_input = true;
-                            this.auth_focus = AuthFocus::Form;
-                            this.auth_form_field = field;
-                            this.focus_current_field(window, cx);
-                            cx.notify();
-                        }),
-                    )
-                    .child(Input::new(input).small()),
+                focus_frame(
+                    is_focused,
+                    Some(primary),
+                    layout::compact_input_shell(Input::new(input).small()),
+                    cx,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        this.switching_input = true;
+                        this.auth_focus = AuthFocus::Form;
+                        this.auth_form_field = field;
+                        this.focus_current_field(window, cx);
+                        cx.notify();
+                    }),
+                ),
             )
     }
 
@@ -1468,189 +1469,165 @@ impl AuthProfilesSection {
             })
             .unwrap_or_default();
 
-        div()
-            .flex_1()
-            .h_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(Label::new(if is_editing {
-                        "Edit Auth Profile"
-                    } else {
-                        "New Auth Profile"
-                    }))
-                    .child(Text::muted(
-                        "Reusable authentication profile for access and value resolution",
-                    )),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_scrollbar()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child({
-                        let is_focused = self.auth_form_field == AuthFormField::Name
-                            && self.auth_focus == AuthFocus::Form
-                            && self.content_focused;
-                        self.render_input_row(
-                            "Name",
-                            &self.input_name,
-                            AuthFormField::Name,
-                            is_focused,
-                            cx,
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(Label::new("Provider"))
-                            .child(self.render_provider_selector(window, cx)),
+        layout::sticky_form_shell(
+            div()
+                .child(Label::new(layout::editor_panel_title(
+                    "Auth Profile",
+                    is_editing,
+                )))
+                .child(Text::muted(
+                    "Reusable authentication profile for access and value resolution",
+                )),
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child({
+                    let is_focused = self.auth_form_field == AuthFormField::Name
+                        && self.auth_focus == AuthFocus::Form
+                        && self.content_focused;
+                    self.render_input_row(
+                        "Name",
+                        &self.input_name,
+                        AuthFormField::Name,
+                        is_focused,
+                        cx,
                     )
-                    .children(dynamic_fields)
-                    .when(
-                        cfg!(feature = "aws")
-                            && self.selected_provider_id.as_deref() == Some("aws-sso"),
-                        |content| {
-                            #[cfg(feature = "aws")]
-                            {
-                                content
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                Button::new(
-                                                    "auth-sso-login",
-                                                    if self.sso_login_loading {
-                                                        "Logging in..."
-                                                    } else {
-                                                        "Login"
-                                                    },
-                                                )
-                                                .small()
-                                                .primary()
-                                                .disabled(self.sso_login_loading)
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.login_sso_profile(cx);
-                                                })),
+                })
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(Label::new("Provider"))
+                        .child(self.render_provider_selector(window, cx)),
+                )
+                .children(dynamic_fields)
+                .when(
+                    cfg!(feature = "aws")
+                        && self.selected_provider_id.as_deref() == Some("aws-sso"),
+                    |content| {
+                        #[cfg(feature = "aws")]
+                        {
+                            content
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            Button::new(
+                                                "auth-sso-login",
+                                                if self.sso_login_loading {
+                                                    "Logging in..."
+                                                } else {
+                                                    "Login"
+                                                },
                                             )
-                                            .child(Text::caption(
-                                                "Runs AWS SSO login for this profile",
-                                            )),
-                                    )
-                                    .child(self.render_dropdown_row(
-                                        "SSO Account ID",
-                                        &self.sso_account_dropdown,
-                                    ))
-                                    .child(self.render_dropdown_row(
+                                            .small()
+                                            .primary()
+                                            .disabled(self.sso_login_loading)
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.login_sso_profile(cx);
+                                                }),
+                                            ),
+                                        )
+                                        .child(Text::caption(
+                                            "Runs AWS SSO login for this profile",
+                                        )),
+                                )
+                                .child(self.render_dropdown_row(
+                                    "SSO Account ID",
+                                    &self.sso_account_dropdown,
+                                ))
+                                .child(
+                                    self.render_dropdown_row(
                                         "SSO Role Name",
                                         &self.sso_role_dropdown,
-                                    ))
-                                    .when_some(
-                                        self.sso_accounts_error.as_ref(),
-                                        |content, error| {
-                                            content.child(
-                                                Text::caption(format!(
-                                                    "Account listing failed: {}",
-                                                    error
-                                                ))
-                                                .warning(),
-                                            )
-                                        },
-                                    )
-                                    .when_some(self.sso_roles_error.as_ref(), |content, error| {
-                                        content.child(
-                                            Text::caption(format!(
-                                                "Role listing failed: {}",
-                                                error
-                                            ))
+                                    ),
+                                )
+                                .when_some(self.sso_accounts_error.as_ref(), |content, error| {
+                                    content.child(
+                                        Text::caption(format!("Account listing failed: {}", error))
                                             .warning(),
-                                        )
+                                    )
+                                })
+                                .when_some(self.sso_roles_error.as_ref(), |content, error| {
+                                    content.child(
+                                        Text::caption(format!("Role listing failed: {}", error))
+                                            .warning(),
+                                    )
+                                })
+                                .when_some(self.sso_login_status.as_ref(), |content, status| {
+                                    content.child(if status.1 {
+                                        Text::caption(status.0.clone()).success()
+                                    } else {
+                                        Text::caption(status.0.clone()).warning()
                                     })
-                                    .when_some(self.sso_login_status.as_ref(), |content, status| {
-                                        content.child(if status.1 {
-                                            Text::caption(status.0.clone()).success()
-                                        } else {
-                                            Text::caption(status.0.clone()).warning()
-                                        })
-                                    })
-                            }
+                                })
+                        }
 
-                            #[cfg(not(feature = "aws"))]
-                            {
-                                content
-                            }
-                        },
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Checkbox::new("auth-profile-enabled")
-                                    .checked(self.profile_enabled)
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.profile_enabled = *checked;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(Text::body("Enabled")),
-                    ),
-            )
-            .child(
-                div()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .gap_2()
-                    .justify_end()
-                    .when(is_editing, |root| {
-                        root.child(
-                            Button::new("delete-auth-profile", "Delete")
-                                .small()
-                                .danger()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.request_delete_selected_profile(cx);
+                        #[cfg(not(feature = "aws"))]
+                        {
+                            content
+                        }
+                    },
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Checkbox::new("auth-profile-enabled")
+                                .checked(self.profile_enabled)
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.profile_enabled = *checked;
+                                    cx.notify();
                                 })),
                         )
-                    })
-                    .child(
-                        Button::new("cancel-auth-profile", "Cancel")
+                        .child(Text::body("Enabled")),
+                ),
+            div()
+                .flex()
+                .gap_2()
+                .justify_end()
+                .when(is_editing, |root| {
+                    root.child(
+                        Button::new("delete-auth-profile", "Delete")
                             .small()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if let Some(selected_id) = this.selected_profile_id {
-                                    this.load_profile_into_form(selected_id, window, cx);
-                                } else {
-                                    this.clear_form(window, cx);
-                                    cx.notify();
-                                }
+                            .danger()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.request_delete_selected_profile(cx);
                             })),
                     )
-                    .child(
-                        Button::new(
-                            "save-auth-profile",
-                            if is_editing { "Update" } else { "Create" },
-                        )
+                })
+                .child(
+                    Button::new("cancel-auth-profile", "Cancel")
                         .small()
-                        .primary()
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.save_profile(window, cx);
+                            if let Some(selected_id) = this.selected_profile_id {
+                                this.load_profile_into_form(selected_id, window, cx);
+                            } else {
+                                this.clear_form(window, cx);
+                                cx.notify();
+                            }
                         })),
-                    ),
-            )
+                )
+                .child(
+                    Button::new(
+                        "save-auth-profile",
+                        if is_editing { "Update" } else { "Create" },
+                    )
+                    .small()
+                    .primary()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_profile(window, cx);
+                    })),
+                ),
+            &theme,
+        )
     }
 }
 

@@ -70,21 +70,13 @@ impl ConnectionManagerWindow {
                                 .gap_1()
                                 .child(Label::new("Auth Profile (optional)"))
                                 .child(
-                                    div()
+                                    self.render_focus_shell(
+                                        show_focus && self.form_focus == FormFocus::SsmAuthProfile,
+                                        ring_color,
+                                        self.auth_profile_dropdown.clone(),
+                                        cx,
+                                    )
                                         .min_w(px(280.0))
-                                        .rounded(px(4.0))
-                                        .border_2()
-                                        .when(
-                                            show_focus
-                                                && self.form_focus == FormFocus::SsmAuthProfile,
-                                            |d| d.border_color(ring_color),
-                                        )
-                                        .when(
-                                            !(show_focus
-                                                && self.form_focus == FormFocus::SsmAuthProfile),
-                                            |d| d.border_color(gpui::transparent_black()),
-                                        )
-                                        .p(px(2.0))
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _, window, cx| {
@@ -94,8 +86,7 @@ impl ConnectionManagerWindow {
                                                     cx,
                                                 );
                                             }),
-                                        )
-                                        .child(self.auth_profile_dropdown.clone()),
+                                        ),
                                 )
                                 .child(
                                     div()
@@ -103,22 +94,18 @@ impl ConnectionManagerWindow {
                                         .items_center()
                                         .gap_2()
                                         .child(
-                                            div()
-                                                .rounded(px(4.0))
-                                                .border_2()
-                                                .when(
-                                                    show_focus
-                                                        && self.form_focus
-                                                            == FormFocus::SsmAuthManage,
-                                                    |d| d.border_color(ring_color),
-                                                )
-                                                .when(
-                                                    !(show_focus
-                                                        && self.form_focus
-                                                            == FormFocus::SsmAuthManage),
-                                                    |d| d.border_color(gpui::transparent_black()),
-                                                )
-                                                .p(px(2.0))
+                                            self.render_focus_shell(
+                                                show_focus
+                                                    && self.form_focus == FormFocus::SsmAuthManage,
+                                                ring_color,
+                                                Button::new("auth-open-settings", "Manage")
+                                                    .ghost()
+                                                    .small()
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.open_auth_profiles_settings(cx);
+                                                    })),
+                                                cx,
+                                            )
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(|this, _, window, cx| {
@@ -128,32 +115,22 @@ impl ConnectionManagerWindow {
                                                             cx,
                                                         );
                                                     }),
-                                                )
-                                                .child(
-                                                    Button::new("auth-open-settings", "Manage")
-                                                        .ghost()
-                                                        .small()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.open_auth_profiles_settings(cx);
-                                                        })),
                                                 ),
                                         )
                                         .child(
-                                            div()
-                                                .rounded(px(4.0))
-                                                .border_2()
-                                                .when(
-                                                    show_focus
-                                                        && self.form_focus == FormFocus::SsmAuthLogin,
-                                                    |d| d.border_color(ring_color),
-                                                )
-                                                .when(
-                                                    !(show_focus
-                                                        && self.form_focus
-                                                            == FormFocus::SsmAuthLogin),
-                                                    |d| d.border_color(gpui::transparent_black()),
-                                                )
-                                                .p(px(2.0))
+                                            self.render_focus_shell(
+                                                show_focus
+                                                    && self.form_focus == FormFocus::SsmAuthLogin,
+                                                ring_color,
+                                                Button::new("auth-login-selected", "Login")
+                                                    .ghost()
+                                                    .small()
+                                                    .disabled(!login_enabled)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.login_selected_auth_profile(cx);
+                                                    })),
+                                                cx,
+                                            )
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(|this, _, window, cx| {
@@ -163,34 +140,22 @@ impl ConnectionManagerWindow {
                                                             cx,
                                                         );
                                                     }),
-                                                )
-                                                .child(
-                                                    Button::new("auth-login-selected", "Login")
-                                                        .ghost()
-                                                        .small()
-                                                        .disabled(!login_enabled)
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.login_selected_auth_profile(cx);
-                                                        })),
                                                 ),
                                         )
                                         .child(
-                                            div()
-                                                .rounded(px(4.0))
-                                                .border_2()
-                                                .when(
-                                                    show_focus
-                                                        && self.form_focus
-                                                            == FormFocus::SsmAuthRefresh,
-                                                    |d| d.border_color(ring_color),
-                                                )
-                                                .when(
-                                                    !(show_focus
-                                                        && self.form_focus
-                                                            == FormFocus::SsmAuthRefresh),
-                                                    |d| d.border_color(gpui::transparent_black()),
-                                                )
-                                                .p(px(2.0))
+                                            self.render_focus_shell(
+                                                show_focus
+                                                    && self.form_focus
+                                                        == FormFocus::SsmAuthRefresh,
+                                                ring_color,
+                                                Button::new("auth-refresh-session", "Refresh")
+                                                    .ghost()
+                                                    .small()
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.refresh_auth_profile_statuses(cx);
+                                                    })),
+                                                cx,
+                                            )
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(|this, _, window, cx| {
@@ -200,14 +165,6 @@ impl ConnectionManagerWindow {
                                                             cx,
                                                         );
                                                     }),
-                                                )
-                                                .child(
-                                                    Button::new("auth-refresh-session", "Refresh")
-                                                        .ghost()
-                                                        .small()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.refresh_auth_profile_statuses(cx);
-                                                        })),
                                                 ),
                                         ),
                                 )
@@ -295,19 +252,13 @@ impl ConnectionManagerWindow {
                         .gap_1()
                         .child(Label::new("Auth Profile"))
                         .child(
-                            div()
+                            self.render_focus_shell(
+                                show_focus && self.form_focus == FormFocus::SsmAuthProfile,
+                                ring_color,
+                                self.auth_profile_dropdown.clone(),
+                                cx,
+                            )
                                 .min_w(px(280.0))
-                                .rounded(px(4.0))
-                                .border_2()
-                                .when(
-                                    show_focus && self.form_focus == FormFocus::SsmAuthProfile,
-                                    |d| d.border_color(ring_color),
-                                )
-                                .when(
-                                    !(show_focus && self.form_focus == FormFocus::SsmAuthProfile),
-                                    |d| d.border_color(gpui::transparent_black()),
-                                )
-                                .p(px(2.0))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, _, window, cx| {
@@ -317,8 +268,7 @@ impl ConnectionManagerWindow {
                                             cx,
                                         );
                                     }),
-                                )
-                                .child(self.auth_profile_dropdown.clone()),
+                                ),
                         )
                         .child(
                             div()
@@ -326,20 +276,17 @@ impl ConnectionManagerWindow {
                                 .items_center()
                                 .gap_2()
                                 .child(
-                                    div()
-                                        .rounded(px(4.0))
-                                        .border_2()
-                                        .when(
-                                            show_focus
-                                                && self.form_focus == FormFocus::SsmAuthManage,
-                                            |d| d.border_color(ring_color),
-                                        )
-                                        .when(
-                                            !(show_focus
-                                                && self.form_focus == FormFocus::SsmAuthManage),
-                                            |d| d.border_color(gpui::transparent_black()),
-                                        )
-                                        .p(px(2.0))
+                                    self.render_focus_shell(
+                                        show_focus && self.form_focus == FormFocus::SsmAuthManage,
+                                        ring_color,
+                                        Button::new("ssm-auth-open-settings", "Manage")
+                                            .ghost()
+                                            .small()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.open_auth_profiles_settings(cx);
+                                            })),
+                                        cx,
+                                    )
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _, window, cx| {
@@ -349,31 +296,21 @@ impl ConnectionManagerWindow {
                                                     cx,
                                                 );
                                             }),
-                                        )
-                                        .child(
-                                            Button::new("ssm-auth-open-settings", "Manage")
-                                                .ghost()
-                                                .small()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.open_auth_profiles_settings(cx);
-                                                })),
                                         ),
                                 )
                                 .child(
-                                    div()
-                                        .rounded(px(4.0))
-                                        .border_2()
-                                        .when(
-                                            show_focus
-                                                && self.form_focus == FormFocus::SsmAuthLogin,
-                                            |d| d.border_color(ring_color),
-                                        )
-                                        .when(
-                                            !(show_focus
-                                                && self.form_focus == FormFocus::SsmAuthLogin),
-                                            |d| d.border_color(gpui::transparent_black()),
-                                        )
-                                        .p(px(2.0))
+                                    self.render_focus_shell(
+                                        show_focus && self.form_focus == FormFocus::SsmAuthLogin,
+                                        ring_color,
+                                        Button::new("ssm-auth-login-selected", "Login")
+                                            .ghost()
+                                            .small()
+                                            .disabled(!login_enabled)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.login_selected_auth_profile(cx);
+                                            })),
+                                        cx,
+                                    )
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _, window, cx| {
@@ -383,32 +320,20 @@ impl ConnectionManagerWindow {
                                                     cx,
                                                 );
                                             }),
-                                        )
-                                        .child(
-                                            Button::new("ssm-auth-login-selected", "Login")
-                                                .ghost()
-                                                .small()
-                                                .disabled(!login_enabled)
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.login_selected_auth_profile(cx);
-                                                })),
                                         ),
                                 )
                                 .child(
-                                    div()
-                                        .rounded(px(4.0))
-                                        .border_2()
-                                        .when(
-                                            show_focus
-                                                && self.form_focus == FormFocus::SsmAuthRefresh,
-                                            |d| d.border_color(ring_color),
-                                        )
-                                        .when(
-                                            !(show_focus
-                                                && self.form_focus == FormFocus::SsmAuthRefresh),
-                                            |d| d.border_color(gpui::transparent_black()),
-                                        )
-                                        .p(px(2.0))
+                                    self.render_focus_shell(
+                                        show_focus && self.form_focus == FormFocus::SsmAuthRefresh,
+                                        ring_color,
+                                        Button::new("ssm-auth-refresh-session", "Refresh")
+                                            .ghost()
+                                            .small()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.refresh_auth_profile_statuses(cx);
+                                            })),
+                                        cx,
+                                    )
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _, window, cx| {
@@ -418,14 +343,6 @@ impl ConnectionManagerWindow {
                                                     cx,
                                                 );
                                             }),
-                                        )
-                                        .child(
-                                            Button::new("ssm-auth-refresh-session", "Refresh")
-                                                .ghost()
-                                                .small()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.refresh_auth_profile_statuses(cx);
-                                                })),
                                         ),
                                 ),
                         )
@@ -469,38 +386,24 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_2()
                     .child(
-                        div()
+                        self.render_focus_shell(selector_focused, ring_color, selector, cx)
                             .w(px(170.0))
-                            .rounded(px(4.0))
-                            .border_2()
-                            .when(selector_focused, |d| d.border_color(ring_color))
-                            .when(!selector_focused, |d| {
-                                d.border_color(gpui::transparent_black())
-                            })
-                            .p(px(2.0))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, window, cx| {
                                     this.enter_edit_mode_for_field(selector_focus, window, cx);
                                 }),
-                            )
-                            .child(selector),
+                            ),
                     )
                     .child(
-                        div()
+                        self.render_control_focus_shell(focused, ring_color, Input::new(input), cx)
                             .flex_1()
-                            .rounded(px(4.0))
-                            .border_2()
-                            .when(focused, |d| d.border_color(ring_color))
-                            .when(!focused, |d| d.border_color(gpui::transparent_black()))
-                            .p(px(2.0))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, window, cx| {
                                     this.enter_edit_mode_for_field(field, window, cx);
                                 }),
-                            )
-                            .child(Input::new(input)),
+                            ),
                     ),
             )
             .into_any_element()

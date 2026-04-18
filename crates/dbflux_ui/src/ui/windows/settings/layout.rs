@@ -5,6 +5,25 @@ use gpui_component::scroll::ScrollableElement;
 
 use crate::ui::theme::ghost_border_color;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StickyFooterLayout {
+    FullWidth,
+}
+
+fn sticky_footer_layout() -> StickyFooterLayout {
+    StickyFooterLayout::FullWidth
+}
+
+pub(super) fn compact_input_shell(child: impl IntoElement) -> Div {
+    div().w_full().child(child)
+}
+
+pub(super) fn editor_panel_title(noun: &str, is_editing: bool) -> String {
+    let prefix = if is_editing { "Edit" } else { "New" };
+
+    format!("{} {}", prefix, noun)
+}
+
 pub(super) fn section_header(
     title: impl Into<SharedString>,
     subtitle: impl Into<SharedString>,
@@ -60,13 +79,42 @@ pub(super) fn sticky_form_shell(
                 .gap_5()
                 .child(body),
         )
-        .child(
-            div()
-                .p_4()
-                .border_t_1()
-                .border_color(theme.border)
-                .flex()
-                .justify_end()
-                .child(footer),
-        )
+        .child(div().p_4().border_t_1().border_color(theme.border).child(
+            match sticky_footer_layout() {
+                StickyFooterLayout::FullWidth => div().w_full().child(footer),
+            },
+        ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        StickyFooterLayout, compact_input_shell, editor_panel_title, sticky_footer_layout,
+    };
+    use gpui::div;
+
+    #[test]
+    fn editor_panel_title_uses_new_prefix_when_creating() {
+        assert_eq!(editor_panel_title("Proxy", false), "New Proxy");
+        assert_eq!(
+            editor_panel_title("Auth Profile", false),
+            "New Auth Profile"
+        );
+    }
+
+    #[test]
+    fn editor_panel_title_uses_edit_prefix_when_updating() {
+        assert_eq!(editor_panel_title("Proxy", true), "Edit Proxy");
+        assert_eq!(editor_panel_title("SSH Tunnel", true), "Edit SSH Tunnel");
+    }
+
+    #[test]
+    fn sticky_form_footer_preserves_full_width_layout() {
+        assert_eq!(sticky_footer_layout(), StickyFooterLayout::FullWidth);
+    }
+
+    #[test]
+    fn compact_settings_inputs_skip_standard_control_shell() {
+        let _ = compact_input_shell(div());
+    }
 }

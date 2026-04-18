@@ -2,7 +2,7 @@ use super::layout;
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId};
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
-use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
+use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::components::multi_select::MultiSelect;
 use dbflux_components::controls::{Button, Checkbox, Input};
@@ -11,8 +11,8 @@ use dbflux_components::primitives::{Label, Text};
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
 use std::collections::HashSet;
 
 /// Tool display metadata: (id, label, description)
