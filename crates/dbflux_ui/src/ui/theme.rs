@@ -1,6 +1,9 @@
+pub use dbflux_components::typography::AppFonts;
+use dbflux_components::typography::load_bundled_fonts;
 use dbflux_core::ThemeSetting;
-use gpui::{App, Hsla, Window, hsla};
+use gpui::{App, Hsla, SharedString, Window, hsla};
 use gpui_component::theme::{Theme, ThemeMode};
+use std::rc::Rc;
 
 /// Ghost border: `#524436` at 15% opacity. Felt-not-seen structural separator.
 /// Use instead of solid `theme.border` when separating major UI regions.
@@ -15,6 +18,7 @@ pub fn surface_highest_color() -> Hsla {
 
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
+    load_bundled_fonts(cx);
     apply_theme(ThemeSetting::Dark, None, cx);
 }
 
@@ -72,6 +76,25 @@ fn rgb_to_hsla_alpha(hex: u32, alpha: f32) -> Hsla {
     hsla
 }
 
+/// Persist custom font families into the stored ThemeConfig so that
+/// `Theme::change()` (triggered by ThemeRegistry observer) preserves them.
+/// Without this, `apply_config()` resets font_family to ".SystemUIFont".
+fn persist_font_config(theme: &mut Theme) {
+    let mut dark = (*theme.dark_theme).clone();
+    dark.font_family = Some(SharedString::from(AppFonts::BODY));
+    dark.mono_font_family = Some(SharedString::from(AppFonts::MONO));
+    theme.dark_theme = Rc::new(dark);
+
+    let mut light = (*theme.light_theme).clone();
+    light.font_family = Some(SharedString::from(AppFonts::BODY));
+    light.mono_font_family = Some(SharedString::from(AppFonts::MONO));
+    theme.light_theme = Rc::new(light);
+
+    // Also set the immediate values
+    theme.font_family = SharedString::from(AppFonts::BODY);
+    theme.mono_font_family = SharedString::from(AppFonts::MONO);
+}
+
 fn apply_ayu_dark(cx: &mut App) {
     let theme = Theme::global_mut(cx);
 
@@ -90,6 +113,8 @@ fn apply_ayu_dark(cx: &mut App) {
     let success = rgb_to_hsla(0xAAD94C);
     let warning = rgb_to_hsla(0xFFB454);
     let info = rgb_to_hsla(0x59C2FF);
+
+    persist_font_config(theme);
 
     // Core colors
     theme.background = background;
@@ -286,6 +311,8 @@ fn apply_ayu_light(cx: &mut App) {
     let success = rgb_to_hsla(0x86B300);
     let warning = rgb_to_hsla(0xF2AE49);
     let info = rgb_to_hsla(0x399EE6);
+
+    persist_font_config(theme);
 
     theme.background = background;
     theme.foreground = foreground;
