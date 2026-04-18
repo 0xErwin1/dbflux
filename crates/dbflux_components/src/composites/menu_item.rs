@@ -223,11 +223,13 @@ pub fn render_menu_item(
     let icon_color = resolve_menu_item_color(visual_state.icon_color, theme);
     let text_color = resolve_menu_item_color(visual_state.text_color, theme);
 
-    let item_id = SharedString::from(format!("{}-item-{}", panel_id, index));
+    let item_selector = format!("{}-item-{}", panel_id, index);
+    let item_id = SharedString::from(item_selector.clone());
 
     let has_no_icon = icon.is_none();
     let mut row = div()
         .id(item_id)
+        .debug_selector(move || item_selector.clone())
         .flex()
         .items_center()
         .gap(Spacing::SM)

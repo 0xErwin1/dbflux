@@ -144,6 +144,10 @@ pub struct Dropdown {
 impl Dropdown {
     const PAGE_STEP: usize = 8;
 
+    fn menu_debug_selector(&self) -> String {
+        format!("{}-menu", self.id)
+    }
+
     pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
@@ -478,8 +482,11 @@ impl Dropdown {
             })
             .collect();
 
+        let menu_debug_selector = self.menu_debug_selector();
+
         let menu = div()
             .id("dropdown-menu")
+            .debug_selector(move || menu_debug_selector.clone())
             .min_w_full()
             .max_h(px(220.0))
             .p(Spacing::XS)
@@ -613,6 +620,10 @@ impl Render for Dropdown {
 
         let mut container = div()
             .id(self.id.clone())
+            .debug_selector({
+                let id = self.id.to_string();
+                move || id.clone()
+            })
             .w_full()
             .when(variant == DropdownTriggerVariant::Compact, |el| el.h_full())
             .child(trigger)

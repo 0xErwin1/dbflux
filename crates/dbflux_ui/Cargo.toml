@@ -91,3 +91,6 @@ lua = ["dbflux_lua", "dbflux_app/lua"]
 aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws", "dbflux_app/aws"]
 mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
