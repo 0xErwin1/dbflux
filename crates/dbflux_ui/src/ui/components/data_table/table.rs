@@ -688,26 +688,24 @@ impl DataTable {
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .whitespace_nowrap()
-                                    .child(
-                                        Text::label_sm(col_spec.title.to_string()).color(
-                                            if is_sorted {
-                                                theme.primary
-                                            } else {
-                                                theme.table_head_foreground
-                                            },
-                                        ),
-                                    ),
+                                    .child(Text::label_sm(col_spec.title.to_string()).color(
+                                        if is_sorted {
+                                            theme.primary
+                                        } else {
+                                            theme.table_head_foreground
+                                        },
+                                    )),
                             ),
                     )
-                    .child(
-                        div().child(if is_sorted {
-                            Text::body(sort_indicator).font_size(FontSizes::SM).color(theme.primary)
-                        } else {
-                            Text::body(sort_indicator)
-                                .font_size(FontSizes::SM)
-                                .color(theme.muted_foreground)
-                        }),
-                    )
+                    .child(div().child(if is_sorted {
+                        Text::body(sort_indicator)
+                            .font_size(FontSizes::SM)
+                            .color(theme.primary)
+                    } else {
+                        Text::body(sort_indicator)
+                            .font_size(FontSizes::SM)
+                            .color(theme.muted_foreground)
+                    }))
                     // Resize handle: mouse-down starts the drag; move/up are
                     // handled on the DataTable root div so the drag survives
                     // the cursor leaving this 6px strip.

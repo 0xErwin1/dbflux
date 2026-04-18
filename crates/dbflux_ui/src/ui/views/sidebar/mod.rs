@@ -377,6 +377,7 @@ impl Render for DragPreview {
     }
 }
 
+#[derive(Clone)]
 pub struct ContextMenuState {
     pub item_id: String,
     pub selected_index: usize,

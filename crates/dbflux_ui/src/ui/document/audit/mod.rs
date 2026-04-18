@@ -25,6 +25,7 @@ const FILTER_BAR_IDX_CLEAR: usize = 7;
 use crate::ui::components::toast::{PendingToast, flush_pending_toast};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::{Label, Text, surface_raised};
 use dbflux_core::{
     Pagination, RefreshPolicy,
@@ -36,7 +37,6 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
-use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 
 use super::chrome::{compact_top_bar, workspace_footer_bar};

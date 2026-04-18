@@ -1,5 +1,6 @@
 use super::*;
 use crate::platform;
+use crate::ui::tokens::FontSizes;
 use dbflux_components::primitives::{Text, overlay_bg};
 
 impl Workspace {
@@ -113,6 +114,8 @@ impl Render for Workspace {
         let bg_color = theme.background;
         let muted_fg = theme.muted_foreground;
         let header_size = px(25.0);
+        let sidebar_context_menu = self.sidebar.read(cx).context_menu_state().cloned();
+        let tab_context_menu = self.tab_bar.read(cx).context_menu_state().cloned();
 
         // Linux CSD title bar: render only when the compositor has negotiated CSD mode.
         let linux_title_bar = platform::render_csd_title_bar(window, cx, "DBFlux");
@@ -627,7 +630,7 @@ impl Render for Workspace {
                 }
             })
             // Context menu rendered at workspace level for proper positioning
-            .when_some(self.sidebar.read(cx).context_menu_state(), |this, menu| {
+            .when_some(sidebar_context_menu, |this, menu| {
                 use crate::ui::components::context_menu as ctx;
                 use crate::ui::views::sidebar::ContextMenuItem;
 
@@ -715,7 +718,7 @@ impl Render for Workspace {
                     })
             })
             // Tab context menu rendered at workspace level for proper positioning
-            .when_some(self.tab_bar.read(cx).context_menu_state(), |this, menu| {
+            .when_some(tab_context_menu, |this, menu| {
                 use crate::ui::components::context_menu as ctx;
                 use crate::ui::document::tab_bar::TabBar;
 

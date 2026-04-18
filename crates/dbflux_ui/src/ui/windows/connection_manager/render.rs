@@ -5,7 +5,7 @@ use crate::ui::tokens::FontSizes;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::primitives::{Icon as AppIconElement, Label, Text};
+use dbflux_components::primitives::{Icon as AppIconElement, Label, Text, focus_frame};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
@@ -16,6 +16,26 @@ use gpui_component::{Icon, IconName};
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};
 
 impl ConnectionManagerWindow {
+    pub(super) fn render_focus_shell(
+        &self,
+        focused: bool,
+        ring_color: Hsla,
+        child: impl IntoElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        focus_frame(focused, Some(ring_color), child, cx)
+    }
+
+    pub(super) fn render_control_focus_shell(
+        &self,
+        focused: bool,
+        ring_color: Hsla,
+        child: impl IntoElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        focus_frame(focused, Some(ring_color), child, cx)
+    }
+
     pub(super) fn render_password_field(
         &self,
         show_focus: bool,
@@ -244,7 +264,11 @@ impl ConnectionManagerWindow {
                             .items_center()
                             .gap_2()
                             .when_some(brand_icon, |el, icon| {
-                                el.child(AppIconElement::new(icon).size(px(24.0)).color(theme.foreground))
+                                el.child(
+                                    AppIconElement::new(icon)
+                                        .size(px(24.0))
+                                        .color(theme.foreground),
+                                )
                             })
                             .child(Text::heading(title).font_size(FontSizes::LG))
                     })
@@ -271,15 +295,17 @@ impl ConnectionManagerWindow {
                     .gap_4()
                     .p_4()
                     .when(!validation_errors.is_empty(), |d| {
-                        d.child(div().child(
-                            div().p_2().rounded(px(4.0)).bg(danger_bg).child(
-                                div().flex().flex_col().gap_1().children(
-                                    validation_errors.iter().map(|err| {
-                                        Text::body(err.clone()).color(danger_color)
-                                    }),
+                        d.child(
+                            div().child(
+                                div().p_2().rounded(px(4.0)).bg(danger_bg).child(
+                                    div().flex().flex_col().gap_1().children(
+                                        validation_errors
+                                            .iter()
+                                            .map(|err| Text::body(err.clone()).color(danger_color)),
+                                    ),
                                 ),
                             ),
-                        ))
+                        )
                     })
                     .children(tab_content),
             )
@@ -375,7 +401,6 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let danger_color = cx.theme().danger;
         if !is_ssh_tab && field_def.id == "profile" && self.selected_driver_id() == Some("dynamodb")
         {
             let field_enabled = self.is_field_enabled(field_def);
@@ -801,7 +826,6 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let danger_color = cx.theme().danger;
         let Some(host_input) = self.input_state_for_field("host") else {
             return div().into_any_element();
         };
@@ -950,7 +974,6 @@ impl ConnectionManagerWindow {
         field: FormFocus,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let danger_color = cx.theme().danger;
         div()
             .rounded(px(4.0))
             .border_2()
@@ -1014,11 +1037,7 @@ impl ConnectionManagerWindow {
         let secondary = theme.secondary;
         let muted_foreground = theme.muted_foreground;
 
-        let icon = if show {
-            AppIcon::EyeOff
-        } else {
-            AppIcon::Eye
-        };
+        let icon = if show { AppIcon::EyeOff } else { AppIcon::Eye };
 
         div()
             .id(toggle_id)
@@ -1030,7 +1049,11 @@ impl ConnectionManagerWindow {
             .rounded(px(4.0))
             .cursor_pointer()
             .hover(move |d| d.bg(secondary))
-            .child(AppIconElement::new(icon).size(px(16.0)).color(muted_foreground))
+            .child(
+                AppIconElement::new(icon)
+                    .size(px(16.0))
+                    .color(muted_foreground),
+            )
     }
 }
 
