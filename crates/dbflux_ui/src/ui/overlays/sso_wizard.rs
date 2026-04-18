@@ -2,13 +2,14 @@ use crate::app::{AppStateChanged, AppStateEntity, AuthProfileCreated};
 use crate::platform;
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Spacing};
+use crate::ui::tokens::Spacing;
+use dbflux_components::controls::{Button, Input};
+use dbflux_components::primitives::Text;
 use dbflux_core::AuthProfile;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme, Disableable};
+use gpui_component::ActiveTheme;
+use gpui_component::input::InputState;
 use uuid::Uuid;
 
 #[cfg(feature = "aws")]
@@ -315,7 +316,7 @@ impl SsoWizard {
             .flex_col()
             .gap(Spacing::MD)
             .p(Spacing::MD)
-            .child(div().text_size(FontSizes::SM).child(step_title))
+            .child(Text::body(step_title))
             .child(match self.step {
                 WizardStep::Start => div()
                     .flex()
@@ -331,12 +332,9 @@ impl SsoWizard {
                         .flex_col()
                         .gap(Spacing::SM)
                         .child(Input::new(&self.input_account_id))
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Use account ID from AWS SSO account discovery"),
-                        );
+                        .child(Text::caption(
+                            "Use account ID from AWS SSO account discovery",
+                        ));
 
                     #[cfg(feature = "aws")]
                     {
@@ -356,15 +354,16 @@ impl SsoWizard {
                             .cloned()
                             .collect::<Vec<_>>();
 
+                        let discover_label = if self.accounts_loading {
+                            "Discovering accounts..."
+                        } else {
+                            "Login + Discover Accounts"
+                        };
+
                         account_step = account_step
                             .child(
-                                Button::new("sso-wizard-discover-accounts")
+                                Button::new("sso-wizard-discover-accounts", discover_label)
                                     .ghost()
-                                    .label(if self.accounts_loading {
-                                        "Discovering accounts..."
-                                    } else {
-                                        "Login + Discover Accounts"
-                                    })
                                     .disabled(self.accounts_loading)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.discover_accounts(cx);
@@ -375,12 +374,9 @@ impl SsoWizard {
                                     && !self.discovered_accounts.is_empty()
                                     && filtered_accounts.is_empty(),
                                 |d| {
-                                    d.child(
-                                        div()
-                                            .text_size(FontSizes::XS)
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child("No matching accounts for current filter"),
-                                    )
+                                    d.child(Text::caption(
+                                        "No matching accounts for current filter",
+                                    ))
                                 },
                             )
                             .child(div().flex().flex_col().gap_1().children(
@@ -420,12 +416,7 @@ impl SsoWizard {
                         .flex_col()
                         .gap(Spacing::SM)
                         .child(Input::new(&self.input_role_name))
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Use role name from AWS SSO role listing"),
-                        );
+                        .child(Text::caption("Use role name from AWS SSO role listing"));
 
                     #[cfg(feature = "aws")]
                     {
@@ -444,15 +435,16 @@ impl SsoWizard {
                             .cloned()
                             .collect::<Vec<_>>();
 
+                        let discover_label = if self.roles_loading {
+                            "Discovering roles..."
+                        } else {
+                            "Discover Roles for Selected Account"
+                        };
+
                         role_step = role_step
                             .child(
-                                Button::new("sso-wizard-discover-roles")
+                                Button::new("sso-wizard-discover-roles", discover_label)
                                     .ghost()
-                                    .label(if self.roles_loading {
-                                        "Discovering roles..."
-                                    } else {
-                                        "Discover Roles for Selected Account"
-                                    })
                                     .disabled(self.roles_loading)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.discover_roles_for_selected_account(cx);
@@ -462,14 +454,7 @@ impl SsoWizard {
                                 !self.roles_loading
                                     && !self.discovered_roles.is_empty()
                                     && filtered_roles.is_empty(),
-                                |d| {
-                                    d.child(
-                                        div()
-                                            .text_size(FontSizes::XS)
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child("No matching roles for current filter"),
-                                    )
-                                },
+                                |d| d.child(Text::caption("No matching roles for current filter")),
                             )
                             .child(div().flex().flex_col().gap_1().children(
                                 filtered_roles.iter().map(|role| {
@@ -502,29 +487,30 @@ impl SsoWizard {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(format!(
+                    .child(Text::body(format!(
                         "Profile: {}",
                         self.input_profile_name.read(cx).value()
-                    ))
-                    .child(format!(
+                    )))
+                    .child(Text::body(format!(
                         "Start URL: {}",
                         self.input_start_url.read(cx).value()
-                    ))
-                    .child(format!("Region: {}", self.input_region.read(cx).value()))
-                    .child(format!(
+                    )))
+                    .child(Text::body(format!(
+                        "Region: {}",
+                        self.input_region.read(cx).value()
+                    )))
+                    .child(Text::body(format!(
                         "Account: {}",
                         self.input_account_id.read(cx).value()
-                    ))
-                    .child(format!("Role: {}", self.input_role_name.read(cx).value()))
+                    )))
+                    .child(Text::body(format!(
+                        "Role: {}",
+                        self.input_role_name.read(cx).value()
+                    )))
                     .into_any_element(),
             })
             .when_some(self.status.clone(), |d, status| {
-                d.child(
-                    div()
-                        .text_size(FontSizes::XS)
-                        .text_color(cx.theme().muted_foreground)
-                        .child(status),
-                )
+                d.child(Text::caption(status))
             })
             .child(
                 div()
@@ -532,30 +518,29 @@ impl SsoWizard {
                     .justify_end()
                     .gap(Spacing::SM)
                     .child(
-                        Button::new("sso-wizard-back")
+                        Button::new("sso-wizard-back", "Back")
                             .ghost()
-                            .label("Back")
                             .disabled(matches!(self.step, WizardStep::Start))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.back(cx);
                             })),
                     )
-                    .child(
-                        Button::new("sso-wizard-next")
+                    .child({
+                        let next_label = if matches!(self.step, WizardStep::Confirm) {
+                            "Save"
+                        } else {
+                            "Next"
+                        };
+                        Button::new("sso-wizard-next", next_label)
                             .ghost()
-                            .label(if matches!(self.step, WizardStep::Confirm) {
-                                "Save"
-                            } else {
-                                "Next"
-                            })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if matches!(this.step, WizardStep::Confirm) {
                                     this.save_profile(cx);
                                 } else {
                                     this.next(cx);
                                 }
-                            })),
-                    ),
+                            }))
+                    }),
             );
 
         frame = frame.child(body);

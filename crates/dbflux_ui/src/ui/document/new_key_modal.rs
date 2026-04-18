@@ -6,6 +6,7 @@ use crate::ui::components::form_navigation::{
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::Text;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
@@ -741,12 +742,7 @@ impl Render for NewKeyModal {
                         .flex()
                         .flex_col()
                         .gap(Spacing::XS)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .child("Key Type*"),
-                        )
+                        .child(Text::caption("Key Type*"))
                         .child(self.key_type_dropdown.clone()),
                 )
                 .child(
@@ -755,12 +751,7 @@ impl Render for NewKeyModal {
                         .flex()
                         .flex_col()
                         .gap(Spacing::XS)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .child("TTL"),
-                        )
+                        .child(Text::caption("TTL"))
                         .child(
                             focus_ring(show_ring && focus == ModalFocus::TTL, ring_color)
                                 .on_mouse_down(
@@ -781,12 +772,7 @@ impl Render for NewKeyModal {
                 .flex()
                 .flex_col()
                 .gap(Spacing::XS)
-                .child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child("Key Name*"),
-                )
+                .child(Text::caption("Key Name*"))
                 .child(
                     focus_ring(show_ring && focus == ModalFocus::KeyName, ring_color)
                         .on_mouse_down(
@@ -917,12 +903,7 @@ impl Render for NewKeyModal {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child("Value"),
-                    )
+                    .child(Text::caption("Value"))
                     .child(
                         focus_ring(show_ring && focus == ModalFocus::Value, ring_color)
                             .on_mouse_down(
@@ -939,12 +920,7 @@ impl Render for NewKeyModal {
         // -- Error message --------------------------------------------------
 
         if let Some(error) = &self.error_message {
-            body = body.child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.muted_foreground)
-                    .child(format!("Error: {}", error)),
-            );
+            body = body.child(Text::caption(format!("Error: {}", error)));
         }
 
         // -- Footer buttons -------------------------------------------------

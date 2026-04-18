@@ -6,6 +6,7 @@ use super::types::{DocumentId, DocumentMetaSnapshot, DocumentState};
 use crate::ui::components::context_menu::MenuItem;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Radii, Spacing};
+use dbflux_components::primitives::Text;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -339,15 +340,13 @@ impl TabBar {
             // Title
             .child(
                 div()
-                    .text_sm()
                     .flex_1()
                     .truncate()
-                    .text_color(if is_active {
+                    .child(Text::caption(title).text_color(if is_active {
                         cx.theme().foreground
                     } else {
                         cx.theme().muted_foreground
-                    })
-                    .child(title),
+                    })),
             )
             // Spinner or close button
             .child(self.render_tab_action(id, is_executing, cx))

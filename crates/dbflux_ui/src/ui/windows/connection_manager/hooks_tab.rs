@@ -1,7 +1,7 @@
 use super::*;
+use dbflux_components::primitives::Text;
 use gpui::prelude::FluentBuilder;
-use gpui_component::Sizable;
-use gpui_component::input::Input;
+use gpui_component::ActiveTheme;
 
 impl ConnectionManagerWindow {
     fn selected_hook_ids(&self, cx: &Context<Self>) -> Vec<String> {
@@ -83,19 +83,14 @@ impl ConnectionManagerWindow {
         })
     }
 
-    pub(super) fn render_hooks_rows(&self, muted: Hsla, cx: &Context<Self>) -> Div {
+    pub(super) fn render_hooks_rows(&self, _muted: Hsla, cx: &Context<Self>) -> Div {
         let show_process_run_warning = self.has_process_run_hook_selected(cx);
 
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("Select reusable hooks configured in Settings -> Hooks"),
-            )
+            .child(Text::caption("Select reusable hooks configured in Settings -> Hooks"))
             .child(
                 div()
                     .flex()
@@ -113,18 +108,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(
-                        div()
-                            .w(px(160.0))
-                            .text_xs()
-                            .text_color(muted)
-                            .child("Extra pre-connect"),
-                    )
-                    .child(
-                        div()
-                            .w(px(240.0))
-                            .child(Input::new(&self.conn_pre_hook_extra_input).small()),
-                    ),
+                    .child(div().w(px(160.0)).child(Text::caption("Extra pre-connect"))),
             )
             .child(
                 div()
@@ -143,18 +127,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(
-                        div()
-                            .w(px(160.0))
-                            .text_xs()
-                            .text_color(muted)
-                            .child("Extra post-connect"),
-                    )
-                    .child(
-                        div()
-                            .w(px(240.0))
-                            .child(Input::new(&self.conn_post_hook_extra_input).small()),
-                    ),
+                    .child(div().w(px(160.0)).child(Text::caption("Extra post-connect"))),
             )
             .child(
                 div()
@@ -173,18 +146,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(
-                        div()
-                            .w(px(160.0))
-                            .text_xs()
-                            .text_color(muted)
-                            .child("Extra pre-disconnect"),
-                    )
-                    .child(
-                        div()
-                            .w(px(240.0))
-                            .child(Input::new(&self.conn_pre_disconnect_hook_extra_input).small()),
-                    ),
+                    .child(div().w(px(160.0)).child(Text::caption("Extra pre-disconnect"))),
             )
             .child(
                 div()
@@ -203,32 +165,20 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(
-                        div()
-                            .w(px(160.0))
-                            .text_xs()
-                            .text_color(muted)
-                            .child("Extra post-disconnect"),
-                    )
-                    .child(
-                        div()
-                            .w(px(240.0))
-                            .child(Input::new(&self.conn_post_disconnect_hook_extra_input).small()),
-                    ),
+                    .child(div().w(px(160.0)).child(Text::caption("Extra post-disconnect"))),
             )
             .when(show_process_run_warning, |this| {
+                let theme = cx.theme();
                 this.child(
                     div()
                         .rounded(px(4.0))
                         .border_1()
-                        .border_color(gpui::rgb(0x7A4A00))
-                        .bg(gpui::rgb(0x2B2110))
+                        .border_color(theme.warning.opacity(0.3))
+                        .bg(theme.warning.opacity(0.1))
                         .p_2()
                         .child(
-                            div()
-                                .text_xs()
-                                .text_color(gpui::rgb(0xFCD34D))
-                                .child("Selected hook enables Lua process.run and can execute external programs with your user permissions"),
+                            Text::caption("Selected hook enables Lua process.run and can execute external programs with your user permissions")
+                                .text_color(theme.warning),
                         ),
                 )
             })

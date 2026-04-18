@@ -30,6 +30,7 @@ pub enum TaskKind {
     /// Lazy schema loading for a single database (MySQL/MariaDB).
     LoadSchema,
     SchemaRefresh,
+    SchemaDrop,
     Export,
     KeyScan,
     KeyGet,
@@ -46,6 +47,7 @@ impl TaskKind {
             TaskKind::SwitchDatabase => "Switch Database",
             TaskKind::LoadSchema => "Load Schema",
             TaskKind::SchemaRefresh => "Schema Refresh",
+            TaskKind::SchemaDrop => "Schema Drop",
             TaskKind::Export => "Export",
             TaskKind::KeyScan => "Key Scan",
             TaskKind::KeyGet => "Key Get",
@@ -379,6 +381,7 @@ impl TaskManager {
                             | TaskKind::SwitchDatabase
                             | TaskKind::LoadSchema
                             | TaskKind::SchemaRefresh
+                            | TaskKind::SchemaDrop
                             | TaskKind::KeyScan
                     )
             })

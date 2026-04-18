@@ -25,7 +25,7 @@ use dbflux_core::{
     DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, IndexData, IndexDirection,
     QueryLanguage, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef,
-    TypeDefinition, ViewInfo,
+    TaskId, TypeDefinition, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -105,23 +105,73 @@ fn parse_node_id(id: &str) -> Option<SchemaNodeId> {
 pub struct ContextMenuItem {
     pub label: String,
     pub action: ContextMenuAction,
+    pub icon: Option<AppIcon>,
+    pub is_separator: bool,
+    pub is_danger: bool,
 }
 
 impl ContextMenuItem {
+    pub fn item(label: impl Into<String>, action: ContextMenuAction) -> Self {
+        Self {
+            label: label.into(),
+            action,
+            icon: None,
+            is_separator: false,
+            is_danger: false,
+        }
+    }
+
+    pub fn danger(label: impl Into<String>, action: ContextMenuAction) -> Self {
+        Self {
+            label: label.into(),
+            action,
+            icon: None,
+            is_separator: false,
+            is_danger: true,
+        }
+    }
+
+    pub fn with_icon(mut self, icon: AppIcon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    pub fn separator() -> Self {
+        Self {
+            label: String::new(),
+            action: ContextMenuAction::Open,
+            icon: None,
+            is_separator: true,
+            is_danger: false,
+        }
+    }
+
+    pub fn is_selectable(&self) -> bool {
+        !self.is_separator
+    }
+
     pub fn to_menu_items(
         items: &[ContextMenuItem],
     ) -> Vec<crate::ui::components::context_menu::MenuItem> {
         items
             .iter()
             .map(|item| {
+                if item.is_separator {
+                    return crate::ui::components::context_menu::MenuItem::separator();
+                }
+
                 let mut mi = crate::ui::components::context_menu::MenuItem::new(item.label.clone());
 
-                if let Some(icon) = item.action.icon() {
+                if let Some(icon) = item.icon.or_else(|| item.action.icon()) {
                     mi = mi.icon(icon);
                 }
 
                 if matches!(item.action, ContextMenuAction::Submenu(_)) {
                     mi = mi.submenu();
+                }
+
+                if item.is_danger {
+                    mi = mi.danger();
                 }
 
                 mi
@@ -155,6 +205,12 @@ pub enum ContextMenuAction {
     GenerateForeignKeySql(ForeignKeySqlAction),
     GenerateTypeSql(TypeSqlAction),
     GenerateCollectionCode(CollectionCodeKind),
+    // Schema DDL actions
+    RefreshDatabase,
+    RefreshObject,
+    DropDatabase,
+    DropTable,
+    DropCollection,
     // Script actions
     OpenScript,
     RenameScript,
@@ -218,6 +274,11 @@ impl ContextMenuAction {
             Self::GenerateForeignKeySql(_) => Some(AppIcon::Code),
             Self::GenerateTypeSql(_) => Some(AppIcon::Code),
             Self::GenerateCollectionCode(_) => Some(AppIcon::Code),
+            Self::RefreshDatabase => Some(AppIcon::RefreshCcw),
+            Self::RefreshObject => Some(AppIcon::RefreshCcw),
+            Self::DropDatabase => Some(AppIcon::Delete),
+            Self::DropTable => Some(AppIcon::Delete),
+            Self::DropCollection => Some(AppIcon::Delete),
             Self::OpenScript => Some(AppIcon::Eye),
             Self::RenameScript => Some(AppIcon::Pencil),
             Self::DeleteScript => Some(AppIcon::Delete),
@@ -489,6 +550,7 @@ pub struct Sidebar {
     /// Maps profile_id -> active database name (for styling in render)
     active_databases: HashMap<Uuid, String>,
     syncing_expansion: bool,
+    tracked_operation_tasks: HashMap<TaskId, Task<()>>,
     _subscriptions: Vec<Subscription>,
     editing_id: Option<Uuid>,
     editing_is_folder: bool,
@@ -530,6 +592,17 @@ struct DeleteConfirmState {
     item_id: String,
     item_name: String,
     is_folder: bool,
+    object_type: Option<String>,
+    is_ddl: bool,
+}
+
+/// Borrowed snapshot of the delete confirmation modal state, used by the
+/// workspace renderer to build the correct label.
+pub struct DeleteModalState<'a> {
+    pub item_name: &'a str,
+    pub is_folder: bool,
+    pub is_ddl: bool,
+    pub object_type: Option<&'a str>,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -632,6 +705,7 @@ impl Sidebar {
             loading_items: HashSet::new(),
             active_databases: HashMap::new(),
             syncing_expansion: false,
+            tracked_operation_tasks: HashMap::new(),
             _subscriptions: vec![
                 app_state_subscription,
                 rename_subscription,
@@ -1089,14 +1163,8 @@ mod tests {
         use super::{ContextMenuAction, ContextMenuItem};
 
         let items = vec![
-            ContextMenuItem {
-                label: "Open".into(),
-                action: ContextMenuAction::Open,
-            },
-            ContextMenuItem {
-                label: "Delete".into(),
-                action: ContextMenuAction::Delete,
-            },
+            ContextMenuItem::item("Open", ContextMenuAction::Open),
+            ContextMenuItem::danger("Delete", ContextMenuAction::Delete),
         ];
 
         let menu_items = ContextMenuItem::to_menu_items(&items);
@@ -1106,19 +1174,20 @@ mod tests {
         assert!(!menu_items[0].has_submenu);
         assert_eq!(menu_items[1].label.as_ref(), "Delete");
         assert!(menu_items[1].icon.is_some());
+        assert!(menu_items[1].is_danger);
     }
 
     #[test]
     fn to_menu_items_marks_submenu_items() {
         use super::{ContextMenuAction, ContextMenuItem};
 
-        let items = vec![ContextMenuItem {
-            label: "Move to".into(),
-            action: ContextMenuAction::Submenu(vec![ContextMenuItem {
-                label: "Folder A".into(),
-                action: ContextMenuAction::MoveToFolder(Some(test_uuid())),
-            }]),
-        }];
+        let items = vec![ContextMenuItem::item(
+            "Move to",
+            ContextMenuAction::Submenu(vec![ContextMenuItem::item(
+                "Folder A",
+                ContextMenuAction::MoveToFolder(Some(test_uuid())),
+            )]),
+        )];
 
         let menu_items = ContextMenuItem::to_menu_items(&items);
         assert_eq!(menu_items.len(), 1);
@@ -1127,10 +1196,42 @@ mod tests {
     }
 
     #[test]
+    fn to_menu_items_uses_explicit_icon_override() {
+        use super::{ContextMenuAction, ContextMenuItem};
+        use crate::ui::icons::AppIcon;
+        use dbflux_components::icon::IconSource;
+
+        let items = vec![
+            ContextMenuItem::item("Refresh", ContextMenuAction::Refresh).with_icon(AppIcon::Code),
+        ];
+
+        let menu_items = ContextMenuItem::to_menu_items(&items);
+        assert_eq!(menu_items.len(), 1);
+        assert!(matches!(
+            menu_items[0].icon.as_ref(),
+            Some(IconSource::Svg(path)) if path.as_ref() == AppIcon::Code.path()
+        ));
+    }
+
+    #[test]
     fn to_menu_items_empty_input_returns_empty() {
         use super::ContextMenuItem;
 
         let menu_items = ContextMenuItem::to_menu_items(&[]);
         assert!(menu_items.is_empty());
+    }
+
+    #[test]
+    fn to_menu_items_maps_separators() {
+        use super::{ContextMenuAction, ContextMenuItem};
+
+        let items = vec![
+            ContextMenuItem::item("Open", ContextMenuAction::Open),
+            ContextMenuItem::separator(),
+        ];
+
+        let menu_items = ContextMenuItem::to_menu_items(&items);
+        assert_eq!(menu_items.len(), 2);
+        assert!(menu_items[1].is_separator);
     }
 }

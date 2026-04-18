@@ -58,7 +58,6 @@ impl Sidebar {
                 .py(Spacing::XS)
                 .cursor_pointer()
                 .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
                 .hover(move |d| d.bg(hover_bg))
                 .on_click(move |_, _, cx| {
                     sidebar_for_folder.update(cx, |this, cx| {
@@ -87,7 +86,6 @@ impl Sidebar {
                 .py(Spacing::XS)
                 .cursor_pointer()
                 .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
                 .hover(move |d| d.bg(theme.list_active))
                 .on_click(move |_, _, cx| {
                     sidebar_for_conn.update(cx, |this, cx| {
@@ -148,7 +146,6 @@ impl Sidebar {
                 .py(Spacing::XS)
                 .cursor_pointer()
                 .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
                 .hover(move |d| d.bg(hover_bg))
                 .on_click(move |_, _, cx| {
                     sidebar_for_file.update(cx, |this, cx| {
@@ -177,7 +174,6 @@ impl Sidebar {
                 .py(Spacing::XS)
                 .cursor_pointer()
                 .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
                 .hover(move |d| d.bg(hover_bg2))
                 .on_click(move |_, _, cx| {
                     sidebar_for_folder.update(cx, |this, cx| {
@@ -206,7 +202,6 @@ impl Sidebar {
                 .py(Spacing::XS)
                 .cursor_pointer()
                 .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
                 .hover(move |d| d.bg(hover_bg3))
                 .on_click(move |_, _, cx| {
                     sidebar_for_import.update(cx, |this, cx| {

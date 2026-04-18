@@ -6,6 +6,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::Text;
 
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
@@ -434,14 +435,12 @@ fn render_toolbar(
         .border_color(theme.border)
         .bg(theme.secondary.opacity(0.3))
         .child(
-            div()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
-                .child(if is_tree_mode {
-                    "Tree View"
-                } else {
-                    "Raw JSON"
-                }),
+            Text::caption(if is_tree_mode {
+                "Tree View"
+            } else {
+                "Raw JSON"
+            })
+            .font_size(FontSizes::XS),
         )
         .child(
             div()
@@ -509,12 +508,7 @@ fn render_search_bar(
                 .text_color(theme.muted_foreground),
         )
         .child(div().flex_1().child(Input::new(&input).small().w_full()))
-        .child(
-            div()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
-                .child(match_text),
-        )
+        .child(Text::caption(match_text).font_size(FontSizes::XS))
         .child(
             div()
                 .id("close-search")
@@ -650,17 +644,14 @@ fn render_tree_row(
                 .items_center()
                 .gap(Spacing::XS)
                 .child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(primary_color)
+                    Text::caption(node.key.to_string())
                         .font_weight(FontWeight::MEDIUM)
-                        .child(node.key.to_string()),
+                        .text_color(primary_color),
                 )
                 .child(
-                    div()
-                        .text_size(FontSizes::XS)
-                        .text_color(muted_color)
-                        .child(":"),
+                    Text::caption(":")
+                        .font_size(FontSizes::XS)
+                        .text_color(muted_color),
                 ),
         )
         // Value preview
@@ -677,12 +668,14 @@ fn render_tree_row(
         .child({
             let type_color = get_type_color(&node.value, &theme);
             div()
-                .text_size(FontSizes::XS)
-                .text_color(type_color)
                 .px(Spacing::XS)
                 .rounded(Radii::SM)
                 .bg(type_color.opacity(0.15))
-                .child(node.value.type_label())
+                .child(
+                    Text::caption(node.value.type_label())
+                        .font_size(FontSizes::XS)
+                        .text_color(type_color),
+                )
         })
 }
 

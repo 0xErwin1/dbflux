@@ -5,11 +5,11 @@ use super::layout;
 use super::proxies::ProxyFormNav;
 use super::section_trait::SectionFocusEvent;
 use crate::app::{AppStateChanged, AppStateEntity};
+use dbflux_components::controls::Button;
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::button::Button;
-use gpui_component::button::ButtonVariants;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -251,12 +251,7 @@ impl ProxiesSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label.to_string()),
-            )
+            .child(Label::new(label.to_string()))
             .child(
                 div()
                     .rounded(px(4.0))
@@ -301,12 +296,7 @@ impl ProxiesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Protocol"),
-            )
+            .child(Label::new("Protocol"))
             .child(div().flex().gap_4().children(kinds.into_iter().map(
                 |(form_field, kind, label)| {
                     let is_focused = is_form_focused && current_field == form_field;
@@ -362,12 +352,7 @@ impl ProxiesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Authentication"),
-            )
+            .child(Label::new("Authentication"))
             .child(
                 div()
                     .flex()
@@ -546,9 +531,8 @@ impl ProxiesSection {
                             transparent_black()
                         })
                         .child(
-                            Button::new("new-proxy")
+                            Button::new("new-proxy", "New Proxy")
                                 .icon(Icon::new(IconName::Plus))
-                                .label("New Proxy")
                                 .small()
                                 .w_full()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -570,13 +554,7 @@ impl ProxiesSection {
                     .flex_col()
                     .gap_1()
                     .when(proxies.is_empty(), |root: Div| {
-                        root.child(
-                            div()
-                                .p_4()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child("No saved proxies"),
-                        )
+                        root.child(div().p_4().child(Text::muted("No saved proxies")))
                     })
                     .children(proxies.iter().enumerate().map(|(idx, proxy)| {
                         let proxy_id = proxy.id;
@@ -628,12 +606,7 @@ impl ProxiesSection {
                                                     .text_color(theme.muted_foreground),
                                             )
                                             .when(!proxy.enabled, |root| {
-                                                root.child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(theme.muted_foreground)
-                                                        .child("off"),
-                                                )
+                                                root.child(Text::caption("off"))
                                             }),
                                     )
                                     .child(
@@ -641,18 +614,8 @@ impl ProxiesSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(proxy.name.clone()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(subtitle),
-                                            ),
+                                            .child(Label::new(proxy.name.clone()))
+                                            .child(Text::caption(subtitle)),
                                     ),
                             )
                     })),
@@ -668,7 +631,7 @@ impl ProxiesSection {
         let theme = cx.theme();
         let primary = theme.primary;
         let border = theme.border;
-        let muted_foreground = theme.muted_foreground;
+        let _muted_foreground = theme.muted_foreground;
 
         let is_form_focused = self.proxy_focus == ProxyFocus::Form;
         let field = self.proxy_form_field;
@@ -686,12 +649,11 @@ impl ProxiesSection {
             .flex_col()
             .overflow_hidden()
             .child(
-                div().p_4().border_b_1().border_color(border).child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(title),
-                ),
+                div()
+                    .p_4()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(Text::body(title).font_weight(FontWeight::MEDIUM)),
             )
             .child(
                 div()
@@ -756,12 +718,9 @@ impl ProxiesSection {
                                 ProxyFormField::NoProxy,
                                 cx,
                             ))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted_foreground)
-                                    .child("Comma-separated hosts/CIDRs to bypass the proxy"),
-                            ),
+                            .child(Text::caption(
+                                "Comma-separated hosts/CIDRs to bypass the proxy",
+                            )),
                     )
                     .child({
                         let is_enabled_focused =
@@ -814,8 +773,7 @@ impl ProxiesSection {
                                     transparent_black()
                                 })
                                 .child(
-                                    Button::new("delete-proxy")
-                                        .label("Delete")
+                                    Button::new("delete-proxy", "Delete")
                                         .small()
                                         .danger()
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -838,17 +796,21 @@ impl ProxiesSection {
                                 transparent_black()
                             })
                             .child(
-                                Button::new("save-proxy")
-                                    .label(if editing_id.is_some() {
+                                Button::new(
+                                    "save-proxy",
+                                    if editing_id.is_some() {
                                         "Update"
                                     } else {
                                         "Create"
-                                    })
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                    },
+                                )
+                                .small()
+                                .primary()
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
                                         this.save_proxy(window, cx);
-                                    })),
+                                    },
+                                )),
                             )
                     }),
             )

@@ -76,6 +76,66 @@ pub enum SchemaLoadingStrategy {
     SingleDatabase,
 }
 
+/// Kinds of schema objects that can be dropped via `Connection::drop_schema_object`.
+///
+/// Each variant maps to the correct DROP command for the driver: SQL drivers
+/// generate `DROP TABLE`, `DROP VIEW`, or `DROP DATABASE`; document drivers
+/// run native collection/database drop commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SchemaObjectKind {
+    Table,
+    View,
+    Database,
+    Collection,
+}
+
+impl SchemaObjectKind {
+    /// Returns the SQL keyword for the DROP statement header.
+    pub fn drop_keyword(&self) -> &'static str {
+        match self {
+            SchemaObjectKind::Table => "TABLE",
+            SchemaObjectKind::View => "VIEW",
+            SchemaObjectKind::Database => "DATABASE",
+            SchemaObjectKind::Collection => "COLLECTION",
+        }
+    }
+}
+
+/// Identity of a schema object that can be dropped by a connection.
+///
+/// This keeps the UI and MCP layers from having to synthesize driver-specific
+/// DDL. SQL drivers can use the default `drop_schema_object()` implementation,
+/// while document or key-value drivers can inspect the same target and run
+/// native commands.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SchemaDropTarget {
+    pub kind: SchemaObjectKind,
+    pub name: String,
+    pub schema: Option<String>,
+    pub database: Option<String>,
+}
+
+impl SchemaDropTarget {
+    pub fn new(kind: SchemaObjectKind, name: impl Into<String>) -> Self {
+        Self {
+            kind,
+            name: name.into(),
+            schema: None,
+            database: None,
+        }
+    }
+
+    pub fn with_schema(mut self, schema: impl Into<String>) -> Self {
+        self.schema = Some(schema.into());
+        self
+    }
+
+    pub fn with_database(mut self, database: impl Into<String>) -> Self {
+        self.database = Some(database.into());
+        self
+    }
+}
+
 /// Scope where a code generator can be applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CodeGenScope {
@@ -1060,6 +1120,56 @@ pub trait Connection: Send + Sync {
     /// Returns whether this driver supports transactional DDL.
     fn supports_transactional_ddl(&self) -> bool {
         false
+    }
+
+    // =========================================================================
+    // Schema Mutation Operations
+    // =========================================================================
+
+    /// Drop a schema object (table, view, database, or collection).
+    ///
+    /// SQL drivers use the default implementation which builds a `DROP` statement
+    /// via `dialect().quote_identifier()` and executes it. NoSQL drivers override
+    /// with native commands (e.g., MongoDB `db.collection.drop()`).
+    fn drop_schema_object(
+        &self,
+        target: &SchemaDropTarget,
+        cascade: bool,
+        if_exists: bool,
+    ) -> Result<(), DbError> {
+        let quoted_name = match target.schema.as_deref() {
+            Some(s) => format!(
+                "{}.{}",
+                self.dialect().quote_identifier(s),
+                self.dialect().quote_identifier(&target.name)
+            ),
+            None => self.dialect().quote_identifier(&target.name),
+        };
+
+        let mut sql = format!("DROP {} ", target.kind.drop_keyword());
+        if if_exists {
+            sql.push_str("IF EXISTS ");
+        }
+        sql.push_str(&quoted_name);
+        if cascade {
+            sql.push_str(" CASCADE");
+        }
+
+        let request = QueryRequest::new(sql).with_database(target.database.clone());
+
+        self.execute(&request)?;
+        Ok(())
+    }
+
+    /// Refresh schema metadata for a database.
+    ///
+    /// Called by the sidebar refresh flow to signal the driver that cached
+    /// schema information for the given database should be invalidated.
+    /// SQL drivers typically rely on cache invalidation at the caller level,
+    /// so the default is a no-op. Drivers that maintain internal schema
+    /// caches (e.g., MongoDB) can override this.
+    fn refresh_database_schema(&self, _database: &str) -> Result<(), DbError> {
+        Ok(())
     }
 
     /// Translate a Value filter expression to a SQL WHERE clause string.

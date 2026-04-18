@@ -5,11 +5,13 @@ use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::Input;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_core::{Pagination, SortDirection, Value};
-use gpui::prelude::FluentBuilder;
+use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme, Sizable};
+use gpui_component::ActiveTheme;
+use gpui_component::input::InputState;
 
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -109,7 +111,6 @@ impl Render for DataGridPanel {
             || self.result.raw_bytes.is_some();
         let has_columns = !self.result.columns.is_empty();
         let is_loading = self.state == GridState::Loading;
-        let muted_fg = theme.muted_foreground;
 
         let show_panel_controls = self.show_panel_controls;
         let is_maximized = self.is_maximized;
@@ -188,16 +189,13 @@ impl Render for DataGridPanel {
                         .border_b_1()
                         .border_color(theme.warning.opacity(0.3))
                         .child(
-                            svg()
-                                .path(AppIcon::TriangleAlert.path())
-                                .size_4()
-                                .text_color(theme.warning),
+                            Icon::new(AppIcon::TriangleAlert)
+                                .small()
+                                .color(theme.warning),
                         )
                         .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.warning)
-                                .child("This table has no primary key - editing is disabled"),
+                            Text::caption("This table has no primary key - editing is disabled")
+                                .text_color(theme.warning),
                         ),
                 )
             })
@@ -238,14 +236,13 @@ impl Render for DataGridPanel {
                                     this.request_toggle_maximize(cx);
                                 }))
                                 .child(
-                                    svg()
-                                        .path(if is_maximized {
-                                            AppIcon::Minimize2.path()
-                                        } else {
-                                            AppIcon::Maximize2.path()
-                                        })
-                                        .size_4()
-                                        .text_color(theme.muted_foreground),
+                                    Icon::new(if is_maximized {
+                                        AppIcon::Minimize2
+                                    } else {
+                                        AppIcon::Maximize2
+                                    })
+                                    .small()
+                                    .color(theme.muted_foreground),
                                 ),
                         )
                         .child(
@@ -263,10 +260,9 @@ impl Render for DataGridPanel {
                                     this.request_hide(cx);
                                 }))
                                 .child(
-                                    svg()
-                                        .path(AppIcon::PanelBottomClose.path())
-                                        .size_4()
-                                        .text_color(theme.muted_foreground),
+                                    Icon::new(AppIcon::PanelBottomClose)
+                                        .small()
+                                        .color(theme.muted_foreground),
                                 ),
                         ),
                 )
@@ -289,12 +285,14 @@ impl Render for DataGridPanel {
                         }),
                     )
                     .when(!has_data && !uses_result_view, |d| {
-                        d.flex().items_center().justify_center().child(
-                            div()
-                                .text_size(FontSizes::BASE)
-                                .text_color(muted_fg)
-                                .child(if is_loading { "Loading..." } else { "No data" }),
-                        )
+                        d.flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Text::muted(if is_loading {
+                                "Loading..."
+                            } else {
+                                "No data"
+                            }))
                     })
                     .when(uses_result_view, |d| {
                         d.child(self.render_result_view(result_view_mode, &theme, cx))
@@ -374,31 +372,15 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child(source_query_prefix.to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.foreground)
-                            .child(source_name.to_string()),
-                    ),
+                    .child(Text::caption(source_query_prefix.to_string()))
+                    .child(Text::body(source_name.to_string()).font_weight(FontWeight::MEDIUM)),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child("WHERE"),
-                    )
+                    .child(Text::caption("WHERE"))
                     .child(
                         div()
                             .flex()
@@ -443,7 +425,7 @@ impl DataGridPanel {
                                             });
                                             this.refresh(window, cx);
                                         }))
-                                        .child("×"),
+                                        .child("\u{00d7}"),
                                 )
                             }),
                     ),
@@ -453,12 +435,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child("LIMIT"),
-                    )
+                    .child(Text::caption("LIMIT"))
                     .child(
                         div()
                             .w(px(60.0))
@@ -505,8 +482,6 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.foreground)
                             .cursor_pointer()
                             .hover(|d| d.bg(theme.accent.opacity(0.08)))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -519,18 +494,17 @@ impl DataGridPanel {
                                 }
                             }))
                             .child(
-                                svg()
-                                    .path(if self.runner.is_primary_active() {
-                                        AppIcon::Loader.path()
-                                    } else if self.refresh_policy.is_auto() {
-                                        AppIcon::Clock.path()
-                                    } else {
-                                        AppIcon::RefreshCcw.path()
-                                    })
-                                    .size_4()
-                                    .text_color(theme.foreground),
+                                Icon::new(if self.runner.is_primary_active() {
+                                    AppIcon::Loader
+                                } else if self.refresh_policy.is_auto() {
+                                    AppIcon::Clock
+                                } else {
+                                    AppIcon::RefreshCcw
+                                })
+                                .small()
+                                .color(theme.foreground),
                             )
-                            .child(refresh_label),
+                            .child(Text::body(refresh_label)),
                     )
                     .child(div().w(px(1.0)).h_full().bg(theme.input))
                     .child(
@@ -542,9 +516,9 @@ impl DataGridPanel {
             )
             .when(self.can_toggle_view(), |d| {
                 let mode = self.view_config.mode;
-                let icon_path = match mode {
-                    DataViewMode::Table => AppIcon::Table.path(),
-                    DataViewMode::Document => AppIcon::Braces.path(),
+                let view_icon: AppIcon = match mode {
+                    DataViewMode::Table => AppIcon::Table,
+                    DataViewMode::Document => AppIcon::Braces,
                 };
                 let _tooltip = match mode {
                     DataViewMode::Table => "Switch to Document View",
@@ -566,18 +540,8 @@ impl DataGridPanel {
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_view_mode(cx);
                         }))
-                        .child(
-                            svg()
-                                .path(icon_path)
-                                .size_4()
-                                .text_color(theme.muted_foreground),
-                        )
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .child(mode.label()),
-                        ),
+                        .child(Icon::new(view_icon).small().color(theme.muted_foreground))
+                        .child(Text::caption(mode.label())),
                 )
             })
     }
@@ -601,22 +565,20 @@ impl DataGridPanel {
             .border_color(theme.border)
             // Left: status text
             .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(if has_changes {
-                        theme.warning
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .child(if has_changes {
-                        format!(
-                            "{} unsaved change{}",
-                            dirty_count,
-                            if dirty_count == 1 { "" } else { "s" }
-                        )
-                    } else {
-                        "No unsaved changes".to_string()
-                    }),
+                Text::caption(if has_changes {
+                    format!(
+                        "{} unsaved change{}",
+                        dirty_count,
+                        if dirty_count == 1 { "" } else { "s" }
+                    )
+                } else {
+                    "No unsaved changes".to_string()
+                })
+                .text_color(if has_changes {
+                    theme.warning
+                } else {
+                    theme.muted_foreground
+                }),
             )
             // Right: buttons
             .child(
@@ -661,17 +623,12 @@ impl DataGridPanel {
                                         window.focus(&this.focus_handle);
                                     }))
                             })
-                            .when(!can_undo, |d| {
-                                d.border_color(theme.border)
-                                    .text_color(theme.muted_foreground)
-                            })
-                            .child(svg().path(AppIcon::Undo.path()).size_4().text_color(
-                                if can_undo {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            )),
+                            .when(!can_undo, |d| d.border_color(theme.border))
+                            .child(Icon::new(AppIcon::Undo).small().color(if can_undo {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })),
                     )
                     // Redo button
                     .child(
@@ -711,13 +668,11 @@ impl DataGridPanel {
                                     }))
                             })
                             .when(!can_redo, |d| d.border_color(theme.border))
-                            .child(svg().path(AppIcon::Redo.path()).size_4().text_color(
-                                if can_redo {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            )),
+                            .child(Icon::new(AppIcon::Redo).small().color(if can_redo {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })),
                     )
                     // Save button
                     .child(
@@ -729,12 +684,10 @@ impl DataGridPanel {
                             .px(Spacing::MD)
                             .h(px(28.0))
                             .rounded(Radii::MD)
-                            .text_size(FontSizes::SM)
                             .border_1()
                             .when(has_changes, |d| {
                                 d.border_color(theme.primary)
                                     .bg(theme.primary)
-                                    .text_color(theme.primary_foreground)
                                     .cursor_pointer()
                                     .hover(|d| d.opacity(0.9))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -747,21 +700,17 @@ impl DataGridPanel {
                                         window.focus(&this.focus_handle);
                                     }))
                             })
-                            .when(!has_changes, |d| {
-                                d.border_color(theme.border)
-                                    .text_color(theme.muted_foreground)
-                            })
-                            .child("Save")
-                            .child(
-                                div()
-                                    .text_size(FontSizes::XS)
-                                    .text_color(if has_changes {
-                                        theme.primary_foreground.opacity(0.7)
-                                    } else {
-                                        theme.muted_foreground.opacity(0.5)
-                                    })
-                                    .child("Ctrl+↵"),
-                            ),
+                            .when(!has_changes, |d| d.border_color(theme.border))
+                            .child(Text::caption("Save").text_color(if has_changes {
+                                theme.primary_foreground
+                            } else {
+                                theme.muted_foreground
+                            }))
+                            .child(Text::caption("Ctrl+↵").text_color(if has_changes {
+                                theme.primary_foreground.opacity(0.7)
+                            } else {
+                                theme.muted_foreground.opacity(0.5)
+                            })),
                     )
                     // Revert button
                     .child(
@@ -772,12 +721,10 @@ impl DataGridPanel {
                             .px(Spacing::MD)
                             .h(px(28.0))
                             .rounded(Radii::MD)
-                            .text_size(FontSizes::SM)
                             .border_1()
+                            .border_color(theme.border)
                             .when(has_changes, |d| {
-                                d.border_color(theme.border)
-                                    .text_color(theme.foreground)
-                                    .cursor_pointer()
+                                d.cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         if let Some(table_state) = &this.table_state {
@@ -789,11 +736,11 @@ impl DataGridPanel {
                                         window.focus(&this.focus_handle);
                                     }))
                             })
-                            .when(!has_changes, |d| {
-                                d.border_color(theme.border)
-                                    .text_color(theme.muted_foreground)
-                            })
-                            .child("Revert"),
+                            .child(Text::caption("Revert").text_color(if has_changes {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })),
                     ),
             )
     }
@@ -869,13 +816,7 @@ impl DataGridPanel {
             .flex()
             .pl(indent)
             .gap(Spacing::SM)
-            .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.muted_foreground)
-                    .child(format!("{}:", name)),
-            )
+            .child(Text::caption(format!("{}:", name)).font_weight(FontWeight::MEDIUM))
             .child(self.render_value(value, theme, depth))
     }
 
@@ -895,103 +836,73 @@ impl DataGridPanel {
         };
 
         match value {
-            Value::Null => div()
-                .text_size(FontSizes::SM)
+            Value::Null => Text::caption("null")
                 .text_color(text_color)
-                .child("null"),
+                .into_any_element(),
 
-            Value::Bool(b) => div()
-                .text_size(FontSizes::SM)
+            Value::Bool(b) => Text::caption(if *b { "true" } else { "false" })
                 .text_color(text_color)
-                .child(if *b { "true" } else { "false" }),
+                .into_any_element(),
 
-            Value::Int(i) => div()
-                .text_size(FontSizes::SM)
+            Value::Int(i) => Text::caption(i.to_string())
                 .text_color(text_color)
-                .child(i.to_string()),
+                .into_any_element(),
 
-            Value::Float(f) => div()
-                .text_size(FontSizes::SM)
+            Value::Float(f) => Text::caption(f.to_string())
                 .text_color(text_color)
-                .child(f.to_string()),
+                .into_any_element(),
 
             Value::Text(s) => {
                 let display: String = s.replace('\n', "\\n").replace('\r', "\\r");
-                div()
-                    .text_size(FontSizes::SM)
+                Text::caption(format!("\"{}\"", display))
                     .text_color(text_color)
-                    .child(format!("\"{}\"", display))
+                    .into_any_element()
             }
 
-            Value::ObjectId(oid) => div()
-                .text_size(FontSizes::SM)
+            Value::ObjectId(oid) => Text::caption(format!("ObjectId(\"{}\")", oid))
                 .text_color(text_color)
-                .child(format!("ObjectId(\"{}\")", oid)),
+                .into_any_element(),
 
-            Value::DateTime(dt) => div()
-                .text_size(FontSizes::SM)
+            Value::DateTime(dt) => Text::caption(dt.to_rfc3339())
                 .text_color(text_color)
-                .child(dt.to_rfc3339()),
+                .into_any_element(),
 
             Value::Array(arr) => {
                 if arr.is_empty() {
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child("[]")
+                    Text::caption("[]").into_any_element()
                 } else if arr.len() <= 3 && depth < 2 {
                     div()
                         .flex()
                         .gap(Spacing::XS)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .child("["),
-                        )
+                        .child(Text::caption("["))
                         .children(arr.iter().enumerate().map(|(i, v)| {
                             div()
                                 .flex()
                                 .child(self.render_value(v, theme, depth + 1))
-                                .when(i < arr.len() - 1, |d| {
-                                    d.child(
-                                        div()
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.muted_foreground)
-                                            .child(","),
-                                    )
-                                })
+                                .when(i < arr.len() - 1, |d| d.child(Text::caption(",")))
                         }))
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .child("]"),
-                        )
+                        .child(Text::caption("]"))
+                        .into_any_element()
                 } else {
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child(format!("[{} items]", arr.len()))
+                    Text::caption(format!("[{} items]", arr.len())).into_any_element()
                 }
             }
 
             Value::Document(doc) => {
                 if doc.is_empty() {
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child("{}")
+                    Text::caption("{}").into_any_element()
                 } else if depth < 2 {
-                    div().flex().flex_col().pl(Spacing::MD).children(
-                        doc.iter()
-                            .map(|(k, v)| self.render_document_field(k, v, theme, depth + 1)),
-                    )
-                } else {
                     div()
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .child(format!("{{{} fields}}", doc.len()))
+                        .flex()
+                        .flex_col()
+                        .pl(Spacing::MD)
+                        .children(
+                            doc.iter()
+                                .map(|(k, v)| self.render_document_field(k, v, theme, depth + 1)),
+                        )
+                        .into_any_element()
+                } else {
+                    Text::caption(format!("{{{} fields}}", doc.len())).into_any_element()
                 }
             }
 
@@ -999,10 +910,7 @@ impl DataGridPanel {
                 let display = format!("{:?}", value)
                     .replace('\n', "\\n")
                     .replace('\r', "\\r");
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
-                    .child(display)
+                Text::body(display).into_any_element()
             }
         }
     }
@@ -1068,8 +976,6 @@ impl DataGridPanel {
     ) -> impl IntoElement {
         const MAX_LINES: usize = 5000;
 
-        let fg = theme.foreground;
-
         let line_count = content.lines().count();
         let truncated = line_count > MAX_LINES;
 
@@ -1091,23 +997,9 @@ impl DataGridPanel {
             .overflow_y_scroll()
             .overflow_x_scroll()
             .bg(theme.background)
-            .child(
-                div()
-                    .font_family("monospace")
-                    .text_size(FontSizes::SM)
-                    .text_color(fg)
-                    .whitespace_nowrap()
-                    .child(display_text),
-            )
+            .child(div().whitespace_nowrap().child(Text::code(display_text)))
             .when(truncated, |d| {
-                d.child(
-                    div()
-                        .px(Spacing::MD)
-                        .pb(Spacing::SM)
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.muted_foreground)
-                        .child(format!("(truncated at {} lines)", MAX_LINES)),
-                )
+                d.child(Text::caption(format!("(truncated at {} lines)", MAX_LINES)))
             })
     }
 
@@ -1132,14 +1024,7 @@ impl DataGridPanel {
             .p(Spacing::MD)
             .overflow_y_scroll()
             .bg(theme.background)
-            .child(
-                div()
-                    .font_family("monospace")
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
-                    .whitespace_nowrap()
-                    .child(hex_dump),
-            )
+            .child(div().whitespace_nowrap().child(Text::code(hex_dump)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1223,27 +1108,19 @@ impl DataGridPanel {
                             dbflux_core::QueryResultShape::Text => "text",
                             dbflux_core::QueryResultShape::Binary => "binary",
                         };
-                        d.child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .child(label.to_string()),
-                        )
+                        d.child(Text::caption(label.to_string()))
                     })
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_1()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
                             .child(
-                                svg()
-                                    .path(AppIcon::Rows3.path())
-                                    .size_3()
-                                    .text_color(theme.muted_foreground),
+                                Icon::new(AppIcon::Rows3)
+                                    .size(px(12.0))
+                                    .color(theme.muted_foreground),
                             )
-                            .child(format!("{} rows", row_count)),
+                            .child(Text::caption(format!("{} rows", row_count))),
                     )
                     .when_some(sort_info, |d, (col_name, direction, is_server)| {
                         let arrow_icon = match direction {
@@ -1256,15 +1133,12 @@ impl DataGridPanel {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
                                 .child(
-                                    svg()
-                                        .path(arrow_icon.path())
-                                        .size_3()
-                                        .text_color(theme.muted_foreground),
+                                    Icon::new(arrow_icon)
+                                        .size(px(12.0))
+                                        .color(theme.muted_foreground),
                                 )
-                                .child(format!("{} ({})", col_name, mode)),
+                                .child(Text::caption(format!("{} ({})", col_name, mode))),
                         )
                     }),
             )
@@ -1285,36 +1159,36 @@ impl DataGridPanel {
                             .gap_1()
                             .px(Spacing::XS)
                             .rounded(Radii::SM)
-                            .text_size(FontSizes::XS)
                             .when(can_prev, |d| {
                                 d.cursor_pointer()
-                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.go_to_prev_page(window, cx);
                                     }))
                             })
-                            .when(!can_prev, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
-                            })
-                            .child(svg().path(AppIcon::ChevronLeft.path()).size_3().text_color(
+                            .when(!can_prev, |d| d.opacity(0.5))
+                            .child(Icon::new(AppIcon::ChevronLeft).size(px(12.0)).color(
                                 if can_prev {
                                     theme.foreground
                                 } else {
                                     theme.muted_foreground
                                 },
                             ))
-                            .child("Prev"),
+                            .child(Text::caption("Prev").font_size(FontSizes::XS).text_color(
+                                if can_prev {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )),
                     )
                     .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
-                            .child(if let Some(total) = total_pages {
-                                format!("Page {}/{} ({}-{})", page, total, start, end)
-                            } else {
-                                format!("Page {} ({}-{})", page, start, end)
-                            }),
+                        Text::caption(if let Some(total) = total_pages {
+                            format!("Page {}/{} ({}-{})", page, total, start, end)
+                        } else {
+                            format!("Page {} ({}-{})", page, start, end)
+                        })
+                        .font_size(FontSizes::XS),
                     )
                     .child(
                         div()
@@ -1324,29 +1198,28 @@ impl DataGridPanel {
                             .gap_1()
                             .px(Spacing::XS)
                             .rounded(Radii::SM)
-                            .text_size(FontSizes::XS)
                             .when(can_next, |d| {
                                 d.cursor_pointer()
-                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.go_to_next_page(window, cx);
                                     }))
                             })
-                            .when(!can_next, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
-                            })
-                            .child("Next")
-                            .child(
-                                svg()
-                                    .path(AppIcon::ChevronRight.path())
-                                    .size_3()
-                                    .text_color(if can_next {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    }),
-                            ),
+                            .when(!can_next, |d| d.opacity(0.5))
+                            .child(Text::caption("Next").font_size(FontSizes::XS).text_color(
+                                if can_next {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            ))
+                            .child(Icon::new(AppIcon::ChevronRight).size(px(12.0)).color(
+                                if can_next {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )),
                     )
                 },
             ))
@@ -1360,10 +1233,7 @@ impl DataGridPanel {
                     .child({
                         let mut muted = theme.muted_foreground;
                         muted.a = 0.5;
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(muted)
-                            .child(exec_time.to_string())
+                        Text::caption(exec_time.to_string()).text_color(muted)
                     }),
             )
     }
@@ -1398,18 +1268,16 @@ impl DataGridPanel {
                 this.export_results(window, cx);
             }))
             .child(
-                svg()
-                    .path(AppIcon::FileSpreadsheet.path())
-                    .size_4()
-                    .text_color(theme.muted_foreground),
+                Icon::new(AppIcon::FileSpreadsheet)
+                    .small()
+                    .color(theme.muted_foreground),
             )
             .child(label)
             .when(formats.len() > 1, |d| {
                 d.child(
-                    svg()
-                        .path(AppIcon::ChevronDown.path())
-                        .size_3()
-                        .text_color(theme.muted_foreground),
+                    Icon::new(AppIcon::ChevronDown)
+                        .size(px(12.0))
+                        .color(theme.muted_foreground),
                 )
             })
             .when(menu_open, |d| {

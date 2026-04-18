@@ -1,0 +1,22 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="1" y="1" width="14" height="14" rx="3.5" fill="#07111F"/>
+
+  <circle cx="8" cy="8" r="4" stroke="#F3B35A" stroke-width="0.95"/>
+
+  <g stroke="#F3B35A" stroke-width="0.7" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <ellipse cx="8" cy="6.25" rx="2.25" ry="0.75"/>
+    <path d="M5.75 6.25V9.75"/>
+    <path d="M10.25 6.25V9.75"/>
+    <path d="M5.75 8C5.75 8.5 6.76 9 8 9C9.24 9 10.25 8.5 10.25 8"/>
+    <path d="M5.75 9.75C5.75 10.25 6.76 10.75 8 10.75C9.24 10.75 10.25 10.25 10.25 9.75"/>
+  </g>
+
+  <path
+    d="M8.9 4.25L7.55 7H8.65L7.85 10.1L9.6 6.85H8.55L8.9 4.25Z"
+    fill="#07111F"
+    stroke="#F3B35A"
+    stroke-width="0.7"
+    stroke-linejoin="round"
+    stroke-linecap="round"
+  />
+</svg>

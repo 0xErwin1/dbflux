@@ -1,12 +1,11 @@
 use crate::platform;
 use crate::ui::components::tree_nav::{self, FlatRow};
-use crate::ui::icons::AppIcon;
+use crate::ui::theme::ghost_border_color;
 use crate::ui::tokens::Heights;
+use dbflux_components::controls::Button;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::Dialog;
 
 use super::{
@@ -96,63 +95,18 @@ impl SettingsCoordinator {
             .gap_0()
             .children(row_elements)
             .child(div().flex_1())
-            .child({
-                div().p_1().border_t_1().border_color(border_color).child(
-                    Button::new("close-settings")
-                        .label("Close")
-                        .ghost()
-                        .small()
-                        .on_click(cx.listener(|this, _, window, _cx| {
-                            this.try_close(window);
-                        })),
-                )
-            })
     }
 
     fn render_group_row(
         &self,
         row: &FlatRow,
-        is_cursor: bool,
+        _is_cursor: bool,
         theme: &gpui_component::Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let chevron_icon = if row.expanded {
-            AppIcon::ChevronDown
-        } else {
-            AppIcon::ChevronRight
-        };
-
         let row_id = row.id.clone();
 
-        let inner = div()
-            .flex()
-            .items_center()
-            .gap_1p5()
-            .child(
-                svg()
-                    .path(chevron_icon.path())
-                    .size(px(12.0))
-                    .text_color(theme.muted_foreground),
-            )
-            .when_some(row.icon, |div, icon| {
-                div.child(
-                    svg()
-                        .path(icon.path())
-                        .size(px(14.0))
-                        .text_color(theme.muted_foreground),
-                )
-            })
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.muted_foreground)
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(row.label.clone()),
-            );
-
+        // Group rows render as uppercase section labels — felt-not-seen dividers
         div()
             .id(SharedString::from(format!("cat-{}", row.id)))
             .flex_1()
@@ -160,22 +114,22 @@ impl SettingsCoordinator {
             .px_2()
             .flex()
             .items_center()
-            .rounded(px(4.0))
             .cursor_pointer()
-            .border_1()
-            .border_color(if is_cursor {
-                theme.primary
-            } else {
-                transparent_black()
-            })
-            .hover(|d| d.bg(theme.secondary))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.sidebar_tree.select_by_id(row_id.as_ref());
-
                 let _ = this.sidebar_tree.activate();
                 cx.notify();
             }))
-            .child(inner)
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.muted_foreground)
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(row.label.to_uppercase()),
+            )
             .into_any_element()
     }
 
@@ -191,17 +145,23 @@ impl SettingsCoordinator {
         let is_active = Self::section_for_tree_id(row.id.as_ref()) == Some(self.active_section);
         let show_active = is_active && !sidebar_focused;
 
+        let icon_color = if is_active {
+            theme.primary
+        } else {
+            theme.muted_foreground
+        };
+        let text_color = if is_active {
+            theme.primary
+        } else {
+            theme.foreground
+        };
+
         let content_inner = div()
             .flex()
             .items_center()
             .gap_2()
             .when_some(row.icon, |div, icon| {
-                div.child(
-                    svg()
-                        .path(icon.path())
-                        .size_4()
-                        .text_color(theme.muted_foreground),
-                )
+                div.child(svg().path(icon.path()).size_4().text_color(icon_color))
             })
             .child(
                 div()
@@ -209,6 +169,7 @@ impl SettingsCoordinator {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
+                    .text_color(text_color)
                     .child(row.label.clone()),
             );
 
@@ -297,6 +258,8 @@ impl Render for SettingsCoordinator {
                             .child(self.active_section_view.clone()),
                     ),
             )
+            // Settings status footer
+            .child(self.render_settings_footer(cx))
             .when_some(self.pending_section_confirm, |element, target_section| {
                 let confirm_entity = cx.entity().clone();
                 let cancel_entity = confirm_entity.clone();
@@ -370,6 +333,38 @@ impl SettingsCoordinator {
                     this.sidebar_resize_start_width = None;
                     cx.notify();
                 }),
+            )
+    }
+
+    fn render_settings_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+        div()
+            .flex_shrink_0()
+            .h(px(36.0))
+            .px_4()
+            .flex()
+            .items_center()
+            .justify_between()
+            .border_t_1()
+            .border_color(ghost_border_color())
+            .bg(cx.theme().background)
+            .child(
+                div()
+                    .text_xs()
+                    .font_family("monospace")
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("v{} | UTF-8", VERSION)),
+            )
+            .child(
+                div().flex().items_center().gap_2().child(
+                    Button::new("settings-close", "Close")
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(|this, _, window, _cx| {
+                            this.try_close(window);
+                        })),
+                ),
             )
     }
 }

@@ -339,20 +339,15 @@ fn render_item(
     theme: &gpui_component::theme::Theme,
     _cx: &App,
 ) -> AnyElement {
-    use gpui_component::Sizable;
-    use gpui_component::input::Input;
+    use dbflux_components::controls::Input;
+    use dbflux_components::primitives::Text;
 
     match item {
         FilterBarItem::Input { label, input } => div()
             .flex()
             .items_center()
             .gap(Spacing::XS)
-            .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.muted_foreground)
-                    .child(label.clone()),
-            )
+            .child(Text::caption(label.clone()))
             .child(
                 div()
                     .flex()
@@ -368,14 +363,8 @@ fn render_item(
             .flex()
             .items_center()
             .gap(Spacing::XS)
+            .child(Text::caption(label.clone()))
             .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.muted_foreground)
-                    .child(label.clone()),
-            )
-            .child(
-                // Ring wraps the dropdown widget exactly as it wraps the input.
                 div()
                     .rounded(Radii::SM)
                     .when(ring_active, |d| d.border_1().border_color(theme.ring))

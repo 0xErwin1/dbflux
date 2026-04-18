@@ -1,9 +1,9 @@
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::Sizable;
 use gpui_component::input::InputState;
 
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::Input;
 use dbflux_core::values::ValueRef;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,9 +238,9 @@ impl Render for ValueSourceSelector {
                 source_kind == ValueSourceKind::Secret || source_kind == ValueSourceKind::Parameter,
                 |el| {
                     el.child(
-                        div().w(px(140.0)).child(
-                            gpui_component::input::Input::new(&self.secondary_input).small(),
-                        ),
+                        div()
+                            .w(px(140.0))
+                            .child(Input::new(&self.secondary_input).small()),
                     )
                 },
             )

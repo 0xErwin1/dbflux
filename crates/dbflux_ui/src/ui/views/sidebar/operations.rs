@@ -1,16 +1,20 @@
 use super::*;
 use crate::platform;
+use crate::ui::AsyncUpdateResultExt;
 use dbflux_app::hook_executor::CompositeExecutor;
 use dbflux_core::observability::actions::{
     CONNECTION_CONNECT, CONNECTION_CONNECT_FAILED, CONNECTION_CONNECTING, CONNECTION_DISCONNECT,
     HOOK_EXECUTE, HOOK_EXECUTE_FAILED,
 };
 use dbflux_core::{
-    CancelToken, ConnectionHook, DetachedProcessHandle, HookContext, HookExecutor, HookKind,
-    HookPhase, HookResult, OutputReceiver, PipelineState, ProcessExecutionError, TaskId, TaskKind,
+    CancelToken, Connection, ConnectionHook, DatabaseConnection, DbSchemaInfo,
+    DetachedProcessHandle, FetchTableDetailsParams, FetchTableDetailsResult, HookContext,
+    HookExecutor, HookKind, HookPhase, HookResult, OutputReceiver, PipelineState,
+    ProcessExecutionError, SchemaDropTarget, SchemaObjectKind, TaskId, TaskKind, TaskTarget,
     detached_process_channel, execute_streaming_process, output_channel,
 };
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DETACHED_HOOK_STARTED_MESSAGE: &str = "Detached process started in background";
@@ -19,6 +23,98 @@ type DetachedReadyReceiver = std::sync::mpsc::Receiver<Result<(), String>>;
 
 struct DetachedHookTaskStart {
     ready_receiver: Option<DetachedReadyReceiver>,
+}
+
+#[derive(Clone)]
+struct SidebarDropOperation {
+    profile_id: Uuid,
+    item_id: String,
+    object_name: String,
+    cache_database: Option<String>,
+    connection: Arc<dyn Connection>,
+    target: SchemaDropTarget,
+    task_target: TaskTarget,
+    task_description: String,
+    is_database: bool,
+}
+
+struct HeldDatabaseConnection {
+    database: String,
+    connection: DatabaseConnection,
+    cached_schema: Option<DbSchemaInfo>,
+    previous_active_database: Option<String>,
+}
+
+struct HeldSidebarDatabaseRefreshState {
+    database: String,
+    primary_schema: Option<SchemaSnapshot>,
+    cached_schema: Option<DbSchemaInfo>,
+    table_details: HashMap<(String, String), TableInfo>,
+    schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
+    schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
+    schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+    previous_active_database: Option<String>,
+    subtree_expansion_overrides: HashMap<String, bool>,
+    held_connection: Option<HeldDatabaseConnection>,
+}
+
+enum DatabaseRefreshMode {
+    LazyPerDatabase,
+    ConnectionPerDatabaseCurrent,
+    ConnectionPerDatabaseSecondary,
+}
+
+enum DatabaseRefreshExecutionOutcome {
+    Refreshed {
+        schema: Option<SchemaSnapshot>,
+        database_schema: Option<DbSchemaInfo>,
+    },
+    Failed {
+        error: String,
+        held_state: HeldSidebarDatabaseRefreshState,
+    },
+    Cancelled {
+        held_state: HeldSidebarDatabaseRefreshState,
+    },
+}
+
+enum SchemaObjectRefreshResult {
+    TableDetails(FetchTableDetailsResult),
+    Views {
+        profile_id: Uuid,
+        database: String,
+        schema_name: String,
+        views: Vec<ViewInfo>,
+    },
+}
+
+struct HeldSidebarObjectRefreshState {
+    profile_id: Uuid,
+    cache_database: String,
+    object_name: String,
+    previous_details: Option<TableInfo>,
+}
+
+enum DatabaseDropReleasePlan {
+    None,
+    ConnectionPerDatabase(Box<HeldDatabaseConnection>),
+    ActiveDatabase {
+        database: String,
+        connection: Arc<dyn Connection>,
+    },
+}
+
+enum DropExecutionOutcome {
+    Dropped {
+        database_release_applied: bool,
+    },
+    Failed {
+        error: String,
+        held_connection: Option<HeldDatabaseConnection>,
+    },
+    Cancelled {
+        held_connection: Option<HeldDatabaseConnection>,
+    },
 }
 
 enum HookPhaseState {
@@ -192,6 +288,72 @@ fn detached_process_error_message(error: &ProcessExecutionError, description: &s
             format!("Detached hook process '{description}' timed out\n{stdout}{stderr}")
         }
     }
+}
+
+fn describe_drop_target(target: &SchemaDropTarget) -> String {
+    match target.kind {
+        SchemaObjectKind::Table | SchemaObjectKind::View => match target.schema.as_deref() {
+            Some(schema) => format!("{}.{}", schema, target.name),
+            None => target.name.clone(),
+        },
+        SchemaObjectKind::Collection | SchemaObjectKind::Database => target.name.clone(),
+    }
+}
+
+fn build_drop_task_details(target: &SchemaDropTarget, released_database: Option<&str>) -> String {
+    let mut lines = vec![
+        format!("Kind: {:?}", target.kind),
+        format!("Target: {}", describe_drop_target(target)),
+    ];
+
+    if let Some(database) = target.database.as_deref() {
+        lines.push(format!("Database: {}", database));
+    }
+
+    if let Some(database) = released_database {
+        lines.push(format!("Released database connection: {}", database));
+    }
+
+    lines.join("\n")
+}
+
+fn try_close_held_database_connection(
+    held_connection: &mut HeldDatabaseConnection,
+) -> Result<(), String> {
+    if let Err(error) = held_connection.connection.connection.cancel_active() {
+        log::debug!(
+            "Could not cancel active query before dropping database {}: {:?}",
+            held_connection.database,
+            error
+        );
+    }
+
+    let Some(connection) = Arc::get_mut(&mut held_connection.connection.connection) else {
+        return Err(format!(
+            "Cannot drop database '{}' while DBFlux still has active references to its connection",
+            held_connection.database
+        ));
+    };
+
+    connection.close().map_err(|error| {
+        format!(
+            "Failed to release DBFlux connection for database '{}': {}",
+            held_connection.database, error
+        )
+    })
+}
+
+fn retain_database_cache_entries<T>(
+    entries: &mut HashMap<SchemaCacheKey, Vec<T>>,
+    database: &str,
+) -> HashMap<SchemaCacheKey, Vec<T>> {
+    let existing = std::mem::take(entries);
+    let (removed, kept): (Vec<_>, Vec<_>) = existing
+        .into_iter()
+        .partition(|(key, _)| key.database == database);
+
+    *entries = kept.into_iter().collect();
+    removed.into_iter().collect()
 }
 
 fn start_task_output_drain(
@@ -879,6 +1041,14 @@ async fn run_hook_phase(
 }
 
 impl Sidebar {
+    fn track_operation_task(&mut self, task_id: TaskId, task: Task<()>) {
+        self.tracked_operation_tasks.insert(task_id, task);
+    }
+
+    fn clear_tracked_operation_task(&mut self, task_id: TaskId) {
+        self.tracked_operation_tasks.remove(&task_id);
+    }
+
     pub(super) fn handle_database_click(&mut self, item_id: &str, cx: &mut Context<Self>) {
         let Some(SchemaNodeId::Database {
             profile_id,
@@ -939,6 +1109,692 @@ impl Sidebar {
         self.set_expanded(item_id, false, cx);
 
         self.refresh_tree(cx);
+    }
+
+    fn collect_subtree_item_ids(
+        items: &[TreeItem],
+        root_item_id: &str,
+        collected: &mut Vec<String>,
+    ) -> bool {
+        for item in items {
+            if item.id.as_ref() == root_item_id {
+                Self::collect_descendant_item_ids(&item.children, collected);
+                return true;
+            }
+
+            if Self::collect_subtree_item_ids(&item.children, root_item_id, collected) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn collect_descendant_item_ids(items: &[TreeItem], collected: &mut Vec<String>) {
+        for item in items {
+            collected.push(item.id.to_string());
+            Self::collect_descendant_item_ids(&item.children, collected);
+        }
+    }
+
+    fn database_root_expanded(&self, item_id: &str, cx: &Context<Self>) -> bool {
+        fn find_expanded(items: &[TreeItem], item_id: &str) -> Option<bool> {
+            for item in items {
+                if item.id.as_ref() == item_id {
+                    return Some(item.is_expanded());
+                }
+
+                if let Some(expanded) = find_expanded(&item.children, item_id) {
+                    return Some(expanded);
+                }
+            }
+
+            None
+        }
+
+        let items = self.build_tree_items_with_overrides(cx);
+        find_expanded(&items, item_id).unwrap_or(false)
+    }
+
+    fn take_database_refresh_state(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<HeldSidebarDatabaseRefreshState, String> {
+        let mut descendant_ids = Vec::new();
+        let items = self.build_tree_items_with_overrides(cx);
+        let _ = Self::collect_subtree_item_ids(&items, item_id, &mut descendant_ids);
+
+        let subtree_expansion_overrides = descendant_ids
+            .iter()
+            .filter_map(|descendant_id| {
+                self.expansion_overrides
+                    .get(descendant_id)
+                    .copied()
+                    .map(|expanded| (descendant_id.clone(), expanded))
+            })
+            .collect();
+
+        let held_state = self.app_state.update(cx, |state, _cx| {
+            let Some(connected) = state.connections_mut().get_mut(&profile_id) else {
+                return Err("Profile not connected".to_string());
+            };
+
+            let cached_schema = connected.database_schemas.remove(database);
+
+            let table_details = {
+                let existing = std::mem::take(&mut connected.table_details);
+                let (removed, kept): (Vec<_>, Vec<_>) = existing
+                    .into_iter()
+                    .partition(|((cache_db, _), _)| cache_db == database);
+                connected.table_details = kept.into_iter().collect();
+                removed.into_iter().collect()
+            };
+
+            let schema_types = retain_database_cache_entries(&mut connected.schema_types, database);
+            let schema_indexes =
+                retain_database_cache_entries(&mut connected.schema_indexes, database);
+            let schema_foreign_keys =
+                retain_database_cache_entries(&mut connected.schema_foreign_keys, database);
+
+            let previous_active_database = connected.active_database.clone();
+            let held_connection =
+                connected
+                    .database_connections
+                    .remove(database)
+                    .map(|connection| HeldDatabaseConnection {
+                        database: database.to_string(),
+                        connection,
+                        cached_schema: None,
+                        previous_active_database: previous_active_database.clone(),
+                    });
+
+            let primary_schema = if held_connection.is_none()
+                && connected
+                    .schema
+                    .as_ref()
+                    .and_then(|schema| schema.current_database())
+                    .is_some_and(|current| current == database)
+            {
+                connected.schema.clone()
+            } else {
+                None
+            };
+
+            Ok(HeldSidebarDatabaseRefreshState {
+                database: database.to_string(),
+                primary_schema,
+                cached_schema,
+                table_details,
+                schema_types,
+                schema_indexes,
+                schema_foreign_keys,
+                previous_active_database,
+                subtree_expansion_overrides,
+                held_connection,
+            })
+        })?;
+
+        for descendant_id in descendant_ids {
+            self.expansion_overrides.remove(&descendant_id);
+        }
+
+        Ok(held_state)
+    }
+
+    fn restore_database_refresh_state(
+        state: &mut AppStateEntity,
+        profile_id: Uuid,
+        held_state: HeldSidebarDatabaseRefreshState,
+    ) {
+        let HeldSidebarDatabaseRefreshState {
+            database,
+            primary_schema,
+            cached_schema,
+            table_details,
+            schema_types,
+            schema_indexes,
+            schema_foreign_keys,
+            previous_active_database,
+            subtree_expansion_overrides: _,
+            held_connection,
+        } = held_state;
+
+        let had_held_connection = held_connection.is_some();
+        let mut cached_schema = cached_schema;
+
+        if let Some(mut held_connection) = held_connection {
+            held_connection.cached_schema = cached_schema.take();
+            Self::restore_database_drop_release(state, profile_id, held_connection);
+        }
+
+        let Some(connected) = state.connections_mut().get_mut(&profile_id) else {
+            log::warn!(
+                "Failed to restore sidebar refresh state for profile {}: profile missing",
+                profile_id
+            );
+            return;
+        };
+
+        if !had_held_connection {
+            if let Some(primary_schema) = primary_schema {
+                connected.schema = Some(primary_schema);
+            }
+
+            if let Some(cached_schema) = cached_schema {
+                connected
+                    .database_schemas
+                    .insert(database.clone(), cached_schema);
+            }
+        }
+
+        connected.active_database = previous_active_database;
+
+        connected.table_details.extend(table_details);
+        connected.schema_types.extend(schema_types);
+        connected.schema_indexes.extend(schema_indexes);
+        connected.schema_foreign_keys.extend(schema_foreign_keys);
+    }
+
+    fn resolve_database_refresh_mode(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        cx: &App,
+    ) -> Option<DatabaseRefreshMode> {
+        let connected = self.app_state.read(cx).connections().get(&profile_id)?;
+
+        match connected.connection.schema_loading_strategy() {
+            SchemaLoadingStrategy::LazyPerDatabase => Some(DatabaseRefreshMode::LazyPerDatabase),
+            SchemaLoadingStrategy::ConnectionPerDatabase => {
+                if connected.database_connections.contains_key(database) {
+                    Some(DatabaseRefreshMode::ConnectionPerDatabaseSecondary)
+                } else if connected
+                    .schema
+                    .as_ref()
+                    .and_then(|schema| schema.current_database())
+                    .is_some_and(|current| current == database)
+                {
+                    Some(DatabaseRefreshMode::ConnectionPerDatabaseCurrent)
+                } else {
+                    None
+                }
+            }
+            SchemaLoadingStrategy::SingleDatabase => None,
+        }
+    }
+
+    fn start_database_refresh_task(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        item_id: &str,
+        root_expanded: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<(TaskId, CancelToken)> {
+        let started = self.app_state.update(cx, |state, cx| {
+            if state.is_operation_pending(profile_id, Some(database)) {
+                return false;
+            }
+
+            let started = state.start_pending_operation(profile_id, Some(database));
+            if started {
+                cx.emit(AppStateChanged);
+            }
+            started
+        });
+
+        if !started {
+            return None;
+        }
+
+        self.expansion_overrides
+            .insert(item_id.to_string(), root_expanded);
+        self.loading_items.insert(item_id.to_string());
+
+        let task_target = TaskTarget {
+            profile_id,
+            database: Some(database.to_string()),
+        };
+
+        Some(self.app_state.update(cx, |state, cx| {
+            let task = state.start_task_for_target(
+                TaskKind::SchemaRefresh,
+                format!("Refreshing database: {}", database),
+                Some(task_target),
+            );
+            cx.emit(AppStateChanged);
+            task
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_database_refresh_outcome(
+        sidebar: &mut Sidebar,
+        app_state: &Entity<AppStateEntity>,
+        item_id: &str,
+        profile_id: Uuid,
+        database: &str,
+        root_expanded: bool,
+        task_id: TaskId,
+        outcome: DatabaseRefreshExecutionOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        sidebar.loading_items.remove(item_id);
+
+        match outcome {
+            DatabaseRefreshExecutionOutcome::Refreshed {
+                schema,
+                database_schema,
+            } => {
+                app_state.update(cx, |state, cx| {
+                    state.complete_task(task_id);
+                    state.finish_pending_operation(profile_id, Some(database));
+
+                    if let Some(database_schema) = database_schema {
+                        state.set_database_schema(
+                            profile_id,
+                            database.to_string(),
+                            database_schema,
+                        );
+                    }
+
+                    if let Some(schema) = schema
+                        && let Some(connected) = state.connections_mut().get_mut(&profile_id)
+                    {
+                        if let Some(database_connection) =
+                            connected.database_connections.get_mut(database)
+                        {
+                            database_connection.schema = Some(schema);
+                        } else {
+                            connected.schema = Some(schema);
+                        }
+                    }
+
+                    if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
+                        connected.active_database = Some(database.to_string());
+                    }
+
+                    cx.emit(AppStateChanged);
+                });
+
+                sidebar
+                    .expansion_overrides
+                    .insert(item_id.to_string(), root_expanded);
+            }
+            DatabaseRefreshExecutionOutcome::Failed { error, held_state } => {
+                let subtree_overrides = held_state.subtree_expansion_overrides.clone();
+
+                app_state.update(cx, |state, cx| {
+                    state.fail_task(task_id, error.clone());
+                    state.finish_pending_operation(profile_id, Some(database));
+                    Self::restore_database_refresh_state(state, profile_id, held_state);
+                    cx.emit(AppStateChanged);
+                });
+
+                sidebar
+                    .expansion_overrides
+                    .insert(item_id.to_string(), root_expanded);
+                sidebar.expansion_overrides.extend(subtree_overrides);
+                sidebar.pending_toast = Some(PendingToast {
+                    message: format!("Failed to refresh database: {}", error),
+                    is_error: true,
+                });
+            }
+            DatabaseRefreshExecutionOutcome::Cancelled { held_state } => {
+                let subtree_overrides = held_state.subtree_expansion_overrides.clone();
+
+                app_state.update(cx, |state, cx| {
+                    state.tasks_mut().cancel(task_id);
+                    state.finish_pending_operation(profile_id, Some(database));
+                    Self::restore_database_refresh_state(state, profile_id, held_state);
+                    cx.emit(AppStateChanged);
+                });
+
+                sidebar
+                    .expansion_overrides
+                    .insert(item_id.to_string(), root_expanded);
+                sidebar.expansion_overrides.extend(subtree_overrides);
+            }
+        }
+
+        sidebar.refresh_tree(cx);
+    }
+
+    fn refresh_lazy_database(
+        &mut self,
+        item_id: &str,
+        profile_id: Uuid,
+        database: String,
+        root_expanded: bool,
+        held_state: HeldSidebarDatabaseRefreshState,
+        cx: &mut Context<Self>,
+    ) {
+        let params = match self.app_state.update(cx, |state, _cx| {
+            state.prepare_fetch_database_schema(profile_id, &database)
+        }) {
+            Ok(params) => params,
+            Err(error) => {
+                let subtree_overrides = held_state.subtree_expansion_overrides.clone();
+                self.app_state.update(cx, |state, _cx| {
+                    Self::restore_database_refresh_state(state, profile_id, held_state)
+                });
+                self.expansion_overrides
+                    .insert(item_id.to_string(), root_expanded);
+                self.expansion_overrides.extend(subtree_overrides);
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Failed to refresh database: {}", error),
+                    is_error: true,
+                });
+                self.refresh_tree(cx);
+                return;
+            }
+        };
+
+        let Some((task_id, cancel_token)) =
+            self.start_database_refresh_task(profile_id, &database, item_id, root_expanded, cx)
+        else {
+            let subtree_overrides = held_state.subtree_expansion_overrides.clone();
+            self.app_state.update(cx, |state, _cx| {
+                Self::restore_database_refresh_state(state, profile_id, held_state)
+            });
+            self.expansion_overrides
+                .insert(item_id.to_string(), root_expanded);
+            self.expansion_overrides.extend(subtree_overrides);
+            self.pending_toast = Some(PendingToast {
+                message: "Database refresh already pending".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            return;
+        };
+
+        self.refresh_tree(cx);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+        let item_id = item_id.to_string();
+
+        let operation_task = cx.spawn(async move |_this, cx| {
+            let outcome = match cx
+                .background_executor()
+                .spawn(async move { params.execute() })
+                .await
+            {
+                Ok(_) if cancel_token.is_cancelled() => {
+                    DatabaseRefreshExecutionOutcome::Cancelled { held_state }
+                }
+                Ok(result) => DatabaseRefreshExecutionOutcome::Refreshed {
+                    schema: None,
+                    database_schema: Some(result.schema),
+                },
+                Err(error) => DatabaseRefreshExecutionOutcome::Failed { error, held_state },
+            };
+
+            if let Err(update_error) = cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.clear_tracked_operation_task(task_id);
+                    Self::apply_database_refresh_outcome(
+                        sidebar,
+                        &app_state,
+                        &item_id,
+                        profile_id,
+                        &database,
+                        root_expanded,
+                        task_id,
+                        outcome,
+                        cx,
+                    );
+                });
+            }) {
+                log::warn!(
+                    "Failed to apply lazy database refresh outcome: {:?}",
+                    update_error
+                );
+            }
+        });
+
+        self.track_operation_task(task_id, operation_task);
+    }
+
+    fn refresh_secondary_database_connection(
+        &mut self,
+        item_id: &str,
+        profile_id: Uuid,
+        database: String,
+        root_expanded: bool,
+        held_state: HeldSidebarDatabaseRefreshState,
+        cx: &mut Context<Self>,
+    ) {
+        let params = match self.app_state.update(cx, |state, _cx| {
+            state.prepare_database_connection(profile_id, &database)
+        }) {
+            Ok(params) => params,
+            Err(error) => {
+                let subtree_overrides = held_state.subtree_expansion_overrides.clone();
+                self.app_state.update(cx, |state, _cx| {
+                    Self::restore_database_refresh_state(state, profile_id, held_state)
+                });
+                self.expansion_overrides
+                    .insert(item_id.to_string(), root_expanded);
+                self.expansion_overrides.extend(subtree_overrides);
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Failed to refresh database: {}", error),
+                    is_error: true,
+                });
+                self.refresh_tree(cx);
+                return;
+            }
+        };
+
+        let Some((task_id, cancel_token)) =
+            self.start_database_refresh_task(profile_id, &database, item_id, root_expanded, cx)
+        else {
+            let subtree_overrides = held_state.subtree_expansion_overrides.clone();
+            self.app_state.update(cx, |state, _cx| {
+                Self::restore_database_refresh_state(state, profile_id, held_state)
+            });
+            self.expansion_overrides
+                .insert(item_id.to_string(), root_expanded);
+            self.expansion_overrides.extend(subtree_overrides);
+            self.pending_toast = Some(PendingToast {
+                message: "Database refresh already pending".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            return;
+        };
+
+        self.refresh_tree(cx);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+        let item_id = item_id.to_string();
+
+        let operation_task = cx.spawn(async move |_this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut held_state = held_state;
+
+                    let Some(held_connection) = held_state.held_connection.as_mut() else {
+                        return DatabaseRefreshExecutionOutcome::Failed {
+                            error: format!(
+                                "Database '{}' was not open, cannot refresh it as a per-database connection",
+                                held_state.database
+                            ),
+                            held_state,
+                        };
+                    };
+
+                    if let Err(error) = try_close_held_database_connection(held_connection) {
+                        return DatabaseRefreshExecutionOutcome::Failed { error, held_state };
+                    }
+
+                    if cancel_token.is_cancelled() {
+                        return DatabaseRefreshExecutionOutcome::Cancelled { held_state };
+                    }
+
+                    match params.execute() {
+                        Ok(result) => DatabaseRefreshExecutionOutcome::Refreshed {
+                            schema: result.schema,
+                            database_schema: None,
+                        },
+                        Err(error) => DatabaseRefreshExecutionOutcome::Failed { error, held_state },
+                    }
+                })
+                .await;
+
+            if let Err(update_error) = cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.clear_tracked_operation_task(task_id);
+                    Self::apply_database_refresh_outcome(
+                        sidebar,
+                        &app_state,
+                        &item_id,
+                        profile_id,
+                        &database,
+                        root_expanded,
+                        task_id,
+                        outcome,
+                        cx,
+                    );
+                });
+            }) {
+                log::warn!(
+                    "Failed to apply per-database refresh outcome: {:?}",
+                    update_error
+                );
+            }
+        });
+
+        self.track_operation_task(task_id, operation_task);
+    }
+
+    fn refresh_current_database_connection(
+        &mut self,
+        item_id: &str,
+        profile_id: Uuid,
+        database: String,
+        root_expanded: bool,
+        held_state: HeldSidebarDatabaseRefreshState,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((task_id, cancel_token)) =
+            self.start_database_refresh_task(profile_id, &database, item_id, root_expanded, cx)
+        else {
+            let subtree_overrides = held_state.subtree_expansion_overrides.clone();
+            self.app_state.update(cx, |state, _cx| {
+                Self::restore_database_refresh_state(state, profile_id, held_state)
+            });
+            self.expansion_overrides
+                .insert(item_id.to_string(), root_expanded);
+            self.expansion_overrides.extend(subtree_overrides);
+            self.pending_toast = Some(PendingToast {
+                message: "Database refresh already pending".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            return;
+        };
+
+        self.refresh_tree(cx);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+        let item_id = item_id.to_string();
+
+        let operation_task = cx.spawn(async move |_this, cx| {
+            let connection = match cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|connected| connected.connection.clone())
+            }) {
+                Ok(Some(connection)) => connection,
+                Ok(None) => {
+                    let outcome = DatabaseRefreshExecutionOutcome::Failed {
+                        error: "Profile not connected".to_string(),
+                        held_state,
+                    };
+
+                    if let Err(update_error) = cx.update(|cx| {
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.clear_tracked_operation_task(task_id);
+                            Self::apply_database_refresh_outcome(
+                                sidebar,
+                                &app_state,
+                                &item_id,
+                                profile_id,
+                                &database,
+                                root_expanded,
+                                task_id,
+                                outcome,
+                                cx,
+                            );
+                        });
+                    }) {
+                        log::warn!(
+                            "Failed to apply missing connection refresh outcome: {:?}",
+                            update_error
+                        );
+                    }
+                    return;
+                }
+                Err(update_error) => {
+                    log::warn!(
+                        "Failed to read current connection for refresh: {:?}",
+                        update_error
+                    );
+                    return;
+                }
+            };
+
+            let outcome = match cx
+                .background_executor()
+                .spawn(async move { connection.schema() })
+                .await
+            {
+                Ok(_) if cancel_token.is_cancelled() => {
+                    DatabaseRefreshExecutionOutcome::Cancelled { held_state }
+                }
+                Ok(schema) => DatabaseRefreshExecutionOutcome::Refreshed {
+                    schema: Some(schema),
+                    database_schema: None,
+                },
+                Err(error) => DatabaseRefreshExecutionOutcome::Failed {
+                    error: error.to_string(),
+                    held_state,
+                },
+            };
+
+            if let Err(update_error) = cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.clear_tracked_operation_task(task_id);
+                    Self::apply_database_refresh_outcome(
+                        sidebar,
+                        &app_state,
+                        &item_id,
+                        profile_id,
+                        &database,
+                        root_expanded,
+                        task_id,
+                        outcome,
+                        cx,
+                    );
+                });
+            }) {
+                log::warn!(
+                    "Failed to apply current database refresh outcome: {:?}",
+                    update_error
+                );
+            }
+        });
+
+        self.track_operation_task(task_id, operation_task);
     }
 
     /// Creates a new folder at the root level.
@@ -3461,5 +4317,840 @@ impl Sidebar {
         }
 
         format!("untitled.{}", extension)
+    }
+
+    pub(super) fn refresh_schema_database(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(SchemaNodeId::Database {
+            profile_id,
+            name: db_name,
+        }) = parse_node_id(item_id)
+        else {
+            return;
+        };
+
+        let Some(mode) = self.resolve_database_refresh_mode(profile_id, &db_name, cx) else {
+            return;
+        };
+
+        if self.app_state.read(cx).is_background_task_limit_reached() {
+            self.pending_toast = Some(PendingToast {
+                message: "Too many background tasks running, please wait".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            cx.notify();
+            return;
+        }
+
+        let root_expanded = self.database_root_expanded(item_id, cx);
+        let held_state = match self.take_database_refresh_state(profile_id, &db_name, item_id, cx) {
+            Ok(held_state) => held_state,
+            Err(error) => {
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Failed to refresh database: {}", error),
+                    is_error: true,
+                });
+                self.refresh_tree(cx);
+                cx.notify();
+                return;
+            }
+        };
+
+        match mode {
+            DatabaseRefreshMode::LazyPerDatabase => self.refresh_lazy_database(
+                item_id,
+                profile_id,
+                db_name,
+                root_expanded,
+                held_state,
+                cx,
+            ),
+            DatabaseRefreshMode::ConnectionPerDatabaseSecondary => self
+                .refresh_secondary_database_connection(
+                    item_id,
+                    profile_id,
+                    db_name,
+                    root_expanded,
+                    held_state,
+                    cx,
+                ),
+            DatabaseRefreshMode::ConnectionPerDatabaseCurrent => self
+                .refresh_current_database_connection(
+                    item_id,
+                    profile_id,
+                    db_name,
+                    root_expanded,
+                    held_state,
+                    cx,
+                ),
+        }
+    }
+
+    pub(super) fn refresh_schema_object(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(parts) = parse_node_id(item_id)
+            .as_ref()
+            .and_then(ItemIdParts::from_node_id)
+        else {
+            return;
+        };
+
+        if self.loading_items.contains(item_id) {
+            return;
+        }
+
+        if self.app_state.read(cx).is_background_task_limit_reached() {
+            self.pending_toast = Some(PendingToast {
+                message: "Too many background tasks running, please wait".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            cx.notify();
+            return;
+        }
+
+        let cache_db = parts.cache_database().to_string();
+        let node_id = parse_node_id(item_id);
+        let previous_details = self.app_state.update(cx, |state, _cx| {
+            state
+                .connections_mut()
+                .get_mut(&parts.profile_id)
+                .and_then(|connected| {
+                    connected
+                        .table_details
+                        .remove(&(cache_db.clone(), parts.object_name.clone()))
+                })
+        });
+
+        let held_state = HeldSidebarObjectRefreshState {
+            profile_id: parts.profile_id,
+            cache_database: cache_db.clone(),
+            object_name: parts.object_name.clone(),
+            previous_details,
+        };
+
+        let refresh_target = TaskTarget {
+            profile_id: parts.profile_id,
+            database: parts.database.clone().or_else(|| Some(cache_db.clone())),
+        };
+
+        enum RefreshObjectJob {
+            Table(FetchTableDetailsParams),
+            View(Arc<dyn Connection>),
+        }
+
+        let job = match node_id {
+            Some(SchemaNodeId::View { .. }) => self
+                .app_state
+                .read(cx)
+                .connections()
+                .get(&parts.profile_id)
+                .map(|connected| {
+                    RefreshObjectJob::View(connected.connection_for_database(&cache_db))
+                }),
+            _ => self
+                .app_state
+                .update(cx, |state, _cx| {
+                    state
+                        .prepare_fetch_table_details(
+                            parts.profile_id,
+                            &cache_db,
+                            Some(&parts.schema_name),
+                            &parts.object_name,
+                        )
+                        .map(RefreshObjectJob::Table)
+                })
+                .ok(),
+        };
+
+        let Some(job) = job else {
+            if let Some(previous_details) = held_state.previous_details.clone() {
+                self.app_state.update(cx, |state, _cx| {
+                    state.set_table_details(
+                        held_state.profile_id,
+                        held_state.cache_database.clone(),
+                        held_state.object_name.clone(),
+                        previous_details,
+                    );
+                });
+            }
+
+            self.pending_toast = Some(PendingToast {
+                message: "Failed to prepare schema object refresh".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            return;
+        };
+
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
+            let task = state.start_task_for_target(
+                TaskKind::SchemaRefresh,
+                format!("Refreshing schema object: {}", parts.object_name),
+                Some(refresh_target),
+            );
+            cx.emit(AppStateChanged);
+            task
+        });
+
+        self.loading_items.insert(item_id.to_string());
+        self.refresh_tree(cx);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+        let item_id = item_id.to_string();
+        let schema_name = parts.schema_name.clone();
+        let profile_id = parts.profile_id;
+
+        let operation_task = cx.spawn(async move |_this, cx| {
+            let result = match job {
+                RefreshObjectJob::Table(params) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            params
+                                .execute()
+                                .map(SchemaObjectRefreshResult::TableDetails)
+                        })
+                        .await
+                }
+                RefreshObjectJob::View(connection) => {
+                    let cache_db = cache_db.clone();
+                    let schema_name = schema_name.clone();
+                    cx.background_executor()
+                        .spawn(async move {
+                            connection
+                                .schema()
+                                .map(|schema| {
+                                    let views = schema
+                                        .schemas()
+                                        .iter()
+                                        .find(|db_schema| db_schema.name == schema_name)
+                                        .map(|db_schema| db_schema.views.clone())
+                                        .unwrap_or_else(|| schema.views().to_vec());
+
+                                    SchemaObjectRefreshResult::Views {
+                                        profile_id,
+                                        database: cache_db,
+                                        schema_name,
+                                        views,
+                                    }
+                                })
+                                .map_err(|error| error.to_string())
+                        })
+                        .await
+                }
+            };
+
+            if let Err(update_error) = cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.clear_tracked_operation_task(task_id);
+                    sidebar.loading_items.remove(&item_id);
+
+                    if cancel_token.is_cancelled() {
+                        app_state.update(cx, |state, cx| {
+                            state.tasks_mut().cancel(task_id);
+                            if let Some(previous_details) = held_state.previous_details.clone() {
+                                state.set_table_details(
+                                    held_state.profile_id,
+                                    held_state.cache_database.clone(),
+                                    held_state.object_name.clone(),
+                                    previous_details,
+                                );
+                            }
+                            cx.emit(AppStateChanged);
+                        });
+                        sidebar.refresh_tree(cx);
+                        return;
+                    }
+
+                    match result {
+                        Ok(SchemaObjectRefreshResult::TableDetails(result)) => {
+                            app_state.update(cx, |state, cx| {
+                                state.complete_task(task_id);
+                                state.set_table_details(
+                                    result.profile_id,
+                                    result.database,
+                                    result.table,
+                                    result.details,
+                                );
+                                cx.emit(AppStateChanged);
+                            });
+                        }
+                        Ok(SchemaObjectRefreshResult::Views {
+                            profile_id,
+                            database,
+                            schema_name,
+                            views,
+                        }) => {
+                            app_state.update(cx, |state, cx| {
+                                state.complete_task(task_id);
+
+                                if let Some(connected) =
+                                    state.connections_mut().get_mut(&profile_id)
+                                {
+                                    if let Some(db_schema) =
+                                        connected.database_schemas.get_mut(&database)
+                                    {
+                                        db_schema.views = views.clone();
+                                    } else if let Some(db_connection) =
+                                        connected.database_connections.get_mut(&database)
+                                    {
+                                        if let Some(schema) = db_connection.schema.as_mut()
+                                            && let dbflux_core::DataStructure::Relational(
+                                                relational,
+                                            ) = &mut schema.structure
+                                        {
+                                            if let Some(target_schema) = relational
+                                                .schemas
+                                                .iter_mut()
+                                                .find(|db_schema| db_schema.name == schema_name)
+                                            {
+                                                target_schema.views = views.clone();
+                                            } else {
+                                                relational.views = views.clone();
+                                            }
+                                        }
+                                    } else if let Some(schema) = connected.schema.as_mut()
+                                        && let dbflux_core::DataStructure::Relational(relational) =
+                                            &mut schema.structure
+                                    {
+                                        if let Some(target_schema) = relational
+                                            .schemas
+                                            .iter_mut()
+                                            .find(|db_schema| db_schema.name == schema_name)
+                                        {
+                                            target_schema.views = views.clone();
+                                        } else {
+                                            relational.views = views.clone();
+                                        }
+                                    }
+                                }
+
+                                cx.emit(AppStateChanged);
+                            });
+                        }
+                        Err(error) => {
+                            app_state.update(cx, |state, cx| {
+                                state.fail_task(task_id, error.clone());
+                                if let Some(previous_details) = held_state.previous_details.clone()
+                                {
+                                    state.set_table_details(
+                                        held_state.profile_id,
+                                        held_state.cache_database.clone(),
+                                        held_state.object_name.clone(),
+                                        previous_details,
+                                    );
+                                }
+                                cx.emit(AppStateChanged);
+                            });
+
+                            sidebar.pending_toast = Some(PendingToast {
+                                message: format!("Failed to refresh schema object: {}", error),
+                                is_error: true,
+                            });
+                        }
+                    }
+
+                    sidebar.refresh_tree(cx);
+                });
+            }) {
+                log::warn!("Failed to apply object refresh result: {:?}", update_error);
+            }
+        });
+
+        self.track_operation_task(task_id, operation_task);
+    }
+
+    fn build_drop_operation(&self, item_id: &str, cx: &App) -> Option<SidebarDropOperation> {
+        let node_id = parse_node_id(item_id)?;
+        let profile_id = node_id.profile_id()?;
+        let connected = self.app_state.read(cx).connections().get(&profile_id)?;
+
+        match node_id {
+            SchemaNodeId::Table {
+                database,
+                schema,
+                name,
+                ..
+            } => {
+                let mut target = SchemaDropTarget::new(SchemaObjectKind::Table, name.clone())
+                    .with_schema(schema.clone());
+
+                if let Some(database_name) = database.clone() {
+                    target = target.with_database(database_name.clone());
+                }
+
+                let connection = connected
+                    .resolve_connection_for_execution(database.as_deref())
+                    .unwrap_or_else(|_| connected.connection.clone());
+
+                Some(SidebarDropOperation {
+                    profile_id,
+                    item_id: item_id.to_string(),
+                    object_name: name.clone(),
+                    cache_database: Some(database.clone().unwrap_or(schema.clone())),
+                    connection,
+                    task_target: TaskTarget {
+                        profile_id,
+                        database,
+                    },
+                    task_description: format!("Dropping table {}", name),
+                    target,
+                    is_database: false,
+                })
+            }
+            SchemaNodeId::View {
+                database,
+                schema,
+                name,
+                ..
+            } => {
+                let mut target = SchemaDropTarget::new(SchemaObjectKind::View, name.clone())
+                    .with_schema(schema.clone());
+
+                if let Some(database_name) = database.clone() {
+                    target = target.with_database(database_name.clone());
+                }
+
+                let connection = connected
+                    .resolve_connection_for_execution(database.as_deref())
+                    .unwrap_or_else(|_| connected.connection.clone());
+
+                Some(SidebarDropOperation {
+                    profile_id,
+                    item_id: item_id.to_string(),
+                    object_name: name.clone(),
+                    cache_database: Some(database.clone().unwrap_or(schema.clone())),
+                    connection,
+                    task_target: TaskTarget {
+                        profile_id,
+                        database,
+                    },
+                    task_description: format!("Dropping view {}", name),
+                    target,
+                    is_database: false,
+                })
+            }
+            SchemaNodeId::Collection { database, name, .. } => Some(SidebarDropOperation {
+                profile_id,
+                item_id: item_id.to_string(),
+                object_name: name.clone(),
+                cache_database: Some(database.clone()),
+                connection: connected
+                    .resolve_connection_for_execution(Some(&database))
+                    .unwrap_or_else(|_| connected.connection.clone()),
+                target: SchemaDropTarget::new(SchemaObjectKind::Collection, name.clone())
+                    .with_database(database.clone()),
+                task_target: TaskTarget {
+                    profile_id,
+                    database: Some(database),
+                },
+                task_description: format!("Dropping collection {}", name),
+                is_database: false,
+            }),
+            SchemaNodeId::Database { name, .. } => Some(SidebarDropOperation {
+                profile_id,
+                item_id: item_id.to_string(),
+                object_name: name.clone(),
+                cache_database: None,
+                connection: connected.connection.clone(),
+                target: SchemaDropTarget::new(SchemaObjectKind::Database, name.clone()),
+                task_target: TaskTarget {
+                    profile_id,
+                    database: Some(name.clone()),
+                },
+                task_description: format!("Dropping database {}", name),
+                is_database: true,
+            }),
+            _ => None,
+        }
+    }
+
+    fn prepare_database_drop_release(
+        state: &mut AppStateEntity,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Result<DatabaseDropReleasePlan, String> {
+        let Some(connected) = state.connections_mut().get_mut(&profile_id) else {
+            return Err(format!(
+                "No active DBFlux connection found for database '{}'",
+                database
+            ));
+        };
+
+        if let Some(connection) = connected.database_connections.remove(database) {
+            let cached_schema = connected.database_schemas.remove(database);
+            let previous_active_database = connected.active_database.clone();
+
+            if connected.active_database.as_deref() == Some(database) {
+                connected.active_database = connected
+                    .schema
+                    .as_ref()
+                    .and_then(|schema| schema.current_database().map(String::from));
+            }
+
+            return Ok(DatabaseDropReleasePlan::ConnectionPerDatabase(Box::new(
+                HeldDatabaseConnection {
+                    database: database.to_string(),
+                    connection,
+                    cached_schema,
+                    previous_active_database,
+                },
+            )));
+        }
+
+        if connected.connection.schema_loading_strategy()
+            == SchemaLoadingStrategy::ConnectionPerDatabase
+            && connected
+                .schema
+                .as_ref()
+                .and_then(|schema| schema.current_database())
+                .is_some_and(|current| current == database)
+        {
+            return Err(format!(
+                "Cannot drop database '{}' while DBFlux is still connected to it as the current session. Open another database first.",
+                database
+            ));
+        }
+
+        if connected.connection.schema_loading_strategy() == SchemaLoadingStrategy::LazyPerDatabase
+            && connected.active_database.as_deref() == Some(database)
+        {
+            return Ok(DatabaseDropReleasePlan::ActiveDatabase {
+                database: database.to_string(),
+                connection: connected.connection.clone(),
+            });
+        }
+
+        Ok(DatabaseDropReleasePlan::None)
+    }
+
+    fn restore_database_drop_release(
+        state: &mut AppStateEntity,
+        profile_id: Uuid,
+        held_connection: HeldDatabaseConnection,
+    ) {
+        let Some(connected) = state.connections_mut().get_mut(&profile_id) else {
+            log::warn!(
+                "Failed to restore released database connection for profile {}: profile missing",
+                profile_id
+            );
+            return;
+        };
+
+        let database = held_connection.database.clone();
+        connected
+            .database_connections
+            .insert(database.clone(), held_connection.connection);
+
+        if let Some(cached_schema) = held_connection.cached_schema {
+            connected.database_schemas.insert(database, cached_schema);
+        }
+
+        connected.active_database = held_connection.previous_active_database;
+    }
+
+    fn finalize_successful_database_release(
+        state: &mut AppStateEntity,
+        profile_id: Uuid,
+        database: &str,
+    ) {
+        if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
+            connected.database_schemas.remove(database);
+            connected.table_details.retain(|(db, _), _| db != database);
+
+            if connected.active_database.as_deref() == Some(database) {
+                connected.active_database = None;
+            }
+        }
+    }
+
+    /// Drop a schema object through the driver-owned schema drop API.
+    pub(super) fn execute_drop_ddl(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(operation) = self.build_drop_operation(item_id, cx) else {
+            return;
+        };
+
+        if self.app_state.read(cx).is_background_task_limit_reached() {
+            self.pending_toast = Some(PendingToast {
+                message: "Too many background tasks running, please wait".to_string(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            cx.notify();
+            return;
+        }
+
+        let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
+            let task = state.start_task_for_target(
+                TaskKind::SchemaDrop,
+                operation.task_description.clone(),
+                Some(operation.task_target.clone()),
+            );
+            cx.emit(AppStateChanged);
+            task
+        });
+
+        self.refresh_tree(cx);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+        let released_database = operation.target.name.clone();
+
+        let operation_task = cx.spawn(async move |_this, cx| {
+            let release_plan = if operation.is_database {
+                match cx.update(|cx| {
+                    app_state.update(cx, |state, _cx| {
+                        Self::prepare_database_drop_release(
+                            state,
+                            operation.profile_id,
+                            &released_database,
+                        )
+                    })
+                }) {
+                    Ok(Ok(plan)) => plan,
+                    Ok(Err(error)) => {
+                        if let Err(update_error) = cx.update(|cx| {
+                            sidebar.update(cx, |sidebar, _cx| {
+                                sidebar.clear_tracked_operation_task(task_id);
+                            });
+
+                            app_state.update(cx, |state, cx| {
+                                state.fail_task(task_id, error.clone());
+                                cx.emit(AppStateChanged);
+                            });
+
+                            sidebar.update(cx, |sidebar, cx| {
+                                sidebar.pending_toast = Some(PendingToast {
+                                    message: error,
+                                    is_error: true,
+                                });
+                                sidebar.refresh_tree(cx);
+                            });
+                        }) {
+                            log::warn!(
+                                "Failed to apply database drop release error: {:?}",
+                                update_error
+                            );
+                        }
+                        return;
+                    }
+                    Err(update_error) => {
+                        log::warn!(
+                            "Failed to prepare database drop release: {:?}",
+                            update_error
+                        );
+
+                        cx.update(|cx| {
+                            sidebar.update(cx, |sidebar, _cx| {
+                                sidebar.clear_tracked_operation_task(task_id);
+                            });
+                        })
+                        .log_if_dropped();
+
+                        return;
+                    }
+                }
+            } else {
+                DatabaseDropReleasePlan::None
+            };
+
+            let drop_result = cx
+                .background_executor()
+                .spawn({
+                    let operation = operation.clone();
+                    let cancel_token = cancel_token.clone();
+                    async move {
+                        let mut database_release_applied = false;
+
+                        if cancel_token.is_cancelled() {
+                            let held_connection = match release_plan {
+                                DatabaseDropReleasePlan::ConnectionPerDatabase(held_connection) => {
+                                    Some(*held_connection)
+                                }
+                                DatabaseDropReleasePlan::None
+                                | DatabaseDropReleasePlan::ActiveDatabase { .. } => None,
+                            };
+
+                            return DropExecutionOutcome::Cancelled { held_connection };
+                        }
+
+                        match release_plan {
+                            DatabaseDropReleasePlan::ConnectionPerDatabase(mut held_connection) => {
+                                if let Err(error) =
+                                    try_close_held_database_connection(&mut held_connection)
+                                {
+                                    return DropExecutionOutcome::Failed {
+                                        error,
+                                        held_connection: Some(*held_connection),
+                                    };
+                                }
+
+                                database_release_applied = true;
+                            }
+                            DatabaseDropReleasePlan::ActiveDatabase {
+                                database,
+                                connection,
+                            } => {
+                                if let Err(error) = connection.set_active_database(None) {
+                                    return DropExecutionOutcome::Failed {
+                                        error: format!(
+                                            "Failed to release active database '{}': {}",
+                                            database, error
+                                        ),
+                                        held_connection: None,
+                                    };
+                                }
+
+                                database_release_applied = true;
+                            }
+                            DatabaseDropReleasePlan::None => {}
+                        }
+
+                        if cancel_token.is_cancelled() {
+                            return DropExecutionOutcome::Cancelled {
+                                held_connection: None,
+                            };
+                        }
+
+                        match operation.connection.drop_schema_object(
+                            &operation.target,
+                            false,
+                            true,
+                        ) {
+                            Ok(()) => DropExecutionOutcome::Dropped {
+                                database_release_applied,
+                            },
+                            Err(error) => DropExecutionOutcome::Failed {
+                                error: error.to_string(),
+                                held_connection: None,
+                            },
+                        }
+                    }
+                })
+                .await;
+
+            if let Err(update_error) = cx.update(|cx| match drop_result {
+                DropExecutionOutcome::Dropped {
+                    database_release_applied,
+                } => {
+                    sidebar.update(cx, |sidebar, _cx| {
+                        sidebar.clear_tracked_operation_task(task_id);
+                    });
+
+                    app_state.update(cx, |state, cx| {
+                        if operation.is_database && database_release_applied {
+                            Self::finalize_successful_database_release(
+                                state,
+                                operation.profile_id,
+                                &operation.object_name,
+                            );
+                        }
+
+                        let details = build_drop_task_details(
+                            &operation.target,
+                            operation
+                                .is_database
+                                .then_some(operation.object_name.as_str()),
+                        );
+                        state.complete_task_with_details(task_id, details);
+                        cx.emit(AppStateChanged);
+                    });
+
+                    sidebar.update(cx, |sidebar, cx| {
+                        if operation.is_database {
+                            sidebar.invalidate_database_cache(
+                                operation.profile_id,
+                                &operation.object_name,
+                                cx,
+                            );
+                        } else if let Some(cache_database) = operation.cache_database.as_deref() {
+                            sidebar.invalidate_object_cache(
+                                operation.profile_id,
+                                cache_database,
+                                &operation.target,
+                                cx,
+                            );
+                        }
+
+                        sidebar.expansion_overrides.remove(&operation.item_id);
+                        sidebar.refresh_tree(cx);
+                    });
+                }
+                DropExecutionOutcome::Failed {
+                    error,
+                    held_connection,
+                } => {
+                    sidebar.update(cx, |sidebar, _cx| {
+                        sidebar.clear_tracked_operation_task(task_id);
+                    });
+
+                    if let Some(held_connection) = held_connection {
+                        app_state.update(cx, |state, _cx| {
+                            Self::restore_database_drop_release(
+                                state,
+                                operation.profile_id,
+                                held_connection,
+                            );
+                        });
+                    }
+
+                    let details = build_drop_task_details(&operation.target, None);
+
+                    app_state.update(cx, |state, cx| {
+                        state.fail_task_with_details(task_id, error.clone(), details);
+                        cx.emit(AppStateChanged);
+                    });
+
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.pending_toast = Some(PendingToast {
+                            message: format!("Failed to drop: {}", error),
+                            is_error: true,
+                        });
+                        sidebar.refresh_tree(cx);
+                    });
+                }
+                DropExecutionOutcome::Cancelled { held_connection } => {
+                    sidebar.update(cx, |sidebar, _cx| {
+                        sidebar.clear_tracked_operation_task(task_id);
+                    });
+
+                    if let Some(held_connection) = held_connection {
+                        app_state.update(cx, |state, _cx| {
+                            Self::restore_database_drop_release(
+                                state,
+                                operation.profile_id,
+                                held_connection,
+                            );
+                        });
+                    }
+
+                    if cancel_token.is_cancelled() {
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.refresh_tree(cx);
+                        });
+                        return;
+                    }
+
+                    let details = build_drop_task_details(&operation.target, None);
+
+                    app_state.update(cx, |state, cx| {
+                        state.fail_task_with_details(task_id, "Schema drop cancelled", details);
+                        cx.emit(AppStateChanged);
+                    });
+
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.pending_toast = Some(PendingToast {
+                            message: "Schema drop cancelled".to_string(),
+                            is_error: true,
+                        });
+                        sidebar.refresh_tree(cx);
+                    });
+                }
+            }) {
+                log::warn!("Failed to apply schema drop result: {:?}", update_error);
+            }
+        });
+
+        self.track_operation_task(task_id, operation_task);
     }
 }

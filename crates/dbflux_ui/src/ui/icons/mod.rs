@@ -1,3 +1,4 @@
+use dbflux_components::icon::IconSource;
 use dbflux_core::Icon;
 
 /// App-specific icons embedded from resources/icons/
@@ -429,3 +430,9 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::BrandInfluxDb,
     AppIcon::DbFlux,
 ];
+
+impl From<AppIcon> for IconSource {
+    fn from(icon: AppIcon) -> Self {
+        IconSource::Svg(icon.path().into())
+    }
+}

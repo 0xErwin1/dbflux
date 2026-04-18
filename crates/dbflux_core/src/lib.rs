@@ -56,9 +56,10 @@ pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
     ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,
     DocumentConnection, ErrorLocation, FormattedError, KeyValueApi, KeyValueConnection,
-    NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter, RelationalConnection, SchemaFeatures,
-    SchemaLoadingStrategy, ShutdownCoordinator, ShutdownPhase, TaskId, TaskKind, TaskManager,
-    TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value, sanitize_uri,
+    NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter, RelationalConnection,
+    SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind, ShutdownCoordinator,
+    ShutdownPhase, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
+    Value, sanitize_uri,
 };
 
 pub use data::{

@@ -1,5 +1,6 @@
 use crate::keymap::ContextId;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::primitives::Text;
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -767,9 +768,7 @@ impl Render for CommandPalette {
                                         .py(Spacing::LG)
                                         .flex()
                                         .justify_center()
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme.muted_foreground)
-                                        .child("No matching items"),
+                                        .child(Text::muted("No matching items")),
                                 )
                             }),
                     )
@@ -782,18 +781,16 @@ impl Render for CommandPalette {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .gap(Spacing::MD)
-                                    .child("↑↓/C-jk Navigate")
-                                    .child("↵ Execute")
-                                    .child("Esc Close"),
+                                    .child(Text::caption("↑↓/C-jk Navigate"))
+                                    .child(Text::caption("↵ Execute"))
+                                    .child(Text::caption("Esc Close")),
                             )
-                            .child(format!("{} items", self.filtered.len())),
+                            .child(Text::caption(format!("{} items", self.filtered.len()))),
                     ),
             )
             .into_any_element()

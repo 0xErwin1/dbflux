@@ -3,6 +3,7 @@ use crate::keymap::ContextId;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::Text;
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -613,24 +614,29 @@ impl HistoryModal {
                             }))
                             .child(
                                 div()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
                                     .overflow_hidden()
                                     .text_ellipsis()
-                                    .child(entry.sql_preview(60)),
+                                    .child(Text::body(entry.sql_preview(60))),
                             )
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .gap(Spacing::SM)
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .child(entry.formatted_timestamp())
+                                    .child(
+                                        Text::caption(entry.formatted_timestamp())
+                                            .font_size(FontSizes::XS),
+                                    )
                                     .when_some(entry.row_count, |d, count| {
-                                        d.child(format!("{} rows", count))
+                                        d.child(
+                                            Text::caption(format!("{} rows", count))
+                                                .font_size(FontSizes::XS),
+                                        )
                                     })
-                                    .child(format!("{}ms", entry.execution_time_ms)),
+                                    .child(
+                                        Text::caption(format!("{}ms", entry.execution_time_ms))
+                                            .font_size(FontSizes::XS),
+                                    ),
                             )
                     }))
                     .when(entries.is_empty(), |d| {
@@ -638,10 +644,8 @@ impl HistoryModal {
                             div()
                                 .px(Spacing::SM)
                                 .py(Spacing::LG)
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
                                 .text_center()
-                                .child("No history yet"),
+                                .child(Text::muted("No history yet")),
                         )
                     })
                     .into_any_element()
@@ -700,12 +704,7 @@ impl HistoryModal {
                                                 )
                                             })
                                             .when(!is_editing, |d| {
-                                                d.child(
-                                                    div()
-                                                        .text_size(FontSizes::SM)
-                                                        .text_color(theme.foreground)
-                                                        .child(entry.name.clone()),
-                                                )
+                                                d.child(Text::body(entry.name.clone()))
                                             }),
                                     )
                                     .child(
@@ -720,7 +719,7 @@ impl HistoryModal {
                                                 .rounded(Radii::SM)
                                                 .text_size(FontSizes::SM)
                                                 .when(is_favorite, |d| {
-                                                    d.text_color(gpui::rgb(0xF59E0B))
+                                                    d.text_color(cx.theme().warning)
                                                 })
                                                 .when(!is_favorite, |d| {
                                                     d.text_color(theme.muted_foreground)
@@ -736,20 +735,12 @@ impl HistoryModal {
                                         ),
                                     ),
                             )
+                            .child(Text::caption(entry.sql_preview(80)).font_size(FontSizes::XS))
                             .child(
-                                div()
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .child(entry.sql_preview(80)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::SM)
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .child(entry.formatted_last_used_at()),
+                                div().flex().items_center().gap(Spacing::SM).child(
+                                    Text::caption(entry.formatted_last_used_at())
+                                        .font_size(FontSizes::XS),
+                                ),
                             )
                     }))
                     .when(entries.is_empty(), |d| {
@@ -757,10 +748,8 @@ impl HistoryModal {
                             div()
                                 .px(Spacing::SM)
                                 .py(Spacing::LG)
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
                                 .text_center()
-                                .child("No saved queries"),
+                                .child(Text::muted("No saved queries")),
                         )
                     })
                     .into_any_element()
@@ -787,10 +776,8 @@ impl HistoryModal {
             .flex()
             .items_center()
             .justify_between()
-            .text_size(FontSizes::XS)
-            .text_color(theme.muted_foreground)
-            .child(shortcuts)
-            .child(format!("{} items", count))
+            .child(Text::caption(shortcuts))
+            .child(Text::caption(format!("{} items", count)))
     }
 
     fn render_save(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -837,9 +824,7 @@ impl HistoryModal {
                             .py(Spacing::SM)
                             .border_b_1()
                             .border_color(theme.border)
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.foreground)
-                            .child("Save Query"),
+                            .child(Text::body("Save Query")),
                     )
                     .child(div().p(Spacing::MD).child(Input::new(&input).w_full()))
                     .child(
@@ -848,9 +833,7 @@ impl HistoryModal {
                             .py(Spacing::SM)
                             .border_t_1()
                             .border_color(theme.border)
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
-                            .child("Enter to save, Esc to cancel"),
+                            .child(Text::caption("Enter to save, Esc to cancel")),
                     ),
             )
             .into_any_element()

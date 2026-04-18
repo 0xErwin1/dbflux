@@ -13,6 +13,7 @@ license.workspace = true
 [dependencies]
 gpui.workspace = true
 gpui-component.workspace = true
+dbflux_components.workspace = true
 dbflux_core.workspace = true
 dbflux_storage.workspace = true
 dbflux_app.workspace = true

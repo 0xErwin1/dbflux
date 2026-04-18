@@ -1,6 +1,56 @@
 use super::*;
+use dbflux_core::DdlCapabilities;
 
 impl Sidebar {
+    fn append_menu_section(
+        items: &mut Vec<ContextMenuItem>,
+        section: impl IntoIterator<Item = ContextMenuItem>,
+    ) {
+        let mut section_items: Vec<ContextMenuItem> = section
+            .into_iter()
+            .filter(ContextMenuItem::is_selectable)
+            .collect();
+
+        if section_items.is_empty() {
+            return;
+        }
+
+        if !items.is_empty() {
+            items.push(ContextMenuItem::separator());
+        }
+
+        items.append(&mut section_items);
+    }
+
+    fn first_selectable_index(items: &[ContextMenuItem]) -> usize {
+        items
+            .iter()
+            .position(ContextMenuItem::is_selectable)
+            .unwrap_or(0)
+    }
+
+    fn last_selectable_index(items: &[ContextMenuItem]) -> usize {
+        items
+            .iter()
+            .rposition(ContextMenuItem::is_selectable)
+            .unwrap_or(0)
+    }
+
+    fn next_selectable_index(items: &[ContextMenuItem], current_index: usize) -> Option<usize> {
+        items
+            .iter()
+            .enumerate()
+            .skip(current_index.saturating_add(1))
+            .find(|(_, item)| item.is_selectable())
+            .map(|(index, _)| index)
+    }
+
+    fn previous_selectable_index(items: &[ContextMenuItem], current_index: usize) -> Option<usize> {
+        items[..current_index]
+            .iter()
+            .rposition(ContextMenuItem::is_selectable)
+    }
+
     pub(super) fn view_table_schema(&mut self, item_id: &str, cx: &mut Context<Self>) {
         self.set_expanded(item_id, true, cx);
     }
@@ -31,7 +81,7 @@ impl Sidebar {
 
         self.context_menu = Some(ContextMenuState {
             item_id: item_id.to_string(),
-            selected_index: 0,
+            selected_index: Self::first_selectable_index(&items),
             items,
             parent_stack: Vec::new(),
             position,
@@ -47,64 +97,118 @@ impl Sidebar {
     ) -> Vec<ContextMenuItem> {
         match node_kind {
             SchemaNodeKind::Table | SchemaNodeKind::View => {
-                let mut items = vec![
-                    ContextMenuItem {
-                        label: "Open".into(),
-                        action: ContextMenuAction::Open,
-                    },
-                    ContextMenuItem {
-                        label: "View Schema".into(),
-                        action: ContextMenuAction::ViewSchema,
-                    },
-                ];
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("View Schema", ContextMenuAction::ViewSchema),
+                        ContextMenuItem::item("Refresh", ContextMenuAction::RefreshObject),
+                    ],
+                );
 
                 // Get code generators from driver (if connected)
                 let generators = self.get_code_generators_for_item(item_id, node_kind, cx);
                 if !generators.is_empty() {
-                    items.push(ContextMenuItem {
-                        label: "Generate SQL".into(),
-                        action: ContextMenuAction::Submenu(generators),
-                    });
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Generate SQL",
+                            ContextMenuAction::Submenu(generators),
+                        )
+                        .with_icon(AppIcon::Code)],
+                    );
+                }
+
+                // Drop items gated on DDL capabilities
+                if let Some(ddl) = self.get_ddl_capabilities(item_id, cx) {
+                    let drop_allowed = match node_kind {
+                        SchemaNodeKind::Table => ddl.supports_drop_table,
+                        SchemaNodeKind::View => ddl.supports_drop_view,
+                        _ => false,
+                    };
+                    if drop_allowed {
+                        let label = match node_kind {
+                            SchemaNodeKind::View => "Drop View",
+                            _ => "Drop Table",
+                        };
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::danger(label, ContextMenuAction::DropTable)],
+                        );
+                    }
                 }
 
                 items
             }
             SchemaNodeKind::Collection => {
-                vec![
-                    ContextMenuItem {
-                        label: "Open".into(),
-                        action: ContextMenuAction::Open,
-                    },
-                    ContextMenuItem {
-                        label: "Generate Query".into(),
-                        action: ContextMenuAction::Submenu(vec![
-                            ContextMenuItem {
-                                label: "find".into(),
-                                action: ContextMenuAction::GenerateCollectionCode(
-                                    CollectionCodeKind::Find,
-                                ),
-                            },
-                            ContextMenuItem {
-                                label: "insertOne".into(),
-                                action: ContextMenuAction::GenerateCollectionCode(
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Refresh",
+                        ContextMenuAction::RefreshObject,
+                    )],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Generate Query",
+                        ContextMenuAction::Submenu(vec![
+                            ContextMenuItem::item(
+                                "find",
+                                ContextMenuAction::GenerateCollectionCode(CollectionCodeKind::Find),
+                            ),
+                            ContextMenuItem::item(
+                                "insertOne",
+                                ContextMenuAction::GenerateCollectionCode(
                                     CollectionCodeKind::InsertOne,
                                 ),
-                            },
-                            ContextMenuItem {
-                                label: "updateOne".into(),
-                                action: ContextMenuAction::GenerateCollectionCode(
+                            ),
+                            ContextMenuItem::item(
+                                "updateOne",
+                                ContextMenuAction::GenerateCollectionCode(
                                     CollectionCodeKind::UpdateOne,
                                 ),
-                            },
-                            ContextMenuItem {
-                                label: "deleteOne".into(),
-                                action: ContextMenuAction::GenerateCollectionCode(
+                            ),
+                            ContextMenuItem::item(
+                                "deleteOne",
+                                ContextMenuAction::GenerateCollectionCode(
                                     CollectionCodeKind::DeleteOne,
                                 ),
-                            },
+                            ),
                         ]),
-                    },
-                ]
+                    )
+                    .with_icon(AppIcon::Code)],
+                );
+
+                // Drop collection gated on DDL capabilities
+                if self
+                    .get_ddl_capabilities(item_id, cx)
+                    .is_some_and(|ddl| ddl.supports_drop_table)
+                {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::danger(
+                            "Drop Collection",
+                            ContextMenuAction::DropCollection,
+                        )],
+                    );
+                }
+
+                items
             }
             SchemaNodeKind::Profile => {
                 let is_connected =
@@ -117,96 +221,139 @@ impl Sidebar {
                         false
                     };
 
-                let mut items = vec![];
+                let mut items = Vec::new();
+
                 if is_connected {
-                    items.push(ContextMenuItem {
-                        label: "Disconnect".into(),
-                        action: ContextMenuAction::Disconnect,
-                    });
-                    items.push(ContextMenuItem {
-                        label: "Refresh".into(),
-                        action: ContextMenuAction::Refresh,
-                    });
+                    Self::append_menu_section(
+                        &mut items,
+                        [
+                            ContextMenuItem::item("Disconnect", ContextMenuAction::Disconnect),
+                            ContextMenuItem::item("Refresh", ContextMenuAction::Refresh),
+                        ],
+                    );
                 } else {
-                    items.push(ContextMenuItem {
-                        label: "Connect".into(),
-                        action: ContextMenuAction::Connect,
-                    });
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item("Connect", ContextMenuAction::Connect)],
+                    );
                 }
-                items.push(ContextMenuItem {
-                    label: "Edit".into(),
-                    action: ContextMenuAction::Edit,
-                });
-                items.push(ContextMenuItem {
-                    label: "Duplicate".into(),
-                    action: ContextMenuAction::Duplicate,
-                });
-                items.push(ContextMenuItem {
-                    label: "Rename".into(),
-                    action: ContextMenuAction::RenameFolder, // Reuse for profile rename
-                });
-                items.push(ContextMenuItem {
-                    label: "Delete".into(),
-                    action: ContextMenuAction::Delete,
-                });
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("Edit", ContextMenuAction::Edit),
+                        ContextMenuItem::item("Duplicate", ContextMenuAction::Duplicate),
+                        ContextMenuItem::item("Rename", ContextMenuAction::RenameFolder),
+                    ],
+                );
 
                 // Add "Move to..." submenu with available folders
                 let move_to_items = self.build_move_to_submenu(item_id, cx);
                 if !move_to_items.is_empty() {
-                    items.push(ContextMenuItem {
-                        label: "Move to...".into(),
-                        action: ContextMenuAction::Submenu(move_to_items),
-                    });
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Move to...",
+                            ContextMenuAction::Submenu(move_to_items),
+                        )
+                        .with_icon(AppIcon::Folder)],
+                    );
                 }
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger("Delete", ContextMenuAction::Delete)],
+                );
 
                 items
             }
             SchemaNodeKind::Database => {
                 let is_loaded = self.is_database_schema_loaded(item_id, cx);
+                let mut items = Vec::new();
+
                 if is_loaded {
                     // Only show Close for databases that support it (MySQL/MariaDB)
                     if self.database_supports_close(item_id, cx) {
-                        vec![ContextMenuItem {
-                            label: "Close".into(),
-                            action: ContextMenuAction::CloseDatabase,
-                        }]
-                    } else {
-                        vec![]
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "Close",
+                                ContextMenuAction::CloseDatabase,
+                            )],
+                        );
+                    }
+
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Refresh",
+                            ContextMenuAction::RefreshDatabase,
+                        )],
+                    );
+
+                    // Drop Database gated on DDL capabilities
+                    if self
+                        .get_ddl_capabilities(item_id, cx)
+                        .is_some_and(|ddl| ddl.supports_drop_database)
+                    {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::danger(
+                                "Drop Database",
+                                ContextMenuAction::DropDatabase,
+                            )],
+                        );
                     }
                 } else {
-                    vec![ContextMenuItem {
-                        label: "Open".into(),
-                        action: ContextMenuAction::OpenDatabase,
-                    }]
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Open",
+                            ContextMenuAction::OpenDatabase,
+                        )],
+                    );
                 }
+
+                items
             }
             SchemaNodeKind::ConnectionFolder => {
-                let mut items = vec![
-                    ContextMenuItem {
-                        label: "New Connection".into(),
-                        action: ContextMenuAction::NewConnection,
-                    },
-                    ContextMenuItem {
-                        label: "New Folder".into(),
-                        action: ContextMenuAction::NewFolder,
-                    },
-                    ContextMenuItem {
-                        label: "Rename".into(),
-                        action: ContextMenuAction::RenameFolder,
-                    },
-                    ContextMenuItem {
-                        label: "Delete".into(),
-                        action: ContextMenuAction::DeleteFolder,
-                    },
-                ];
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("New Connection", ContextMenuAction::NewConnection),
+                        ContextMenuItem::item("New Folder", ContextMenuAction::NewFolder),
+                    ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Rename",
+                        ContextMenuAction::RenameFolder,
+                    )],
+                );
 
                 let move_to_items = self.build_move_to_submenu(item_id, cx);
                 if !move_to_items.is_empty() {
-                    items.push(ContextMenuItem {
-                        label: "Move to...".into(),
-                        action: ContextMenuAction::Submenu(move_to_items),
-                    });
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Move to...",
+                            ContextMenuAction::Submenu(move_to_items),
+                        )
+                        .with_icon(AppIcon::Folder)],
+                    );
                 }
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger(
+                        "Delete",
+                        ContextMenuAction::DeleteFolder,
+                    )],
+                );
 
                 items
             }
@@ -216,33 +363,33 @@ impl Sidebar {
                 let mut submenu = Vec::new();
 
                 if caps.contains(CodeGenCapabilities::CREATE_INDEX) {
-                    submenu.push(ContextMenuItem {
-                        label: "CREATE INDEX".into(),
-                        action: ContextMenuAction::GenerateIndexSql(IndexSqlAction::Create),
-                    });
+                    submenu.push(ContextMenuItem::item(
+                        "CREATE INDEX",
+                        ContextMenuAction::GenerateIndexSql(IndexSqlAction::Create),
+                    ));
                 }
 
                 if caps.contains(CodeGenCapabilities::DROP_INDEX) {
-                    submenu.push(ContextMenuItem {
-                        label: "DROP INDEX".into(),
-                        action: ContextMenuAction::GenerateIndexSql(IndexSqlAction::Drop),
-                    });
+                    submenu.push(ContextMenuItem::item(
+                        "DROP INDEX",
+                        ContextMenuAction::GenerateIndexSql(IndexSqlAction::Drop),
+                    ));
                 }
 
                 if caps.contains(CodeGenCapabilities::REINDEX) {
-                    submenu.push(ContextMenuItem {
-                        label: "REINDEX".into(),
-                        action: ContextMenuAction::GenerateIndexSql(IndexSqlAction::Reindex),
-                    });
+                    submenu.push(ContextMenuItem::item(
+                        "REINDEX",
+                        ContextMenuAction::GenerateIndexSql(IndexSqlAction::Reindex),
+                    ));
                 }
 
                 if submenu.is_empty() {
                     vec![]
                 } else {
-                    vec![ContextMenuItem {
-                        label: "Generate SQL".into(),
-                        action: ContextMenuAction::Submenu(submenu),
-                    }]
+                    vec![
+                        ContextMenuItem::item("Generate SQL", ContextMenuAction::Submenu(submenu))
+                            .with_icon(AppIcon::Code),
+                    ]
                 }
             }
 
@@ -251,30 +398,30 @@ impl Sidebar {
                 let mut submenu = Vec::new();
 
                 if caps.contains(CodeGenCapabilities::ADD_FOREIGN_KEY) {
-                    submenu.push(ContextMenuItem {
-                        label: "ADD CONSTRAINT".into(),
-                        action: ContextMenuAction::GenerateForeignKeySql(
+                    submenu.push(ContextMenuItem::item(
+                        "ADD CONSTRAINT",
+                        ContextMenuAction::GenerateForeignKeySql(
                             ForeignKeySqlAction::AddConstraint,
                         ),
-                    });
+                    ));
                 }
 
                 if caps.contains(CodeGenCapabilities::DROP_FOREIGN_KEY) {
-                    submenu.push(ContextMenuItem {
-                        label: "DROP CONSTRAINT".into(),
-                        action: ContextMenuAction::GenerateForeignKeySql(
+                    submenu.push(ContextMenuItem::item(
+                        "DROP CONSTRAINT",
+                        ContextMenuAction::GenerateForeignKeySql(
                             ForeignKeySqlAction::DropConstraint,
                         ),
-                    });
+                    ));
                 }
 
                 if submenu.is_empty() {
                     vec![]
                 } else {
-                    vec![ContextMenuItem {
-                        label: "Generate SQL".into(),
-                        action: ContextMenuAction::Submenu(submenu),
-                    }]
+                    vec![
+                        ContextMenuItem::item("Generate SQL", ContextMenuAction::Submenu(submenu))
+                            .with_icon(AppIcon::Code),
+                    ]
                 }
             }
 
@@ -285,97 +432,118 @@ impl Sidebar {
                 if caps.contains(CodeGenCapabilities::CREATE_TYPE)
                     && let Some(label) = self.create_type_sql_label(item_id, cx)
                 {
-                    submenu.push(ContextMenuItem {
-                        label: label.into(),
-                        action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::Create),
-                    });
+                    submenu.push(ContextMenuItem::item(
+                        label,
+                        ContextMenuAction::GenerateTypeSql(TypeSqlAction::Create),
+                    ));
                 }
 
                 if caps.contains(CodeGenCapabilities::ALTER_TYPE) && self.is_enum_type(item_id, cx)
                 {
-                    submenu.push(ContextMenuItem {
-                        label: "ADD VALUE".into(),
-                        action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::AddEnumValue),
-                    });
+                    submenu.push(ContextMenuItem::item(
+                        "ADD VALUE",
+                        ContextMenuAction::GenerateTypeSql(TypeSqlAction::AddEnumValue),
+                    ));
                 }
 
                 if caps.contains(CodeGenCapabilities::DROP_TYPE) {
-                    submenu.push(ContextMenuItem {
-                        label: "DROP TYPE".into(),
-                        action: ContextMenuAction::GenerateTypeSql(TypeSqlAction::Drop),
-                    });
+                    submenu.push(ContextMenuItem::item(
+                        "DROP TYPE",
+                        ContextMenuAction::GenerateTypeSql(TypeSqlAction::Drop),
+                    ));
                 }
 
                 if submenu.is_empty() {
                     vec![]
                 } else {
-                    vec![ContextMenuItem {
-                        label: "Generate SQL".into(),
-                        action: ContextMenuAction::Submenu(submenu),
-                    }]
+                    vec![
+                        ContextMenuItem::item("Generate SQL", ContextMenuAction::Submenu(submenu))
+                            .with_icon(AppIcon::Code),
+                    ]
                 }
             }
 
             SchemaNodeKind::ScriptsFolder => {
-                let mut items = vec![
-                    ContextMenuItem {
-                        label: "New File".into(),
-                        action: ContextMenuAction::NewScriptFile,
-                    },
-                    ContextMenuItem {
-                        label: "New Folder".into(),
-                        action: ContextMenuAction::NewScriptFolder,
-                    },
-                ];
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("New File", ContextMenuAction::NewScriptFile),
+                        ContextMenuItem::item("New Folder", ContextMenuAction::NewScriptFolder),
+                    ],
+                );
 
                 // Only show rename/delete for subfolders, not the root
                 if let Some(SchemaNodeId::ScriptsFolder { path: Some(_) }) = parse_node_id(item_id)
                 {
-                    items.push(ContextMenuItem {
-                        label: "Rename".into(),
-                        action: ContextMenuAction::RenameScript,
-                    });
-                    items.push(ContextMenuItem {
-                        label: "Delete".into(),
-                        action: ContextMenuAction::DeleteScript,
-                    });
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Rename",
+                            ContextMenuAction::RenameScript,
+                        )],
+                    );
+
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::danger(
+                            "Delete",
+                            ContextMenuAction::DeleteScript,
+                        )],
+                    );
                 }
 
-                items.push(ContextMenuItem {
-                    label: "Reveal in File Manager".into(),
-                    action: ContextMenuAction::RevealInFileManager,
-                });
-                items.push(ContextMenuItem {
-                    label: "Copy Path".into(),
-                    action: ContextMenuAction::CopyPath,
-                });
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item(
+                            "Reveal in File Manager",
+                            ContextMenuAction::RevealInFileManager,
+                        ),
+                        ContextMenuItem::item("Copy Path", ContextMenuAction::CopyPath),
+                    ],
+                );
 
                 items
             }
 
             SchemaNodeKind::ScriptFile => {
-                vec![
-                    ContextMenuItem {
-                        label: "Open".into(),
-                        action: ContextMenuAction::OpenScript,
-                    },
-                    ContextMenuItem {
-                        label: "Rename".into(),
-                        action: ContextMenuAction::RenameScript,
-                    },
-                    ContextMenuItem {
-                        label: "Delete".into(),
-                        action: ContextMenuAction::DeleteScript,
-                    },
-                    ContextMenuItem {
-                        label: "Reveal in File Manager".into(),
-                        action: ContextMenuAction::RevealInFileManager,
-                    },
-                    ContextMenuItem {
-                        label: "Copy Path".into(),
-                        action: ContextMenuAction::CopyPath,
-                    },
-                ]
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::OpenScript)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Rename",
+                        ContextMenuAction::RenameScript,
+                    )],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item(
+                            "Reveal in File Manager",
+                            ContextMenuAction::RevealInFileManager,
+                        ),
+                        ContextMenuItem::item("Copy Path", ContextMenuAction::CopyPath),
+                    ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger(
+                        "Delete",
+                        ContextMenuAction::DeleteScript,
+                    )],
+                );
+
+                items
             }
 
             _ => vec![],
@@ -402,10 +570,10 @@ impl Sidebar {
 
         // Add "Root" option if not already at root
         if current_parent.is_some() {
-            items.push(ContextMenuItem {
-                label: "Root".into(),
-                action: ContextMenuAction::MoveToFolder(None),
-            });
+            items.push(ContextMenuItem::item(
+                "Root",
+                ContextMenuAction::MoveToFolder(None),
+            ));
         }
 
         // Add all folders (except self and descendants for folders)
@@ -427,10 +595,10 @@ impl Sidebar {
                 continue;
             }
 
-            items.push(ContextMenuItem {
-                label: folder.name.clone(),
-                action: ContextMenuAction::MoveToFolder(Some(folder.id)),
-            });
+            items.push(ContextMenuItem::item(
+                folder.name.clone(),
+                ContextMenuAction::MoveToFolder(Some(folder.id)),
+            ));
         }
 
         items
@@ -482,36 +650,48 @@ impl Sidebar {
         }
     }
 
+    /// Extract DDL capabilities from the driver metadata for the given item.
+    pub(super) fn get_ddl_capabilities(&self, item_id: &str, cx: &App) -> Option<DdlCapabilities> {
+        let profile_id = Self::extract_profile_id_from_item(item_id)?;
+        let state = self.app_state.read(cx);
+        let conn = state.connections().get(&profile_id)?;
+        conn.connection.metadata().ddl.clone()
+    }
+
     pub fn context_menu_select_next(&mut self, cx: &mut Context<Self>) {
         if let Some(ref mut menu) = self.context_menu
-            && menu.selected_index < menu.items.len().saturating_sub(1)
+            && let Some(next_index) = Self::next_selectable_index(&menu.items, menu.selected_index)
         {
-            menu.selected_index += 1;
+            menu.selected_index = next_index;
             cx.notify();
         }
     }
 
     pub fn context_menu_select_prev(&mut self, cx: &mut Context<Self>) {
         if let Some(ref mut menu) = self.context_menu
-            && menu.selected_index > 0
+            && let Some(previous_index) =
+                Self::previous_selectable_index(&menu.items, menu.selected_index)
         {
-            menu.selected_index -= 1;
+            menu.selected_index = previous_index;
             cx.notify();
         }
     }
 
     pub fn context_menu_select_first(&mut self, cx: &mut Context<Self>) {
-        if let Some(ref mut menu) = self.context_menu
-            && menu.selected_index != 0
-        {
-            menu.selected_index = 0;
-            cx.notify();
+        if let Some(ref mut menu) = self.context_menu {
+            let first = Self::first_selectable_index(&menu.items);
+
+            if menu.selected_index != first {
+                menu.selected_index = first;
+                cx.notify();
+            }
         }
     }
 
     pub fn context_menu_select_last(&mut self, cx: &mut Context<Self>) {
         if let Some(ref mut menu) = self.context_menu {
-            let last = menu.items.len().saturating_sub(1);
+            let last = Self::last_selectable_index(&menu.items);
+
             if menu.selected_index != last {
                 menu.selected_index = last;
                 cx.notify();
@@ -520,9 +700,15 @@ impl Sidebar {
     }
 
     pub fn context_menu_hover_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(ref mut menu) = self.context_menu
-            && menu.selected_index != index
-        {
+        if let Some(ref mut menu) = self.context_menu {
+            let Some(item) = menu.items.get(index) else {
+                return;
+            };
+
+            if !item.is_selectable() || menu.selected_index == index {
+                return;
+            }
+
             menu.selected_index = index;
             cx.notify();
         }
@@ -530,9 +716,16 @@ impl Sidebar {
 
     pub fn context_menu_parent_hover_at(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(ref mut menu) = self.context_menu
-            && let Some((_, parent_selected)) = menu.parent_stack.last_mut()
-            && *parent_selected != index
+            && let Some((parent_items, parent_selected)) = menu.parent_stack.last_mut()
         {
+            let Some(item) = parent_items.get(index) else {
+                return;
+            };
+
+            if !item.is_selectable() || *parent_selected == index {
+                return;
+            }
+
             *parent_selected = index;
             cx.notify();
         }
@@ -547,6 +740,10 @@ impl Sidebar {
             return;
         };
 
+        if !item.is_selectable() {
+            return;
+        }
+
         let item_id = menu.item_id.clone();
 
         match item.action {
@@ -556,7 +753,7 @@ impl Sidebar {
                 let current_index = menu.selected_index;
                 menu.parent_stack.push((current_items, current_index));
                 menu.items = sub_items;
-                menu.selected_index = 0;
+                menu.selected_index = Self::first_selectable_index(&menu.items);
                 cx.notify();
                 return;
             }
@@ -656,6 +853,27 @@ impl Sidebar {
             ContextMenuAction::CopyPath => {
                 self.copy_path_to_clipboard(&item_id, cx);
             }
+            ContextMenuAction::RefreshDatabase => {
+                self.refresh_schema_database(&item_id, cx);
+            }
+            ContextMenuAction::RefreshObject => {
+                self.refresh_schema_object(&item_id, cx);
+            }
+            ContextMenuAction::DropDatabase => {
+                self.show_ddl_confirm_modal(&item_id, "Database", cx);
+            }
+            ContextMenuAction::DropTable => {
+                let node_kind = parse_node_kind(&item_id);
+                let object_type = if node_kind == SchemaNodeKind::View {
+                    "View"
+                } else {
+                    "Table"
+                };
+                self.show_ddl_confirm_modal(&item_id, object_type, cx);
+            }
+            ContextMenuAction::DropCollection => {
+                self.show_ddl_confirm_modal(&item_id, "Collection", cx);
+            }
         }
 
         // Close menu after executing action
@@ -674,6 +892,11 @@ impl Sidebar {
                 );
                 return;
             }
+
+            if !menu.items[index].is_selectable() {
+                return;
+            }
+
             menu.selected_index = index;
         }
         self.context_menu_execute(cx);

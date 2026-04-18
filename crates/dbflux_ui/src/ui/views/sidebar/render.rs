@@ -1,5 +1,6 @@
 use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
+use dbflux_components::primitives::Text;
 
 impl Sidebar {
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -60,16 +61,22 @@ impl Sidebar {
                             .cursor_pointer()
                             .border_b_2()
                             .border_color(tab_border_color(active_tab == SidebarTab::Connections))
-                            .text_size(FontSizes::XS)
-                            .text_color(tab_text_color(active_tab == SidebarTab::Connections))
-                            .font_weight(tab_font_weight(active_tab == SidebarTab::Connections))
                             .hover(|d| d.bg(theme.secondary))
                             .on_click(move |_, _, cx| {
                                 sidebar.update(cx, |this, cx| {
                                     this.set_active_tab(SidebarTab::Connections, cx);
                                 });
                             })
-                            .child("CONNECTIONS"),
+                            .child(
+                                Text::caption("CONNECTIONS")
+                                    .font_size(FontSizes::XS)
+                                    .font_weight(tab_font_weight(
+                                        active_tab == SidebarTab::Connections,
+                                    ))
+                                    .text_color(tab_text_color(
+                                        active_tab == SidebarTab::Connections,
+                                    )),
+                            ),
                     )
                     .child(
                         div()
@@ -81,16 +88,18 @@ impl Sidebar {
                             .cursor_pointer()
                             .border_b_2()
                             .border_color(tab_border_color(active_tab == SidebarTab::Scripts))
-                            .text_size(FontSizes::XS)
-                            .text_color(tab_text_color(active_tab == SidebarTab::Scripts))
-                            .font_weight(tab_font_weight(active_tab == SidebarTab::Scripts))
                             .hover(|d| d.bg(theme.secondary))
                             .on_click(move |_, _, cx| {
                                 sidebar2.update(cx, |this, cx| {
                                     this.set_active_tab(SidebarTab::Scripts, cx);
                                 });
                             })
-                            .child("SCRIPTS"),
+                            .child(
+                                Text::caption("SCRIPTS")
+                                    .font_size(FontSizes::XS)
+                                    .font_weight(tab_font_weight(active_tab == SidebarTab::Scripts))
+                                    .text_color(tab_text_color(active_tab == SidebarTab::Scripts)),
+                            ),
                     ),
             )
             .child({
@@ -104,16 +113,14 @@ impl Sidebar {
                     .items_center()
                     .justify_center()
                     .rounded(Radii::SM)
-                    .text_size(FontSizes::LG)
-                    .text_color(theme.muted_foreground)
                     .cursor_pointer()
-                    .hover(move |d| d.bg(hover_bg).text_color(theme.foreground))
+                    .hover(move |d| d.bg(hover_bg))
                     .on_click(move |_, _, cx| {
                         sidebar_for_toggle.update(cx, |this, cx| {
                             this.toggle_add_menu(cx);
                         });
                     })
-                    .child("+")
+                    .child(Text::muted("+"))
             })
     }
 
@@ -129,13 +136,14 @@ impl Sidebar {
                         .py(Spacing::XS)
                         .border_b_1()
                         .border_color(theme.border)
-                        .bg(gpui::rgb(0x5C1F1F))
+                        .bg(theme.danger.opacity(0.15))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.foreground)
-                        .child("Press x to confirm delete, ESC to cancel"),
+                        .child(
+                            Text::caption("Press x to confirm delete, ESC to cancel")
+                                .text_color(theme.foreground),
+                        ),
                 )
             })
     }
@@ -147,7 +155,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let has_entries = self.visible_entry_count > 0;
-        let theme = cx.theme();
+        let _theme = cx.theme();
         let sidebar_for_root_drop = sidebar_entity.clone();
         let sidebar_for_clear_drop = sidebar_entity.clone();
 
@@ -194,20 +202,8 @@ impl Sidebar {
                         .justify_center()
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .text_center()
-                                .child("No connections yet"),
-                        )
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .text_center()
-                                .child("Use + to add a new connection"),
-                        ),
+                        .child(Text::muted("No connections yet"))
+                        .child(Text::caption("Use + to add a new connection")),
                 )
             })
     }
@@ -308,20 +304,10 @@ impl Sidebar {
                         .justify_center()
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.muted_foreground)
-                                .text_center()
-                                .child("No scripts yet"),
-                        )
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .text_center()
-                                .child("Use + to create a new script or import an existing file"),
-                        ),
+                        .child(Text::muted("No scripts yet"))
+                        .child(Text::caption(
+                            "Use + to create a new script or import an existing file",
+                        )),
                 )
             })
     }

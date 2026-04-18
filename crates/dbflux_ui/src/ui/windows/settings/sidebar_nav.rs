@@ -7,35 +7,31 @@ use std::collections::HashSet;
 impl SettingsCoordinator {
     #[allow(clippy::result_large_err)]
     pub(super) fn build_sidebar_tree() -> TreeNav {
-        let mut nodes = vec![TreeNavNode::leaf(
-            "general",
-            "General",
-            Some(AppIcon::Settings),
-        )];
-
-        nodes.extend([
-            TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
+        // Groups match the Figma design: NETWORK / CONNECTION / GENERAL
+        let nodes = vec![
             TreeNavNode::group(
-                "security",
-                "Security",
-                Some(AppIcon::Lock),
-                vec![TreeNavNode::leaf(
-                    "auth-profiles",
-                    "Auth Profiles",
-                    Some(AppIcon::KeyRound),
-                )],
+                "general-group",
+                "General",
+                Some(AppIcon::Settings),
+                vec![
+                    TreeNavNode::leaf("general", "General", Some(AppIcon::Settings)),
+                    TreeNavNode::leaf("keybindings", "Keybindings", Some(AppIcon::Keyboard)),
+                    TreeNavNode::leaf("audit", "Audit", Some(AppIcon::History)),
+                    TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
+                ],
             ),
             TreeNavNode::group(
                 "network",
                 "Network",
                 Some(AppIcon::Server),
                 vec![
-                    TreeNavNode::leaf("proxies", "Proxy", Some(AppIcon::Server)),
                     TreeNavNode::leaf(
                         "ssh-tunnels",
                         "SSH Tunnels",
                         Some(AppIcon::FingerprintPattern),
                     ),
+                    TreeNavNode::leaf("proxies", "Proxy", Some(AppIcon::Server)),
+                    TreeNavNode::leaf("auth-profiles", "Access Providers", Some(AppIcon::KeyRound)),
                 ],
             ),
             TreeNavNode::group(
@@ -43,9 +39,9 @@ impl SettingsCoordinator {
                 "Connection",
                 Some(AppIcon::Link2),
                 vec![
-                    TreeNavNode::leaf("services", "Services", Some(AppIcon::Plug)),
                     TreeNavNode::leaf("hooks", "Hooks", Some(AppIcon::SquareTerminal)),
                     TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
+                    TreeNavNode::leaf("services", "Services (RPC)", Some(AppIcon::Plug)),
                 ],
             ),
             #[cfg(feature = "mcp")]
@@ -59,16 +55,14 @@ impl SettingsCoordinator {
                     TreeNavNode::leaf("mcp-policies", "Policies", Some(AppIcon::ScrollText)),
                 ],
             ),
-            TreeNavNode::leaf("audit", "Audit", Some(AppIcon::History)),
-            TreeNavNode::leaf("about", "About", Some(AppIcon::Info)),
-        ]);
+        ];
 
         let mut expanded = HashSet::new();
         #[cfg(feature = "mcp")]
         expanded.insert(SharedString::from("mcp-governance"));
-        expanded.insert(SharedString::from("security"));
         expanded.insert(SharedString::from("network"));
         expanded.insert(SharedString::from("connection"));
+        expanded.insert(SharedString::from("general-group"));
 
         TreeNav::new(nodes, expanded)
     }

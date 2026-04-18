@@ -676,17 +676,25 @@ impl DataTable {
                     })
                     .child(
                         div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(if is_sorted {
-                                theme.primary
-                            } else {
-                                theme.table_head_foreground
-                            })
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
                             .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(col_spec.title.to_string()),
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(if is_sorted {
+                                        theme.primary
+                                    } else {
+                                        theme.table_head_foreground
+                                    })
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .child(col_spec.title.to_string()),
+                            ),
                     )
                     .child(
                         div()

@@ -1,6 +1,154 @@
 use super::*;
+use dbflux_core::{DbSchemaInfo, SchemaDropTarget, SchemaObjectKind};
 
 impl Sidebar {
+    fn remove_database_from_snapshot(snapshot: &mut SchemaSnapshot, database: &str) {
+        match &mut snapshot.structure {
+            dbflux_core::DataStructure::Relational(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.schemas.clear();
+                    schema.tables.clear();
+                    schema.views.clear();
+                }
+            }
+            dbflux_core::DataStructure::Document(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.collections.clear();
+                }
+            }
+            dbflux_core::DataStructure::Graph(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.node_labels.clear();
+                    schema.relationship_types.clear();
+                    schema.property_keys.clear();
+                }
+            }
+            dbflux_core::DataStructure::TimeSeries(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.measurements.clear();
+                    schema.retention_policies.clear();
+                }
+            }
+            dbflux_core::DataStructure::Vector(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.collections.clear();
+                }
+            }
+            dbflux_core::DataStructure::MultiModel(schema) => {
+                schema.databases.retain(|entry| entry.name != database);
+
+                if schema.current_database.as_deref() == Some(database) {
+                    schema.current_database = None;
+                    schema.tables.clear();
+                    schema.collections.clear();
+                    schema.graphs.clear();
+                }
+            }
+            dbflux_core::DataStructure::KeyValue(_)
+            | dbflux_core::DataStructure::WideColumn(_)
+            | dbflux_core::DataStructure::Search(_) => {}
+        }
+    }
+
+    fn remove_object_from_db_schema(db_schema: &mut DbSchemaInfo, target: &SchemaDropTarget) {
+        match target.kind {
+            SchemaObjectKind::Table | SchemaObjectKind::Collection => {
+                db_schema.tables.retain(|entry| entry.name != target.name);
+            }
+            SchemaObjectKind::View => {
+                db_schema.views.retain(|entry| entry.name != target.name);
+            }
+            SchemaObjectKind::Database => {}
+        }
+    }
+
+    fn remove_object_from_snapshot(snapshot: &mut SchemaSnapshot, target: &SchemaDropTarget) {
+        match &mut snapshot.structure {
+            dbflux_core::DataStructure::Relational(schema) => {
+                let matches_current_database = target
+                    .database
+                    .as_deref()
+                    .is_none_or(|database| schema.current_database.as_deref() == Some(database));
+
+                if !matches_current_database {
+                    return;
+                }
+
+                if let Some(schema_name) = target.schema.as_deref() {
+                    if let Some(db_schema) = schema
+                        .schemas
+                        .iter_mut()
+                        .find(|entry| entry.name == schema_name)
+                    {
+                        Self::remove_object_from_db_schema(db_schema, target);
+                    }
+                    return;
+                }
+
+                match target.kind {
+                    SchemaObjectKind::Table => {
+                        schema.tables.retain(|entry| entry.name != target.name);
+                    }
+                    SchemaObjectKind::View => {
+                        schema.views.retain(|entry| entry.name != target.name);
+                    }
+                    SchemaObjectKind::Collection | SchemaObjectKind::Database => {}
+                }
+            }
+            dbflux_core::DataStructure::Document(schema) => {
+                let matches_current_database = target
+                    .database
+                    .as_deref()
+                    .is_none_or(|database| schema.current_database.as_deref() == Some(database));
+
+                if matches_current_database && target.kind == SchemaObjectKind::Collection {
+                    schema.collections.retain(|entry| entry.name != target.name);
+                }
+            }
+            dbflux_core::DataStructure::MultiModel(schema) => {
+                let matches_current_database = target
+                    .database
+                    .as_deref()
+                    .is_none_or(|database| schema.current_database.as_deref() == Some(database));
+
+                if !matches_current_database {
+                    return;
+                }
+
+                match target.kind {
+                    SchemaObjectKind::Table => {
+                        schema.tables.retain(|entry| entry.name != target.name);
+                    }
+                    SchemaObjectKind::Collection => {
+                        schema.collections.retain(|entry| entry.name != target.name);
+                    }
+                    SchemaObjectKind::View | SchemaObjectKind::Database => {}
+                }
+            }
+            dbflux_core::DataStructure::KeyValue(_)
+            | dbflux_core::DataStructure::Graph(_)
+            | dbflux_core::DataStructure::WideColumn(_)
+            | dbflux_core::DataStructure::TimeSeries(_)
+            | dbflux_core::DataStructure::Search(_)
+            | dbflux_core::DataStructure::Vector(_) => {}
+        }
+    }
+
     pub fn expand_collapse(&mut self, cx: &mut Context<Self>) {
         let tree = self.active_tree_state().clone();
         let entry = tree.read(cx).selected_entry().cloned();
@@ -220,6 +368,84 @@ impl Sidebar {
         });
         self.syncing_expansion = false;
         cx.notify();
+    }
+
+    /// Remove cached schema data for a specific database, causing the next
+    /// expansion to re-fetch from the driver.
+    pub(super) fn invalidate_database_cache(
+        &mut self,
+        profile_id: Uuid,
+        db_name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.app_state.update(cx, |state, _cx| {
+            if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
+                conn.database_schemas.remove(db_name);
+                conn.table_details.retain(|(db, _), _| db != db_name);
+                conn.schema_types.retain(|key, _| key.database != db_name);
+                conn.schema_indexes.retain(|key, _| key.database != db_name);
+                conn.schema_foreign_keys
+                    .retain(|key, _| key.database != db_name);
+                conn.database_connections.remove(db_name);
+
+                if let Some(schema) = conn.schema.as_mut() {
+                    Self::remove_database_from_snapshot(schema, db_name);
+                }
+            }
+        });
+    }
+
+    /// Remove the cached column/index details for a single table or collection,
+    /// so the next expansion re-fetches from the driver.
+    pub(super) fn invalidate_object_cache(
+        &mut self,
+        profile_id: Uuid,
+        cache_db: &str,
+        target: &SchemaDropTarget,
+        cx: &mut Context<Self>,
+    ) {
+        self.app_state.update(cx, |state, _cx| {
+            if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
+                let key = (cache_db.to_string(), target.name.clone());
+                conn.table_details.remove(&key);
+
+                if target.kind == SchemaObjectKind::Table {
+                    let target_schema = target.schema.as_deref();
+
+                    conn.schema_indexes.retain(|key, indexes| {
+                        if key.database != cache_db || key.schema.as_deref() != target_schema {
+                            return true;
+                        }
+
+                        indexes.retain(|index| index.table_name != target.name);
+                        !indexes.is_empty()
+                    });
+
+                    conn.schema_foreign_keys.retain(|key, foreign_keys| {
+                        if key.database != cache_db || key.schema.as_deref() != target_schema {
+                            return true;
+                        }
+
+                        foreign_keys.retain(|foreign_key| foreign_key.table_name != target.name);
+                        !foreign_keys.is_empty()
+                    });
+                }
+
+                if let Some(db_schema) = conn.database_schemas.get_mut(cache_db) {
+                    Self::remove_object_from_db_schema(db_schema, target);
+                }
+
+                if let Some(db_conn) = conn.database_connections.get_mut(cache_db)
+                    && let Some(schema) = db_conn.schema.as_mut()
+                {
+                    Self::remove_object_from_snapshot(schema, target);
+                }
+
+                if let Some(schema) = conn.schema.as_mut() {
+                    Self::remove_object_from_snapshot(schema, target);
+                }
+            }
+        });
     }
 
     fn cleanup_stale_overrides(&mut self, cx: &Context<Self>) {

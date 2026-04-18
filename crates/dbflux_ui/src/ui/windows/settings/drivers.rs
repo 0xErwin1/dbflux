@@ -7,16 +7,15 @@ use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
+use dbflux_components::controls::{Button, Checkbox, Input};
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputEvent};
+use gpui_component::input::InputEvent;
 
 const CAPABILITY_CATALOG: &[(DriverCapabilities, &str)] = &[
     (DriverCapabilities::MULTIPLE_DATABASES, "Multiple Databases"),
@@ -714,13 +713,7 @@ impl DriversSection {
                     .flex_col()
                     .gap_1()
                     .when(self.drv_entries.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .p_3()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child("No registered drivers"),
-                        )
+                        d.child(div().p_3().child(Text::muted("No registered drivers")))
                     })
                     .children(self.drv_entries.iter().enumerate().map(|(idx, entry)| {
                         let selected = self.drv_selected_idx == Some(idx);
@@ -763,18 +756,8 @@ impl DriversSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(entry.metadata.display_name.clone()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(entry.driver_key.clone()),
-                                            ),
+                                            .child(Label::new(entry.metadata.display_name.clone()))
+                                            .child(Text::caption(entry.driver_key.clone())),
                                     ),
                             )
                     })),
@@ -790,12 +773,7 @@ impl DriversSection {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("Select a driver to configure settings"),
-                );
+                .child(Text::muted("Select a driver to configure settings"));
         };
 
         let global = &self.gen_settings;
@@ -821,24 +799,9 @@ impl DriversSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(entry.metadata.display_name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(entry.driver_key.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .child(entry.metadata.description.clone()),
-                            ),
+                            .child(Text::heading(entry.metadata.display_name.clone()))
+                            .child(Text::caption(entry.driver_key.clone()))
+                            .child(Text::caption(entry.metadata.description.clone())),
                     ),
             )
             .child(
@@ -883,8 +846,7 @@ impl DriversSection {
                     },
                 )
                 .child(
-                    Button::new("save-driver-settings")
-                        .label("Save")
+                    Button::new("save-driver-settings", "Save")
                         .small()
                         .primary()
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -909,12 +871,7 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Capabilities"),
-            )
+            .child(Text::heading("Capabilities"))
             .child(
                 div().flex().flex_wrap().gap_2().children(
                     CAPABILITY_CATALOG
@@ -952,18 +909,10 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_3()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Global Overrides"),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Enable override to replace the global default for this driver."),
-            )
+            .child(Text::heading("Global Overrides"))
+            .child(Text::caption(
+                "Enable override to replace the global default for this driver.",
+            ))
             .child(
                 div()
                     .flex()
@@ -977,13 +926,7 @@ impl DriversSection {
                             .items_center()
                             .gap_3()
                             .child(div().w(px(220.0)))
-                            .child(
-                                div()
-                                    .w(px(160.0))
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("Override Value"),
-                            ),
+                            .child(div().w(px(160.0)).child(Text::caption("Override Value"))),
                     )
                     .child(
                         div()
@@ -1035,7 +978,7 @@ impl DriversSection {
                                             )),
                                     ),
                             )
-                            .child(div().w(px(220.0)).text_sm().child("Refresh policy"))
+                            .child(div().w(px(220.0)).child(Label::new("Refresh policy")))
                             .child(
                                 div()
                                     .min_w(px(160.0))
@@ -1068,9 +1011,10 @@ impl DriversSection {
                                     )
                                     .child(self.drv_refresh_policy_dropdown.clone()),
                             )
-                            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                                format!("Default: {}", policy_label(global.default_refresh_policy)),
-                            )),
+                            .child(Text::caption(format!(
+                                "Default: {}",
+                                policy_label(global.default_refresh_policy)
+                            ))),
                     )
                     .child(
                         div()
@@ -1122,7 +1066,11 @@ impl DriversSection {
                                             )),
                                     ),
                             )
-                            .child(div().w(px(220.0)).text_sm().child("Refresh interval (sec)"))
+                            .child(
+                                div()
+                                    .w(px(220.0))
+                                    .child(Label::new("Refresh interval (sec)")),
+                            )
                             .child(
                                 div()
                                     .w(px(160.0))
@@ -1159,9 +1107,10 @@ impl DriversSection {
                                             .disabled(!self.drv_override_refresh_interval),
                                     ),
                             )
-                            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                                format!("Default: {}", global.default_refresh_interval_secs),
-                            )),
+                            .child(Text::caption(format!(
+                                "Default: {}",
+                                global.default_refresh_interval_secs
+                            ))),
                     )
                     .child(
                         div()
@@ -1173,8 +1122,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(220.0))
-                                    .text_sm()
-                                    .child("Confirm dangerous queries"),
+                                    .child(Label::new("Confirm dangerous queries")),
                             )
                             .child(
                                 div()
@@ -1203,12 +1151,10 @@ impl DriversSection {
                                     )
                                     .child(self.drv_confirm_dangerous_dropdown.clone()),
                             )
-                            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                                format!(
-                                    "Default: {}",
-                                    bool_label(global.confirm_dangerous_queries)
-                                ),
-                            )),
+                            .child(Text::caption(format!(
+                                "Default: {}",
+                                bool_label(global.confirm_dangerous_queries)
+                            ))),
                     )
                     .child(
                         div()
@@ -1217,7 +1163,7 @@ impl DriversSection {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(div().w(px(220.0)).text_sm().child("Require WHERE"))
+                            .child(div().w(px(220.0)).child(Label::new("Require WHERE")))
                             .child(
                                 div()
                                     .w(px(160.0))
@@ -1245,9 +1191,10 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_where_dropdown.clone()),
                             )
-                            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                                format!("Default: {}", bool_label(global.dangerous_requires_where)),
-                            )),
+                            .child(Text::caption(format!(
+                                "Default: {}",
+                                bool_label(global.dangerous_requires_where)
+                            ))),
                     )
                     .child(
                         div()
@@ -1256,7 +1203,7 @@ impl DriversSection {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(div().w(px(220.0)).text_sm().child("Require preview"))
+                            .child(div().w(px(220.0)).child(Label::new("Require preview")))
                             .child(
                                 div()
                                     .w(px(160.0))
@@ -1284,12 +1231,10 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_preview_dropdown.clone()),
                             )
-                            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                                format!(
-                                    "Default: {}",
-                                    bool_label(global.dangerous_requires_preview)
-                                ),
-                            )),
+                            .child(Text::caption(format!(
+                                "Default: {}",
+                                bool_label(global.dangerous_requires_preview)
+                            ))),
                     ),
             )
     }
@@ -1305,30 +1250,15 @@ impl DriversSection {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("Driver Settings"),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("No custom settings for this driver."),
-                );
+                .child(Text::heading("Driver Settings"))
+                .child(Text::caption("No custom settings for this driver."));
         };
 
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Driver Settings"),
-            )
+            .child(Text::heading("Driver Settings"))
             .children(
                 schema
                     .tabs
@@ -1401,7 +1331,7 @@ impl DriversSection {
                                                 .flex_col()
                                                 .gap_1()
                                                 .opacity(if enabled { 1.0 } else { 0.6 })
-                                                .child(div().text_sm().child(field.label.clone()))
+                                                .child(Label::new(field.label.clone()))
                                                 .child(div().w(px(240.0)).child(dropdown))
                                                 .into_any_element(),
                                         )
@@ -1414,7 +1344,7 @@ impl DriversSection {
                                                 .flex()
                                                 .flex_col()
                                                 .gap_1()
-                                                .child(div().text_sm().child(field.label.clone()))
+                                                .child(Label::new(field.label.clone()))
                                                 .child(
                                                     Input::new(&input).small().disabled(!enabled),
                                                 )

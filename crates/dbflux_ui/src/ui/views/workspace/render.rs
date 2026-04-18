@@ -1,5 +1,6 @@
 use super::*;
 use crate::platform;
+use dbflux_components::primitives::Text;
 
 impl Workspace {
     fn render_panel_header(
@@ -233,17 +234,10 @@ impl Render for Workspace {
                                         .size_16()
                                         .text_color(muted_fg.opacity(0.5)),
                                 )
+                                .child(Text::muted("No documents open"))
                                 .child(
-                                    div()
-                                        .text_color(muted_fg)
-                                        .text_sm()
-                                        .child("No documents open"),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(muted_fg.opacity(0.7))
-                                        .text_xs()
-                                        .child("Press Ctrl+N to create a new query"),
+                                    Text::caption("Press Ctrl+N to create a new query")
+                                        .text_color(muted_fg.opacity(0.7)),
                                 ),
                         ),
                 )
@@ -577,7 +571,7 @@ impl Render for Workspace {
                 #[cfg(feature = "mcp")]
                 {
                     root.when_some(self.active_governance_panel, |root, panel| {
-                        let close_entity = cx.entity().clone();
+                        let _close_entity = cx.entity().clone();
                         let title = match panel {
                             super::GovernancePanel::Approvals => "MCP Approvals",
                         };
@@ -620,30 +614,7 @@ impl Render for Workspace {
                                                 .justify_between()
                                                 .border_b_1()
                                                 .border_color(theme.border)
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .child(title),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .cursor_pointer()
-                                                        .px(Spacing::SM)
-                                                        .py(Spacing::XS)
-                                                        .rounded(Radii::SM)
-                                                        .hover(|div| div.bg(theme.secondary))
-                                                        .on_mouse_down(
-                                                            MouseButton::Left,
-                                                            cx.listener(move |_, _, _, cx| {
-                                                                close_entity.update(cx, |this, cx| {
-                                                            this.active_governance_panel = None;
-                                                            cx.notify();
-                                                        });
-                                                            }),
-                                                        )
-                                                        .child("Close"),
-                                                ),
+                                                .child(Text::heading(title)),
                                         )
                                         .child(div().flex_1().min_h_0().child(content)),
                                 ),
@@ -785,18 +756,22 @@ impl Render for Workspace {
             })
             // Delete confirmation modal rendered at workspace level for proper centering
             .when_some(
-                self.sidebar.read(cx).delete_modal_info(),
-                |el, (item_name, is_folder)| {
+                self.sidebar.read(cx).delete_modal_state(),
+                |el, modal_state| {
                     let theme = cx.theme();
                     let sidebar_confirm = self.sidebar.clone();
                     let sidebar_cancel = self.sidebar.clone();
 
-                    let message = if is_folder {
-                        format!("Delete folder \"{}\"?", item_name)
+                    let message = if modal_state.is_ddl {
+                        let object_type = modal_state.object_type.unwrap_or("Object");
+                        format!("Drop {} \"{}\"?", object_type, modal_state.item_name)
+                    } else if modal_state.is_folder {
+                        format!("Delete folder \"{}\"?", modal_state.item_name)
                     } else {
-                        format!("Delete connection \"{}\"?", item_name)
+                        format!("Delete connection \"{}\"?", modal_state.item_name)
                     };
 
+                    let confirm_label = if modal_state.is_ddl { "Drop" } else { "Delete" };
                     let btn_hover = theme.muted;
 
                     el.child(
@@ -815,7 +790,11 @@ impl Render for Workspace {
                                 div()
                                     .bg(theme.sidebar)
                                     .border_1()
-                                    .border_color(theme.border)
+                                    .border_color(if modal_state.is_ddl {
+                                        theme.danger
+                                    } else {
+                                        theme.border
+                                    })
                                     .rounded(Radii::MD)
                                     .p(Spacing::MD)
                                     .min_w(px(250.0))
@@ -829,16 +808,19 @@ impl Render for Workspace {
                                             .gap_2()
                                             .child(
                                                 svg()
-                                                    .path(AppIcon::TriangleAlert.path())
+                                                    .path(if modal_state.is_ddl {
+                                                        AppIcon::Delete.path()
+                                                    } else {
+                                                        AppIcon::TriangleAlert.path()
+                                                    })
                                                     .size_5()
-                                                    .text_color(theme.warning),
+                                                    .text_color(if modal_state.is_ddl {
+                                                        theme.danger
+                                                    } else {
+                                                        theme.warning
+                                                    }),
                                             )
-                                            .child(
-                                                div()
-                                                    .text_size(FontSizes::SM)
-                                                    .text_color(theme.foreground)
-                                                    .child(message),
-                                            ),
+                                            .child(Text::body(message)),
                                     )
                                     .child(
                                         div()
@@ -897,7 +879,7 @@ impl Render for Workspace {
                                                             .size_4()
                                                             .text_color(theme.background),
                                                     )
-                                                    .child("Delete"),
+                                                    .child(confirm_label),
                                             ),
                                     ),
                             ),

@@ -43,18 +43,19 @@ impl Sidebar {
         let mut items_with_order: Vec<_> = generators
             .into_iter()
             .map(|g| {
-                let label = if g.destructive {
-                    format!("\u{26A0} {}", g.label)
+                let item = if g.destructive {
+                    ContextMenuItem::danger(
+                        g.label.to_string(),
+                        ContextMenuAction::GenerateCode(g.id.to_string()),
+                    )
                 } else {
-                    g.label.to_string()
+                    ContextMenuItem::item(
+                        g.label.to_string(),
+                        ContextMenuAction::GenerateCode(g.id.to_string()),
+                    )
                 };
-                (
-                    g.order,
-                    ContextMenuItem {
-                        label,
-                        action: ContextMenuAction::GenerateCode(g.id.to_string()),
-                    },
-                )
+
+                (g.order, item)
             })
             .collect();
 
@@ -75,13 +76,19 @@ impl Sidebar {
             };
 
             for (order, generator_id, label) in query_items.iter().copied() {
-                items_with_order.push((
-                    order,
-                    ContextMenuItem {
-                        label: label.to_string(),
-                        action: ContextMenuAction::GenerateCode(generator_id.to_string()),
-                    },
-                ));
+                let item = if generator_id == "delete" {
+                    ContextMenuItem::danger(
+                        label.to_string(),
+                        ContextMenuAction::GenerateCode(generator_id.to_string()),
+                    )
+                } else {
+                    ContextMenuItem::item(
+                        label.to_string(),
+                        ContextMenuAction::GenerateCode(generator_id.to_string()),
+                    )
+                };
+
+                items_with_order.push((order, item));
             }
         }
 

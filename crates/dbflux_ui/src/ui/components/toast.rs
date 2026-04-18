@@ -1,12 +1,15 @@
 use std::time::Duration;
 
+use dbflux_components::icon::IconSource;
+use dbflux_components::primitives::{IconButton, Text};
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, Global, Hsla, MouseButton, Window, px, rems};
+use gpui::{App, Context, Entity, Global, Hsla, Window, px, rems};
 use gpui_component::ActiveTheme;
+use gpui_component::IconNamed;
 
 use crate::ui::AsyncUpdateResultExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use crate::ui::tokens::{Radii, Spacing};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
@@ -34,6 +37,10 @@ impl ToastKind {
             Self::Warning => theme.warning,
             Self::Error => theme.danger,
         }
+    }
+
+    fn icon_source(self) -> IconSource {
+        IconSource::Svg(self.icon().path().into())
     }
 
     fn auto_dismiss(self) -> bool {
@@ -139,32 +146,19 @@ impl Render for ToastHost {
             .map(|toast| {
                 let toast_id = toast.id;
                 let accent = toast.kind.color(cx);
-                let icon_path = toast.kind.icon().path();
+                let icon_source = toast.kind.icon_source();
 
                 let background = mix_color(theme.popover, accent, 0.15);
                 let border_color = with_alpha(accent, 0.5);
 
-                let close_button = gpui::div()
-                    .id(("toast-close", toast_id))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(rems(1.5))
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(with_alpha(accent, 0.2)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |host, _, _, cx| {
-                            host.dismiss(toast_id, cx);
-                        }),
-                    )
-                    .child(
-                        gpui::svg()
-                            .path(AppIcon::X.path())
-                            .size(px(14.0))
-                            .text_color(theme.muted_foreground),
-                    );
+                let close_button = IconButton::new(
+                    ("toast-close", toast_id),
+                    IconSource::Svg(AppIcon::X.path().into()),
+                )
+                .icon_size(px(14.0))
+                .on_click(cx.listener(move |host, _, _, cx| {
+                    host.dismiss(toast_id, cx);
+                }));
 
                 let is_error = matches!(toast.kind, ToastKind::Error);
 
@@ -183,22 +177,26 @@ impl Render for ToastHost {
                     .bg(background)
                     .rounded(Radii::LG)
                     .shadow_lg()
-                    .child(
-                        gpui::svg()
-                            .path(icon_path)
+                    .child(match icon_source {
+                        IconSource::Svg(path) => gpui::svg()
+                            .path(path)
                             .size(px(18.0))
                             .flex_shrink_0()
                             .mt(px(2.0))
                             .text_color(accent),
-                    )
+                        IconSource::Named(name) => gpui::svg()
+                            .path(name.path())
+                            .size(px(18.0))
+                            .flex_shrink_0()
+                            .mt(px(2.0))
+                            .text_color(accent),
+                    })
                     .child(
                         gpui::div()
                             .flex_1()
                             .min_w_0()
                             .when(!is_error, |d| d.overflow_hidden().text_ellipsis())
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.foreground)
-                            .child(toast.message.clone()),
+                            .child(Text::body(toast.message.clone())),
                     )
                     .child(close_button)
                     .into_any_element()

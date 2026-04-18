@@ -1,0 +1,15 @@
+[package]
+name = "dbflux_components"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Pure UI components and design tokens for DBFlux"
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true

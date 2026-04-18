@@ -1,4 +1,6 @@
 use super::*;
+use dbflux_components::controls::Button;
+use dbflux_components::primitives::{Badge, BadgeVariant, Text};
 use gpui_component::scroll::ScrollableElement;
 
 impl CodeDocument {
@@ -64,17 +66,11 @@ impl CodeDocument {
                     .py(Spacing::XS)
                     .rounded(Radii::SM)
                     .cursor_pointer()
-                    .text_xs()
                     .when(run_enabled, |el| {
                         el.bg(if is_executing { theme.danger } else { primary })
-                            .text_color(theme.background)
                             .hover(|d| d.opacity(0.9))
                     })
-                    .when(!run_enabled, |el| {
-                        el.bg(btn_bg)
-                            .text_color(theme.muted_foreground)
-                            .cursor_not_allowed()
-                    })
+                    .when(!run_enabled, |el| el.bg(btn_bg).cursor_not_allowed())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if this.state == DocumentState::Executing {
                             this.cancel_query(cx);
@@ -92,7 +88,11 @@ impl CodeDocument {
                                 theme.muted_foreground
                             }),
                     )
-                    .child(run_label),
+                    .child(Text::caption(run_label).text_color(if run_enabled {
+                        theme.background
+                    } else {
+                        theme.muted_foreground
+                    })),
             )
             .when(is_db_language && !is_executing, |el| {
                 el.child(
@@ -105,9 +105,7 @@ impl CodeDocument {
                         .py(Spacing::XS)
                         .rounded(Radii::SM)
                         .cursor_pointer()
-                        .text_xs()
                         .bg(btn_bg)
-                        .text_color(theme.foreground)
                         .hover(|d| d.bg(theme.secondary_hover))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_query_in_new_tab(window, cx);
@@ -118,7 +116,7 @@ impl CodeDocument {
                                 .size_3()
                                 .text_color(theme.foreground),
                         )
-                        .child("New tab"),
+                        .child(Text::caption("New tab").text_color(theme.foreground)),
                 )
                 .child(
                     div()
@@ -130,9 +128,7 @@ impl CodeDocument {
                         .py(Spacing::XS)
                         .rounded(Radii::SM)
                         .cursor_pointer()
-                        .text_xs()
                         .bg(btn_bg)
-                        .text_color(theme.foreground)
                         .hover(|d| d.bg(theme.secondary_hover))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_selected_query(window, cx);
@@ -143,15 +139,10 @@ impl CodeDocument {
                                 .size_3()
                                 .text_color(theme.foreground),
                         )
-                        .child("Selection"),
+                        .child(Text::caption("Selection").text_color(theme.foreground)),
                 )
             })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(shortcut_hint),
-            )
+            .child(Text::caption(shortcut_hint))
             .when(is_db_language, |el| {
                 el.child(
                     div()
@@ -172,9 +163,7 @@ impl CodeDocument {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_sm()
                                 .cursor_pointer()
-                                .text_color(theme.foreground)
                                 .hover(|d| d.bg(theme.accent.opacity(0.08)))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if this.runner.is_primary_active() {
@@ -189,7 +178,7 @@ impl CodeDocument {
                                         .size_3()
                                         .text_color(theme.foreground),
                                 )
-                                .child(refresh_label),
+                                .child(Text::body(refresh_label)),
                         )
                         .child(div().w(px(1.0)).h_full().bg(theme.input))
                         .child(
@@ -202,21 +191,9 @@ impl CodeDocument {
             })
             .child(div().flex_1())
             .when_some(execution_time, |el, duration| {
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("{:.2}s", duration.as_secs_f64())),
-                )
+                el.child(Text::caption(format!("{:.2}s", duration.as_secs_f64())))
             })
-            .when(self.show_saved_label, |el| {
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Saved"),
-                )
-            })
+            .when(self.show_saved_label, |el| el.child(Text::caption("Saved")))
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -324,41 +301,25 @@ impl CodeDocument {
                     .py(Spacing::SM)
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.foreground)
-                            .child(status),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("{} lines", line_count)),
-                    )
+                    .child(Text::body(status).font_weight(FontWeight::MEDIUM))
+                    .child(Text::caption(format!("{} lines", line_count)))
                     .when(live_output.has_stderr(), |el| {
-                        el.child(div().text_xs().text_color(theme.warning).child("stderr"))
+                        el.child(Badge::new("stderr", BadgeVariant::Warning))
                     }),
             )
             .child(
-                div().flex_1().overflow_y_scrollbar().p(Spacing::MD).child(
-                    div()
-                        .font_family("monospace")
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.foreground)
-                        .whitespace_nowrap()
-                        .child(text),
-                ),
+                div()
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .p(Spacing::MD)
+                    .child(div().whitespace_nowrap().child(Text::code(text))),
             )
             .when(live_output.is_truncated(), |el| {
                 el.child(
                     div()
                         .px(Spacing::MD)
                         .pb(Spacing::SM)
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("(truncated at 5000 lines)"),
+                        .child(Text::caption("(truncated at 5000 lines)")),
                 )
             })
     }
@@ -396,18 +357,18 @@ impl CodeDocument {
                             .py(Spacing::XS)
                             .rounded(Radii::SM)
                             .cursor_pointer()
-                            .text_xs()
-                            .when(is_active, |el| {
-                                el.bg(theme.secondary).text_color(theme.foreground)
-                            })
+                            .when(is_active, |el| el.bg(theme.secondary))
                             .when(!is_active, |el| {
-                                el.text_color(theme.muted_foreground)
-                                    .hover(|d| d.bg(theme.secondary.opacity(0.5)))
+                                el.hover(|d| d.bg(theme.secondary.opacity(0.5)))
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.activate_result_tab(i, cx);
                             }))
-                            .child(tab.title.clone())
+                            .child(Text::caption(tab.title.clone()).text_color(if is_active {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            }))
                             .child(
                                 div()
                                     .id(ElementId::Name(
@@ -508,13 +469,11 @@ impl CodeDocument {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(format!(
+                    .child(Text::caption(format!(
                         "{} result{}",
                         tab_count,
                         if tab_count == 1 { "" } else { "s" }
-                    )),
+                    ))),
             )
             .child(div().flex_1())
             .child(
@@ -552,35 +511,25 @@ impl CodeDocument {
             .justify_center()
             .gap_2()
             .child(
-                div()
+                Text::body("Query Error")
                     .text_color(error_color)
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Query Error"),
+                    .font_weight(FontWeight::MEDIUM),
             )
             .child(
                 div()
-                    .text_color(muted_fg)
-                    .text_sm()
                     .max_w(px(500.0))
                     .text_center()
-                    .child(error.to_string()),
+                    .child(Text::body(error.to_string()).text_color(muted_fg)),
             )
     }
 
-    fn render_empty_results(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let muted_fg = cx.theme().muted_foreground;
-
+    fn render_empty_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
             .items_center()
             .justify_center()
-            .child(
-                div()
-                    .text_color(muted_fg)
-                    .child("Run a query to see results"),
-            )
+            .child(Text::muted("Run a query to see results"))
     }
 
     fn render_dangerous_query_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -612,8 +561,6 @@ impl CodeDocument {
                 (title, p.kind.message())
             })
             .unwrap_or(("Warning", "This query may be dangerous."));
-
-        let btn_hover = theme.muted;
 
         div()
             .id("dangerous-query-modal-overlay")
@@ -649,20 +596,9 @@ impl CodeDocument {
                                     .size_5()
                                     .text_color(theme.warning),
                             )
-                            .child(
-                                div()
-                                    .text_size(FontSizes::SM)
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.foreground)
-                                    .child(title),
-                            ),
+                            .child(Text::heading(title)),
                     )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child(message),
-                    )
+                    .child(Text::caption(message))
                     .child(
                         div()
                             .flex()
@@ -678,61 +614,33 @@ impl CodeDocument {
                                     .py(Spacing::XS)
                                     .rounded(Radii::SM)
                                     .cursor_pointer()
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(move |_, window, cx| {
                                         entity_suppress.update(cx, |doc, cx| {
                                             doc.confirm_dangerous_query(true, window, cx);
                                         });
                                     })
-                                    .child("Don't ask again"),
+                                    .child(Text::caption("Don't ask again")),
                             )
                             .child(
                                 div()
                                     .flex()
                                     .gap(Spacing::SM)
+                                    .child(Button::new("dangerous-cancel-btn", "Cancel").on_click(
+                                        move |_, _, cx| {
+                                            entity_cancel.update(cx, |doc, cx| {
+                                                doc.cancel_dangerous_query(cx);
+                                            });
+                                        },
+                                    ))
                                     .child(
-                                        div()
-                                            .id("dangerous-cancel-btn")
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .px(Spacing::SM)
-                                            .py(Spacing::XS)
-                                            .rounded(Radii::SM)
-                                            .cursor_pointer()
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.muted_foreground)
-                                            .bg(theme.secondary)
-                                            .hover(|d| d.bg(btn_hover))
-                                            .on_click(move |_, _, cx| {
-                                                entity_cancel.update(cx, |doc, cx| {
-                                                    doc.cancel_dangerous_query(cx);
-                                                });
-                                            })
-                                            .child("Cancel"),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("dangerous-confirm-btn")
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .px(Spacing::SM)
-                                            .py(Spacing::XS)
-                                            .rounded(Radii::SM)
-                                            .cursor_pointer()
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.background)
-                                            .bg(theme.warning)
-                                            .hover(|d| d.opacity(0.9))
+                                        Button::new("dangerous-confirm-btn", "Run Anyway")
+                                            .danger()
                                             .on_click(move |_, window, cx| {
                                                 entity.update(cx, |doc, cx| {
                                                     doc.confirm_dangerous_query(false, window, cx);
                                                 });
-                                            })
-                                            .child("Run Anyway"),
+                                            }),
                                     ),
                             ),
                     ),

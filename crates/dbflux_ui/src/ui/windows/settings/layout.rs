@@ -1,31 +1,22 @@
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
 
+use crate::ui::theme::ghost_border_color;
+
 pub(super) fn section_header(
     title: impl Into<SharedString>,
     subtitle: impl Into<SharedString>,
-    theme: &gpui_component::Theme,
+    _theme: &gpui_component::Theme,
 ) -> Div {
-    let title: SharedString = title.into();
-    let subtitle: SharedString = subtitle.into();
-
     div()
-        .p_4()
+        .px_6()
+        .py_5()
         .border_b_1()
-        .border_color(theme.border)
-        .child(
-            div()
-                .text_lg()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
-        )
-        .child(
-            div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(subtitle),
-        )
+        .border_color(ghost_border_color())
+        .child(Text::heading(title))
+        .child(div().mt_1().child(Text::muted(subtitle)))
 }
 
 pub(super) fn section_container(content: impl IntoElement) -> Div {

@@ -6,15 +6,15 @@ use super::section_trait::SectionFocusEvent;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{Button, Checkbox, Input};
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::{AccessKind, AuthProfile, FormFieldKind, ImportableProfile};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::InputState;
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable};
+use gpui_component::{ActiveTheme, Icon, IconName};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -853,31 +853,20 @@ impl AuthProfilesSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(format!(
-                                        "Detected {} importable profile{}",
-                                        detected_profiles.len(),
-                                        if detected_profiles.len() == 1 {
-                                            ""
-                                        } else {
-                                            "s"
-                                        }
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(names_preview),
-                            ),
+                            .child(Label::new(format!(
+                                "Detected {} importable profile{}",
+                                detected_profiles.len(),
+                                if detected_profiles.len() == 1 {
+                                    ""
+                                } else {
+                                    "s"
+                                }
+                            )))
+                            .child(Text::caption(names_preview)),
                     ),
             )
             .child(
-                Button::new("import-detected-auth-profiles")
-                    .label("Import")
+                Button::new("import-detected-auth-profiles", "Import")
                     .small()
                     .primary()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -900,12 +889,7 @@ impl AuthProfilesSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label.to_string()),
-            )
+            .child(Label::new(label.to_string()))
             .child(
                 div()
                     .rounded(px(4.0))
@@ -935,12 +919,7 @@ impl AuthProfilesSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label.to_string()),
-            )
+            .child(Label::new(label.to_string()))
             .child(dropdown.clone())
     }
 
@@ -968,11 +947,14 @@ impl AuthProfilesSection {
                         transparent_black()
                     })
                     .child(
-                        Button::new(SharedString::from(format!("auth-provider-{}", provider_id)))
-                            .label(label)
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                        Button::new(
+                            SharedString::from(format!("auth-provider-{}", provider_id)),
+                            label,
+                        )
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
                                 this.selected_provider_id = Some(provider_id.clone());
                                 this.rebuild_form_inputs(window, cx);
 
@@ -986,7 +968,8 @@ impl AuthProfilesSection {
                                 this.reset_sso_listing_state(cx);
 
                                 cx.notify();
-                            })),
+                            },
+                        )),
                     )
             }))
     }
@@ -1019,16 +1002,10 @@ impl AuthProfilesSection {
                     .flex()
                     .flex_col()
                     .gap_2()
+                    .child(Label::new("Profiles"))
                     .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Profiles"),
-                    )
-                    .child(
-                        Button::new("new-auth-profile")
+                        Button::new("new-auth-profile", "New Auth Profile")
                             .icon(Icon::new(IconName::Plus))
-                            .label("New Auth Profile")
                             .small()
                             .w_full()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1083,18 +1060,8 @@ impl AuthProfilesSection {
                                     .flex()
                                     .flex_col()
                                     .gap_1()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(profile.name.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .child(provider_label),
-                                    ),
+                                    .child(Label::new(profile.name.clone()))
+                                    .child(Text::caption(provider_label)),
                             )
                     })),
             )
@@ -1512,21 +1479,14 @@ impl AuthProfilesSection {
                     .p_4()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_base()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(if is_editing {
-                                "Edit Auth Profile"
-                            } else {
-                                "New Auth Profile"
-                            }),
-                    )
-                    .child(
-                        div().text_sm().text_color(theme.muted_foreground).child(
-                            "Reusable authentication profile for access and value resolution",
-                        ),
-                    ),
+                    .child(Label::new(if is_editing {
+                        "Edit Auth Profile"
+                    } else {
+                        "New Auth Profile"
+                    }))
+                    .child(Text::muted(
+                        "Reusable authentication profile for access and value resolution",
+                    )),
             )
             .child(
                 div()
@@ -1553,12 +1513,7 @@ impl AuthProfilesSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Provider"),
-                            )
+                            .child(Label::new("Provider"))
                             .child(self.render_provider_selector(window, cx)),
                     )
                     .children(dynamic_fields)
@@ -1575,25 +1530,24 @@ impl AuthProfilesSection {
                                             .items_center()
                                             .gap_2()
                                             .child(
-                                                Button::new("auth-sso-login")
-                                                    .label(if self.sso_login_loading {
+                                                Button::new(
+                                                    "auth-sso-login",
+                                                    if self.sso_login_loading {
                                                         "Logging in..."
                                                     } else {
                                                         "Login"
-                                                    })
-                                                    .small()
-                                                    .primary()
-                                                    .disabled(self.sso_login_loading)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.login_sso_profile(cx);
-                                                    })),
+                                                    },
+                                                )
+                                                .small()
+                                                .primary()
+                                                .disabled(self.sso_login_loading)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.login_sso_profile(cx);
+                                                })),
                                             )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child("Runs AWS SSO login for this profile"),
-                                            ),
+                                            .child(Text::caption(
+                                                "Runs AWS SSO login for this profile",
+                                            )),
                                     )
                                     .child(self.render_dropdown_row(
                                         "SSO Account ID",
@@ -1607,31 +1561,31 @@ impl AuthProfilesSection {
                                         self.sso_accounts_error.as_ref(),
                                         |content, error| {
                                             content.child(
-                                                div().text_xs().text_color(theme.warning).child(
-                                                    format!("Account listing failed: {}", error),
-                                                ),
+                                                Text::caption(format!(
+                                                    "Account listing failed: {}",
+                                                    error
+                                                ))
+                                                .text_color(theme.warning),
                                             )
                                         },
                                     )
                                     .when_some(self.sso_roles_error.as_ref(), |content, error| {
                                         content.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.warning)
-                                                .child(format!("Role listing failed: {}", error)),
+                                            Text::caption(format!(
+                                                "Role listing failed: {}",
+                                                error
+                                            ))
+                                            .text_color(theme.warning),
                                         )
                                     })
                                     .when_some(self.sso_login_status.as_ref(), |content, status| {
-                                        content.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(if status.1 {
-                                                    theme.success
-                                                } else {
-                                                    theme.warning
-                                                })
-                                                .child(status.0.clone()),
-                                        )
+                                        content.child(Text::caption(status.0.clone()).text_color(
+                                            if status.1 {
+                                                theme.success
+                                            } else {
+                                                theme.warning
+                                            },
+                                        ))
                                     })
                             }
 
@@ -1654,7 +1608,7 @@ impl AuthProfilesSection {
                                         cx.notify();
                                     })),
                             )
-                            .child(div().text_sm().child("Enabled")),
+                            .child(Text::body("Enabled")),
                     ),
             )
             .child(
@@ -1667,8 +1621,7 @@ impl AuthProfilesSection {
                     .justify_end()
                     .when(is_editing, |root| {
                         root.child(
-                            Button::new("delete-auth-profile")
-                                .label("Delete")
+                            Button::new("delete-auth-profile", "Delete")
                                 .small()
                                 .danger()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -1677,8 +1630,7 @@ impl AuthProfilesSection {
                         )
                     })
                     .child(
-                        Button::new("cancel-auth-profile")
-                            .label("Cancel")
+                        Button::new("cancel-auth-profile", "Cancel")
                             .small()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(selected_id) = this.selected_profile_id {
@@ -1690,13 +1642,15 @@ impl AuthProfilesSection {
                             })),
                     )
                     .child(
-                        Button::new("save-auth-profile")
-                            .label(if is_editing { "Update" } else { "Create" })
-                            .small()
-                            .primary()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_profile(window, cx);
-                            })),
+                        Button::new(
+                            "save-auth-profile",
+                            if is_editing { "Update" } else { "Create" },
+                        )
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.save_profile(window, cx);
+                        })),
                     ),
             )
     }
@@ -1979,7 +1933,7 @@ impl Render for AuthProfilesSection {
                             });
                             true
                         })
-                        .child(div().text_sm().child(body)),
+                        .child(Text::body(body)),
                 )
             }),
         )

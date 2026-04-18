@@ -1,6 +1,7 @@
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
+use dbflux_components::primitives::{Label, Text};
 use dbflux_core::ServiceConfig;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::prelude::FluentBuilder;
@@ -772,13 +773,7 @@ impl ServicesSection {
                     .flex_col()
                     .gap_1()
                     .when(services.is_empty(), |container| {
-                        container.child(
-                            div()
-                                .p_4()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child("No services configured"),
-                        )
+                        container.child(div().p_4().child(Text::muted("No services configured")))
                     })
                     .children(services.iter().enumerate().map(|(idx, service)| {
                         let is_selected = editing_idx == Some(idx);
@@ -854,12 +849,7 @@ impl ServicesSection {
                                                         )
                                                     }),
                                             )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(subtitle.to_string()),
-                                            ),
+                                            .child(Text::caption(subtitle.to_string())),
                                     ),
                             )
                     })),
@@ -896,12 +886,11 @@ impl ServicesSection {
             .flex_col()
             .overflow_hidden()
             .child(
-                div().p_4().border_b_1().border_color(border).child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(title),
-                ),
+                div()
+                    .p_4()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(Text::body(title).font_weight(FontWeight::MEDIUM)),
             )
             .child(
                 div()
@@ -1029,12 +1018,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label.to_string()),
-            )
+            .child(Label::new(label.to_string()))
             .child(
                 div()
                     .rounded(px(4.0))
@@ -1108,12 +1092,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Arguments"),
-            )
+            .child(Label::new("Arguments"))
             .children(self.svc_arg_inputs.iter().enumerate().map(|(idx, input)| {
                 let is_row_at_cursor =
                     is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::Arg(idx));
@@ -1227,12 +1206,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Environment Variables"),
-            )
+            .child(Label::new("Environment Variables"))
             .children(
                 self.svc_env_key_inputs
                     .iter()
@@ -1276,12 +1250,7 @@ impl ServicesSection {
                                     )
                                     .child(Input::new(key_input).small()),
                             )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .child("="),
-                            )
+                            .child(Text::caption("="))
                             .child(
                                 div()
                                     .flex_1()

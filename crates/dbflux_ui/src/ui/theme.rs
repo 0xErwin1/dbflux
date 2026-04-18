@@ -2,6 +2,17 @@ use dbflux_core::ThemeSetting;
 use gpui::{App, Hsla, Window, hsla};
 use gpui_component::theme::{Theme, ThemeMode};
 
+/// Ghost border: `#524436` at 15% opacity. Felt-not-seen structural separator.
+/// Use instead of solid `theme.border` when separating major UI regions.
+pub fn ghost_border_color() -> Hsla {
+    rgb_to_hsla_alpha(0x524436, 0.15)
+}
+
+/// Surface highest: `#31353C`. Use for modal/overlay backgrounds to lift them above panel.
+pub fn surface_highest_color() -> Hsla {
+    rgb_to_hsla(0x31353C)
+}
+
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     apply_theme(ThemeSetting::Dark, None, cx);
@@ -72,7 +83,7 @@ fn apply_ayu_dark(cx: &mut App) {
     let accent = rgb_to_hsla(0xFFB454);
     let border = rgb_to_hsla(0x1F2430);
 
-    let raised = rgb_to_hsla(0x151E2B);
+    let raised = rgb_to_hsla(0x1C2026);
     let selection = rgb_to_hsla(0x273747);
 
     let error = rgb_to_hsla(0xF07178);
@@ -130,8 +141,8 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.info_active = rgb_to_hsla(0x479ACC);
     theme.info_foreground = rgb_to_hsla(0x0A0E14);
 
-    // Popover
-    theme.popover = panel;
+    // Popover / modal surface — elevated above panel using surface_highest (#31353C)
+    theme.popover = surface_highest_color();
     theme.popover_foreground = foreground;
 
     // Selection
@@ -173,7 +184,8 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.table_hover = rgb_to_hsla_alpha(0xB3B1AD, 0.05);
     theme.table_active = rgb_to_hsla_alpha(0x59C2FF, 0.15);
     theme.table_active_border = rgb_to_hsla_alpha(0x59C2FF, 0.5);
-    theme.table_row_border = border;
+    // No row dividers — alternating tint (table_even) provides visual separation
+    theme.table_row_border = hsla(0.0, 0.0, 0.0, 0.0);
 
     // List
     theme.list = background;
@@ -351,7 +363,8 @@ fn apply_ayu_light(cx: &mut App) {
     theme.table_hover = rgb_to_hsla_alpha(0x5C6166, 0.06);
     theme.table_active = rgb_to_hsla_alpha(0x399EE6, 0.12);
     theme.table_active_border = rgb_to_hsla_alpha(0x399EE6, 0.4);
-    theme.table_row_border = border;
+    // No row dividers — alternating tint (table_even) provides visual separation
+    theme.table_row_border = hsla(0.0, 0.0, 0.0, 0.0);
 
     theme.list = background;
     theme.list_head = panel;

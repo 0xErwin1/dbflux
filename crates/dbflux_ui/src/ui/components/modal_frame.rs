@@ -1,12 +1,15 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
-use crate::keymap::{Cancel, ContextId};
-use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::icon::IconSource;
+use dbflux_components::primitives::IconButton;
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-type CloseHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+use crate::keymap::{Cancel, ContextId};
+use crate::ui::icons::AppIcon;
+
+type CloseHandler = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
 
 /// Reusable modal shell: dark overlay, centered container, header with icon/title/close.
 ///
@@ -37,7 +40,7 @@ impl ModalFrame {
     pub fn new(
         id: impl Into<ElementId>,
         focus_handle: &FocusHandle,
-        on_close: impl Fn(&mut Window, &mut App) + 'static,
+        on_close: impl Fn(&mut Window, &mut App) + Send + Sync + 'static,
     ) -> Self {
         Self {
             id: id.into(),
@@ -48,7 +51,7 @@ impl ModalFrame {
             width: px(900.0),
             height: ModalHeight::Fixed(px(600.0)),
             top_offset: px(80.0),
-            on_close: Rc::new(on_close),
+            on_close: Arc::new(on_close),
             header_extra: None,
             block_scroll: false,
             children: Vec::new(),
@@ -166,24 +169,11 @@ impl ModalFrame {
             .border_color(theme.border)
             .child(header_left)
             .child(
-                div()
-                    .id("close-btn")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(Heights::ICON_SM)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
+                IconButton::new("close-btn", IconSource::Svg(AppIcon::X.path().into()))
+                    .icon_size(Heights::ICON_SM)
                     .on_click(move |_, window, cx| {
                         (close_for_button)(window, cx);
-                    })
-                    .child(
-                        svg()
-                            .path(AppIcon::X.path())
-                            .size_4()
-                            .text_color(theme.muted_foreground),
-                    ),
+                    }),
             );
 
         container = container.child(header);

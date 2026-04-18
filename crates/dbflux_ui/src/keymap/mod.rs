@@ -19,6 +19,9 @@ pub use dbflux_app::keymap::{
 #[allow(unused_imports)]
 pub use dbflux_app::keymap::ParseError;
 
+// Re-export Cancel from the component crate
+pub use dbflux_components::actions::Cancel;
+
 // GPUI-coupled types that stay in dbflux_ui
 pub use actions::*;
 pub use defaults::default_keymap;

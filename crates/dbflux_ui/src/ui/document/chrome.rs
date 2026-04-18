@@ -1,4 +1,5 @@
-use crate::ui::tokens::{FontSizes, Heights, Spacing};
+use crate::ui::tokens::{Heights, Spacing};
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::theme::Theme;
@@ -27,18 +28,13 @@ pub(crate) fn compact_top_bar(
 pub(crate) fn compact_labeled_control(
     label: impl Into<SharedString>,
     control: impl IntoElement,
-    theme: &Theme,
+    _theme: &Theme,
 ) -> Div {
     div()
         .flex()
         .items_center()
         .gap(Spacing::XS)
-        .child(
-            div()
-                .text_size(FontSizes::SM)
-                .text_color(theme.muted_foreground)
-                .child(label.into()),
-        )
+        .child(Text::caption(label.into()))
         .child(control)
 }
 
