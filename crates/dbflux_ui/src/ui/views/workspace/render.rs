@@ -1,7 +1,7 @@
 use super::*;
 use crate::platform;
 use crate::ui::tokens::FontSizes;
-use dbflux_components::primitives::{Text, overlay_bg};
+use dbflux_components::primitives::{Icon, Text, overlay_bg};
 
 impl Workspace {
     fn render_panel_header(
@@ -26,12 +26,6 @@ impl Workspace {
             theme.foreground
         };
 
-        let title_weight = if is_focused {
-            FontWeight::BOLD
-        } else {
-            FontWeight::MEDIUM
-        };
-
         div()
             .id(SharedString::from(format!("panel-header-{}", title)))
             .flex()
@@ -52,13 +46,21 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_xs()
-                    .font_weight(title_weight)
-                    .text_color(title_color)
-                    .child(svg().path(chevron.path()).size_3().text_color(title_color))
-                    .child(svg().path(icon.path()).size_3().text_color(title_color))
-                    .child(title),
+                    .child(Icon::new(chevron).size(px(12.0)).color(title_color))
+                    .child(Icon::new(icon).size(px(12.0)).color(title_color))
+                    .child(Self::panel_header_title(title, is_focused, title_color)),
             )
+    }
+
+    fn panel_header_title(title: &'static str, is_focused: bool, color: Hsla) -> Text {
+        Text::label_sm(title)
+            .font_size(FontSizes::XS)
+            .font_weight(if is_focused {
+                FontWeight::BOLD
+            } else {
+                FontWeight::MEDIUM
+            })
+            .color(color)
     }
 
     /// Renders the active document from TabManager (v0.3).
@@ -232,16 +234,12 @@ impl Render for Workspace {
                                 .justify_center()
                                 .gap_4()
                                 .child(
-                                    svg()
-                                        .path(AppIcon::Database.path())
-                                        .size_16()
-                                        .text_color(muted_fg.opacity(0.5)),
+                                    Icon::new(AppIcon::Database)
+                                        .size(px(64.0))
+                                        .color(muted_fg.opacity(0.5)),
                                 )
                                 .child(Text::muted("No documents open"))
-                                .child(
-                                    Text::caption("Press Ctrl+N to create a new query")
-                                        .text_color(muted_fg.opacity(0.7)),
-                                ),
+                                .child(Text::dim_secondary("Press Ctrl+N to create a new query")),
                         ),
                 )
                 .child(
@@ -841,7 +839,6 @@ impl Render for Workspace {
                                                     .rounded(Radii::SM)
                                                     .cursor_pointer()
                                                     .text_size(FontSizes::SM)
-                                                    .text_color(theme.muted_foreground)
                                                     .bg(theme.secondary)
                                                     .hover(move |d| d.bg(btn_hover))
                                                     .on_click(move |_, _, cx| {
@@ -850,12 +847,13 @@ impl Render for Workspace {
                                                         });
                                                     })
                                                     .child(
-                                                        svg()
-                                                            .path(AppIcon::X.path())
-                                                            .size_4()
-                                                            .text_color(theme.muted_foreground),
+                                                        Icon::new(AppIcon::X)
+                                                            .size(px(16.0))
+                                                            .muted(),
                                                     )
-                                                    .child("Cancel"),
+                                                    .child(
+                                                        Text::caption("Cancel").muted_foreground(),
+                                                    ),
                                             )
                                             .child(
                                                 div()
@@ -868,7 +866,6 @@ impl Render for Workspace {
                                                     .rounded(Radii::SM)
                                                     .cursor_pointer()
                                                     .text_size(FontSizes::SM)
-                                                    .text_color(theme.background)
                                                     .bg(theme.danger)
                                                     .hover(|d| d.opacity(0.9))
                                                     .on_click(move |_, _, cx| {
@@ -877,12 +874,14 @@ impl Render for Workspace {
                                                         });
                                                     })
                                                     .child(
-                                                        svg()
-                                                            .path(AppIcon::Delete.path())
-                                                            .size_4()
-                                                            .text_color(theme.background),
+                                                        Icon::new(AppIcon::Delete)
+                                                            .size(px(16.0))
+                                                            .color(theme.background),
                                                     )
-                                                    .child(confirm_label),
+                                                    .child(
+                                                        Text::caption(confirm_label)
+                                                            .color(theme.background),
+                                                    ),
                                             ),
                                     ),
                             ),

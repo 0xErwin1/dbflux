@@ -4,7 +4,7 @@ use super::{KeyValueDocumentEvent, KeyValueFocusMode, KvValueViewMode, TtlState}
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::Input;
-use dbflux_components::primitives::{IconButton, Text, overlay_bg, surface_panel, surface_raised};
+use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -104,12 +104,7 @@ impl Render for super::KeyValueDocument {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .child(
-                                svg()
-                                    .path(AppIcon::KeyRound.path())
-                                    .size(Heights::ICON_SM)
-                                    .text_color(theme.muted_foreground),
-                            )
+                            .child(Icon::new(AppIcon::KeyRound).small().muted())
                             .child(Text::body(key_name)),
                     )
                     .child(
@@ -191,13 +186,8 @@ impl Render for super::KeyValueDocument {
                             .flex()
                             .items_center()
                             .gap(Spacing::XS)
-                            .child(
-                                svg()
-                                    .path(AppIcon::Clock.path())
-                                    .size(Heights::ICON_SM)
-                                    .text_color(ttl_color),
-                            )
-                            .child(Text::body(self.ttl_display.clone()).text_color(ttl_color)),
+                            .child(Icon::new(AppIcon::Clock).small().color(ttl_color))
+                            .child(Text::body(self.ttl_display.clone()).color(ttl_color)),
                     )
                     .child(Text::caption(size_label)),
             );
@@ -243,12 +233,7 @@ impl Render for super::KeyValueDocument {
                         .border_b_1()
                         .border_l_1()
                         .border_color(theme.border)
-                        .child(
-                            svg()
-                                .path(AppIcon::Search.path())
-                                .size(Heights::ICON_SM)
-                                .text_color(theme.muted_foreground),
-                        )
+                        .child(Icon::new(AppIcon::Search).small().muted())
                         .child(
                             div()
                                 .flex_1()
@@ -500,12 +485,7 @@ impl Render for super::KeyValueDocument {
                     .border_b_1()
                     .border_color(theme.border)
                     .bg(theme.tab_bar)
-                    .child(
-                        svg()
-                            .path(AppIcon::Search.path())
-                            .size(Heights::ICON_SM)
-                            .text_color(theme.muted_foreground),
-                    )
+                    .child(Icon::new(AppIcon::Search).small().muted())
                     .child(
                         div()
                             .flex_1()
@@ -567,16 +547,15 @@ impl Render for super::KeyValueDocument {
                                         }),
                                     )
                                     .child(
-                                        svg()
-                                            .path(if self.runner.is_primary_active() {
-                                                AppIcon::Loader.path()
-                                            } else if self.refresh_policy.is_auto() {
-                                                AppIcon::Clock.path()
-                                            } else {
-                                                AppIcon::RefreshCcw.path()
-                                            })
-                                            .size(Heights::ICON_SM)
-                                            .text_color(theme.foreground),
+                                        Icon::new(if self.runner.is_primary_active() {
+                                            AppIcon::Loader
+                                        } else if self.refresh_policy.is_auto() {
+                                            AppIcon::Clock
+                                        } else {
+                                            AppIcon::RefreshCcw
+                                        })
+                                        .small()
+                                        .color(theme.foreground),
                                     )
                                     .child(Text::body(refresh_label)),
                             )
@@ -610,12 +589,7 @@ impl Render for super::KeyValueDocument {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(
-                                svg()
-                                    .path(AppIcon::Rows3.path())
-                                    .size_3()
-                                    .text_color(theme.muted_foreground),
-                            )
+                            .child(Icon::new(AppIcon::Rows3).size(px(12.0)).muted())
                             .child(Text::caption(if self.runner.is_primary_active() {
                                 "Loading...".to_string()
                             } else {
@@ -644,17 +618,14 @@ impl Render for super::KeyValueDocument {
                                             }))
                                     })
                                     .when(!can_prev, |d| d.opacity(0.5))
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::ChevronLeft.path())
-                                            .size_3()
-                                            .text_color(if can_prev {
-                                                theme.foreground
-                                            } else {
-                                                theme.muted_foreground
-                                            }),
-                                    )
-                                    .child(Text::caption("Prev").text_color(if can_prev {
+                                    .child(Icon::new(AppIcon::ChevronLeft).size(px(12.0)).color(
+                                        if can_prev {
+                                            theme.foreground
+                                        } else {
+                                            theme.muted_foreground
+                                        },
+                                    ))
+                                    .child(Text::caption("Prev").color(if can_prev {
                                         theme.foreground
                                     } else {
                                         theme.muted_foreground
@@ -678,21 +649,18 @@ impl Render for super::KeyValueDocument {
                                             }))
                                     })
                                     .when(!can_next, |d| d.opacity(0.5))
-                                    .child(Text::caption("Next").text_color(if can_next {
+                                    .child(Text::caption("Next").color(if can_next {
                                         theme.foreground
                                     } else {
                                         theme.muted_foreground
                                     }))
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::ChevronRight.path())
-                                            .size_3()
-                                            .text_color(if can_next {
-                                                theme.foreground
-                                            } else {
-                                                theme.muted_foreground
-                                            }),
-                                    ),
+                                    .child(Icon::new(AppIcon::ChevronRight).size(px(12.0)).color(
+                                        if can_next {
+                                            theme.foreground
+                                        } else {
+                                            theme.muted_foreground
+                                        },
+                                    )),
                             ),
                     )
             })
@@ -746,12 +714,7 @@ impl Render for super::KeyValueDocument {
                             }),
                         );
 
-                    row = row.child(
-                        svg()
-                            .path(icon.path())
-                            .size(Heights::ICON_SM)
-                            .text_color(icon_color),
-                    );
+                    row = row.child(Icon::new(icon).small().color(icon_color));
 
                     if is_renaming {
                         if let Some(input) = &self.rename_input {
@@ -864,12 +827,7 @@ fn render_delete_confirm_modal(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(
-                            svg()
-                                .path(AppIcon::TriangleAlert.path())
-                                .size_5()
-                                .text_color(theme.warning),
-                        )
+                        .child(Icon::new(AppIcon::TriangleAlert).size(px(20.0)).warning())
                         .child(Text::heading(title.to_string())),
                 )
                 .child(Text::muted(message.to_string()))
@@ -895,12 +853,7 @@ fn render_delete_confirm_modal(
                                     this.pending_member_delete = None;
                                     cx.notify();
                                 }))
-                                .child(
-                                    svg()
-                                        .path(AppIcon::X.path())
-                                        .size_4()
-                                        .text_color(theme.muted_foreground),
-                                )
+                                .child(Icon::new(AppIcon::X).size(px(16.0)).muted())
                                 .child(Text::caption("Cancel")),
                         )
                         .child(
@@ -923,12 +876,11 @@ fn render_delete_confirm_modal(
                                     }
                                 }))
                                 .child(
-                                    svg()
-                                        .path(AppIcon::Delete.path())
-                                        .size_4()
-                                        .text_color(theme.background),
+                                    Icon::new(AppIcon::Delete)
+                                        .size(px(16.0))
+                                        .color(theme.background),
                                 )
-                                .child(Text::caption("Delete").text_color(theme.background)),
+                                .child(Text::caption("Delete").color(theme.background)),
                         ),
                 ),
         )
@@ -1006,14 +958,14 @@ fn render_kv_context_menu(
                         this.execute_menu_action(action, target, window, cx);
                     }
                 }))
-                .child(svg().path(icon.path()).size_4().text_color(if is_danger {
+                .child(Icon::new(icon).size(px(16.0)).color(if is_danger {
                     theme.danger
                 } else if is_selected {
                     theme.accent_foreground
                 } else {
                     theme.muted_foreground
                 }))
-                .child(Text::caption(label).text_color(label_color))
+                .child(Text::caption(label).color(label_color))
                 .into_any_element()
         })
         .collect();
@@ -1087,10 +1039,5 @@ pub(super) fn icon_button_base(
         .rounded(Radii::SM)
         .cursor_pointer()
         .hover(move |d| d.bg(hover_bg))
-        .child(
-            svg()
-                .path(icon.path())
-                .size(Heights::ICON_SM)
-                .text_color(foreground),
-        )
+        .child(Icon::new(icon).small().color(foreground))
 }

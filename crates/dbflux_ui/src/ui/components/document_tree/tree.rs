@@ -6,7 +6,7 @@ use gpui_component::Sizable;
 
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
@@ -463,14 +463,13 @@ fn render_toolbar(
                     }
                 })
                 .child(
-                    svg()
-                        .path(if is_tree_mode {
-                            AppIcon::Braces.path()
-                        } else {
-                            AppIcon::Rows3.path()
-                        })
-                        .size_4()
-                        .text_color(theme.muted_foreground),
+                    Icon::new(if is_tree_mode {
+                        AppIcon::Braces
+                    } else {
+                        AppIcon::Rows3
+                    })
+                    .size(px(16.0))
+                    .muted(),
                 ),
         )
 }
@@ -501,12 +500,7 @@ fn render_search_bar(
         .border_b_1()
         .border_color(theme.border)
         .bg(theme.secondary.opacity(0.3))
-        .child(
-            svg()
-                .path(AppIcon::Search.path())
-                .size_4()
-                .text_color(theme.muted_foreground),
-        )
+        .child(Icon::new(AppIcon::Search).size(px(16.0)).muted())
         .child(div().flex_1().child(Input::new(&input).small().w_full()))
         .child(Text::caption(match_text).font_size(FontSizes::XS))
         .child(
@@ -524,12 +518,7 @@ fn render_search_bar(
                         state.update(cx, |s, cx| s.close_search(cx));
                     }
                 })
-                .child(
-                    svg()
-                        .path(AppIcon::X.path())
-                        .size_3()
-                        .text_color(theme.muted_foreground),
-                ),
+                .child(Icon::new(AppIcon::X).size(px(12.0)).muted()),
         )
 }
 
@@ -643,15 +632,11 @@ fn render_tree_row(
                 .flex()
                 .items_center()
                 .gap(Spacing::XS)
-                .child(
-                    Text::caption(node.key.to_string())
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(primary_color),
-                )
+                .child(Text::label_sm(node.key.to_string()).color(primary_color))
                 .child(
                     Text::caption(":")
                         .font_size(FontSizes::XS)
-                        .text_color(muted_color),
+                        .color(muted_color),
                 ),
         )
         // Value preview
@@ -674,7 +659,7 @@ fn render_tree_row(
                 .child(
                     Text::caption(node.value.type_label())
                         .font_size(FontSizes::XS)
-                        .text_color(type_color),
+                        .color(type_color),
                 )
         })
 }
@@ -701,7 +686,7 @@ fn render_chevron(
         };
 
         chevron
-            .child(svg().path(icon.path()).size_3().text_color(muted_color))
+            .child(Icon::new(icon).size(px(12.0)).color(muted_color))
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 cx.stop_propagation();

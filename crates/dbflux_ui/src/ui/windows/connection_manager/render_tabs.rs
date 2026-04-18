@@ -21,143 +21,81 @@ impl ConnectionManagerWindow {
             .items_center()
             .border_b_1()
             .border_color(theme.border)
-            .child(
-                div()
-                    .id("tab-main")
-                    .px_4()
-                    .py_2()
-                    .cursor_pointer()
-                    .border_b_2()
-                    .when(active_tab == ActiveTab::Main, |d| {
-                        d.border_color(theme.primary).text_color(theme.foreground)
-                    })
-                    .when(active_tab != ActiveTab::Main, |d| {
-                        d.border_color(gpui::transparent_black())
-                            .text_color(theme.muted_foreground)
-                    })
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = ActiveTab::Main;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(Icon::new(AppIcon::Plug).small().color(
-                                if active_tab == ActiveTab::Main {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(div().text_sm().child("Main")),
-                    ),
-            )
+            .child(self.render_tab_trigger(
+                "tab-main",
+                "Main",
+                AppIcon::Plug,
+                ActiveTab::Main,
+                active_tab == ActiveTab::Main,
+                cx,
+            ))
             .when(show_access_tab, |d| {
-                d.child(
-                    div()
-                        .id("tab-access")
-                        .px_4()
-                        .py_2()
-                        .cursor_pointer()
-                        .border_b_2()
-                        .when(active_tab == ActiveTab::Access, |dd| {
-                            dd.border_color(theme.primary).text_color(theme.foreground)
-                        })
-                        .when(active_tab != ActiveTab::Access, |dd| {
-                            dd.border_color(gpui::transparent_black())
-                                .text_color(theme.muted_foreground)
-                        })
-                        .hover(|dd| dd.bg(theme.secondary))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.active_tab = ActiveTab::Access;
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(Icon::new(AppIcon::FingerprintPattern).small().color(
-                                    if active_tab == ActiveTab::Access {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    },
-                                ))
-                                .child(div().text_sm().child("Access")),
-                        ),
-                )
+                d.child(self.render_tab_trigger(
+                    "tab-access",
+                    "Access",
+                    AppIcon::FingerprintPattern,
+                    ActiveTab::Access,
+                    active_tab == ActiveTab::Access,
+                    cx,
+                ))
             })
+            .child(self.render_tab_trigger(
+                "tab-settings",
+                "Settings",
+                AppIcon::Settings,
+                ActiveTab::Settings,
+                active_tab == ActiveTab::Settings,
+                cx,
+            ))
+            .child(self.render_tab_trigger(
+                "tab-mcp",
+                "MCP",
+                AppIcon::Lock,
+                ActiveTab::Mcp,
+                active_tab == ActiveTab::Mcp,
+                cx,
+            ))
+    }
+
+    fn render_tab_trigger(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        icon: AppIcon,
+        tab: ActiveTab,
+        is_active: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let color = if is_active {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        };
+
+        div()
+            .id(id)
+            .px_4()
+            .py_2()
+            .cursor_pointer()
+            .border_b_2()
+            .border_color(if is_active {
+                theme.primary
+            } else {
+                gpui::transparent_black()
+            })
+            .hover(|d| d.bg(theme.secondary))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.active_tab = tab;
+                cx.notify();
+            }))
             .child(
                 div()
-                    .id("tab-settings")
-                    .px_4()
-                    .py_2()
-                    .cursor_pointer()
-                    .border_b_2()
-                    .when(active_tab == ActiveTab::Settings, |d| {
-                        d.border_color(theme.primary).text_color(theme.foreground)
-                    })
-                    .when(active_tab != ActiveTab::Settings, |d| {
-                        d.border_color(gpui::transparent_black())
-                            .text_color(theme.muted_foreground)
-                    })
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = ActiveTab::Settings;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(Icon::new(AppIcon::Settings).small().color(
-                                if active_tab == ActiveTab::Settings {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(div().text_sm().child("Settings")),
-                    ),
-            )
-            .child(
-                div()
-                    .id("tab-mcp")
-                    .px_4()
-                    .py_2()
-                    .cursor_pointer()
-                    .border_b_2()
-                    .when(active_tab == ActiveTab::Mcp, |d| {
-                        d.border_color(theme.primary).text_color(theme.foreground)
-                    })
-                    .when(active_tab != ActiveTab::Mcp, |d| {
-                        d.border_color(gpui::transparent_black())
-                            .text_color(theme.muted_foreground)
-                    })
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = ActiveTab::Mcp;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(Icon::new(AppIcon::Lock).small().color(
-                                if active_tab == ActiveTab::Mcp {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(div().text_sm().child("MCP")),
-                    ),
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(Icon::new(icon).small().color(color))
+                    .child(Text::caption(label).color(color)),
             )
     }
 
@@ -689,7 +627,7 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .opacity(opacity)
-                    .child(Text::body("Policy").font_weight(FontWeight::MEDIUM))
+                    .child(Text::label("Policy"))
                     .child(Text::caption(
                         "Configure policies in Settings \u{2192} MCP \u{2192} Policies",
                     ))

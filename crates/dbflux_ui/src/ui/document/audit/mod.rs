@@ -26,7 +26,7 @@ use crate::ui::components::toast::{PendingToast, flush_pending_toast};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
-use dbflux_components::primitives::{Label, Text, surface_raised};
+use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_core::{
     Pagination, RefreshPolicy,
     observability::{EventCategory, EventOutcome, EventSeverity},
@@ -847,10 +847,10 @@ impl AuditDocument {
     }
 
     /// Renders a null placeholder matching the DataTable convention: italic muted "NULL".
-    fn null_display(theme: &gpui_component::Theme) -> Div {
+    fn null_display(_theme: &gpui_component::Theme) -> Div {
         div()
             .italic()
-            .child(Text::caption("NULL").text_color(theme.muted_foreground))
+            .child(Text::caption("NULL").muted_foreground())
     }
 
     fn short_category_label(category: Option<&str>) -> &'static str {
@@ -1625,7 +1625,7 @@ impl AuditDocument {
                     .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
                     // Icon or indent to keep label alignment consistent.
                     .when_some(icon, |d, icon| {
-                        d.child(svg().path(icon.path()).size_4().text_color(icon_color))
+                        d.child(Icon::new(icon).size(px(16.0)).color(icon_color))
                     })
                     .when(icon.is_none(), |d| d.pl(px(20.0)))
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -1675,7 +1675,7 @@ impl AuditDocument {
                             }
                         }
                     }))
-                    .child(Text::caption(label).text_color(if is_selected {
+                    .child(Text::caption(label).color(if is_selected {
                         theme.accent_foreground
                     } else {
                         theme.foreground
@@ -1769,9 +1769,9 @@ impl AuditDocument {
             "Refresh"
         };
         let refresh_icon = if self.refresh_policy.is_auto() {
-            AppIcon::Clock.path()
+            AppIcon::Clock
         } else {
-            AppIcon::RefreshCcw.path()
+            AppIcon::RefreshCcw
         };
 
         let refresh_btn = div()
@@ -1802,10 +1802,9 @@ impl AuditDocument {
                         this.load_events(cx);
                     }))
                     .child(
-                        svg()
-                            .path(refresh_icon)
-                            .size_4()
-                            .text_color(theme.foreground),
+                        Icon::new(refresh_icon)
+                            .size(px(16.0))
+                            .color(theme.foreground),
                     )
                     .child(Text::caption(refresh_label)),
             )
@@ -1860,8 +1859,6 @@ impl AuditDocument {
     }
 
     fn render_event_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-
         if self.events.is_empty() && self.is_loading {
             return div()
                 .flex_1()
@@ -1882,7 +1879,7 @@ impl AuditDocument {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(Text::heading("Failed to load audit events").text_color(theme.danger))
+                .child(Text::heading("Failed to load audit events").danger())
                 .child(Text::muted(self.status_message.clone().unwrap_or_default()))
                 .child(
                     Button::new("audit-retry")
@@ -1947,10 +1944,9 @@ impl AuditDocument {
                 .bg(Self::level_bg_color(Some(l), theme))
                 .flex_shrink_0()
                 .child(
-                    Text::caption(l.to_uppercase())
+                    Text::label_sm(l.to_uppercase())
                         .font_size(FontSizes::XS)
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(Self::level_color(Some(l), theme)),
+                        .color(Self::level_color(Some(l), theme)),
                 )
                 .into_any_element(),
             None => Self::null_display(theme).flex_shrink_0().into_any_element(),
@@ -2011,14 +2007,13 @@ impl AuditDocument {
                         }),
                     )
                     .child(
-                        svg()
-                            .path(if is_expanded {
-                                AppIcon::ChevronDown.path()
-                            } else {
-                                AppIcon::ChevronRight.path()
-                            })
-                            .size_3()
-                            .text_color(theme.muted_foreground),
+                        Icon::new(if is_expanded {
+                            AppIcon::ChevronDown
+                        } else {
+                            AppIcon::ChevronRight
+                        })
+                        .size(px(12.0))
+                        .muted(),
                     )
                     .child(Text::code(timestamp))
                     .child(level_display)
@@ -2148,7 +2143,7 @@ impl AuditDocument {
                         .flex_col()
                         .gap_1p5()
                         .child(Label::new("Error").text_color(theme.danger))
-                        .child(Text::body(value).text_color(theme.danger)),
+                        .child(Text::body(value).danger()),
                 )
             })
             .when_some(details_json, |root, value| {
@@ -2187,7 +2182,7 @@ impl AuditDocument {
                                         );
                                     }),
                                 )
-                                .child(Text::body(value.clone()).text_color(theme.primary)),
+                                .child(Text::body(value.clone()).primary()),
                         ),
                 )
             })
@@ -2214,19 +2209,9 @@ impl AuditDocument {
             .on_click(cx.listener(|this, _, _, cx| {
                 this.toggle_export_menu(cx);
             }))
-            .child(
-                svg()
-                    .path(AppIcon::FileSpreadsheet.path())
-                    .size_4()
-                    .text_color(theme.muted_foreground),
-            )
+            .child(Icon::new(AppIcon::FileSpreadsheet).size(px(16.0)).muted())
             .child(Text::caption("Export"))
-            .child(
-                svg()
-                    .path(AppIcon::ChevronDown.path())
-                    .size_3()
-                    .text_color(theme.muted_foreground),
-            )
+            .child(Icon::new(AppIcon::ChevronDown).size(px(12.0)).muted())
             .when(menu_open, |trigger| {
                 trigger.child(self.render_export_menu(theme, cx))
             })
@@ -2301,12 +2286,7 @@ impl AuditDocument {
                 .flex()
                 .items_center()
                 .gap_1()
-                .child(
-                    svg()
-                        .path(AppIcon::Rows3.path())
-                        .size_3()
-                        .text_color(theme.muted_foreground),
-                )
+                .child(Icon::new(AppIcon::Rows3).size(px(12.0)).muted())
                 .child(Text::caption(row_count_label))
         };
 
@@ -2337,14 +2317,14 @@ impl AuditDocument {
                                     }))
                             })
                             .when(!can_prev, |d| d.opacity(0.5))
-                            .child(svg().path(AppIcon::ChevronLeft.path()).size_3().text_color(
+                            .child(Icon::new(AppIcon::ChevronLeft).size(px(12.0)).color(
                                 if can_prev {
                                     theme.foreground
                                 } else {
                                     theme.muted_foreground
                                 },
                             ))
-                            .child(Text::caption("Prev").text_color(if can_prev {
+                            .child(Text::caption("Prev").color(if can_prev {
                                 theme.foreground
                             } else {
                                 theme.muted_foreground
@@ -2372,21 +2352,18 @@ impl AuditDocument {
                                     }))
                             })
                             .when(!can_next, |d| d.opacity(0.5))
-                            .child(Text::caption("Next").text_color(if can_next {
+                            .child(Text::caption("Next").color(if can_next {
                                 theme.foreground
                             } else {
                                 theme.muted_foreground
                             }))
-                            .child(
-                                svg()
-                                    .path(AppIcon::ChevronRight.path())
-                                    .size_3()
-                                    .text_color(if can_next {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    }),
-                            ),
+                            .child(Icon::new(AppIcon::ChevronRight).size(px(12.0)).color(
+                                if can_next {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )),
                     )
             },
         );
@@ -2401,11 +2378,7 @@ impl AuditDocument {
             })
             .when_some(
                 self.status_message.clone().filter(|_| self.is_loading),
-                |d, _| {
-                    d.child(
-                        Text::caption("Loading...").text_color(theme.muted_foreground.opacity(0.5)),
-                    )
-                },
+                |d, _| d.child(Text::dim("Loading...")),
             );
 
         workspace_footer_bar(&theme, left, center, right)

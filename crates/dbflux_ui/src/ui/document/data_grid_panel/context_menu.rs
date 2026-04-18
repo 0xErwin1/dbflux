@@ -1156,7 +1156,7 @@ impl DataGridPanel {
                                     .child(
                                         Icon::new(AppIcon::Delete).small().color(theme.background),
                                     )
-                                    .child(Text::caption("Delete").text_color(theme.background)),
+                                    .child(Text::caption("Delete").color(theme.background)),
                             ),
                     ),
             )
@@ -1264,7 +1264,7 @@ impl DataGridPanel {
                         }))
                     })
                     .when(icon.is_none(), |d| d.pl(px(20.0)))
-                    .child(Text::caption(label).text_color(if is_selected {
+                    .child(Text::caption(label).color(if is_selected {
                         if is_danger {
                             theme.danger
                         } else {
@@ -1362,7 +1362,7 @@ impl DataGridPanel {
                                     .small()
                                     .color(filter_label_color),
                             )
-                            .child(Text::caption("Filter").text_color(filter_label_color)),
+                            .child(Text::caption("Filter").color(filter_label_color)),
                     )
                     .child(Icon::new(AppIcon::ChevronRight).small().color(
                         if filter_selected && !filter_submenu_open {
@@ -1484,7 +1484,7 @@ impl DataGridPanel {
                                                     ))
                                                     .child(
                                                         Text::caption(label.clone())
-                                                            .text_color(item_color),
+                                                            .color(item_color),
                                                     )
                                                     .into_any_element(),
                                             );
@@ -1573,7 +1573,7 @@ impl DataGridPanel {
                                     .small()
                                     .color(order_label_color),
                             )
-                            .child(Text::caption("Order").text_color(order_label_color)),
+                            .child(Text::caption("Order").color(order_label_color)),
                     )
                     .child(Icon::new(AppIcon::ChevronRight).small().color(
                         if order_selected && !order_submenu_open {
@@ -1702,7 +1702,7 @@ impl DataGridPanel {
                                                     ))
                                                     .child(
                                                         Text::caption(label)
-                                                            .text_color(order_item_color),
+                                                            .color(order_item_color),
                                                     )
                                                     .into_any_element(),
                                             );
@@ -1790,7 +1790,7 @@ impl DataGridPanel {
                             .items_center()
                             .gap(Spacing::SM)
                             .child(Icon::new(AppIcon::Code).small().color(gen_sql_label_color))
-                            .child(Text::caption("Generate SQL").text_color(gen_sql_label_color)),
+                            .child(Text::caption("Generate SQL").color(gen_sql_label_color)),
                     )
                     .child(Icon::new(AppIcon::ChevronRight).small().color(
                         if gen_sql_selected && !sql_submenu_open {
@@ -1869,7 +1869,7 @@ impl DataGridPanel {
                                                     theme.muted_foreground
                                                 },
                                             ))
-                                            .child(Text::caption(label).text_color(sql_item_color))
+                                            .child(Text::caption(label).color(sql_item_color))
                                     })
                                     .collect::<Vec<_>>(),
                                 ),
@@ -2024,7 +2024,7 @@ impl DataGridPanel {
                                                     theme.muted_foreground
                                                 },
                                             ))
-                                            .child(Text::caption(label).text_color(copy_item_color))
+                                            .child(Text::caption(label).color(copy_item_color))
                                     })
                                     .collect::<Vec<_>>(),
                                 ),

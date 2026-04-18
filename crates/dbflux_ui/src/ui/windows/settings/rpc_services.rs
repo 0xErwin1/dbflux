@@ -1,8 +1,8 @@
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{Heights, Radii};
+use crate::ui::tokens::{FontSizes, Heights, Radii};
 use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::primitives::{Icon as PrimitiveIcon, Label, Text};
 use dbflux_core::ServiceConfig;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::prelude::FluentBuilder;
@@ -809,13 +809,9 @@ impl ServicesSection {
                                     .flex()
                                     .items_start()
                                     .gap_2()
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::Plug.path())
-                                            .size_4()
-                                            .text_color(theme.muted_foreground)
-                                            .mt(px(2.0)),
-                                    )
+                                    .child(div().mt(px(2.0)).child(
+                                        PrimitiveIcon::new(AppIcon::Plug).size(px(16.0)).muted(),
+                                    ))
                                     .child(
                                         div()
                                             .flex()
@@ -826,26 +822,25 @@ impl ServicesSection {
                                                     .flex()
                                                     .items_center()
                                                     .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .font_weight(FontWeight::MEDIUM)
-                                                            .when(is_disabled, |div| {
-                                                                div.text_color(
-                                                                    theme.muted_foreground,
-                                                                )
-                                                            })
-                                                            .child(service.socket_id.clone()),
-                                                    )
+                                                    .child(if is_disabled {
+                                                        Text::label_sm(service.socket_id.clone())
+                                                            .muted_foreground()
+                                                            .into_any_element()
+                                                    } else {
+                                                        Text::label_sm(service.socket_id.clone())
+                                                            .into_any_element()
+                                                    })
                                                     .when(is_disabled, |container| {
                                                         container.child(
                                                             div()
-                                                                .text_xs()
                                                                 .px_1()
                                                                 .rounded(px(3.0))
                                                                 .bg(theme.secondary)
-                                                                .text_color(theme.muted_foreground)
-                                                                .child("Disabled"),
+                                                                .child(
+                                                                    Text::caption("Disabled")
+                                                                        .font_size(FontSizes::XS)
+                                                                        .muted_foreground(),
+                                                                ),
                                                         )
                                                     }),
                                             )
@@ -890,7 +885,7 @@ impl ServicesSection {
                     .p_4()
                     .border_b_1()
                     .border_color(border)
-                    .child(Text::body(title).font_weight(FontWeight::MEDIUM)),
+                    .child(Text::label(title)),
             )
             .child(
                 div()
@@ -1179,10 +1174,9 @@ impl ServicesSection {
                                     }),
                                 )
                                 .child(
-                                    svg()
-                                        .path(AppIcon::Plus.path())
+                                    PrimitiveIcon::new(AppIcon::Plus)
                                         .size(Heights::ICON_SM)
-                                        .text_color(theme.primary_foreground),
+                                        .color(theme.primary_foreground),
                                 ),
                         ),
                 ),
@@ -1328,10 +1322,9 @@ impl ServicesSection {
                                     }),
                                 )
                                 .child(
-                                    svg()
-                                        .path(AppIcon::Plus.path())
+                                    PrimitiveIcon::new(AppIcon::Plus)
                                         .size(Heights::ICON_SM)
-                                        .text_color(theme.primary_foreground),
+                                        .color(theme.primary_foreground),
                                 ),
                         ),
                 ),
