@@ -9,6 +9,7 @@ pub mod actions;
 pub mod helpers;
 pub mod icon;
 pub mod tokens;
+pub mod typography;
 
 pub mod composites;
 pub mod controls;

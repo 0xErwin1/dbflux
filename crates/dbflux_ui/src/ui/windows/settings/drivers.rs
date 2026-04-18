@@ -7,6 +7,7 @@ use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
+use crate::ui::theme::AppFonts;
 use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
@@ -699,6 +700,7 @@ impl DriversSection {
             .min_h_0()
             .border_r_1()
             .border_color(theme.border)
+            .font_family(AppFonts::CODE)
             .flex()
             .flex_col()
             .overflow_hidden()
