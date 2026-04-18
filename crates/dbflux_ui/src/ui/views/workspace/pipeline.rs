@@ -168,7 +168,10 @@ impl Render for PipelineProgress {
                             .size(px(14.0))
                             .text_color(theme.primary),
                     )
-                    .child(Text::body(format!("Connecting: {}", self.profile_name)).font_weight(gpui::FontWeight::MEDIUM)),
+                    .child(
+                        Text::body(format!("Connecting: {}", self.profile_name))
+                            .font_weight(gpui::FontWeight::MEDIUM),
+                    ),
             )
             // Completed stages (checkmarks)
             .children(self.completed_stages.iter().map(|stage| {

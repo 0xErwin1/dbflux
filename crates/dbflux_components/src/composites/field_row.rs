@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, px, App, SharedString};
+use gpui::{App, SharedString, div, px};
 
 use crate::primitives::{Label, Text};
 use crate::tokens::Spacing;

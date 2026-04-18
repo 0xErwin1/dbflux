@@ -649,7 +649,9 @@ fn render_tree_row(
                         .text_color(primary_color),
                 )
                 .child(
-                    Text::caption(":").font_size(FontSizes::XS).text_color(muted_color),
+                    Text::caption(":")
+                        .font_size(FontSizes::XS)
+                        .text_color(muted_color),
                 ),
         )
         // Value preview

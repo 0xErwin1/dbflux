@@ -20,10 +20,11 @@ use dbflux_core::{
     IndexDirection, KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities,
     OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
     QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationalConnection, Row, SchemaLoadingStrategy, SchemaSnapshot, SemanticFieldRef,
-    SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig,
-    TableInfo, TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value,
-    ViewInfo, WhereOperator, detect_dangerous_mongo, sanitize_uri,
+    RelationalConnection, Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
+    SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TextPosition, TextPositionRange,
+    TransactionCapabilities, ValidationResult, Value, ViewInfo, WhereOperator,
+    detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -93,9 +94,9 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     }),
     ddl: Some(DdlCapabilities {
         supports_create_database: false,
-        supports_drop_database: false,
+        supports_drop_database: true,
         supports_create_table: false,
-        supports_drop_table: false,
+        supports_drop_table: true,
         supports_alter_table: false,
         supports_create_index: true,
         supports_drop_index: true,
@@ -1559,6 +1560,90 @@ impl Connection for MongoConnection {
             views: Vec::new(),
             custom_types: None,
         })
+    }
+
+    fn drop_schema_object(
+        &self,
+        target: &SchemaDropTarget,
+        _cascade: bool,
+        if_exists: bool,
+    ) -> Result<(), DbError> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|error| DbError::query_failed(format!("Lock error: {}", error)))?;
+
+        match target.kind {
+            SchemaObjectKind::Collection => {
+                let database_name = target
+                    .database
+                    .as_deref()
+                    .or(self.default_database.as_deref())
+                    .ok_or_else(|| {
+                        DbError::query_failed(
+                            "MongoDB collection drop requires a target database".to_string(),
+                        )
+                    })?;
+
+                let database = client.database(database_name);
+                let collection_exists = database
+                    .list_collection_names()
+                    .run()
+                    .map_err(|error| format_mongo_query_error(&error))?
+                    .into_iter()
+                    .any(|name| name == target.name);
+
+                if !collection_exists {
+                    return if if_exists {
+                        Ok(())
+                    } else {
+                        Err(DbError::object_not_found(format!(
+                            "Collection '{}.{}' was not found",
+                            database_name, target.name
+                        )))
+                    };
+                }
+
+                database
+                    .collection::<Document>(&target.name)
+                    .drop()
+                    .run()
+                    .map_err(|error| format_mongo_query_error(&error))?;
+
+                Ok(())
+            }
+            SchemaObjectKind::Database => {
+                let database_exists = client
+                    .list_database_names()
+                    .run()
+                    .map_err(|error| format_mongo_query_error(&error))?
+                    .into_iter()
+                    .any(|name| name == target.name);
+
+                if !database_exists {
+                    return if if_exists {
+                        Ok(())
+                    } else {
+                        Err(DbError::object_not_found(format!(
+                            "Database '{}' was not found",
+                            target.name
+                        )))
+                    };
+                }
+
+                client
+                    .database(&target.name)
+                    .drop()
+                    .run()
+                    .map_err(|error| format_mongo_query_error(&error))?;
+
+                Ok(())
+            }
+            unsupported_kind => Err(DbError::NotSupported(format!(
+                "MongoDB drop_schema_object only supports collections and databases, got {:?}",
+                unsupported_kind
+            ))),
+        }
     }
 
     fn table_details(

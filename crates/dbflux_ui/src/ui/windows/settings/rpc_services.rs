@@ -886,9 +886,11 @@ impl ServicesSection {
             .flex_col()
             .overflow_hidden()
             .child(
-                div().p_4().border_b_1().border_color(border).child(
-                    Text::body(title).font_weight(FontWeight::MEDIUM),
-                ),
+                div()
+                    .p_4()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(Text::body(title).font_weight(FontWeight::MEDIUM)),
             )
             .child(
                 div()
@@ -1016,9 +1018,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                Label::new(label.to_string()),
-            )
+            .child(Label::new(label.to_string()))
             .child(
                 div()
                     .rounded(px(4.0))
@@ -1092,9 +1092,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                Label::new("Arguments"),
-            )
+            .child(Label::new("Arguments"))
             .children(self.svc_arg_inputs.iter().enumerate().map(|(idx, input)| {
                 let is_row_at_cursor =
                     is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::Arg(idx));
@@ -1208,9 +1206,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                Label::new("Environment Variables"),
-            )
+            .child(Label::new("Environment Variables"))
             .children(
                 self.svc_env_key_inputs
                     .iter()

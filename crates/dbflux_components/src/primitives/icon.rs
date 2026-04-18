@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{svg, App, Hsla, Pixels, Window};
+use gpui::{App, Hsla, Pixels, Window, svg};
 use gpui_component::{ActiveTheme, IconNamed};
 
 use crate::icon::IconSource;

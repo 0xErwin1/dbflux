@@ -654,13 +654,11 @@ impl Render for super::KeyValueDocument {
                                                 theme.muted_foreground
                                             }),
                                     )
-                                    .child(
-                                        Text::caption("Prev").text_color(if can_prev {
-                                            theme.foreground
-                                        } else {
-                                            theme.muted_foreground
-                                        }),
-                                    ),
+                                    .child(Text::caption("Prev").text_color(if can_prev {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    })),
                             )
                             .child(Text::caption(format!("Page {}", current_page)))
                             .child(
@@ -680,13 +678,11 @@ impl Render for super::KeyValueDocument {
                                             }))
                                     })
                                     .when(!can_next, |d| d.opacity(0.5))
-                                    .child(
-                                        Text::caption("Next").text_color(if can_next {
-                                            theme.foreground
-                                        } else {
-                                            theme.muted_foreground
-                                        }),
-                                    )
+                                    .child(Text::caption("Next").text_color(if can_next {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    }))
                                     .child(
                                         svg()
                                             .path(AppIcon::ChevronRight.path())

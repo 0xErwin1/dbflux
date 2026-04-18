@@ -19,8 +19,8 @@ use dbflux_core::{
     ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
     OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
     QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, RelationalConnection,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, SetAddRequest,
-    SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
+    SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest,
+    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
     StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
     ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
@@ -783,6 +783,18 @@ impl Connection for RedisConnection {
             .ok()
             .flatten()
             .map(|db| format!("db{}", db))
+    }
+
+    fn drop_schema_object(
+        &self,
+        target: &SchemaDropTarget,
+        _cascade: bool,
+        _if_exists: bool,
+    ) -> Result<(), DbError> {
+        Err(DbError::NotSupported(format!(
+            "Redis does not support dropping schema objects via drop_schema_object (requested {:?} '{}')",
+            target.kind, target.name
+        )))
     }
 
     fn kind(&self) -> DbKind {

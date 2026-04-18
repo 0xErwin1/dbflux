@@ -540,11 +540,7 @@ impl DataGridPanel {
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_view_mode(cx);
                         }))
-                        .child(
-                            Icon::new(view_icon)
-                                .small()
-                                .color(theme.muted_foreground),
-                        )
+                        .child(Icon::new(view_icon).small().color(theme.muted_foreground))
                         .child(Text::caption(mode.label())),
                 )
             })
@@ -627,16 +623,12 @@ impl DataGridPanel {
                                         window.focus(&this.focus_handle);
                                     }))
                             })
-                            .when(!can_undo, |d| {
-                                d.border_color(theme.border)
-                            })
-                            .child(Icon::new(AppIcon::Undo).small().color(
-                                if can_undo {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            )),
+                            .when(!can_undo, |d| d.border_color(theme.border))
+                            .child(Icon::new(AppIcon::Undo).small().color(if can_undo {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })),
                     )
                     // Redo button
                     .child(
@@ -676,13 +668,11 @@ impl DataGridPanel {
                                     }))
                             })
                             .when(!can_redo, |d| d.border_color(theme.border))
-                            .child(Icon::new(AppIcon::Redo).small().color(
-                                if can_redo {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            )),
+                            .child(Icon::new(AppIcon::Redo).small().color(if can_redo {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })),
                     )
                     // Save button
                     .child(
@@ -710,9 +700,7 @@ impl DataGridPanel {
                                         window.focus(&this.focus_handle);
                                     }))
                             })
-                            .when(!has_changes, |d| {
-                                d.border_color(theme.border)
-                            })
+                            .when(!has_changes, |d| d.border_color(theme.border))
                             .child(Text::caption("Save").text_color(if has_changes {
                                 theme.primary_foreground
                             } else {
@@ -922,8 +910,7 @@ impl DataGridPanel {
                 let display = format!("{:?}", value)
                     .replace('\n', "\\n")
                     .replace('\r', "\\r");
-                Text::body(display)
-                    .into_any_element()
+                Text::body(display).into_any_element()
             }
         }
     }
@@ -1010,11 +997,7 @@ impl DataGridPanel {
             .overflow_y_scroll()
             .overflow_x_scroll()
             .bg(theme.background)
-            .child(
-                div()
-                    .whitespace_nowrap()
-                    .child(Text::code(display_text)),
-            )
+            .child(div().whitespace_nowrap().child(Text::code(display_text)))
             .when(truncated, |d| {
                 d.child(Text::caption(format!("(truncated at {} lines)", MAX_LINES)))
             })
@@ -1041,11 +1024,7 @@ impl DataGridPanel {
             .p(Spacing::MD)
             .overflow_y_scroll()
             .bg(theme.background)
-            .child(
-                div()
-                    .whitespace_nowrap()
-                    .child(Text::code(hex_dump)),
-            )
+            .child(div().whitespace_nowrap().child(Text::code(hex_dump)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1187,9 +1166,7 @@ impl DataGridPanel {
                                         this.go_to_prev_page(window, cx);
                                     }))
                             })
-                            .when(!can_prev, |d| {
-                                d.opacity(0.5)
-                            })
+                            .when(!can_prev, |d| d.opacity(0.5))
                             .child(Icon::new(AppIcon::ChevronLeft).size(px(12.0)).color(
                                 if can_prev {
                                     theme.foreground
@@ -1228,9 +1205,7 @@ impl DataGridPanel {
                                         this.go_to_next_page(window, cx);
                                     }))
                             })
-                            .when(!can_next, |d| {
-                                d.opacity(0.5)
-                            })
+                            .when(!can_next, |d| d.opacity(0.5))
                             .child(Text::caption("Next").font_size(FontSizes::XS).text_color(
                                 if can_next {
                                     theme.foreground
@@ -1238,15 +1213,13 @@ impl DataGridPanel {
                                     theme.muted_foreground
                                 },
                             ))
-                            .child(
-                                Icon::new(AppIcon::ChevronRight)
-                                    .size(px(12.0))
-                                    .color(if can_next {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    }),
-                            ),
+                            .child(Icon::new(AppIcon::ChevronRight).size(px(12.0)).color(
+                                if can_next {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )),
                     )
                 },
             ))

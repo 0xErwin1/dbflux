@@ -6,6 +6,7 @@ use aws_sdk_dynamodb::config::{Builder as DynamoConfigBuilder, Credentials};
 use aws_sdk_dynamodb::error::ProvideErrorMetadata;
 use aws_sdk_dynamodb::operation::batch_write_item::BatchWriteItemError;
 use aws_sdk_dynamodb::operation::delete_item::DeleteItemError;
+use aws_sdk_dynamodb::operation::delete_table::DeleteTableError;
 use aws_sdk_dynamodb::operation::describe_table::DescribeTableError;
 use aws_sdk_dynamodb::operation::list_tables::ListTablesError;
 use aws_sdk_dynamodb::operation::put_item::PutItemError;
@@ -27,10 +28,10 @@ use dbflux_core::{
     DriverLimits, DriverMetadata, FieldInfo, FormValues, FormattedError, Icon, IndexData,
     IndexDirection, KeyValueConnection, LanguageService, MutationCapabilities, OrderByColumn,
     Pagination, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, SchemaLoadingStrategy,
-    SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
-    SemanticRequest, SqlDialect, TableInfo, TransactionCapabilities, ValidationResult, Value,
-    WhereOperator,
+    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, SchemaDropTarget,
+    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef, SemanticFilter,
+    SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, TableInfo,
+    TransactionCapabilities, ValidationResult, Value, WhereOperator,
 };
 
 use crate::query_generator::DynamoQueryGenerator;
@@ -309,7 +310,7 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         supports_create_database: false,
         supports_drop_database: false,
         supports_create_table: false,
-        supports_drop_table: false,
+        supports_drop_table: true,
         supports_alter_table: false,
         supports_create_index: false,
         supports_drop_index: false,
@@ -684,6 +685,55 @@ impl Connection for DynamoConnection {
             views: Vec::new(),
             custom_types: None,
         })
+    }
+
+    fn drop_schema_object(
+        &self,
+        target: &SchemaDropTarget,
+        _cascade: bool,
+        if_exists: bool,
+    ) -> Result<(), DbError> {
+        let table_name = match target.kind {
+            SchemaObjectKind::Table | SchemaObjectKind::Collection => target.name.as_str(),
+            unsupported_kind => {
+                return Err(DbError::NotSupported(format!(
+                    "DynamoDB drop_schema_object only supports tables, got {:?}",
+                    unsupported_kind
+                )));
+            }
+        };
+
+        if let Some(database) = target.database.as_deref()
+            && database != DYNAMODB_DEFAULT_DATABASE
+        {
+            return Err(DbError::object_not_found(format!(
+                "Database '{}' is not available for DynamoDB",
+                database
+            )));
+        }
+
+        let config = DynamoProfileConfig {
+            region: self.default_region.clone(),
+            profile: None,
+            endpoint: None,
+            table: Some(table_name.to_string()),
+        };
+
+        let runtime = runtime()?;
+        let request = self.client.delete_table().table_name(table_name);
+
+        match runtime.block_on(request.send()) {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let formatted = DYNAMO_ERROR_FORMATTER.format_delete_table_error(&error, &config);
+
+                if if_exists && formatted.code.as_deref() == Some("ResourceNotFoundException") {
+                    return Ok(());
+                }
+
+                Err(classify_query_error(formatted))
+            }
+        }
     }
 
     fn table_details(
@@ -3899,6 +3949,20 @@ impl DynamoErrorFormatter {
     fn format_delete_error(
         &self,
         error: &aws_sdk_dynamodb::error::SdkError<DeleteItemError>,
+        config: &DynamoProfileConfig,
+    ) -> FormattedError {
+        if let Some(service_error) = error.as_service_error() {
+            let code = service_error.code();
+            let message = service_error.message().unwrap_or("DynamoDB service error");
+            return self.format_from_code(code, message, config);
+        }
+
+        self.format_sdk_message(&error.to_string(), config)
+    }
+
+    fn format_delete_table_error(
+        &self,
+        error: &aws_sdk_dynamodb::error::SdkError<DeleteTableError>,
         config: &DynamoProfileConfig,
     ) -> FormattedError {
         if let Some(service_error) = error.as_service_error() {

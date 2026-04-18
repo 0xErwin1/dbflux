@@ -145,11 +145,7 @@ impl ConnectionManagerWindow {
             .flex()
             .items_center()
             .gap_3()
-             .child(
-                 div()
-                     .w(px(100.0))
-                     .child(Label::new(label.to_string())),
-             )
+            .child(div().w(px(100.0)).child(Label::new(label.to_string())))
             .child(Text::body(value.to_string()))
     }
 
@@ -396,10 +392,8 @@ impl ConnectionManagerWindow {
                 .flex()
                 .flex_col()
                 .gap_1()
-                 .when(!field_enabled, |d| d.opacity(0.5))
-                 .child(
-                     Label::new(field_def.label.clone()),
-                 )
+                .when(!field_enabled, |d| d.opacity(0.5))
+                .child(Label::new(field_def.label.clone()))
                 .child(
                     div()
                         .when(field_enabled, |d| {
@@ -453,13 +447,10 @@ impl ConnectionManagerWindow {
                         .gap_1()
                         .when(!field_enabled, |d| d.opacity(0.5))
                         .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                 .gap_1()
-                                 .child(
-                                     Label::new(field_def.label.clone()).required(field_def.required && field_enabled),
-                                 )
+                            div().flex().items_center().gap_1().child(
+                                Label::new(field_def.label.clone())
+                                    .required(field_def.required && field_enabled),
+                            ),
                         )
                         .child(
                             div()
@@ -536,13 +527,10 @@ impl ConnectionManagerWindow {
                             .h(px(28.0))
                             .mb_1()
                             .child(
-                                 div()
-                                     .flex()
-                                     .items_center()
-                                     .gap_1()
-                                     .child(
-                                         Label::new(field_def.label.clone()).required(field_def.required && field_enabled),
-                                     )
+                                div().flex().items_center().gap_1().child(
+                                    Label::new(field_def.label.clone())
+                                        .required(field_def.required && field_enabled),
+                                ),
                             ),
                     )
                     .child(
@@ -588,13 +576,9 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                Label::new(field_def.label.clone()).required(field_def.required),
-                            )
+                        div().flex().items_center().gap_1().child(
+                            Label::new(field_def.label.clone()).required(field_def.required),
+                        ),
                     )
                     .child(
                         div()
@@ -685,9 +669,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            Label::new(field_def.label.clone()),
-                        )
+                        .child(Label::new(field_def.label.clone()))
                         .child(
                             div()
                                 .flex()
@@ -883,9 +865,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(
-                        Label::new(primary_label).required(primary_required && primary_enabled),
-                    )
+                    .child(Label::new(primary_label).required(primary_required && primary_enabled)),
             )
             .child(
                 div()
@@ -995,9 +975,7 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_1()
                     .mb_1()
-                    .child(
-                        Label::new(label.to_string()).required(required),
-                    )
+                    .child(Label::new(label.to_string()).required(required)),
             )
             .child(Input::new(input))
     }
@@ -1015,9 +993,7 @@ impl ConnectionManagerWindow {
             .flex()
             .items_center()
             .gap_2()
-            .child(
-                Label::new(format!("{}:", label)),
-            )
+            .child(Label::new(format!("{}:", label)))
             .child(
                 div()
                     .w(px(200.0))

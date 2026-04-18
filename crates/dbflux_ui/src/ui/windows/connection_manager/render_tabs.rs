@@ -80,15 +80,13 @@ impl ConnectionManagerWindow {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .child(
-                                    Icon::new(AppIcon::FingerprintPattern)
-                                        .small()
-                                        .color(if active_tab == ActiveTab::Access {
-                                            theme.foreground
-                                        } else {
-                                            theme.muted_foreground
-                                        }),
-                                )
+                                .child(Icon::new(AppIcon::FingerprintPattern).small().color(
+                                    if active_tab == ActiveTab::Access {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    },
+                                ))
                                 .child(div().text_sm().child("Access")),
                         ),
                 )
@@ -691,9 +689,7 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .opacity(opacity)
-                    .child(
-                        Text::body("Policy").font_weight(FontWeight::MEDIUM),
-                    )
+                    .child(Text::body("Policy").font_weight(FontWeight::MEDIUM))
                     .child(Text::caption(
                         "Configure policies in Settings \u{2192} MCP \u{2192} Policies",
                     ))

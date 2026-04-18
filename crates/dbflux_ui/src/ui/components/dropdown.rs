@@ -434,9 +434,12 @@ impl Render for Dropdown {
             });
 
         if self.compact_trigger {
-            trigger = trigger.h_full().justify_center().px_2().text_sm().child(
-                Text::caption("▾").font_size(FontSizes::XS),
-            );
+            trigger = trigger
+                .h_full()
+                .justify_center()
+                .px_2()
+                .text_sm()
+                .child(Text::caption("▾").font_size(FontSizes::XS));
         } else if self.toolbar_style {
             // Borderless inline trigger matching the DataGridPanel toolbar weight.
             // No background, no border, compact horizontal padding only, xs text.

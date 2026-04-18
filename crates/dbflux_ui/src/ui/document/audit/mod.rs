@@ -1674,13 +1674,11 @@ impl AuditDocument {
                             }
                         }
                     }))
-                    .child(
-                        Text::caption(label).text_color(if is_selected {
-                            theme.accent_foreground
-                        } else {
-                            theme.foreground
-                        }),
-                    )
+                    .child(Text::caption(label).text_color(if is_selected {
+                        theme.accent_foreground
+                    } else {
+                        theme.foreground
+                    }))
                     .into_any_element(),
             );
         }
@@ -1888,9 +1886,7 @@ impl AuditDocument {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(
-                    Text::heading("Failed to load audit events").text_color(theme.danger),
-                )
+                .child(Text::heading("Failed to load audit events").text_color(theme.danger))
                 .child(Text::muted(self.status_message.clone().unwrap_or_default()))
                 .child(
                     Button::new("audit-retry")
@@ -2356,13 +2352,11 @@ impl AuditDocument {
                                     theme.muted_foreground
                                 },
                             ))
-                            .child(
-                                Text::caption("Prev").text_color(if can_prev {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                }),
-                            ),
+                            .child(Text::caption("Prev").text_color(if can_prev {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })),
                     )
                     .child(Text::caption(if total_pages > 1 {
                         format!("Page {}/{} ({}-{})", page, total_pages, start, end)
@@ -2386,13 +2380,11 @@ impl AuditDocument {
                                     }))
                             })
                             .when(!can_next, |d| d.opacity(0.5))
-                            .child(
-                                Text::caption("Next").text_color(if can_next {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                }),
-                            )
+                            .child(Text::caption("Next").text_color(if can_next {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            }))
                             .child(
                                 svg()
                                     .path(AppIcon::ChevronRight.path())

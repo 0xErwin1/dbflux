@@ -1,9 +1,9 @@
-use super::layout;
-use super::section_trait::SectionFocusEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::layout;
+use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
-use crate::keymap::{key_chord_from_gpui, Modifiers};
+use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::toast::ToastExt;
 use dbflux_components::primitives::Text;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;

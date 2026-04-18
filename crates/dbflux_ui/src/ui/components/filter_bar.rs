@@ -29,8 +29,8 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::InputState;
 use gpui_component::ActiveTheme;
+use gpui_component::input::InputState;
 
 // ── Item kinds ────────────────────────────────────────────────────────────────
 
