@@ -7,11 +7,10 @@ use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Icon, Label, Text};
-use dbflux_components::typography::{MonoLabel, MonoMeta};
+use dbflux_components::primitives::{Icon, Label};
+use dbflux_components::typography::{Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel};
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
@@ -723,7 +722,9 @@ impl DriversSection {
                     .flex_col()
                     .gap_1()
                     .when(self.drv_entries.is_empty(), |d| {
-                        d.child(div().p_3().child(Text::muted("No registered drivers")))
+                        d.child(div().p_3().child(
+                            Body::new("No registered drivers").color(theme.muted_foreground),
+                        ))
                     })
                     .children(self.drv_entries.iter().enumerate().map(|(idx, entry)| {
                         let selected = self.drv_selected_idx == Some(idx);
@@ -785,7 +786,9 @@ impl DriversSection {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(Text::muted("Select a driver to configure settings"));
+                .child(Body::new("Select a driver to configure settings").color(
+                    theme.muted_foreground,
+                ));
         };
 
         let global = &self.gen_settings;
@@ -810,9 +813,11 @@ impl DriversSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(Text::heading(entry.metadata.display_name.clone()))
-                            .child(Text::caption(entry.driver_key.clone()))
-                            .child(Text::caption(entry.metadata.description.clone())),
+                            .child(PanelTitle::new(entry.metadata.display_name.clone()))
+                            .child(MonoMeta::new(entry.driver_key.clone()))
+                            .child(Body::new(entry.metadata.description.clone()).color(
+                                theme.muted_foreground,
+                            )),
                     ),
             )
             .child(
@@ -821,21 +826,21 @@ impl DriversSection {
                     .gap_2()
                     .child(
                         div()
-                            .text_xs()
                             .px_2()
                             .py_1()
                             .rounded(px(4.0))
                             .bg(theme.secondary)
-                            .child(entry.metadata.category.display_name()),
+                            .child(MonoCaption::new(entry.metadata.category.display_name())),
                     )
                     .child(
                         div()
-                            .text_xs()
                             .px_2()
                             .py_1()
                             .rounded(px(4.0))
                             .bg(theme.secondary)
-                            .child(entry.metadata.query_language.display_name().to_string()),
+                            .child(MonoCaption::new(
+                                entry.metadata.query_language.display_name().to_string(),
+                            )),
                     ),
             );
 
@@ -882,7 +887,7 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Text::heading("Capabilities"))
+            .child(FieldLabel::new("Capabilities"))
             .child(
                 div().flex().flex_wrap().gap_2().children(
                     CAPABILITY_CATALOG
@@ -901,8 +906,11 @@ impl DriversSection {
                                 } else {
                                     gpui::transparent_black()
                                 })
-                                .text_xs()
-                                .child(format!("{} {}", if supported { "✓" } else { "-" }, label))
+                                .child(Body::new(format!(
+                                    "{} {}",
+                                    if supported { "✓" } else { "-" },
+                                    label
+                                )))
                         }),
                 ),
             )
@@ -920,10 +928,9 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_3()
-            .child(Text::heading("Global Overrides"))
-            .child(Text::caption(
-                "Enable override to replace the global default for this driver.",
-            ))
+            .child(FieldLabel::new("Global Overrides"))
+            .child(Body::new("Enable override to replace the global default for this driver.")
+                .color(theme.muted_foreground))
             .child(
                 div()
                     .flex()
@@ -937,7 +944,7 @@ impl DriversSection {
                             .items_center()
                             .gap_3()
                             .child(div().w(px(220.0)))
-                            .child(div().w(px(160.0)).child(Text::caption("Override Value"))),
+                            .child(div().w(px(160.0)).child(FieldLabel::new("Override Value"))),
                     )
                     .child(
                         div()
@@ -1022,7 +1029,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_refresh_policy_dropdown.clone()),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 policy_label(global.default_refresh_policy)
                             ))),
@@ -1118,7 +1125,7 @@ impl DriversSection {
                                             .disabled(!self.drv_override_refresh_interval),
                                     ),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 global.default_refresh_interval_secs
                             ))),
@@ -1162,7 +1169,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_confirm_dangerous_dropdown.clone()),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 bool_label(global.confirm_dangerous_queries)
                             ))),
@@ -1202,7 +1209,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_where_dropdown.clone()),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 bool_label(global.dangerous_requires_where)
                             ))),
@@ -1242,7 +1249,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_preview_dropdown.clone()),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 bool_label(global.dangerous_requires_preview)
                             ))),
@@ -1260,15 +1267,17 @@ impl DriversSection {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(Text::heading("Driver Settings"))
-                .child(Text::caption("No custom settings for this driver."));
+                .child(FieldLabel::new("Driver Settings"))
+                .child(Body::new("No custom settings for this driver.").color(
+                    cx.theme().muted_foreground,
+                ));
         };
 
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(Text::heading("Driver Settings"))
+            .child(FieldLabel::new("Driver Settings"))
             .children(
                 schema
                     .tabs
@@ -1280,9 +1289,7 @@ impl DriversSection {
                             .flex_col()
                             .gap_2()
                             .child(
-                                Text::heading(section.title.to_uppercase())
-                                    .font_size(FontSizes::XS)
-                                    .muted_foreground(),
+                                SubSectionLabel::new(section.title.to_uppercase()),
                             )
                             .children(section.fields.iter().filter_map(|field| {
                                 let enabled = form_renderer::is_field_enabled(

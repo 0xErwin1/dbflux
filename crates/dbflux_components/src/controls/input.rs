@@ -1,6 +1,9 @@
 use gpui::prelude::*;
-use gpui::{App, Entity, IntoElement, Window};
+use gpui::{App, Entity, FontWeight, IntoElement, Window};
 use gpui_component::Sizable;
+
+use crate::tokens::FontSizes;
+use crate::typography::AppFonts;
 
 pub use gpui_component::input::{
     CompletionProvider, Input as GpuiInput, InputEvent, InputState, Position as InputPosition, Rope,
@@ -67,7 +70,14 @@ impl RenderOnce for Input {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let mut input = GpuiInput::new(&self.state)
             .appearance(self.appearance)
-            .disabled(self.disabled);
+            .disabled(self.disabled)
+            .font_family(AppFonts::BODY)
+            .font_weight(FontWeight::MEDIUM)
+            .text_size(if self.small {
+                FontSizes::SM
+            } else {
+                FontSizes::BASE
+            });
 
         if self.small {
             input = input.small();

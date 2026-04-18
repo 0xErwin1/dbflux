@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, App, FontWeight, Hsla, SharedString, Window, div};
+use gpui::{div, AnyElement, App, FontWeight, Hsla, SharedString, Window};
 use gpui_component::ActiveTheme;
 use std::borrow::Cow;
 
@@ -86,9 +86,9 @@ pub struct BundledFontAsset {
 pub struct AppFonts;
 
 impl AppFonts {
-    pub const HEADLINE: &'static str = "Space Grotesk";
-    pub const BODY: &'static str = "Inter";
-    pub const MONO: &'static str = "JetBrains Mono";
+    pub const HEADLINE: &'static str = "IBM Plex Mono";
+    pub const BODY: &'static str = "IBM Plex Mono";
+    pub const MONO: &'static str = "IBM Plex Mono";
     pub const MONO_FALLBACK: &'static str = "monospace";
     pub const CODE: &'static str = Self::MONO;
     pub const SHORTCUT: &'static str = Self::MONO;
@@ -97,43 +97,43 @@ impl AppFonts {
 pub const BUNDLED_FONT_ASSETS: [BundledFontAsset; 8] = [
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "Inter-Variable.ttf",
-        data: include_bytes!("../assets/fonts/Inter-Variable.ttf"),
+        file_name: "IBMPlexMono-Regular.ttf",
+        data: include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf"),
     },
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "Inter-Variable-Italic.ttf",
-        data: include_bytes!("../assets/fonts/Inter-Variable-Italic.ttf"),
+        file_name: "IBMPlexMono-Italic.ttf",
+        data: include_bytes!("../assets/fonts/IBMPlexMono-Italic.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::HEADLINE,
-        file_name: "SpaceGrotesk-Regular.ttf",
-        data: include_bytes!("../assets/fonts/SpaceGrotesk-Regular.ttf"),
+        family: AppFonts::BODY,
+        file_name: "IBMPlexMono-Medium.ttf",
+        data: include_bytes!("../assets/fonts/IBMPlexMono-Medium.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::HEADLINE,
-        file_name: "SpaceGrotesk-Bold.ttf",
-        data: include_bytes!("../assets/fonts/SpaceGrotesk-Bold.ttf"),
+        family: AppFonts::BODY,
+        file_name: "IBMPlexMono-MediumItalic.ttf",
+        data: include_bytes!("../assets/fonts/IBMPlexMono-MediumItalic.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::MONO,
-        file_name: "JetBrainsMono-Regular.ttf",
-        data: include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
+        family: AppFonts::BODY,
+        file_name: "IBMPlexMono-SemiBold.ttf",
+        data: include_bytes!("../assets/fonts/IBMPlexMono-SemiBold.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::MONO,
-        file_name: "JetBrainsMono-Bold.ttf",
-        data: include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
+        family: AppFonts::BODY,
+        file_name: "IBMPlexMono-SemiBoldItalic.ttf",
+        data: include_bytes!("../assets/fonts/IBMPlexMono-SemiBoldItalic.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::MONO,
-        file_name: "JetBrainsMono-Italic.ttf",
-        data: include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf"),
+        family: AppFonts::BODY,
+        file_name: "IBMPlexMono-Bold.ttf",
+        data: include_bytes!("../assets/fonts/IBMPlexMono-Bold.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::MONO,
-        file_name: "JetBrainsMono-BoldItalic.ttf",
-        data: include_bytes!("../assets/fonts/JetBrainsMono-BoldItalic.ttf"),
+        family: AppFonts::BODY,
+        file_name: "IBMPlexMono-BoldItalic.ttf",
+        data: include_bytes!("../assets/fonts/IBMPlexMono-BoldItalic.ttf"),
     },
 ];
 
@@ -659,6 +659,43 @@ impl RenderOnce for FieldLabel {
     }
 }
 
+#[derive(IntoElement)]
+pub struct PanelTitle {
+    text: SharedString,
+    color: Option<Hsla>,
+}
+
+impl PanelTitle {
+    pub fn new(text: impl Into<SharedString>) -> Self {
+        Self {
+            text: text.into(),
+            color: None,
+        }
+    }
+
+    pub fn color(mut self, color: Hsla) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    fn build_text(text: SharedString, color: Option<Hsla>) -> Text {
+        let text = Text::field_label(text)
+            .font_size(FontSizes::LG)
+            .font_weight(FontWeight::SEMIBOLD);
+
+        match color {
+            Some(color) => text.color(color),
+            None => text,
+        }
+    }
+}
+
+impl RenderOnce for PanelTitle {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        Self::build_text(self.text, self.color)
+    }
+}
+
 #[derive(IntoElement, Default)]
 pub struct RequiredMarker;
 
@@ -861,7 +898,10 @@ impl AppInput {
 
 impl RenderOnce for AppInput {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        div().font_family(AppFonts::BODY).children(self.children)
+        div()
+            .font_family(AppFonts::BODY)
+            .font_weight(FontWeight::MEDIUM)
+            .children(self.children)
     }
 }
 
@@ -888,9 +928,9 @@ impl AppTab {
 impl RenderOnce for AppTab {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let weight = if self.active {
-            FontWeight::MEDIUM
+            FontWeight::BOLD
         } else {
-            FontWeight::NORMAL
+            FontWeight::MEDIUM
         };
 
         div()
@@ -918,7 +958,10 @@ impl AppSection {
 
 impl RenderOnce for AppSection {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        div().font_family(AppFonts::BODY).children(self.children)
+        div()
+            .font_family(AppFonts::BODY)
+            .font_weight(FontWeight::MEDIUM)
+            .children(self.children)
     }
 }
 
@@ -940,14 +983,17 @@ impl AppPanel {
 
 impl RenderOnce for AppPanel {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        div().font_family(AppFonts::BODY).children(self.children)
+        div()
+            .font_family(AppFonts::BODY)
+            .font_weight(FontWeight::MEDIUM)
+            .children(self.children)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AppFonts, BUNDLED_FONT_ASSETS, Body, Caption, FieldLabel, Headline, RequiredMarker,
+        AppFonts, Body, Caption, FieldLabel, Headline, RequiredMarker, BUNDLED_FONT_ASSETS,
     };
     use crate::primitives::TextVariant;
 
@@ -969,34 +1015,39 @@ mod tests {
     }
 
     #[test]
-    fn mono_font_contract_stays_on_jetbrains_mono() {
-        assert_eq!(AppFonts::MONO, "JetBrains Mono");
+    fn mono_font_contract_stays_on_ibm_plex_mono() {
+        assert_eq!(AppFonts::BODY, "IBM Plex Mono");
+        assert_eq!(AppFonts::HEADLINE, "IBM Plex Mono");
+        assert_eq!(AppFonts::MONO, "IBM Plex Mono");
         assert_eq!(AppFonts::MONO_FALLBACK, "monospace");
         assert_eq!(AppFonts::CODE, AppFonts::MONO);
         assert_eq!(AppFonts::SHORTCUT, AppFonts::MONO);
     }
 
     #[test]
-    fn mono_bundled_assets_remain_jetbrains_mono_files() {
+    fn mono_bundled_assets_use_ibm_plex_mono_files() {
         let mono_assets: Vec<_> = BUNDLED_FONT_ASSETS
             .iter()
-            .filter(|asset| asset.family == AppFonts::MONO)
             .map(|asset| asset.file_name)
             .collect();
 
         assert_eq!(
             mono_assets,
             vec![
-                "JetBrainsMono-Regular.ttf",
-                "JetBrainsMono-Bold.ttf",
-                "JetBrainsMono-Italic.ttf",
-                "JetBrainsMono-BoldItalic.ttf",
+                "IBMPlexMono-Regular.ttf",
+                "IBMPlexMono-Italic.ttf",
+                "IBMPlexMono-Medium.ttf",
+                "IBMPlexMono-MediumItalic.ttf",
+                "IBMPlexMono-SemiBold.ttf",
+                "IBMPlexMono-SemiBoldItalic.ttf",
+                "IBMPlexMono-Bold.ttf",
+                "IBMPlexMono-BoldItalic.ttf",
             ]
         );
     }
 
     #[test]
-    fn headline_wrapper_stays_on_space_grotesk_for_window_titles() {
+    fn headline_wrapper_keeps_shared_headline_contract_for_window_titles() {
         let headline = Headline::new("Connection Manager").xl().text();
 
         assert_eq!(
@@ -1007,7 +1058,7 @@ mod tests {
     }
 
     #[test]
-    fn body_and_caption_wrappers_keep_inter_contracts() {
+    fn body_and_caption_wrappers_keep_shared_mono_first_contracts() {
         let body = Body::new("Sidebar").text();
         let caption = Caption::new("Settings").text();
 

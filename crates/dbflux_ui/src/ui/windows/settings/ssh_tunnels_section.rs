@@ -1,15 +1,16 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
-use super::form_section::{FormSection, create_blur_subscription};
+use super::form_section::{create_blur_subscription, FormSection};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use super::ssh_tunnels::SshFormNav;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::focus_frame;
-use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
+use dbflux_components::primitives::{Icon as FluxIcon, Label};
+use dbflux_components::typography::{Body, MonoCaption, MonoMeta, PanelTitle};
 use dbflux_core::SshTunnelProfile;
 use gpui::prelude::*;
 use gpui::*;
@@ -548,9 +549,10 @@ impl SshTunnelsSection {
                             )
                     }),
             )
-            .child(Text::caption(
-                "Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)",
-            ))
+            .child(
+                Body::new("Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)")
+                    .color(cx.theme().muted_foreground),
+            )
             .child(
                 div()
                     .flex()
@@ -574,7 +576,10 @@ impl SshTunnelsSection {
                     )
                     .when_some(save_checkbox, |div, checkbox| div.child(checkbox)),
             )
-            .child(Text::caption("Leave empty if the key has no passphrase"))
+            .child(
+                Body::new("Leave empty if the key has no passphrase")
+                    .color(cx.theme().muted_foreground),
+            )
     }
 
     fn render_password_fields(
@@ -673,7 +678,11 @@ impl SshTunnelsSection {
                     .flex_col()
                     .gap_1()
                     .when(tunnels.is_empty(), |root: Div| {
-                        root.child(div().p_4().child(Text::muted("No saved SSH tunnels")))
+                        root.child(
+                            div().p_4().child(
+                                Body::new("No saved SSH tunnels").color(theme.muted_foreground),
+                            ),
+                        )
                     })
                     .children(tunnels.iter().enumerate().map(|(idx, tunnel)| {
                         let tunnel_id = tunnel.id;
@@ -726,9 +735,9 @@ impl SshTunnelsSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(Label::new(tunnel.name.clone()))
-                                            .child(Text::caption(subtitle))
-                                            .child(Text::caption(auth_label)),
+                                            .child(Body::new(tunnel.name.clone()))
+                                            .child(MonoMeta::new(subtitle))
+                                            .child(MonoCaption::new(auth_label)),
                                     ),
                             )
                     })),
@@ -738,21 +747,23 @@ impl SshTunnelsSection {
     fn render_test_status(&self, _cx: &mut Context<Self>) -> Option<AnyElement> {
         match self.ssh_test_status {
             SshTestStatus::None => None,
-            SshTestStatus::Testing => {
-                Some(Text::muted("Testing SSH connection...").into_any_element())
-            }
+            SshTestStatus::Testing => Some(
+                Body::new("Testing SSH connection...")
+                    .color(_cx.theme().muted_foreground)
+                    .into_any_element(),
+            ),
             SshTestStatus::Success => Some(
-                Text::body("SSH connection successful")
-                    .success()
+                Body::new("SSH connection successful")
+                    .color(_cx.theme().success)
                     .into_any_element(),
             ),
             SshTestStatus::Failed => Some(
-                Text::body(
+                Body::new(
                     self.ssh_test_error
                         .clone()
                         .unwrap_or_else(|| "SSH connection failed".to_string()),
                 )
-                .danger()
+                .color(_cx.theme().danger)
                 .into_any_element(),
             ),
         }
@@ -771,7 +782,7 @@ impl SshTunnelsSection {
         let field = self.ssh_form_field;
 
         layout::sticky_form_shell(
-            Text::label(layout::editor_panel_title(
+            PanelTitle::new(layout::editor_panel_title(
                 "SSH Tunnel",
                 editing_id.is_some(),
             )),

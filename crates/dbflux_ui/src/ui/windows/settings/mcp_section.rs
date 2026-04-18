@@ -2,17 +2,18 @@ use super::layout;
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId};
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
-use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
+use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::components::multi_select::MultiSelect;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{InputEvent, InputState};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::primitives::Label;
+use dbflux_components::typography::{Body, FieldLabel, MonoCaption, MonoMeta, SubSectionLabel};
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
 use std::collections::HashSet;
 
 /// Tool display metadata: (id, label, description)
@@ -744,7 +745,10 @@ impl McpSection {
                     .flex_col()
                     .gap_1()
                     .when(clients.is_empty(), |r| {
-                        r.child(Text::muted("No trusted clients configured."))
+                        r.child(
+                            Body::new("No trusted clients configured.")
+                                .color(theme.muted_foreground),
+                        )
                     })
                     .children(clients.iter().map(|client| {
                         let id = client.id.clone();
@@ -778,14 +782,14 @@ impl McpSection {
                                     .flex()
                                     .justify_between()
                                     .items_center()
-                                    .child(Label::new(client.name.clone()))
+                                    .child(FieldLabel::new(client.name.clone()))
                                     .child(if client.active {
-                                        Text::caption("active").success()
+                                        MonoCaption::new("active").color(theme.success)
                                     } else {
-                                        Text::caption("inactive")
+                                        MonoCaption::new("inactive")
                                     }),
                             )
-                            .child(Text::caption(client.id.clone()))
+                            .child(MonoMeta::new(client.id.clone()))
                     })),
             );
 
@@ -838,7 +842,7 @@ impl McpSection {
                                         cx.notify();
                                     })),
                             )
-                            .child(Text::body("Active")),
+                            .child(Body::new("Active")),
                     ),
             )
             .child(
@@ -850,11 +854,14 @@ impl McpSection {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .child(Text::caption(if self.client_has_unsaved_changes(cx) {
-                        "Unsaved form changes"
-                    } else {
-                        "All changes applied"
-                    }))
+                    .child(
+                        Body::new(if self.client_has_unsaved_changes(cx) {
+                            "Unsaved form changes"
+                        } else {
+                            "All changes applied"
+                        })
+                        .color(theme.muted_foreground),
+                    )
                     .child(
                         div()
                             .flex()
@@ -925,7 +932,7 @@ impl McpSection {
                     .flex_col()
                     .gap_1()
                     .when(roles.is_empty(), |r| {
-                        r.child(Text::muted("No roles configured."))
+                        r.child(Body::new("No roles configured.").color(theme.muted_foreground))
                     })
                     .children(roles.iter().map(|role| {
                         let id = role.id.clone();
@@ -960,7 +967,7 @@ impl McpSection {
                                     .items_center()
                                     .justify_between()
                                     .gap_2()
-                                    .child(Label::new(
+                                    .child(FieldLabel::new(
                                         builtin_display_name(&role.id)
                                             .unwrap_or(role.id.as_str())
                                             .to_string(),
@@ -974,13 +981,13 @@ impl McpSection {
                                                 .text_xs()
                                                 .bg(theme.accent.opacity(0.2))
                                                 .child(
-                                                    Text::caption("built-in")
+                                                    MonoCaption::new("built-in")
                                                         .color(theme.accent_foreground),
                                                 ),
                                         )
                                     }),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "{} {}",
                                 role.policy_ids.len(),
                                 if role.policy_ids.len() == 1 {
@@ -1026,7 +1033,10 @@ impl McpSection {
                     .child(Label::new("Role ID"))
                     .child(Input::new(&self.input_role_id).small())
                     .child(Label::new("Policies"))
-                    .child(Text::caption("Select policies defined in the Policies tab"))
+                    .child(
+                        Body::new("Select policies defined in the Policies tab")
+                            .color(theme.muted_foreground),
+                    )
                     .child(self.role_policies_multiselect.clone()),
             )
             .child(
@@ -1039,7 +1049,10 @@ impl McpSection {
                     .justify_end()
                     .gap_2()
                     .when(role_is_builtin, |d| {
-                        d.child(Text::caption("Built-in roles cannot be modified"))
+                        d.child(
+                            Body::new("Built-in roles cannot be modified")
+                                .color(theme.muted_foreground),
+                        )
                     })
                     .child(
                         Button::new("mcp-role-delete", "Delete")
@@ -1104,7 +1117,7 @@ impl McpSection {
                     .flex_col()
                     .gap_1()
                     .when(policies.is_empty(), |r| {
-                        r.child(Text::muted("No policies configured."))
+                        r.child(Body::new("No policies configured.").color(theme.muted_foreground))
                     })
                     .children(policies.iter().map(|policy| {
                         let id = policy.id.clone();
@@ -1139,7 +1152,7 @@ impl McpSection {
                                     .items_center()
                                     .justify_between()
                                     .gap_2()
-                                    .child(Label::new(
+                                    .child(FieldLabel::new(
                                         builtin_display_name(&policy.id)
                                             .unwrap_or(policy.id.as_str())
                                             .to_string(),
@@ -1153,13 +1166,13 @@ impl McpSection {
                                                 .text_xs()
                                                 .bg(theme.accent.opacity(0.2))
                                                 .child(
-                                                    Text::caption("built-in")
+                                                    MonoCaption::new("built-in")
                                                         .color(theme.accent_foreground),
                                                 ),
                                         )
                                     }),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "{} tools · {} classes",
                                 policy.allowed_tools.len(),
                                 policy.allowed_classes.len()
@@ -1237,8 +1250,11 @@ impl McpSection {
                                             .flex()
                                             .flex_col()
                                             .gap_0p5()
-                                            .child(Label::new(label))
-                                            .child(Text::caption(description)),
+                                            .child(FieldLabel::new(label))
+                                            .child(
+                                                Body::new(description)
+                                                    .color(theme.muted_foreground),
+                                            ),
                                     )
                             })),
                     )
@@ -1248,7 +1264,7 @@ impl McpSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(Text::label_sm(*group_name).muted_foreground())
+                            .child(SubSectionLabel::new(*group_name))
                             .child(div().flex().flex_col().gap_2().pl_2().children(
                                 tools.iter().map(|&tool| {
                                     let checked = self.draft_policy_tools.contains(tool);
@@ -1283,8 +1299,11 @@ impl McpSection {
                                                 .flex()
                                                 .flex_col()
                                                 .gap_0p5()
-                                                .child(Label::new(label))
-                                                .child(Text::caption(description)),
+                                                .child(FieldLabel::new(label))
+                                                .child(
+                                                    Body::new(description)
+                                                        .color(theme.muted_foreground),
+                                                ),
                                         )
                                 }),
                             ))
@@ -1300,7 +1319,10 @@ impl McpSection {
                     .justify_end()
                     .gap_2()
                     .when(policy_is_builtin, |d| {
-                        d.child(Text::caption("Built-in policies cannot be modified"))
+                        d.child(
+                            Body::new("Built-in policies cannot be modified")
+                                .color(theme.muted_foreground),
+                        )
                     })
                     .child(
                         Button::new("mcp-policy-delete", "Delete")

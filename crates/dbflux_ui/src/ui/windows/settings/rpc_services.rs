@@ -1,8 +1,9 @@
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Heights, Radii};
+use crate::ui::tokens::{Heights, Radii};
 use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::primitives::{Icon as PrimitiveIcon, Label, Text};
+use dbflux_components::primitives::{Icon as PrimitiveIcon, Label};
+use dbflux_components::typography::{Body, MonoCaption, MonoLabel, MonoMeta, PanelTitle};
 use dbflux_core::ServiceConfig;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::prelude::FluentBuilder;
@@ -773,7 +774,9 @@ impl ServicesSection {
                     .flex_col()
                     .gap_1()
                     .when(services.is_empty(), |container| {
-                        container.child(div().p_4().child(Text::muted("No services configured")))
+                        container.child(div().p_4().child(
+                            Body::new("No services configured").color(theme.muted_foreground),
+                        ))
                     })
                     .children(services.iter().enumerate().map(|(idx, service)| {
                         let is_selected = editing_idx == Some(idx);
@@ -823,11 +826,11 @@ impl ServicesSection {
                                                     .items_center()
                                                     .gap_2()
                                                     .child(if is_disabled {
-                                                        Text::label_sm(service.socket_id.clone())
-                                                            .muted_foreground()
+                                                        MonoLabel::new(service.socket_id.clone())
+                                                            .color(theme.muted_foreground)
                                                             .into_any_element()
                                                     } else {
-                                                        Text::label_sm(service.socket_id.clone())
+                                                        MonoLabel::new(service.socket_id.clone())
                                                             .into_any_element()
                                                     })
                                                     .when(is_disabled, |container| {
@@ -836,15 +839,11 @@ impl ServicesSection {
                                                                 .px_1()
                                                                 .rounded(px(3.0))
                                                                 .bg(theme.secondary)
-                                                                .child(
-                                                                    Text::caption("Disabled")
-                                                                        .font_size(FontSizes::XS)
-                                                                        .muted_foreground(),
-                                                                ),
+                                                                .child(MonoCaption::new("Disabled")),
                                                         )
                                                     }),
                                             )
-                                            .child(Text::caption(subtitle.to_string())),
+                                            .child(MonoMeta::new(subtitle.to_string())),
                                     ),
                             )
                     })),
@@ -885,7 +884,7 @@ impl ServicesSection {
                     .p_4()
                     .border_b_1()
                     .border_color(border)
-                    .child(Text::label(title)),
+                    .child(PanelTitle::new(title)),
             )
             .child(
                 div()
@@ -1067,7 +1066,7 @@ impl ServicesSection {
                         cx.notify();
                     })),
             )
-            .child(div().text_sm().child("Enable this service"))
+            .child(Body::new("Enable this service"))
     }
 
     fn render_svc_args_section(
@@ -1244,7 +1243,7 @@ impl ServicesSection {
                                     )
                                     .child(Input::new(key_input).small()),
                             )
-                            .child(Text::caption("="))
+                            .child(MonoCaption::new("="))
                             .child(
                                 div()
                                     .flex_1()

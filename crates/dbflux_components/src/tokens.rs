@@ -1,4 +1,4 @@
-use gpui::{Hsla, Pixels, px, rgb};
+use gpui::{px, rgb, Hsla, Pixels};
 
 pub struct Spacing;
 
@@ -28,12 +28,12 @@ impl Heights {
 pub struct FontSizes;
 
 impl FontSizes {
-    pub const XS: Pixels = px(11.0);
-    pub const SM: Pixels = px(12.0);
-    pub const BASE: Pixels = px(13.0);
-    pub const LG: Pixels = px(14.0);
-    pub const XL: Pixels = px(16.0);
-    pub const TITLE: Pixels = px(18.0);
+    pub const XS: Pixels = px(12.0);
+    pub const SM: Pixels = px(13.0);
+    pub const BASE: Pixels = px(14.0);
+    pub const LG: Pixels = px(15.0);
+    pub const XL: Pixels = px(18.0);
+    pub const TITLE: Pixels = px(20.0);
 }
 
 pub struct Radii;

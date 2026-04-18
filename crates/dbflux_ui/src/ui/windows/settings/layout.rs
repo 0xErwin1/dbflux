@@ -1,4 +1,4 @@
-use dbflux_components::primitives::Text;
+use dbflux_components::typography::{Body, Headline};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
@@ -34,8 +34,12 @@ pub(super) fn section_header(
         .py_5()
         .border_b_1()
         .border_color(ghost_border_color())
-        .child(Text::heading(title))
-        .child(div().mt_1().child(Text::muted(subtitle)))
+        .child(Headline::new(title).xl())
+        .child(
+            div()
+                .mt_1()
+                .child(Body::new(subtitle).color(_theme.muted_foreground)),
+        )
 }
 
 pub(super) fn section_container(content: impl IntoElement) -> Div {
@@ -89,7 +93,7 @@ pub(super) fn sticky_form_shell(
 #[cfg(test)]
 mod tests {
     use super::{
-        StickyFooterLayout, compact_input_shell, editor_panel_title, sticky_footer_layout,
+        compact_input_shell, editor_panel_title, sticky_footer_layout, StickyFooterLayout,
     };
     use gpui::div;
 

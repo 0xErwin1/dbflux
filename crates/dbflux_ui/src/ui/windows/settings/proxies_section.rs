@@ -1,14 +1,15 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::layout;
 use super::proxies::ProxyFormNav;
 use super::section_trait::SectionFocusEvent;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::focus_frame;
-use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
+use dbflux_components::primitives::{Icon as FluxIcon, Label};
+use dbflux_components::typography::{Body, MonoCaption, MonoMeta, PanelTitle};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use gpui::prelude::*;
 use gpui::*;
@@ -552,7 +553,11 @@ impl ProxiesSection {
                     .flex_col()
                     .gap_1()
                     .when(proxies.is_empty(), |root: Div| {
-                        root.child(div().p_4().child(Text::muted("No saved proxies")))
+                        root.child(
+                            div()
+                                .p_4()
+                                .child(Body::new("No saved proxies").color(theme.muted_foreground)),
+                        )
                     })
                     .children(proxies.iter().enumerate().map(|(idx, proxy)| {
                         let proxy_id = proxy.id;
@@ -604,7 +609,7 @@ impl ProxiesSection {
                                                     .color(theme.muted_foreground),
                                             )
                                             .when(!proxy.enabled, |root| {
-                                                root.child(Text::caption("off"))
+                                                root.child(MonoCaption::new("off"))
                                             }),
                                     )
                                     .child(
@@ -612,8 +617,8 @@ impl ProxiesSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(Label::new(proxy.name.clone()))
-                                            .child(Text::caption(subtitle)),
+                                            .child(Body::new(proxy.name.clone()))
+                                            .child(MonoMeta::new(subtitle)),
                                     ),
                             )
                     })),
@@ -634,7 +639,7 @@ impl ProxiesSection {
         let field = self.proxy_form_field;
 
         layout::sticky_form_shell(
-            Text::label(layout::editor_panel_title("Proxy", editing_id.is_some())),
+            PanelTitle::new(layout::editor_panel_title("Proxy", editing_id.is_some())),
             div()
                 .flex()
                 .flex_col()
@@ -694,9 +699,10 @@ impl ProxiesSection {
                             ProxyFormField::NoProxy,
                             cx,
                         ))
-                        .child(Text::caption(
-                            "Comma-separated hosts/CIDRs to bypass the proxy",
-                        )),
+                        .child(
+                            Body::new("Comma-separated hosts/CIDRs to bypass the proxy")
+                                .color(theme.muted_foreground),
+                        ),
                 )
                 .child({
                     let is_enabled_focused = is_form_focused && field == ProxyFormField::Enabled;
@@ -722,7 +728,7 @@ impl ProxiesSection {
                                     cx.notify();
                                 })),
                         )
-                        .child(div().text_sm().child("Enabled"))
+                        .child(Body::new("Enabled"))
                 }),
             div()
                 .flex()

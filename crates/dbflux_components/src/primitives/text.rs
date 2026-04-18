@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font};
+use gpui::{div, font, App, FontFallbacks, FontWeight, Hsla, SharedString, Window};
 use gpui_component::ActiveTheme;
 
 use crate::tokens::FontSizes;
@@ -75,7 +75,7 @@ pub(crate) struct TextRoleContract {
 pub enum TextVariant {
     /// Section headings — XL, semibold, foreground.
     Heading,
-    /// Body text — BASE, default weight, foreground.
+    /// Body text — BASE, medium, foreground.
     Body,
     /// Emphasized labels — BASE, medium, foreground.
     Label,
@@ -83,15 +83,15 @@ pub enum TextVariant {
     LabelSm,
     /// Page titles and brand names — TITLE, bold, foreground.
     Title,
-    /// Small labels — SM, default weight, muted foreground.
+    /// Small labels — SM, medium, muted foreground.
     Caption,
-    /// De-emphasized text — SM, default weight, muted foreground.
+    /// De-emphasized text — SM, medium, muted foreground.
     Muted,
-    /// Very subtle text — SM, default weight, muted foreground at 0.5 opacity.
+    /// Very subtle text — SM, medium, muted foreground at 0.5 opacity.
     Dim,
-    /// Slightly de-emphasized text — SM, default weight, muted foreground at 0.7 opacity.
+    /// Slightly de-emphasized text — SM, medium, muted foreground at 0.7 opacity.
     DimSecondary,
-    /// Inline code — SM, monospace, foreground.
+    /// Inline code — SM, monospace, medium, foreground.
     Code,
     /// Shared headline role — TITLE, bold, headline font, foreground.
     Headline3,
@@ -99,17 +99,17 @@ pub enum TextVariant {
     Headline2,
     /// Shared headline role — LG, bold, headline font, foreground.
     Headline1,
-    /// Shared section label role — XS, bold, body font, muted foreground.
+    /// Shared section label role — SM, medium, body font, muted foreground.
     SubSectionLabel,
     /// Shared sidebar label role — XS, bold, mono font, muted foreground.
     SidebarGroupLabel,
-    /// Shared small body role — SM, default weight, body font, foreground.
+    /// Shared small body role — SM, medium, body font, foreground.
     BodySm,
-    /// Shared caption role — XS, default weight, body font, muted foreground.
+    /// Shared caption role — XS, medium, body font, muted foreground.
     CaptionXs,
     /// Shared key hint role — XS, bold, mono font, muted foreground.
     KeyHint,
-    /// Shared field label role — SM, medium, body font, foreground.
+    /// Shared field label role — BASE, medium, body font, foreground.
     FieldLabel,
 }
 
@@ -318,14 +318,14 @@ impl TextVariant {
                 family: None,
                 fallbacks: &[],
                 size: FontSizes::XL,
-                weight: FontWeight::SEMIBOLD,
+                weight: FontWeight::BOLD,
                 color: TextDefaultColor::Foreground,
             },
             Self::Body => TextRoleContract {
                 family: None,
                 fallbacks: &[],
                 size: FontSizes::BASE,
-                weight: FontWeight::default(),
+                weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::Foreground,
             },
             Self::Label => TextRoleContract {
@@ -353,35 +353,35 @@ impl TextVariant {
                 family: None,
                 fallbacks: &[],
                 size: FontSizes::SM,
-                weight: FontWeight::default(),
+                weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::Muted => TextRoleContract {
                 family: None,
                 fallbacks: &[],
                 size: FontSizes::SM,
-                weight: FontWeight::default(),
+                weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::Dim => TextRoleContract {
                 family: None,
                 fallbacks: &[],
                 size: FontSizes::SM,
-                weight: FontWeight::default(),
+                weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::MutedForegroundDim,
             },
             Self::DimSecondary => TextRoleContract {
                 family: None,
                 fallbacks: &[],
                 size: FontSizes::SM,
-                weight: FontWeight::default(),
+                weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::MutedForegroundSecondary,
             },
             Self::Code => TextRoleContract {
                 family: Some(AppFonts::MONO),
                 fallbacks: &[AppFonts::MONO_FALLBACK],
                 size: FontSizes::SM,
-                weight: FontWeight::default(),
+                weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::Foreground,
             },
             Self::Headline3 => TextRoleContract {
@@ -408,8 +408,8 @@ impl TextVariant {
             Self::SubSectionLabel => TextRoleContract {
                 family: Some(AppFonts::BODY),
                 fallbacks: &[],
-                size: FontSizes::XS,
-                weight: FontWeight::BOLD,
+                size: FontSizes::SM,
+                weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::SidebarGroupLabel => TextRoleContract {
@@ -423,14 +423,14 @@ impl TextVariant {
                 family: Some(AppFonts::BODY),
                 fallbacks: &[],
                 size: FontSizes::SM,
-                weight: FontWeight::default(),
+                weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::Foreground,
             },
             Self::CaptionXs => TextRoleContract {
                 family: Some(AppFonts::BODY),
                 fallbacks: &[],
                 size: FontSizes::XS,
-                weight: FontWeight::default(),
+                weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::KeyHint => TextRoleContract {
@@ -443,7 +443,7 @@ impl TextVariant {
             Self::FieldLabel => TextRoleContract {
                 family: Some(AppFonts::BODY),
                 fallbacks: &[],
-                size: FontSizes::SM,
+                size: FontSizes::BASE,
                 weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::Foreground,
             },
@@ -510,8 +510,8 @@ mod tests {
         let subsection = TextVariant::SubSectionLabel.role_contract();
         assert_eq!(subsection.family, Some(AppFonts::BODY));
         assert_eq!(subsection.fallbacks, NO_FALLBACKS);
-        assert_eq!(subsection.size, FontSizes::XS);
-        assert_eq!(subsection.weight, FontWeight::BOLD);
+        assert_eq!(subsection.size, FontSizes::SM);
+        assert_eq!(subsection.weight, FontWeight::MEDIUM);
 
         let sidebar = TextVariant::SidebarGroupLabel.role_contract();
         assert_eq!(sidebar.family, Some(AppFonts::SHORTCUT));
@@ -526,7 +526,13 @@ mod tests {
         assert_eq!(body.family, Some(AppFonts::BODY));
         assert_eq!(body.fallbacks, NO_FALLBACKS);
         assert_eq!(body.size, FontSizes::SM);
-        assert_eq!(body.weight, FontWeight::NORMAL);
+        assert_eq!(body.weight, FontWeight::MEDIUM);
+
+        let body_base = TextVariant::Body.role_contract();
+        assert_eq!(body_base.family, None);
+        assert_eq!(body_base.fallbacks, NO_FALLBACKS);
+        assert_eq!(body_base.size, FontSizes::BASE);
+        assert_eq!(body_base.weight, FontWeight::MEDIUM);
 
         let key_hint = TextVariant::KeyHint.role_contract();
         assert_eq!(key_hint.family, Some(AppFonts::SHORTCUT));
@@ -538,12 +544,12 @@ mod tests {
         assert_eq!(code.family, Some(AppFonts::MONO));
         assert_eq!(code.fallbacks, &[AppFonts::MONO_FALLBACK]);
         assert_eq!(code.size, FontSizes::SM);
-        assert_eq!(code.weight, FontWeight::NORMAL);
+        assert_eq!(code.weight, FontWeight::MEDIUM);
 
         let field_label = TextVariant::FieldLabel.role_contract();
         assert_eq!(field_label.family, Some(AppFonts::BODY));
         assert_eq!(field_label.fallbacks, NO_FALLBACKS);
-        assert_eq!(field_label.size, FontSizes::SM);
+        assert_eq!(field_label.size, FontSizes::BASE);
         assert_eq!(field_label.weight, FontWeight::MEDIUM);
     }
 }

@@ -1,7 +1,7 @@
-use crate::keymap::{ContextId, KeyChord, default_keymap};
-use crate::ui::tokens::FontSizes;
+use crate::keymap::{default_keymap, ContextId, KeyChord};
 use dbflux_components::controls::Input;
-use dbflux_components::primitives::{Icon as FluxIcon, Text};
+use dbflux_components::primitives::Icon as FluxIcon;
+use dbflux_components::typography::{Body, FieldLabel, KeyHint, MonoCaption};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -204,18 +204,18 @@ impl KeybindingsSection {
                                         .flex()
                                         .items_center()
                                         .gap_2()
-                                        .child(Text::label(context.display_name()))
-                                        .child(Text::muted(format!(
-                                            "({} bindings)",
-                                            binding_count
-                                        ))),
+                                        .child(FieldLabel::new(context.display_name()))
+                                        .child(
+                                            Body::new(format!("({} bindings)", binding_count))
+                                                .color(muted_foreground),
+                                        ),
                                 )
                                 // Inherits info
                                 .when(has_parent, |d| {
-                                    d.child(
-                                        Text::muted(format!("inherits from {}", parent_name))
-                                            .font_size(FontSizes::XS),
-                                    )
+                                    d.child(MonoCaption::new(format!(
+                                        "inherits from {}",
+                                        parent_name
+                                    )))
                                 })
                         }
 
@@ -288,11 +288,9 @@ impl KeybindingsSection {
                 secondary,
             )))
             .child(div().flex_1().child(if is_inherited {
-                Text::body(cmd_name.to_string())
-                    .font_size(FontSizes::SM)
-                    .color(muted_foreground)
+                Body::new(cmd_name.to_string()).color(muted_foreground)
             } else {
-                Text::body(cmd_name.to_string()).font_size(FontSizes::SM)
+                Body::new(cmd_name.to_string())
             }))
             .when(is_inherited, |d| {
                 d.child(
@@ -301,7 +299,7 @@ impl KeybindingsSection {
                         .py(px(2.0))
                         .rounded(px(4.0))
                         .bg(secondary)
-                        .child(Text::muted("inherited").font_size(FontSizes::XS)),
+                        .child(MonoCaption::new("inherited")),
                 )
             })
     }
@@ -354,7 +352,7 @@ impl KeybindingsSection {
             .bg(secondary)
             .border_1()
             .border_color(muted_foreground.opacity(0.3))
-            .child(Text::label_sm(key.to_string()).font_size(FontSizes::XS))
+            .child(KeyHint::new(key.to_string()))
     }
 
     fn format_key(&self, key: &str) -> String {
