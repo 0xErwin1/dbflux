@@ -218,8 +218,16 @@ struct PendingModalOpen {
 }
 
 struct PendingDeleteConfirm {
-    row_idx: usize,
+    row_indices: Vec<usize>,
     is_table: bool,
+}
+
+/// Remaining operations in a batch save pipeline.
+/// After deletes complete, inserts run one by one, then dirty rows.
+/// pending_refresh is only set after all operations finish.
+struct PendingBatchRemaining {
+    pending_inserts: Vec<usize>,
+    dirty_rows: Vec<usize>,
 }
 
 struct PendingDocumentPreview {
@@ -307,6 +315,7 @@ pub struct DataGridPanel {
     pending_refresh: bool,
     pending_toast: Option<PendingToast>,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
+    pending_batch_remaining: Option<PendingBatchRemaining>,
     is_active_tab: bool,
 
     // Focus
@@ -711,6 +720,7 @@ impl DataGridPanel {
             pending_refresh: false,
             pending_toast: None,
             pending_delete_confirm: None,
+            pending_batch_remaining: None,
             is_active_tab: true,
             focus_handle,
             focus_mode: GridFocusMode::default(),
@@ -1130,6 +1140,18 @@ impl DataGridPanel {
                     DataTableEvent::CommitDeleteRequested(row_idx) => {
                         this.handle_commit_delete(*row_idx, cx);
                     }
+                    DataTableEvent::SaveAllRequested {
+                        pending_deletes,
+                        pending_inserts,
+                        dirty_rows,
+                    } => {
+                        this.handle_save_all(
+                            pending_deletes.clone(),
+                            pending_inserts.clone(),
+                            dirty_rows.clone(),
+                            cx,
+                        );
+                    }
                 }
             });
 
@@ -1177,7 +1199,7 @@ impl DataGridPanel {
                 DocumentTreeEvent::DeleteRequested(node_id) => {
                     if let Some(doc_idx) = node_id.doc_index() {
                         this.pending_delete_confirm = Some(PendingDeleteConfirm {
-                            row_idx: doc_idx,
+                            row_indices: vec![doc_idx],
                             is_table: false,
                         });
                         cx.notify();
