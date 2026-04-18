@@ -29,6 +29,7 @@ pub struct TabBar {
 }
 
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct TabContextMenu {
     pub tab_id: DocumentId,
     pub tab_index: usize,

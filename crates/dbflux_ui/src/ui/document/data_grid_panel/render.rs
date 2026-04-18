@@ -6,12 +6,12 @@ use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::Input;
+use dbflux_components::controls::InputState;
 use dbflux_components::primitives::{Icon, Text, surface_raised};
 use dbflux_core::{Pagination, SortDirection, Value};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use dbflux_components::controls::InputState;
 
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -762,9 +762,7 @@ impl DataGridPanel {
             let cards: Vec<_> = rows
                 .iter()
                 .enumerate()
-                .map(|(row_idx, row)| {
-                    self.render_document_card(row_idx, row, columns, _theme)
-                })
+                .map(|(row_idx, row)| self.render_document_card(row_idx, row, columns, _theme))
                 .collect();
 
             div()

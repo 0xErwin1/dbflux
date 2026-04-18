@@ -7,8 +7,6 @@ use dbflux_components::composites::{
 };
 use gpui::*;
 
-use crate::ui::icons::AppIcon;
-
 /// Full-screen transparent overlay that dismisses the menu on any click outside.
 pub fn render_menu_overlay(
     id: impl Into<ElementId>,

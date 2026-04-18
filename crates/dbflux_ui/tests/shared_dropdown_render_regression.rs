@@ -3,7 +3,7 @@ use dbflux_ui::app_state_entity::AppStateEntity;
 use dbflux_ui::ui::document::{AuditDocument, KeyValueDocument};
 use dbflux_ui::ui::theme;
 use gpui::prelude::*;
-use gpui::{div, px, AppContext, Context, Entity, Modifiers, Render, TestAppContext, Window};
+use gpui::{AppContext, Context, Entity, Modifiers, Render, TestAppContext, Window, div, px};
 use uuid::Uuid;
 
 fn dropdown_menu_selector(id: &str) -> String {

@@ -4,12 +4,12 @@ use dbflux_components::composites::{
 };
 use dbflux_components::controls::{Input, InputState};
 use dbflux_components::primitives::focus_frame;
-use dbflux_ui::ui::components::context_menu::{render_menu_container, MenuItem};
+use dbflux_ui::ui::components::context_menu::{MenuItem, render_menu_container};
 use dbflux_ui::ui::icons::AppIcon;
 use dbflux_ui::ui::theme;
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, AppContext, Context, Entity, Modifiers, Render, TestAppContext, Window,
+    AnyElement, AppContext, Context, Entity, Modifiers, Render, TestAppContext, Window, div, px,
 };
 use gpui_component::Root;
 use std::cell::RefCell;

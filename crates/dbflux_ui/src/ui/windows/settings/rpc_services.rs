@@ -1,6 +1,7 @@
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
+use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::{Label, Text};
 use dbflux_core::ServiceConfig;
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -10,7 +11,6 @@ use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use dbflux_components::controls::{GpuiInput as Input, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Icon, IconName};
 use std::collections::HashMap;
