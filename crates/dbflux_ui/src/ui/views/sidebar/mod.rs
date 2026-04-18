@@ -18,8 +18,8 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
-use dbflux_components::primitives::Text;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::primitives::Text;
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
     CollectionIndexInfo, CollectionRef, ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind,

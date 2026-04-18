@@ -1,12 +1,13 @@
+use super::SettingsSection;
+use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::layout;
 use super::proxies::ProxyFormNav;
 use super::section_trait::SectionFocusEvent;
-use super::SettingsSection;
-use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use gpui::prelude::*;
@@ -253,25 +254,22 @@ impl ProxiesSection {
             .gap_1()
             .child(Label::new(label.to_string()))
             .child(
-                div()
-                    .rounded(px(4.0))
-                    .border_1()
-                    .border_color(if is_focused {
-                        primary
-                    } else {
-                        transparent_black()
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.switching_input = true;
-                            this.proxy_focus = ProxyFocus::Form;
-                            this.proxy_form_field = field;
-                            this.proxy_focus_current_field(window, cx);
-                            cx.notify();
-                        }),
-                    )
-                    .child(Input::new(input).small()),
+                focus_frame(
+                    is_focused,
+                    Some(primary),
+                    layout::compact_input_shell(Input::new(input).small()),
+                    cx,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        this.switching_input = true;
+                        this.proxy_focus = ProxyFocus::Form;
+                        this.proxy_form_field = field;
+                        this.proxy_focus_current_field(window, cx);
+                        cx.notify();
+                    }),
+                ),
             )
     }
 
@@ -628,192 +626,164 @@ impl ProxiesSection {
         keyring_available: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let primary = theme.primary;
-        let border = theme.border;
         let _muted_foreground = theme.muted_foreground;
 
         let is_form_focused = self.proxy_focus == ProxyFocus::Form;
         let field = self.proxy_form_field;
 
-        let title = if editing_id.is_some() {
-            "Edit Proxy"
-        } else {
-            "New Proxy"
-        };
+        layout::sticky_form_shell(
+            Text::label(layout::editor_panel_title("Proxy", editing_id.is_some())),
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(self.render_proxy_field(
+                    "Name",
+                    &self.input_proxy_name,
+                    is_form_focused && field == ProxyFormField::Name,
+                    primary,
+                    ProxyFormField::Name,
+                    cx,
+                ))
+                .child(self.render_proxy_kind_selector(is_form_focused, field, cx))
+                .child(
+                    div()
+                        .flex()
+                        .gap_3()
+                        .child(div().flex_1().child(self.render_proxy_field(
+                            "Host",
+                            &self.input_proxy_host,
+                            is_form_focused && field == ProxyFormField::Host,
+                            primary,
+                            ProxyFormField::Host,
+                            cx,
+                        )))
+                        .child(div().w(px(80.0)).child(self.render_proxy_field(
+                            "Port",
+                            &self.input_proxy_port,
+                            is_form_focused && field == ProxyFormField::Port,
+                            primary,
+                            ProxyFormField::Port,
+                            cx,
+                        ))),
+                )
+                .child(self.render_proxy_auth_selector(is_form_focused, field, cx))
+                .when(
+                    self.proxy_auth_selection == ProxyAuthSelection::Basic,
+                    |div: Div| {
+                        div.child(self.render_proxy_auth_fields(
+                            keyring_available,
+                            is_form_focused,
+                            field,
+                            cx,
+                        ))
+                    },
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(self.render_proxy_field(
+                            "No Proxy",
+                            &self.input_proxy_no_proxy,
+                            is_form_focused && field == ProxyFormField::NoProxy,
+                            primary,
+                            ProxyFormField::NoProxy,
+                            cx,
+                        ))
+                        .child(Text::caption(
+                            "Comma-separated hosts/CIDRs to bypass the proxy",
+                        )),
+                )
+                .child({
+                    let is_enabled_focused = is_form_focused && field == ProxyFormField::Enabled;
 
-        div()
-            .flex_1()
-            .h_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(Text::label(title)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(self.render_proxy_field(
-                        "Name",
-                        &self.input_proxy_name,
-                        is_form_focused && field == ProxyFormField::Name,
-                        primary,
-                        ProxyFormField::Name,
-                        cx,
-                    ))
-                    .child(self.render_proxy_kind_selector(is_form_focused, field, cx))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_3()
-                            .child(div().flex_1().child(self.render_proxy_field(
-                                "Host",
-                                &self.input_proxy_host,
-                                is_form_focused && field == ProxyFormField::Host,
-                                primary,
-                                ProxyFormField::Host,
-                                cx,
-                            )))
-                            .child(div().w(px(80.0)).child(self.render_proxy_field(
-                                "Port",
-                                &self.input_proxy_port,
-                                is_form_focused && field == ProxyFormField::Port,
-                                primary,
-                                ProxyFormField::Port,
-                                cx,
-                            ))),
-                    )
-                    .child(self.render_proxy_auth_selector(is_form_focused, field, cx))
-                    .when(
-                        self.proxy_auth_selection == ProxyAuthSelection::Basic,
-                        |div: Div| {
-                            div.child(self.render_proxy_auth_fields(
-                                keyring_available,
-                                is_form_focused,
-                                field,
-                                cx,
-                            ))
-                        },
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(self.render_proxy_field(
-                                "No Proxy",
-                                &self.input_proxy_no_proxy,
-                                is_form_focused && field == ProxyFormField::NoProxy,
-                                primary,
-                                ProxyFormField::NoProxy,
-                                cx,
-                            ))
-                            .child(Text::caption(
-                                "Comma-separated hosts/CIDRs to bypass the proxy",
-                            )),
-                    )
-                    .child({
-                        let is_enabled_focused =
-                            is_form_focused && field == ProxyFormField::Enabled;
-
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_enabled_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .child(
-                                Checkbox::new("proxy-enabled")
-                                    .checked(self.proxy_enabled)
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.proxy_enabled = *checked;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(div().text_sm().child("Enabled"))
-                    }),
-            )
-            .child(
-                div()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(border)
-                    .flex()
-                    .gap_2()
-                    .justify_end()
-                    .when(editing_id.is_some(), |root| {
-                        let proxy_id = editing_id.expect("checked is_some");
-                        let is_delete_focused =
-                            is_form_focused && field == ProxyFormField::DeleteButton;
-
-                        root.child(
-                            div()
-                                .rounded(px(4.0))
-                                .border_1()
-                                .border_color(if is_delete_focused {
-                                    primary
-                                } else {
-                                    transparent_black()
-                                })
-                                .child(
-                                    Button::new("delete-proxy", "Delete")
-                                        .small()
-                                        .danger()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.request_delete_proxy(proxy_id, cx);
-                                        })),
-                                ),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_enabled_focused {
+                            primary
+                        } else {
+                            transparent_black()
+                        })
+                        .child(
+                            Checkbox::new("proxy-enabled")
+                                .checked(self.proxy_enabled)
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.proxy_enabled = *checked;
+                                    cx.notify();
+                                })),
                         )
-                    })
-                    .child(div().flex_1())
-                    .child({
-                        let is_save_focused =
-                            is_form_focused && field == ProxyFormField::SaveButton;
+                        .child(div().text_sm().child("Enabled"))
+                }),
+            div()
+                .flex()
+                .gap_2()
+                .justify_end()
+                .when(editing_id.is_some(), |root| {
+                    let proxy_id = editing_id.expect("checked is_some");
+                    let is_delete_focused =
+                        is_form_focused && field == ProxyFormField::DeleteButton;
 
+                    root.child(
                         div()
                             .rounded(px(4.0))
                             .border_1()
-                            .border_color(if is_save_focused {
+                            .border_color(if is_delete_focused {
                                 primary
                             } else {
                                 transparent_black()
                             })
                             .child(
-                                Button::new(
-                                    "save-proxy",
-                                    if editing_id.is_some() {
-                                        "Update"
-                                    } else {
-                                        "Create"
-                                    },
-                                )
-                                .small()
-                                .primary()
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| {
-                                        this.save_proxy(window, cx);
-                                    },
-                                )),
+                                Button::new("delete-proxy", "Delete")
+                                    .small()
+                                    .danger()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.request_delete_proxy(proxy_id, cx);
+                                    })),
+                            ),
+                    )
+                })
+                .child(div().flex_1())
+                .child({
+                    let is_save_focused = is_form_focused && field == ProxyFormField::SaveButton;
+
+                    div()
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if is_save_focused {
+                            primary
+                        } else {
+                            transparent_black()
+                        })
+                        .child(
+                            Button::new(
+                                "save-proxy",
+                                if editing_id.is_some() {
+                                    "Update"
+                                } else {
+                                    "Create"
+                                },
                             )
-                    }),
-            )
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.save_proxy(window, cx);
+                                },
+                            )),
+                        )
+                }),
+            &theme,
+        )
     }
 
     fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> Div {

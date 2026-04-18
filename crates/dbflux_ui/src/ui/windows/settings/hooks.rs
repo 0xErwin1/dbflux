@@ -1264,13 +1264,9 @@ impl HooksSection {
                                     .flex()
                                     .items_start()
                                     .gap_2()
-                                    .child(
-                                        div().mt(px(2.0)).child(
-                                            Icon::new(AppIcon::SquareTerminal)
-                                                .size(px(16.0))
-                                                .muted(),
-                                        ),
-                                    )
+                                    .child(div().mt(px(2.0)).child(
+                                        Icon::new(AppIcon::SquareTerminal).size(px(16.0)).muted(),
+                                    ))
                                     .child(
                                         div()
                                             .flex()

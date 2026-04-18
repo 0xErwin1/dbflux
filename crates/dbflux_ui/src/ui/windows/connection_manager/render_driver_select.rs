@@ -1,10 +1,11 @@
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::FontSizes;
+use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::list::ListItem;
 use gpui_component::ActiveTheme;
+use gpui_component::list::ListItem;
 
 use super::ConnectionManagerWindow;
 
@@ -47,44 +48,42 @@ impl ConnectionManagerWindow {
                             let icon = driver_info.icon;
                             let is_focused = idx == focused_idx;
 
-                            div()
-                                .rounded(px(6.0))
-                                .border_2()
-                                .when(is_focused, |d| d.border_color(ring_color))
-                                .when(!is_focused, |d| d.border_color(gpui::transparent_black()))
-                                .child(
-                                    ListItem::new(("driver", idx))
-                                        .py(px(8.0))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.select_driver(&driver_id, window, cx);
-                                        }))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_row()
-                                                .items_center()
-                                                .gap_3()
-                                                .child(
-                                                    Icon::new(AppIcon::from_icon(icon))
-                                                        .size(px(32.0))
-                                                        .color(theme.foreground),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .flex_col()
-                                                        .gap_1()
-                                                        .child(
-                                                            Text::heading(driver_info.name)
-                                                                .font_size(FontSizes::SM),
-                                                        )
-                                                        .child(
-                                                            Text::muted(driver_info.description)
-                                                                .font_size(FontSizes::XS),
-                                                        ),
-                                                ),
-                                        ),
-                                )
+                            focus_frame(
+                                is_focused,
+                                Some(ring_color),
+                                ListItem::new(("driver", idx))
+                                    .py(px(8.0))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.select_driver(&driver_id, window, cx);
+                                    }))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_3()
+                                            .child(
+                                                Icon::new(AppIcon::from_icon(icon))
+                                                    .size(px(32.0))
+                                                    .color(theme.foreground),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_1()
+                                                    .child(
+                                                        Text::heading(driver_info.name)
+                                                            .font_size(FontSizes::SM),
+                                                    )
+                                                    .child(
+                                                        Text::muted(driver_info.description)
+                                                            .font_size(FontSizes::XS),
+                                                    ),
+                                            ),
+                                    ),
+                                cx,
+                            )
                         })),
                 ),
             )

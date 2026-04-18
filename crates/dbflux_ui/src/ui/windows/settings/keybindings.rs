@@ -1,4 +1,4 @@
-use crate::keymap::{default_keymap, ContextId, KeyChord};
+use crate::keymap::{ContextId, KeyChord, default_keymap};
 use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::{Icon as FluxIcon, Text};

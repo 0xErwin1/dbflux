@@ -1,11 +1,11 @@
-use super::{layout, SettingsSection, SettingsSectionId};
+use super::{SettingsSection, SettingsSectionId, layout};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::FontSizes;
 use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
 
 pub(super) struct AboutSection;
 

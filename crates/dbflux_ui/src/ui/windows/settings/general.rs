@@ -1,15 +1,15 @@
-use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
+use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::Text;
 use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 
 use super::general_section::{GeneralFormRow, GeneralSection};
 use super::layout;

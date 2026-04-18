@@ -1,567 +1,80 @@
-use std::sync::Arc;
-
-use crate::ui::tokens::{FontSizes, Heights};
-use dbflux_components::primitives::Text;
-use gpui::prelude::*;
-use gpui::{
-    Corner, Div, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Render, ScrollHandle, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
+pub use dbflux_components::controls::{
+    Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged,
 };
-use gpui_component::ActiveTheme;
 
-#[derive(Clone, Debug)]
-pub struct DropdownSelectionChanged {
-    pub index: usize,
-    #[allow(dead_code)]
-    pub item: DropdownItem,
-}
+#[cfg(test)]
+mod tests {
+    use super::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 
-/// Emitted when the dropdown closes without a selection (click outside).
-#[derive(Clone, Debug)]
-pub struct DropdownDismissed;
+    fn accepts_shared_dropdown(_: dbflux_components::controls::Dropdown) {}
+    fn accepts_shared_item(_: dbflux_components::controls::DropdownItem) {}
+    fn accepts_shared_selection_changed(_: dbflux_components::controls::DropdownSelectionChanged) {}
+    fn accepts_shared_dismissed(_: dbflux_components::controls::DropdownDismissed) {}
 
-#[derive(Clone, Debug)]
-pub struct DropdownItem {
-    pub label: SharedString,
-    #[allow(dead_code)]
-    pub value: SharedString,
-}
+    #[test]
+    fn legacy_dropdown_adapter_is_the_shared_dropdown_type() {
+        let dropdown = Dropdown::new("legacy-dropdown");
 
-impl DropdownItem {
-    #[allow(dead_code)]
-    pub fn new(label: impl Into<SharedString>) -> Self {
-        let label = label.into();
-        Self {
-            value: label.clone(),
-            label,
-        }
+        accepts_shared_dropdown(dropdown);
     }
 
-    pub fn with_value(label: impl Into<SharedString>, value: impl Into<SharedString>) -> Self {
-        Self {
-            label: label.into(),
-            value: value.into(),
-        }
-    }
-}
+    #[test]
+    fn legacy_dropdown_symbols_match_shared_events_and_items() {
+        let item = DropdownItem::with_value("Label", "value");
 
-#[allow(clippy::type_complexity)]
-pub struct Dropdown {
-    id: ElementId,
-    items: Vec<DropdownItem>,
-    open: bool,
-    selected_index: Option<usize>,
-    highlighted_index: Option<usize>,
-    disabled: bool,
-    placeholder: SharedString,
-    focus_ring_color: Option<Hsla>,
-    compact_trigger: bool,
-    /// When true, renders a borderless inline trigger suitable for toolbars:
-    /// no background, no border, compact padding, small text. Matches the
-    /// visual weight of `Input::small()` controls in the DataGridPanel toolbar.
-    toolbar_style: bool,
-    menu_scroll_handle: ScrollHandle,
-    on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
-}
-
-#[allow(dead_code)]
-impl Dropdown {
-    const PAGE_STEP: usize = 8;
-
-    pub fn new(id: impl Into<ElementId>) -> Self {
-        Self {
-            id: id.into(),
-            items: Vec::new(),
-            open: false,
-            selected_index: None,
-            highlighted_index: None,
-            disabled: false,
-            placeholder: "Select".into(),
-            focus_ring_color: None,
-            compact_trigger: false,
-            toolbar_style: false,
-            menu_scroll_handle: ScrollHandle::new(),
-            on_select: None,
-        }
+        accepts_shared_item(item.clone());
+        accepts_shared_selection_changed(DropdownSelectionChanged { index: 0, item });
+        accepts_shared_dismissed(DropdownDismissed);
     }
 
-    pub fn items(mut self, items: Vec<DropdownItem>) -> Self {
-        self.items = items;
-        self
+    #[test]
+    fn legacy_dropdown_preserves_selected_label_and_value_behavior() {
+        let dropdown = Dropdown::new("legacy-dropdown")
+            .items(vec![
+                DropdownItem::with_value("Primary", "primary-value"),
+                DropdownItem::with_value("Secondary", "secondary-value"),
+            ])
+            .selected_index(Some(1));
+
+        assert_eq!(
+            dropdown.selected_label().map(|label| label.to_string()),
+            Some("Secondary".to_string())
+        );
+        assert_eq!(
+            dropdown.selected_value().map(|value| value.to_string()),
+            Some("secondary-value".to_string())
+        );
     }
 
-    pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
-        self.placeholder = placeholder.into();
-        self
+    #[test]
+    fn legacy_dropdown_clears_observable_selection_for_out_of_range_index() {
+        let dropdown = Dropdown::new("legacy-dropdown")
+            .items(vec![DropdownItem::with_value("Primary", "primary-value")])
+            .selected_index(Some(9));
+
+        assert_eq!(
+            dropdown.selected_label().map(|label| label.to_string()),
+            None
+        );
+        assert_eq!(
+            dropdown.selected_value().map(|value| value.to_string()),
+            None
+        );
     }
 
-    pub fn selected_index(mut self, index: Option<usize>) -> Self {
-        self.selected_index = index;
-        self
+    #[test]
+    fn legacy_dropdown_preserves_shared_item_default_value_behavior() {
+        let dropdown = Dropdown::new("legacy-dropdown")
+            .items(vec![DropdownItem::new("Same Label")])
+            .selected_index(Some(0));
+
+        assert_eq!(
+            dropdown.selected_label().map(|label| label.to_string()),
+            Some("Same Label".to_string())
+        );
+        assert_eq!(
+            dropdown.selected_value().map(|value| value.to_string()),
+            Some("Same Label".to_string())
+        );
     }
-
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
-
-    #[allow(clippy::type_complexity)]
-    pub fn on_select(
-        mut self,
-        handler: Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>,
-    ) -> Self {
-        self.on_select = Some(handler);
-        self
-    }
-
-    pub fn selected_label(&self) -> Option<SharedString> {
-        self.selected_index
-            .and_then(|index| self.items.get(index).map(|item| item.label.clone()))
-    }
-
-    pub fn selected_value(&self) -> Option<SharedString> {
-        self.selected_index
-            .and_then(|index| self.items.get(index).map(|item| item.value.clone()))
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    pub fn set_selected_index(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
-        if let Some(idx) = index {
-            if idx < self.items.len() {
-                self.selected_index = Some(idx);
-                if self.open {
-                    self.menu_scroll_handle.scroll_to_item(idx);
-                }
-                cx.notify();
-            }
-        } else {
-            self.selected_index = None;
-            cx.notify();
-        }
-    }
-
-    pub fn set_items(&mut self, items: Vec<DropdownItem>, cx: &mut Context<Self>) {
-        self.items = items;
-        if let Some(selected) = self.selected_index
-            && selected >= self.items.len()
-        {
-            self.selected_index = None;
-        }
-        cx.notify();
-    }
-
-    pub fn set_focus_ring(&mut self, color: Option<Hsla>, cx: &mut Context<Self>) {
-        self.focus_ring_color = color;
-        cx.notify();
-    }
-
-    pub fn compact_trigger(mut self, compact: bool) -> Self {
-        self.compact_trigger = compact;
-        self
-    }
-
-    /// Render with a borderless inline trigger for use inside toolbars.
-    /// The trigger has no background, no border, compact padding, and small text,
-    /// matching the visual weight of `Input::small()` in the DataGridPanel toolbar.
-    pub fn toolbar_style(mut self, toolbar: bool) -> Self {
-        self.toolbar_style = toolbar;
-        self
-    }
-
-    pub fn toggle_open(&mut self, cx: &mut Context<Self>) {
-        if self.disabled || self.items.is_empty() {
-            return;
-        }
-        self.open = !self.open;
-        if self.open {
-            self.highlighted_index = self.selected_index.or(Some(0));
-
-            if let Some(index) = self.highlighted_index {
-                self.menu_scroll_handle.scroll_to_item(index);
-            }
-        }
-        cx.notify();
-    }
-
-    pub fn open(&mut self, cx: &mut Context<Self>) {
-        if !self.disabled && !self.items.is_empty() {
-            self.open = true;
-            self.highlighted_index = self.selected_index.or(Some(0));
-
-            if let Some(index) = self.highlighted_index {
-                self.menu_scroll_handle.scroll_to_item(index);
-            }
-
-            cx.notify();
-        }
-    }
-
-    pub fn close(&mut self, cx: &mut Context<Self>) {
-        self.open = false;
-        self.highlighted_index = None;
-        cx.notify();
-    }
-
-    pub fn select_next_item(&mut self, cx: &mut Context<Self>) {
-        if self.items.is_empty() {
-            return;
-        }
-        let next_index = self
-            .highlighted_index
-            .map(|i| (i + 1) % self.items.len())
-            .unwrap_or(0);
-        self.highlighted_index = Some(next_index);
-        if self.open {
-            self.menu_scroll_handle.scroll_to_item(next_index);
-        }
-        cx.notify();
-    }
-
-    pub fn select_prev_item(&mut self, cx: &mut Context<Self>) {
-        if self.items.is_empty() {
-            return;
-        }
-        let prev_index = self
-            .highlighted_index
-            .map(|i| if i == 0 { self.items.len() - 1 } else { i - 1 })
-            .unwrap_or(self.items.len() - 1);
-        self.highlighted_index = Some(prev_index);
-        if self.open {
-            self.menu_scroll_handle.scroll_to_item(prev_index);
-        }
-        cx.notify();
-    }
-
-    pub fn select_next_page(&mut self, cx: &mut Context<Self>) {
-        if self.items.is_empty() {
-            return;
-        }
-
-        let current = self.highlighted_index.unwrap_or(0);
-        let next_index = (current + Self::PAGE_STEP).min(self.items.len() - 1);
-        self.highlighted_index = Some(next_index);
-
-        if self.open {
-            self.menu_scroll_handle.scroll_to_item(next_index);
-        }
-
-        cx.notify();
-    }
-
-    pub fn select_prev_page(&mut self, cx: &mut Context<Self>) {
-        if self.items.is_empty() {
-            return;
-        }
-
-        let current = self.highlighted_index.unwrap_or(0);
-        let prev_index = current.saturating_sub(Self::PAGE_STEP);
-        self.highlighted_index = Some(prev_index);
-
-        if self.open {
-            self.menu_scroll_handle.scroll_to_item(prev_index);
-        }
-
-        cx.notify();
-    }
-
-    fn handle_menu_scroll_wheel(
-        &mut self,
-        event: &ScrollWheelEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let delta = event.delta.pixel_delta(px(1.0));
-        if delta.y < px(0.0) {
-            self.select_next_item(cx);
-        } else if delta.y > px(0.0) {
-            self.select_prev_item(cx);
-        }
-    }
-
-    pub fn accept_selection(&mut self, cx: &mut Context<Self>) {
-        if let Some(index) = self.highlighted_index {
-            self.select_item(index, cx);
-        }
-    }
-
-    fn select_item(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.disabled {
-            return;
-        }
-        let item = match self.items.get(index) {
-            Some(item) => item.clone(),
-            None => return,
-        };
-        self.selected_index = Some(index);
-        self.highlighted_index = None;
-        self.open = false;
-        if let Some(on_select) = self.on_select.clone() {
-            on_select(index, &item, cx);
-        }
-        cx.emit(DropdownSelectionChanged {
-            index,
-            item: item.clone(),
-        });
-        cx.notify();
-    }
-
-    fn handle_trigger_click(
-        &mut self,
-        _event: &gpui::ClickEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.toggle_open(cx);
-    }
-
-    fn handle_mouse_down_out(
-        &mut self,
-        _event: &gpui::MouseDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.open {
-            self.open = false;
-            self.highlighted_index = None;
-            cx.emit(DropdownDismissed);
-            cx.notify();
-        }
-    }
-
-    fn render_menu(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        if !self.open || self.items.is_empty() {
-            return div().into_any_element();
-        }
-
-        let theme = cx.theme();
-        let is_disabled = self.disabled;
-
-        let items: Vec<gpui::AnyElement> = self
-            .items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                let is_highlighted = self.highlighted_index == Some(index);
-                let mut row = div()
-                    .id(index)
-                    .w_full()
-                    .px_2()
-                    .py_1p5()
-                    .text_sm()
-                    .whitespace_nowrap()
-                    .when(is_highlighted, |el| {
-                        el.bg(theme.accent)
-                    })
-                    .when(!is_highlighted && !is_disabled, |el| {
-                        el.hover(|s| s.bg(theme.list_active))
-                    })
-                    .child(render_dropdown_menu_label(
-                        item.label.clone(),
-                        is_disabled,
-                        is_highlighted,
-                        theme,
-                    ));
-
-                if is_disabled {
-                    row = row.cursor_not_allowed();
-                } else {
-                    row = row.cursor_pointer().on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.select_item(index, cx);
-                        }),
-                    );
-                }
-
-                row.into_any_element()
-            })
-            .collect();
-
-        let menu = div()
-            .id("dropdown-menu")
-            .min_w_full()
-            .max_h(px(220.0))
-            .p_1()
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .rounded_md()
-            .overflow_scroll()
-            .track_scroll(&self.menu_scroll_handle)
-            .on_scroll_wheel(cx.listener(Self::handle_menu_scroll_wheel))
-            .shadow_lg()
-            .occlude()
-            .children(items);
-
-        deferred(
-            anchored()
-                .anchor(Corner::TopLeft)
-                .offset(point(px(0.0), px(4.0)))
-                .snap_to_window()
-                .child(menu),
-        )
-        .with_priority(1)
-        .into_any_element()
-    }
-}
-
-impl Render for Dropdown {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let is_disabled = self.disabled;
-        let disabled = is_disabled || self.items.is_empty();
-        let label = self
-            .selected_label()
-            .unwrap_or_else(|| self.placeholder.clone());
-
-        let focus_ring_color = self.focus_ring_color;
-
-        let mut trigger = div()
-            .id("dropdown-trigger")
-            .h(Heights::BUTTON)
-            .flex()
-            .items_center()
-            .w_full()
-            .when(disabled, |el| el.cursor_not_allowed().opacity(0.5))
-            .when(!disabled, |el| {
-                el.cursor_pointer().hover(|s| s.bg(theme.accent.opacity(0.1)))
-            });
-
-        if self.compact_trigger {
-            trigger = trigger
-                .h_full()
-                .justify_center()
-                .px_2()
-                .text_sm()
-                .child(Text::caption("▾").font_size(FontSizes::XS));
-        } else if self.toolbar_style {
-            // Borderless inline trigger matching the DataGridPanel toolbar weight.
-            // No background, no border, compact horizontal padding only, xs text.
-            trigger = trigger
-                .justify_between()
-                .gap_1()
-                .px_1p5()
-                .text_xs()
-                .child(render_dropdown_trigger_label(
-                    label.clone(),
-                    disabled,
-                    FontSizes::XS,
-                ))
-                .child(Text::caption("▾").font_size(FontSizes::XS));
-        } else {
-            trigger = trigger
-                .justify_between()
-                .gap_2()
-                .px_3()
-                .py_1p5()
-                .rounded_md()
-                .bg(theme.background)
-                .border_1()
-                .border_color(theme.input)
-                .text_sm()
-                .child(render_dropdown_trigger_label(
-                    label.clone(),
-                    disabled,
-                    FontSizes::SM,
-                ))
-                .child(Text::caption("▾").font_size(FontSizes::XS));
-        }
-
-        if !disabled {
-            trigger = trigger.on_click(cx.listener(Self::handle_trigger_click));
-        }
-
-        if self.compact_trigger {
-            let mut container = div()
-                .id(self.id.clone())
-                .w_full()
-                .h_full()
-                .child(trigger)
-                .child(self.render_menu(cx));
-
-            if self.open {
-                container = container.on_mouse_down_out(cx.listener(Self::handle_mouse_down_out));
-            }
-
-            return container;
-        }
-
-        // toolbar_style uses the same simple container as compact (no focus-ring wrapper).
-        if self.toolbar_style {
-            let mut container = div()
-                .id(self.id.clone())
-                .w_full()
-                .child(trigger)
-                .child(self.render_menu(cx));
-
-            if self.open {
-                container = container.on_mouse_down_out(cx.listener(Self::handle_mouse_down_out));
-            }
-
-            return container;
-        }
-
-        let trigger_wrap = div()
-            .id("trigger-wrap")
-            .w_full()
-            .flex()
-            .flex_col()
-            .rounded(px(4.0))
-            .border_2()
-            .when_some(focus_ring_color, |d, color| d.border_color(color))
-            .when(focus_ring_color.is_none(), |d| {
-                d.border_color(gpui::transparent_black())
-            })
-            .p(px(2.0))
-            .child(trigger)
-            .child(self.render_menu(cx));
-
-        let mut container = div().id(self.id.clone()).w_full().child(trigger_wrap);
-
-        if self.open {
-            container = container.on_mouse_down_out(cx.listener(Self::handle_mouse_down_out));
-        }
-
-        container
-    }
-}
-
-impl EventEmitter<DropdownSelectionChanged> for Dropdown {}
-impl EventEmitter<DropdownDismissed> for Dropdown {}
-
-fn render_dropdown_menu_label(
-    label: SharedString,
-    is_disabled: bool,
-    is_highlighted: bool,
-    theme: &gpui_component::Theme,
-) -> Div {
-    let text = if is_disabled {
-        Text::muted(label).font_size(FontSizes::SM)
-    } else if is_highlighted {
-        Text::body(label)
-            .font_size(FontSizes::SM)
-            .color(theme.accent_foreground)
-    } else {
-        Text::body(label).font_size(FontSizes::SM)
-    };
-
-    div().w_full().truncate().child(text)
-}
-
-fn render_dropdown_trigger_label(
-    label: SharedString,
-    disabled: bool,
-    font_size: gpui::Pixels,
-) -> Div {
-    let text = if disabled {
-        Text::muted(label).font_size(font_size)
-    } else {
-        Text::body(label).font_size(font_size)
-    };
-
-    div().flex_1().truncate().child(text)
 }

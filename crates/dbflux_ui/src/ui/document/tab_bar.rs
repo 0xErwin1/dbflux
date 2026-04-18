@@ -332,24 +332,17 @@ impl TabBar {
                 }),
             )
             // Icon
-            .child(
-                Icon::new(icon).size(px(16.0)).color(if is_active {
-                    cx.theme().foreground
-                } else {
-                    cx.theme().muted_foreground
-                }),
-            )
+            .child(Icon::new(icon).size(px(16.0)).color(if is_active {
+                cx.theme().foreground
+            } else {
+                cx.theme().muted_foreground
+            }))
             // Title
-            .child(
-                div()
-                    .flex_1()
-                    .truncate()
-                    .child(if is_active {
-                        Text::caption(title).color(cx.theme().foreground)
-                    } else {
-                        Text::caption(title)
-                    }),
-            )
+            .child(div().flex_1().truncate().child(if is_active {
+                Text::caption(title).color(cx.theme().foreground)
+            } else {
+                Text::caption(title)
+            }))
             // Spinner or close button
             .child(self.render_tab_action(id, is_executing, cx))
     }

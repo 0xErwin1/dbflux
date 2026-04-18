@@ -6,12 +6,12 @@ use dbflux_components::controls::Button;
 use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::Dialog;
 use gpui_component::ActiveTheme;
+use gpui_component::dialog::Dialog;
 
 use super::{
-    SettingsCoordinator, SettingsFocus, SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH,
-    SETTINGS_SIDEBAR_MIN_WIDTH,
+    SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
+    SettingsCoordinator, SettingsFocus, layout,
 };
 
 const INDENT_PX: f32 = 16.0;
@@ -252,15 +252,9 @@ impl Render for SettingsCoordinator {
                             .child(self.render_sidebar_grip(cx)),
                     )
                     .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
+                        layout::section_container(self.active_section_view.clone())
                             .h_full()
-                            .flex()
-                            .flex_col()
-                            .overflow_hidden()
-                            .bg(cx.theme().background)
-                            .child(self.active_section_view.clone()),
+                            .bg(cx.theme().background),
                     ),
             )
             // Settings status footer
