@@ -1,6 +1,8 @@
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Radii, Spacing};
+use crate::ui::tokens::{Radii, Spacing};
+use dbflux_components::controls::Button;
+use dbflux_components::primitives::Text;
 use dbflux_core::PipelineState;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -284,23 +286,13 @@ impl Render for LoginModal {
                         .flex_col()
                         .gap(Spacing::MD)
                         .p(Spacing::MD)
-                        .child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .child(format!(
-                                    "Sign in with {} to continue connecting \"{}\".",
-                                    provider_name, profile_name
-                                )),
-                        )
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .child(
-                                    "Open the login URL in your browser and finish authentication. DBFlux will continue automatically once the login completes.",
-                                ),
-                        )
+                        .child(Text::body(format!(
+                            "Sign in with {} to continue connecting \"{}\".",
+                            provider_name, profile_name
+                        )))
+                        .child(Text::caption(
+                            "Open the login URL in your browser and finish authentication. DBFlux will continue automatically once the login completes.",
+                        ))
                         .child(
                             div()
                                 .p(Spacing::SM)
@@ -308,37 +300,16 @@ impl Render for LoginModal {
                                 .border_1()
                                 .border_color(theme.border)
                                 .bg(theme.secondary)
-                                .child(
-                                    div()
-                                        .text_size(FontSizes::XS)
-                                        .text_color(theme.muted_foreground)
-                                        .child("Start URL"),
-                                )
-                                .child(
-                                    div()
-                                        .mt_1()
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme.foreground)
-                                        .child(url_display),
-                                ),
+                                .child(Text::caption("Start URL"))
+                                .child(div().mt_1().child(Text::body(url_display))),
                         )
                         .when_some(launch_error.clone(), |el, error| {
-                            el.child(
-                                div()
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.warning)
-                                    .child(error),
-                            )
+                            el.child(Text::caption(error).text_color(theme.warning))
                         })
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .child(format!(
-                                    "Login can take up to 5 minutes. Elapsed: {}s",
-                                    elapsed
-                                )),
-                        )
+                        .child(Text::caption(format!(
+                            "Login can take up to 5 minutes. Elapsed: {}s",
+                            elapsed
+                        )))
                         .child(
                             div()
                                 .flex()
@@ -346,67 +317,23 @@ impl Render for LoginModal {
                                 .justify_end()
                                 .gap(Spacing::SM)
                                 .child(
-                                    div()
-                                        .id("sso-open-browser")
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::XS)
-                                        .px(Spacing::MD)
-                                        .py(Spacing::SM)
-                                        .rounded(Radii::SM)
-                                        .cursor_pointer()
-                                        .bg(if has_url { theme.primary } else { theme.secondary })
-                                        .text_size(FontSizes::SM)
-                                        .text_color(if has_url {
-                                            theme.primary_foreground
-                                        } else {
-                                            theme.muted_foreground
-                                        })
-                                        .hover(|d| d.opacity(0.9))
+                                    Button::new("sso-open-browser", "Open Browser")
+                                        .when(has_url, |b| b.primary())
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.open_browser(cx);
-                                        }))
-                                        .child(svg().path(AppIcon::Link2.path()).size_4())
-                                        .child("Open Browser"),
+                                        })),
                                 )
                                 .child(
-                                    div()
-                                        .id("sso-copy-url")
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::XS)
-                                        .px(Spacing::MD)
-                                        .py(Spacing::SM)
-                                        .rounded(Radii::SM)
-                                        .cursor_pointer()
-                                        .bg(theme.secondary)
-                                        .hover(|d| d.bg(theme.muted))
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme.foreground)
+                                    Button::new("sso-copy-url", "Copy URL")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.copy_url(cx);
-                                        }))
-                                        .child(svg().path(AppIcon::Copy.path()).size_4())
-                                        .child("Copy URL"),
+                                        })),
                                 )
                                 .child(
-                                    div()
-                                        .id("sso-cancel")
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::XS)
-                                        .px(Spacing::MD)
-                                        .py(Spacing::SM)
-                                        .rounded(Radii::SM)
-                                        .cursor_pointer()
-                                        .bg(theme.secondary)
-                                        .hover(|d| d.bg(theme.muted))
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme.foreground)
+                                    Button::new("sso-cancel", "Cancel")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.close(cx);
-                                        }))
-                                        .child("Cancel"),
+                                        })),
                                 ),
                         ),
                 )
@@ -424,56 +351,26 @@ impl Render for LoginModal {
                     .flex()
                     .flex_col()
                     .gap(Spacing::MD)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.warning)
-                            .child("Connection failed"),
-                    )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.foreground)
-                            .child(error.clone()),
-                    )
-                    .child(
-                        div().flex().justify_end().child(
-                            div()
-                                .id("sso-failed-close")
-                                .px(Spacing::MD)
-                                .py(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .bg(theme.secondary)
-                                .hover(|d| d.bg(theme.muted))
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.close(cx);
-                                }))
-                                .child("Close"),
-                        ),
-                    );
+                    .child(Text::body("Connection failed").text_color(theme.warning))
+                    .child(Text::body(error.clone()))
+                    .child(div().flex().justify_end().child(
+                        Button::new("sso-failed-close", "Close").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.close(cx);
+                            },
+                        )),
+                    ));
 
                 if show_sso_wizard_button {
-                    frame.child(error_content).child(
-                        div().flex().justify_end().child(
-                            div()
-                                .id("sso-open-wizard")
-                                .px(Spacing::MD)
-                                .py(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .bg(theme.secondary)
-                                .hover(|d| d.bg(theme.muted))
-                                .text_size(FontSizes::SM)
-                                .text_color(theme.foreground)
-                                .on_click(cx.listener(|this, _, _, cx| {
+                    frame
+                        .child(error_content)
+                        .child(div().flex().justify_end().child(
+                            Button::new("sso-open-wizard", "Open AWS SSO Wizard").on_click(
+                                cx.listener(|this, _, _, cx| {
                                     this.open_sso_wizard(cx);
-                                }))
-                                .child("Open AWS SSO Wizard"),
-                        ),
-                    )
+                                }),
+                            ),
+                        ))
                 } else {
                     frame.child(error_content)
                 }
@@ -484,18 +381,10 @@ impl Render for LoginModal {
                     .flex()
                     .flex_col()
                     .gap(Spacing::MD)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.success)
-                            .child("Login completed"),
-                    )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.foreground)
-                            .child("Authentication succeeded. Closing this dialog..."),
-                    ),
+                    .child(Text::body("Login completed").text_color(theme.success))
+                    .child(Text::body(
+                        "Authentication succeeded. Closing this dialog...",
+                    )),
             ),
             _ => frame,
         };

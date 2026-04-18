@@ -1,5 +1,6 @@
 use super::{SettingsSection, SettingsSectionId, layout};
 use crate::ui::icons::AppIcon;
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -76,12 +77,7 @@ impl Render for AboutSection {
                                                 .font_weight(FontWeight::BOLD)
                                                 .child("DBFlux"),
                                         )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(theme.muted_foreground)
-                                                .child(format!("{} ({})", VERSION, PROFILE)),
-                                        ),
+                                        .child(Text::caption(format!("{} ({})", VERSION, PROFILE))),
                                 ),
                         )
                         .child(
@@ -115,21 +111,14 @@ impl Render for AboutSection {
                                     .child("on GitHub."),
                             ),
                         )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child(format!(
-                                    "Copyright © 2026 {} and contributors.",
-                                    author_name
-                                )),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child(format!("Licensed under the {} licenses.", license_display)),
-                        )
+                        .child(Text::caption(format!(
+                            "Copyright © 2026 {} and contributors.",
+                            author_name
+                        )))
+                        .child(Text::caption(format!(
+                            "Licensed under the {} licenses.",
+                            license_display
+                        )))
                         .child(
                             div()
                                 .mt_4()
@@ -140,23 +129,11 @@ impl Render for AboutSection {
                                 .flex_col()
                                 .gap_2()
                                 .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("Third-Party Licenses"),
+                                    Text::body("Third-Party Licenses")
+                                        .font_weight(FontWeight::SEMIBOLD),
                                 )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.muted_foreground)
-                                        .child("UI icons from Lucide (ISC License)"),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.muted_foreground)
-                                        .child("Brand icons from Simple Icons (CC0 1.0)"),
-                                ),
+                                .child(Text::caption("UI icons from Lucide (ISC License)"))
+                                .child(Text::caption("Brand icons from Simple Icons (CC0 1.0)")),
                         ),
                 ),
             )

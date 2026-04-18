@@ -1,11 +1,10 @@
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
-use crate::ui::icons::AppIcon;
+use dbflux_components::controls::Button;
+use dbflux_components::primitives::Text;
 use dbflux_mcp::{PendingExecutionDetail, PendingExecutionSummary};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::scroll::ScrollableElement;
 
 use super::chrome::{compact_labeled_control, compact_top_bar, workspace_footer_bar};
@@ -169,8 +168,7 @@ impl Render for McpApprovalsView {
                     .flex_col()
                     .gap_2()
                     .child(
-                        Button::new("mcp-approvals-refresh")
-                            .label("Refresh Pending")
+                        Button::new("mcp-approvals-refresh", "Refresh Pending")
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -185,12 +183,7 @@ impl Render for McpApprovalsView {
                             .flex_col()
                             .gap_1()
                             .when(self.pending.is_empty(), |root| {
-                                root.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.muted_foreground)
-                                        .child("No pending executions"),
-                                )
+                                root.child(Text::muted("No pending executions"))
                             })
                             .children(self.pending.iter().map(|entry| {
                                 let entry_id = entry.id.clone();
@@ -222,17 +215,10 @@ impl Render for McpApprovalsView {
                                         cx.notify();
                                     }))
                                     .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(entry.tool_id.clone()),
+                                        Text::body(entry.tool_id.clone())
+                                            .font_weight(FontWeight::MEDIUM),
                                     )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .child(format!("actor: {}", entry.actor_id)),
-                                    )
+                                    .child(Text::caption(format!("actor: {}", entry.actor_id)))
                             })),
                     ),
             )
@@ -245,70 +231,44 @@ impl Render for McpApprovalsView {
                     .flex_col()
                     .gap_3()
                     .when_some(self.selected_detail.clone(), |root, detail| {
-                        root.child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(format!("Pending {}", detail.summary.id)),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child("Approval context")
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.foreground)
-                                        .child(Self::semantics_preview(&detail)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child("Execution plan")
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.foreground)
-                                        .child(detail.plan.to_string()),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(
-                                    Button::new("mcp-approval-approve")
-                                        .label("Approve")
-                                        .small()
-                                        .primary()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.approve_selected(cx);
-                                        })),
-                                )
-                                .child(
-                                    Button::new("mcp-approval-reject")
-                                        .label("Reject")
-                                        .small()
-                                        .danger()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.reject_selected(cx);
-                                        })),
-                                ),
-                        )
+                        root.child(Text::heading(format!("Pending {}", detail.summary.id)))
+                            .child(
+                                div()
+                                    .child(Text::caption("Approval context"))
+                                    .child(Text::body(Self::semantics_preview(&detail))),
+                            )
+                            .child(
+                                div()
+                                    .child(Text::caption("Execution plan"))
+                                    .child(Text::body(detail.plan.to_string())),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("mcp-approval-approve", "Approve")
+                                            .small()
+                                            .primary()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.approve_selected(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("mcp-approval-reject", "Reject")
+                                            .small()
+                                            .danger()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.reject_selected(cx);
+                                            })),
+                                    ),
+                            )
                     })
                     .when(self.selected_detail.is_none(), |root| {
-                        root.child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child("Select a pending request to review details."),
-                        )
+                        root.child(Text::muted("Select a pending request to review details."))
                     })
                     .when_some(self.status_message.clone(), |root, message| {
-                        root.child(div().text_sm().text_color(theme.danger).child(message))
+                        root.child(Text::body(message).text_color(theme.danger))
                     }),
             )
     }

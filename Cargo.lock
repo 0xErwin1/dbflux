@@ -2289,6 +2289,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbflux_components"
+version = "0.4.5"
+dependencies = [
+ "gpui",
+ "gpui-component",
+]
+
+[[package]]
 name = "dbflux_core"
 version = "0.4.5"
 dependencies = [
@@ -2615,6 +2623,7 @@ dependencies = [
  "dbflux_approval",
  "dbflux_audit",
  "dbflux_aws",
+ "dbflux_components",
  "dbflux_core",
  "dbflux_driver_dynamodb",
  "dbflux_driver_ipc",

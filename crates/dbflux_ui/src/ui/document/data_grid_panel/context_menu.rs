@@ -10,6 +10,7 @@ use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
     RowIdentity, RowInsert, RowPatch, Value,
@@ -1087,25 +1088,13 @@ impl DataGridPanel {
                             .items_center()
                             .gap_2()
                             .child(
-                                svg()
-                                    .path(AppIcon::TriangleAlert.path())
-                                    .size_5()
-                                    .text_color(theme.warning),
+                                Icon::new(AppIcon::TriangleAlert)
+                                    .medium()
+                                    .color(theme.warning),
                             )
-                            .child(
-                                div()
-                                    .text_size(FontSizes::SM)
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.foreground)
-                                    .child("Delete row?"),
-                            ),
+                            .child(Text::heading("Delete row?")),
                     )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child("This action cannot be undone."),
-                    )
+                    .child(Text::muted("This action cannot be undone."))
                     .child(
                         div()
                             .flex()
@@ -1121,20 +1110,15 @@ impl DataGridPanel {
                                     .py(Spacing::XS)
                                     .rounded(Radii::SM)
                                     .cursor_pointer()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.muted_foreground)
                                     .bg(theme.secondary)
                                     .hover(|d| d.bg(btn_hover))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.cancel_delete(window, cx);
                                     }))
                                     .child(
-                                        svg()
-                                            .path(AppIcon::X.path())
-                                            .size_4()
-                                            .text_color(theme.muted_foreground),
+                                        Icon::new(AppIcon::X).small().color(theme.muted_foreground),
                                     )
-                                    .child("Cancel"),
+                                    .child(Text::caption("Cancel")),
                             )
                             .child(
                                 div()
@@ -1146,20 +1130,15 @@ impl DataGridPanel {
                                     .py(Spacing::XS)
                                     .rounded(Radii::SM)
                                     .cursor_pointer()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.background)
                                     .bg(theme.danger)
                                     .hover(|d| d.opacity(0.9))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.confirm_delete(window, cx);
                                     }))
                                     .child(
-                                        svg()
-                                            .path(AppIcon::Delete.path())
-                                            .size_4()
-                                            .text_color(theme.background),
+                                        Icon::new(AppIcon::Delete).small().color(theme.background),
                                     )
-                                    .child("Delete"),
+                                    .child(Text::caption("Delete").text_color(theme.background)),
                             ),
                     ),
             )
@@ -1212,6 +1191,12 @@ impl DataGridPanel {
             let icon = item.icon;
             let current_index = visual_index;
 
+            let label_color = if is_danger {
+                theme.danger
+            } else {
+                theme.foreground
+            };
+
             menu_items.push(
                 div()
                     .id(SharedString::from(label))
@@ -1224,21 +1209,11 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if is_danger {
-                        theme.danger
-                    } else {
-                        theme.foreground
-                    })
                     .when(is_selected, |d| {
                         d.bg(if is_danger {
                             theme.danger.opacity(0.1)
                         } else {
                             theme.accent
-                        })
-                        .text_color(if is_danger {
-                            theme.danger
-                        } else {
-                            theme.accent_foreground
                         })
                     })
                     .when(!is_selected, |d| {
@@ -1262,7 +1237,7 @@ impl DataGridPanel {
                         this.handle_context_menu_action(action, window, cx);
                     }))
                     .when_some(icon, |d, icon| {
-                        d.child(svg().path(icon.path()).size_4().text_color(if is_danger {
+                        d.child(Icon::new(icon).small().color(if is_danger {
                             theme.danger
                         } else if is_selected {
                             theme.accent_foreground
@@ -1271,7 +1246,15 @@ impl DataGridPanel {
                         }))
                     })
                     .when(icon.is_none(), |d| d.pl(px(20.0)))
-                    .child(label)
+                    .child(Text::caption(label).text_color(if is_selected {
+                        if is_danger {
+                            theme.danger
+                        } else {
+                            theme.accent_foreground
+                        }
+                    } else {
+                        label_color
+                    }))
                     .into_any_element(),
             );
 
@@ -1306,6 +1289,12 @@ impl DataGridPanel {
             let (_col_name_display, filter_submenu_count, filter_items, value_ops_count) =
                 self.build_filter_items(menu, backend, cx);
 
+            let filter_label_color = if filter_selected && !filter_submenu_open {
+                theme.accent_foreground
+            } else {
+                submenu_fg
+            };
+
             menu_items.push(
                 div()
                     .id("filter-trigger")
@@ -1319,11 +1308,6 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if filter_selected && !filter_submenu_open {
-                        theme.accent_foreground
-                    } else {
-                        submenu_fg
-                    })
                     .when(filter_submenu_open, |d| d.bg(submenu_hover))
                     .when(filter_selected && !filter_submenu_open, |d| {
                         d.bg(theme.accent)
@@ -1355,25 +1339,20 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .child(svg().path(AppIcon::ListFilter.path()).size_4().text_color(
-                                if filter_selected && !filter_submenu_open {
-                                    theme.accent_foreground
-                                } else {
-                                    submenu_fg
-                                },
-                            ))
-                            .child("Filter"),
+                            .child(
+                                Icon::new(AppIcon::ListFilter)
+                                    .small()
+                                    .color(filter_label_color),
+                            )
+                            .child(Text::caption("Filter").text_color(filter_label_color)),
                     )
-                    .child(
-                        svg()
-                            .path(AppIcon::ChevronRight.path())
-                            .size_4()
-                            .text_color(if filter_selected && !filter_submenu_open {
-                                theme.accent_foreground
-                            } else {
-                                theme.muted_foreground
-                            }),
-                    )
+                    .child(Icon::new(AppIcon::ChevronRight).small().color(
+                        if filter_selected && !filter_submenu_open {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        },
+                    ))
                     .when(filter_submenu_open, |d: Stateful<Div>| {
                         let value_section_separator_idx =
                             (value_ops_count > 0).then_some(value_ops_count);
@@ -1396,14 +1375,9 @@ impl DataGridPanel {
                                     cx.stop_propagation();
                                 })
                                 .when(value_ops_count > 0, |d| {
-                                    d.child(
-                                        div()
-                                            .px(Spacing::SM)
-                                            .py(Spacing::XS)
-                                            .text_size(FontSizes::XS)
-                                            .text_color(theme.muted_foreground)
-                                            .child("Cell value"),
-                                    )
+                                    d.child(div().px(Spacing::SM).py(Spacing::XS).child(
+                                        Text::caption("Cell value").font_size(FontSizes::XS),
+                                    ))
                                 })
                                 .children(
                                     filter_items
@@ -1442,6 +1416,14 @@ impl DataGridPanel {
                                             let label_shared =
                                                 SharedString::from(format!("filter-{}", idx));
 
+                                            let item_color = if is_remove {
+                                                theme.danger
+                                            } else if is_submenu_selected {
+                                                theme.accent_foreground
+                                            } else {
+                                                submenu_fg
+                                            };
+
                                             elements.push(
                                                 div()
                                                     .id(label_shared)
@@ -1454,13 +1436,6 @@ impl DataGridPanel {
                                                     .rounded(Radii::SM)
                                                     .cursor_pointer()
                                                     .text_size(FontSizes::SM)
-                                                    .text_color(if is_remove {
-                                                        theme.danger
-                                                    } else if is_submenu_selected {
-                                                        theme.accent_foreground
-                                                    } else {
-                                                        submenu_fg
-                                                    })
                                                     .when(is_submenu_selected && !is_remove, |d| {
                                                         d.bg(theme.accent)
                                                     })
@@ -1489,7 +1464,10 @@ impl DataGridPanel {
                                                             );
                                                         },
                                                     ))
-                                                    .child(label.clone())
+                                                    .child(
+                                                        Text::caption(label.clone())
+                                                            .text_color(item_color),
+                                                    )
                                                     .into_any_element(),
                                             );
 
@@ -1522,6 +1500,12 @@ impl DataGridPanel {
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
 
+            let order_label_color = if order_selected && !order_submenu_open {
+                theme.accent_foreground
+            } else {
+                submenu_fg
+            };
+
             menu_items.push(
                 div()
                     .id("order-trigger")
@@ -1535,11 +1519,6 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if order_selected && !order_submenu_open {
-                        theme.accent_foreground
-                    } else {
-                        submenu_fg
-                    })
                     .when(order_submenu_open, |d| d.bg(submenu_hover))
                     .when(order_selected && !order_submenu_open, |d| {
                         d.bg(theme.accent)
@@ -1571,25 +1550,20 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .child(svg().path(AppIcon::ArrowUpDown.path()).size_4().text_color(
-                                if order_selected && !order_submenu_open {
-                                    theme.accent_foreground
-                                } else {
-                                    submenu_fg
-                                },
-                            ))
-                            .child("Order"),
+                            .child(
+                                Icon::new(AppIcon::ArrowUpDown)
+                                    .small()
+                                    .color(order_label_color),
+                            )
+                            .child(Text::caption("Order").text_color(order_label_color)),
                     )
-                    .child(
-                        svg()
-                            .path(AppIcon::ChevronRight.path())
-                            .size_4()
-                            .text_color(if order_selected && !order_submenu_open {
-                                theme.accent_foreground
-                            } else {
-                                theme.muted_foreground
-                            }),
-                    )
+                    .child(Icon::new(AppIcon::ChevronRight).small().color(
+                        if order_selected && !order_submenu_open {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        },
+                    ))
                     .when(order_submenu_open, |d: Stateful<Div>| {
                         let order_items: Vec<(String, ContextMenuAction, AppIcon)> = vec![
                             (
@@ -1648,6 +1622,14 @@ impl DataGridPanel {
                                             let is_remove =
                                                 matches!(action, ContextMenuAction::RemoveOrdering);
 
+                                            let order_item_color = if is_remove {
+                                                theme.danger
+                                            } else if is_submenu_selected {
+                                                theme.accent_foreground
+                                            } else {
+                                                submenu_fg
+                                            };
+
                                             elements.push(
                                                 div()
                                                     .id(SharedString::from(format!(
@@ -1663,13 +1645,6 @@ impl DataGridPanel {
                                                     .rounded(Radii::SM)
                                                     .cursor_pointer()
                                                     .text_size(FontSizes::SM)
-                                                    .text_color(if is_remove {
-                                                        theme.danger
-                                                    } else if is_submenu_selected {
-                                                        theme.accent_foreground
-                                                    } else {
-                                                        submenu_fg
-                                                    })
                                                     .when(is_submenu_selected && !is_remove, |d| {
                                                         d.bg(theme.accent)
                                                     })
@@ -1698,19 +1673,19 @@ impl DataGridPanel {
                                                             );
                                                         },
                                                     ))
+                                                    .child(Icon::new(icon).small().color(
+                                                        if is_remove {
+                                                            theme.danger
+                                                        } else if is_submenu_selected {
+                                                            theme.accent_foreground
+                                                        } else {
+                                                            theme.muted_foreground
+                                                        },
+                                                    ))
                                                     .child(
-                                                        svg()
-                                                            .path(icon.path())
-                                                            .size_4()
-                                                            .text_color(if is_remove {
-                                                                theme.danger
-                                                            } else if is_submenu_selected {
-                                                                theme.accent_foreground
-                                                            } else {
-                                                                theme.muted_foreground
-                                                            }),
+                                                        Text::caption(label)
+                                                            .text_color(order_item_color),
                                                     )
-                                                    .child(label)
                                                     .into_any_element(),
                                             );
 
@@ -1748,6 +1723,12 @@ impl DataGridPanel {
             let gen_sql_selected = selected_index == gen_sql_index;
             let submenu_selected_index = menu.submenu_selected_index;
 
+            let gen_sql_label_color = if gen_sql_selected && !sql_submenu_open {
+                theme.accent_foreground
+            } else {
+                submenu_fg
+            };
+
             menu_items.push(
                 div()
                     .id("generate-sql-trigger")
@@ -1761,11 +1742,6 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if gen_sql_selected && !sql_submenu_open {
-                        theme.accent_foreground
-                    } else {
-                        submenu_fg
-                    })
                     .when(sql_submenu_open, |d| d.bg(submenu_hover))
                     .when(gen_sql_selected && !sql_submenu_open, |d| {
                         d.bg(theme.accent)
@@ -1795,25 +1771,16 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .child(svg().path(AppIcon::Code.path()).size_4().text_color(
-                                if gen_sql_selected && !sql_submenu_open {
-                                    theme.accent_foreground
-                                } else {
-                                    submenu_fg
-                                },
-                            ))
-                            .child("Generate SQL"),
+                            .child(Icon::new(AppIcon::Code).small().color(gen_sql_label_color))
+                            .child(Text::caption("Generate SQL").text_color(gen_sql_label_color)),
                     )
-                    .child(
-                        svg()
-                            .path(AppIcon::ChevronRight.path())
-                            .size_4()
-                            .text_color(if gen_sql_selected && !sql_submenu_open {
-                                theme.accent_foreground
-                            } else {
-                                theme.muted_foreground
-                            }),
-                    )
+                    .child(Icon::new(AppIcon::ChevronRight).small().color(
+                        if gen_sql_selected && !sql_submenu_open {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        },
+                    ))
                     // Submenu appears to the right
                     .when(sql_submenu_open, |d: Stateful<Div>| {
                         d.child(
@@ -1845,6 +1812,12 @@ impl DataGridPanel {
                                     .enumerate()
                                     .map(|(idx, (label, action))| {
                                         let is_submenu_selected = idx == submenu_selected_index;
+                                        let sql_item_color = if is_submenu_selected {
+                                            theme.accent_foreground
+                                        } else {
+                                            submenu_fg
+                                        };
+
                                         div()
                                             .id(SharedString::from(label))
                                             .flex()
@@ -1856,11 +1829,6 @@ impl DataGridPanel {
                                             .rounded(Radii::SM)
                                             .cursor_pointer()
                                             .text_size(FontSizes::SM)
-                                            .text_color(if is_submenu_selected {
-                                                theme.accent_foreground
-                                            } else {
-                                                submenu_fg
-                                            })
                                             .when(is_submenu_selected, |d| d.bg(theme.accent))
                                             .when(!is_submenu_selected, |d| {
                                                 d.hover(|d| d.bg(submenu_hover))
@@ -1876,17 +1844,14 @@ impl DataGridPanel {
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.handle_context_menu_action(action, window, cx);
                                             }))
-                                            .child(
-                                                svg()
-                                                    .path(AppIcon::Code.path())
-                                                    .size_4()
-                                                    .text_color(if is_submenu_selected {
-                                                        theme.accent_foreground
-                                                    } else {
-                                                        theme.muted_foreground
-                                                    }),
-                                            )
-                                            .child(label)
+                                            .child(Icon::new(AppIcon::Code).small().color(
+                                                if is_submenu_selected {
+                                                    theme.accent_foreground
+                                                } else {
+                                                    theme.muted_foreground
+                                                },
+                                            ))
+                                            .child(Text::caption(label).text_color(sql_item_color))
                                     })
                                     .collect::<Vec<_>>(),
                                 ),
@@ -1931,11 +1896,6 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .cursor_pointer()
                     .text_size(FontSizes::SM)
-                    .text_color(if copy_query_selected && !copy_submenu_open {
-                        theme.accent_foreground
-                    } else {
-                        submenu_fg
-                    })
                     .when(copy_submenu_open, |d| d.bg(submenu_hover))
                     .when(copy_query_selected && !copy_submenu_open, |d| {
                         d.bg(theme.accent)
@@ -1965,7 +1925,7 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
-                            .child(svg().path(AppIcon::Columns.path()).size_4().text_color(
+                            .child(Icon::new(AppIcon::Columns).small().color(
                                 if copy_query_selected && !copy_submenu_open {
                                     theme.accent_foreground
                                 } else {
@@ -1974,16 +1934,13 @@ impl DataGridPanel {
                             ))
                             .child(copy_query_label),
                     )
-                    .child(
-                        svg()
-                            .path(AppIcon::ChevronRight.path())
-                            .size_4()
-                            .text_color(if copy_query_selected && !copy_submenu_open {
-                                theme.accent_foreground
-                            } else {
-                                theme.muted_foreground
-                            }),
-                    )
+                    .child(Icon::new(AppIcon::ChevronRight).small().color(
+                        if copy_query_selected && !copy_submenu_open {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        },
+                    ))
                     .when(copy_submenu_open, |d: Stateful<Div>| {
                         d.child(
                             div()
@@ -2011,6 +1968,11 @@ impl DataGridPanel {
                                     .enumerate()
                                     .map(|(idx, (label, action))| {
                                         let is_submenu_selected = idx == submenu_selected_index;
+                                        let copy_item_color = if is_submenu_selected {
+                                            theme.accent_foreground
+                                        } else {
+                                            submenu_fg
+                                        };
                                         div()
                                             .id(SharedString::from(format!("copy-{}", label)))
                                             .flex()
@@ -2022,11 +1984,6 @@ impl DataGridPanel {
                                             .rounded(Radii::SM)
                                             .cursor_pointer()
                                             .text_size(FontSizes::SM)
-                                            .text_color(if is_submenu_selected {
-                                                theme.accent_foreground
-                                            } else {
-                                                submenu_fg
-                                            })
                                             .when(is_submenu_selected, |d| d.bg(theme.accent))
                                             .when(!is_submenu_selected, |d| {
                                                 d.hover(|d| d.bg(submenu_hover))
@@ -2042,17 +1999,14 @@ impl DataGridPanel {
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.handle_context_menu_action(action, window, cx);
                                             }))
-                                            .child(
-                                                svg()
-                                                    .path(AppIcon::Columns.path())
-                                                    .size_4()
-                                                    .text_color(if is_submenu_selected {
-                                                        theme.accent_foreground
-                                                    } else {
-                                                        theme.muted_foreground
-                                                    }),
-                                            )
-                                            .child(label)
+                                            .child(Icon::new(AppIcon::Columns).small().color(
+                                                if is_submenu_selected {
+                                                    theme.accent_foreground
+                                                } else {
+                                                    theme.muted_foreground
+                                                },
+                                            ))
+                                            .child(Text::caption(label).text_color(copy_item_color))
                                     })
                                     .collect::<Vec<_>>(),
                                 ),

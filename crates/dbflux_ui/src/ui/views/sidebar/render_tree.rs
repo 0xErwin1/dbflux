@@ -170,7 +170,7 @@ pub(super) fn render_tree_item(
         .pending_delete
         .as_ref()
         .is_some_and(|id| id == item_id.as_ref());
-    let pending_delete_bg: Hsla = gpui::rgb(0x5C1F1F).into();
+    let pending_delete_bg: Hsla = theme.danger.opacity(0.15);
 
     let current_drop_target = params.drop_target.as_ref();
     let drop_indicator_color = theme.accent;

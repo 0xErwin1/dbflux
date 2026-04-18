@@ -2,11 +2,10 @@ use crate::platform;
 use crate::ui::components::tree_nav::{self, FlatRow};
 use crate::ui::theme::ghost_border_color;
 use crate::ui::tokens::Heights;
+use dbflux_components::controls::Button;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::Dialog;
 
 use super::{
@@ -359,8 +358,7 @@ impl SettingsCoordinator {
             )
             .child(
                 div().flex().items_center().gap_2().child(
-                    Button::new("settings-close")
-                        .label("Close")
+                    Button::new("settings-close", "Close")
                         .ghost()
                         .small()
                         .on_click(cx.listener(|this, _, window, _cx| {

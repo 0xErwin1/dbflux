@@ -1,13 +1,11 @@
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
+use dbflux_components::controls::{Button, Input};
+use dbflux_components::primitives::{Label, Status, StatusIndicator, Text};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::Input;
 use gpui_component::{Icon, IconName};
 
 use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus};
@@ -45,12 +43,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child("Access Method"),
-                        )
+                        .child(Label::new("Access Method"))
                         .child(
                             div()
                                 .min_w(px(240.0))
@@ -69,23 +62,13 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_3()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child("Direct connections use the database fields from the Main tab."),
-                        )
+                        .child(Text::muted("Direct connections use the database fields from the Main tab."))
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
                                 .gap_1()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .child("Auth Profile (optional)"),
-                                )
+                                .child(Label::new("Auth Profile (optional)"))
                                 .child(
                                     div()
                                         .min_w(px(280.0))
@@ -147,10 +130,9 @@ impl ConnectionManagerWindow {
                                                     }),
                                                 )
                                                 .child(
-                                                    Button::new("auth-open-settings")
+                                                    Button::new("auth-open-settings", "Manage")
                                                         .ghost()
                                                         .small()
-                                                        .label("Manage")
                                                         .on_click(cx.listener(|this, _, _, cx| {
                                                             this.open_auth_profiles_settings(cx);
                                                         })),
@@ -183,10 +165,9 @@ impl ConnectionManagerWindow {
                                                     }),
                                                 )
                                                 .child(
-                                                    Button::new("auth-login-selected")
+                                                    Button::new("auth-login-selected", "Login")
                                                         .ghost()
                                                         .small()
-                                                        .label("Login")
                                                         .disabled(!login_enabled)
                                                         .on_click(cx.listener(|this, _, _, cx| {
                                                             this.login_selected_auth_profile(cx);
@@ -221,41 +202,28 @@ impl ConnectionManagerWindow {
                                                     }),
                                                 )
                                                 .child(
-                                                    Button::new("auth-refresh-session")
+                                                    Button::new("auth-refresh-session", "Refresh")
                                                         .ghost()
                                                         .small()
-                                                        .label("Refresh")
                                                         .on_click(cx.listener(|this, _, _, cx| {
                                                             this.refresh_auth_profile_statuses(cx);
                                                         })),
                                                 ),
                                         ),
                                 )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .child("Used for resolving Secret/Parameter/Auth value sources in Direct mode."),
-                                ),
+                                .child(Text::caption("Used for resolving Secret/Parameter/Auth value sources in Direct mode.")),
                         )
                         .when_some(self.selected_auth_profile_status_text(cx), |d, status| {
-                            d.child(div().text_xs().text_color(theme.muted_foreground).child(status))
+                            d.child(Text::caption(status))
                         })
                         .when(auth_profile_is_valid, |d| {
                             d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(gpui::rgb(0x16A34A))
-                                    .child("Auth profile session is valid"),
+                                StatusIndicator::new(Status::Connected)
+                                    .label("Auth profile session is valid"),
                             )
                         })
                         .when_some(self.auth_profile_action_message.as_ref(), |d, message| {
-                            d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(message.clone()),
-                            )
+                            d.child(Text::caption(message.clone()))
                         })
                         .into_any_element(),
                 );
@@ -319,23 +287,13 @@ impl ConnectionManagerWindow {
                     FormFocus::SsmRemotePort,
                     cx,
                 ))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("DBFlux and the OS auto-assign the local tunnel port. Only Remote Port is configurable here."),
-                )
+                .child(Text::caption("DBFlux and the OS auto-assign the local tunnel port. Only Remote Port is configurable here."))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child("Auth Profile"),
-                        )
+                        .child(Label::new("Auth Profile"))
                         .child(
                             div()
                                 .min_w(px(280.0))
@@ -393,10 +351,9 @@ impl ConnectionManagerWindow {
                                             }),
                                         )
                                         .child(
-                                            Button::new("ssm-auth-open-settings")
+                                            Button::new("ssm-auth-open-settings", "Manage")
                                                 .ghost()
                                                 .small()
-                                                .label("Manage")
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.open_auth_profiles_settings(cx);
                                                 })),
@@ -428,10 +385,9 @@ impl ConnectionManagerWindow {
                                             }),
                                         )
                                         .child(
-                                            Button::new("ssm-auth-login-selected")
+                                            Button::new("ssm-auth-login-selected", "Login")
                                                 .ghost()
                                                 .small()
-                                                .label("Login")
                                                 .disabled(!login_enabled)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.login_selected_auth_profile(cx);
@@ -464,10 +420,9 @@ impl ConnectionManagerWindow {
                                             }),
                                         )
                                         .child(
-                                            Button::new("ssm-auth-refresh-session")
+                                            Button::new("ssm-auth-refresh-session", "Refresh")
                                                 .ghost()
                                                 .small()
-                                                .label("Refresh")
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.refresh_auth_profile_statuses(cx);
                                                 })),
@@ -475,14 +430,12 @@ impl ConnectionManagerWindow {
                                 ),
                         )
                         .when_some(self.selected_auth_profile_status_text(cx), |d, status| {
-                            d.child(div().text_xs().text_color(theme.muted_foreground).child(status))
+                            d.child(Text::caption(status))
                         })
                         .when(auth_profile_is_valid, |d| {
                             d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(gpui::rgb(0x16A34A))
-                                    .child("Auth profile session is valid"),
+                                StatusIndicator::new(Status::Connected)
+                                    .label("Auth profile session is valid"),
                             )
                         }),
                 ),
@@ -509,21 +462,7 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(label.to_string()),
-                    )
-                    .when(required, |d| {
-                        d.child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*"))
-                    }),
-            )
+            .child(Label::new(label.to_string()).required(required))
             .child(
                 div()
                     .flex()
@@ -561,7 +500,7 @@ impl ConnectionManagerWindow {
                                     this.enter_edit_mode_for_field(field, window, cx);
                                 }),
                             )
-                            .child(gpui_component::input::Input::new(input)),
+                            .child(Input::new(input)),
                     ),
             )
             .into_any_element()
@@ -577,7 +516,7 @@ impl ConnectionManagerWindow {
 
         let ring_color = cx.theme().ring;
         let theme = cx.theme().clone();
-        let muted_fg = theme.muted_foreground;
+        let _muted_fg = theme.muted_foreground;
 
         let mut sections: Vec<AnyElement> = Vec::new();
 
@@ -594,18 +533,8 @@ impl ConnectionManagerWindow {
                             .flex_col()
                             .items_center()
                             .gap_2()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(muted_fg)
-                                    .child("No proxy profiles configured"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted_fg)
-                                    .child("Add proxies in Settings > Proxies"),
-                            ),
+                            .child(Text::muted("No proxy profiles configured"))
+                            .child(Text::caption("Add proxies in Settings > Proxies")),
                     )
                     .into_any_element(),
             );
@@ -649,13 +578,7 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(muted_fg)
-                    .child("Select Proxy"),
-            )
+            .child(Label::new("Select Proxy"))
             .child(
                 div()
                     .flex()
@@ -672,8 +595,7 @@ impl ConnectionManagerWindow {
                                     dd.border_color(gpui::transparent_black())
                                 })
                                 .child(
-                                    Button::new("clear-proxy")
-                                        .label("Clear")
+                                    Button::new("clear-proxy", "Clear")
                                         .small()
                                         .ghost()
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -717,8 +639,7 @@ impl ConnectionManagerWindow {
                             .when(edit_focused, |d| d.border_color(ring_color))
                             .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
                             .child(
-                                Button::new("proxy-edit-in-settings")
-                                    .label("Edit in Settings")
+                                Button::new("proxy-edit-in-settings", "Edit in Settings")
                                     .small()
                                     .ghost()
                                     .icon(Icon::new(IconName::ExternalLink)),
@@ -768,12 +689,7 @@ impl ConnectionManagerWindow {
                         cx.notify();
                     })),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Use SSH Tunnel"),
-            );
+            .child(Label::new("Use SSH Tunnel"));
 
         let tunnel_items: Vec<DropdownItem> = ssh_tunnels
             .iter()
@@ -807,13 +723,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(cx.theme().muted_foreground)
-                            .child("SSH Tunnel"),
-                    )
+                    .child(Label::new("SSH Tunnel"))
                     .child(
                         div()
                             .flex()
@@ -832,8 +742,7 @@ impl ConnectionManagerWindow {
                                             dd.border_color(gpui::transparent_black())
                                         })
                                         .child(
-                                            Button::new("clear-ssh-tunnel")
-                                                .label("Clear")
+                                            Button::new("clear-ssh-tunnel", "Clear")
                                                 .small()
                                                 .ghost()
                                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -850,7 +759,7 @@ impl ConnectionManagerWindow {
         };
 
         let theme = cx.theme().clone();
-        let muted_fg = theme.muted_foreground;
+        let _muted_fg = theme.muted_foreground;
 
         let (auth_selector, auth_inputs, ssh_server_section) = if ssh_enabled && has_selected_tunnel
         {
@@ -894,8 +803,7 @@ impl ConnectionManagerWindow {
                                 .when(edit_focused, |d| d.border_color(ring_color))
                                 .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
                                 .child(
-                                    Button::new("ssh-edit-in-settings")
-                                        .label("Edit in Settings")
+                                    Button::new("ssh-edit-in-settings", "Edit in Settings")
                                         .small()
                                         .ghost()
                                         .icon(Icon::new(IconName::ExternalLink)),
@@ -995,9 +903,8 @@ impl ConnectionManagerWindow {
                     d.border_color(gpui::transparent_black())
                 })
                 .child(
-                    Button::new("test-ssh")
+                    Button::new("test-ssh", "Test SSH")
                         .icon(Icon::new(IconName::ExternalLink))
-                        .label("Test SSH")
                         .small()
                         .ghost()
                         .disabled(ssh_test_status == TestStatus::Testing)
@@ -1008,25 +915,17 @@ impl ConnectionManagerWindow {
 
             let status_el: Option<AnyElement> = match ssh_test_status {
                 TestStatus::None => None,
-                TestStatus::Testing => Some(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("Testing SSH connection...")
-                        .into_any_element(),
-                ),
+                TestStatus::Testing => {
+                    Some(Text::muted("Testing SSH connection...").into_any_element())
+                }
                 TestStatus::Success => Some(
-                    div()
-                        .text_sm()
-                        .text_color(theme.success)
-                        .child("SSH connection successful")
+                    StatusIndicator::new(Status::Connected)
+                        .label("SSH connection successful")
                         .into_any_element(),
                 ),
                 TestStatus::Failed => Some(
-                    div()
-                        .text_sm()
-                        .text_color(theme.danger)
-                        .child(
+                    StatusIndicator::new(Status::Error)
+                        .label(
                             ssh_test_error.unwrap_or_else(|| "SSH connection failed".to_string()),
                         )
                         .into_any_element(),
@@ -1045,9 +944,8 @@ impl ConnectionManagerWindow {
                             d.border_color(gpui::transparent_black())
                         })
                         .child(
-                            Button::new("save-ssh-tunnel")
+                            Button::new("save-ssh-tunnel", "Save as tunnel")
                                 .icon(Icon::new(IconName::Plus))
-                                .label("Save as tunnel")
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -1114,11 +1012,9 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
-                        div().text_sm().text_color(muted_fg).child(
-                            "Enable SSH tunnel to configure connection through a bastion host",
-                        ),
-                    )
+                    .child(Text::muted(
+                        "Enable SSH tunnel to configure connection through a bastion host",
+                    ))
                     .into_any_element(),
             );
         }
@@ -1234,7 +1130,7 @@ impl ConnectionManagerWindow {
         };
 
         let theme = cx.theme();
-        let muted_fg = theme.muted_foreground;
+        let _muted_fg = theme.muted_foreground;
 
         let key_path_focused = show_focus && focus == FormFocus::SshKeyPath;
         let key_browse_focused = show_focus && focus == FormFocus::SshKeyBrowse;
@@ -1253,12 +1149,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Private Key Path"),
-                        )
+                        .child(Label::new("Private Key Path"))
                         .child(
                             div()
                                 .flex()
@@ -1294,8 +1185,7 @@ impl ConnectionManagerWindow {
                                             d.border_color(gpui::transparent_black())
                                         })
                                         .child(
-                                            Button::new("browse-ssh-key")
-                                                .label("Browse")
+                                            Button::new("browse-ssh-key", "Browse")
                                                 .small()
                                                 .ghost()
                                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -1305,24 +1195,16 @@ impl ConnectionManagerWindow {
                                 ),
                         ),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted_fg)
-                        .child("Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)"),
-                )
+                .child(Text::caption(
+                    "Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)",
+                ))
                 .child(
                     div()
                         .id(6usize)
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Key Passphrase"),
-                        )
+                        .child(Label::new("Key Passphrase"))
                         .child(
                             div()
                                 .flex()
@@ -1385,12 +1267,7 @@ impl ConnectionManagerWindow {
                                     )
                                 }),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted_fg)
-                                .child("Leave empty if key has no passphrase"),
-                        ),
+                        .child(Text::caption("Leave empty if key has no passphrase")),
                 )
                 .into_any_element(),
             SshAuthSelection::Password => div()
@@ -1403,19 +1280,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child("SSH Password"),
-                                )
-                                .child(div().text_sm().text_color(gpui::rgb(0xEF4444)).child("*")),
-                        )
+                        .child(Label::new("SSH Password").required(true))
                         .child(
                             div()
                                 .flex()

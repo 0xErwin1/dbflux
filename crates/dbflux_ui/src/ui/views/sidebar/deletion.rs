@@ -88,6 +88,34 @@ impl Sidebar {
             item_id: item_id.to_string(),
             item_name,
             is_folder,
+            object_type: None,
+            is_ddl: false,
+        });
+        cx.notify();
+    }
+
+    /// Show a DDL drop confirmation modal for schema objects (table, view,
+    /// collection, database).
+    pub fn show_ddl_confirm_modal(
+        &mut self,
+        item_id: &str,
+        object_type: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let item_name = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Table { name, .. })
+            | Some(SchemaNodeId::View { name, .. })
+            | Some(SchemaNodeId::Collection { name, .. })
+            | Some(SchemaNodeId::Database { name, .. }) => name,
+            _ => return,
+        };
+
+        self.delete_confirm_modal = Some(DeleteConfirmState {
+            item_id: item_id.to_string(),
+            item_name,
+            is_folder: false,
+            object_type: Some(object_type.to_string()),
+            is_ddl: true,
         });
         cx.notify();
     }
@@ -97,7 +125,11 @@ impl Sidebar {
             return;
         };
 
-        self.execute_delete(&modal.item_id, cx);
+        if modal.is_ddl {
+            self.execute_drop_ddl(&modal.item_id, cx);
+        } else {
+            self.execute_delete(&modal.item_id, cx);
+        }
     }
 
     pub fn cancel_modal_delete(&mut self, cx: &mut Context<Self>) {
@@ -115,6 +147,18 @@ impl Sidebar {
         self.delete_confirm_modal
             .as_ref()
             .map(|m| (m.item_name.as_str(), m.is_folder))
+    }
+
+    /// Returns full delete modal state for DDL-aware rendering.
+    pub fn delete_modal_state(&self) -> Option<DeleteModalState<'_>> {
+        self.delete_confirm_modal
+            .as_ref()
+            .map(|m| DeleteModalState {
+                item_name: &m.item_name,
+                is_folder: m.is_folder,
+                is_ddl: m.is_ddl,
+                object_type: m.object_type.as_deref(),
+            })
     }
 
     pub(super) fn execute_delete(&mut self, item_id: &str, cx: &mut Context<Self>) {
