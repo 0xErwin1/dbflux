@@ -1,12 +1,11 @@
 use crate::keymap::ContextId;
 use crate::platform;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::FontSizes;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::{Icon as AppIconElement, Label, Text, focus_frame};
-use dbflux_components::typography::{Body, Headline};
+use dbflux_components::typography::{Body, Headline, SubSectionLabel};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
@@ -182,9 +181,7 @@ impl ConnectionManagerWindow {
             .flex_col()
             .gap_2()
             .child(
-                Text::subsection_label(title.to_uppercase())
-                    .font_size(FontSizes::SM)
-                    .font_weight(FontWeight::NORMAL),
+                SubSectionLabel::new(title.to_uppercase()),
             )
             .child(content)
     }
@@ -813,7 +810,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(Body::new(section.title.to_uppercase()).muted(cx))
+                    .child(SubSectionLabel::new(section.title.to_uppercase()))
                     .children(field_elements)
                     .into_any_element(),
             );

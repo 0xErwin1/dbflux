@@ -1,13 +1,13 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
 use super::layout;
 use super::section_trait::SectionFocusEvent;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::AppStateEntity;
-use crate::keymap::{Modifiers, key_chord_from_gpui};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::components::toast::ToastExt;
-use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;
+use dbflux_components::typography::SubSectionLabel;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
 use gpui::prelude::*;
 use gpui::*;
@@ -633,11 +633,12 @@ impl AuditSection {
         border: Hsla,
         _muted_fg: Hsla,
     ) -> impl IntoElement {
-        div().pt_2().pb_1().border_b_1().border_color(border).child(
-            Text::heading(label.to_string())
-                .font_size(FontSizes::BASE)
-                .color(_muted_fg),
-        )
+        div()
+            .pt_2()
+            .pb_1()
+            .border_b_1()
+            .border_color(border)
+            .child(SubSectionLabel::new(label.to_string()))
     }
 
     fn render_audit_status_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {

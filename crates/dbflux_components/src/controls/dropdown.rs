@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::composites::control_shell_with_padding;
 use crate::primitives::focus_frame;
 use crate::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{
     ClickEvent, Context, Corner, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement,
@@ -456,7 +457,9 @@ impl Dropdown {
                     .w_full()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
-                    .text_size(FontSizes::SM)
+                    .font_family(AppFonts::BODY)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_size(FontSizes::BASE)
                     .whitespace_nowrap()
                     .text_color(theme.foreground)
                     .when(is_highlighted, |el| {
@@ -545,10 +548,12 @@ impl Dropdown {
                     .h_full()
                     .justify_center()
                     .px(Spacing::SM)
+                    .font_family(AppFonts::BODY)
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_size(FontSizes::SM)
                     .child(
                         div()
-                            .text_size(FontSizes::XS)
+                            .text_size(FontSizes::SM)
                             .text_color(theme.muted_foreground)
                             .child("▾"),
                     );
@@ -558,11 +563,13 @@ impl Dropdown {
                     .justify_between()
                     .gap(Spacing::XS)
                     .px(Spacing::XS)
-                    .text_size(FontSizes::XS)
+                    .font_family(AppFonts::BODY)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_size(FontSizes::SM)
                     .child(div().flex_1().truncate().child(label))
                     .child(
                         div()
-                            .text_size(FontSizes::XS)
+                            .text_size(FontSizes::SM)
                             .text_color(theme.muted_foreground)
                             .child("▾"),
                     );
@@ -572,11 +579,13 @@ impl Dropdown {
                     .justify_between()
                     .gap(Spacing::SM)
                     .py(Spacing::XS)
-                    .text_size(FontSizes::SM)
+                    .font_family(AppFonts::BODY)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_size(FontSizes::BASE)
                     .child(div().flex_1().truncate().child(label))
                     .child(
                         div()
-                            .text_size(FontSizes::XS)
+                            .text_size(FontSizes::SM)
                             .text_color(theme.muted_foreground)
                             .child("▾"),
                     );

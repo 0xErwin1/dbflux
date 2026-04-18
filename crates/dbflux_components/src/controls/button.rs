@@ -1,11 +1,12 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, ElementId, SharedString, Window};
+use gpui::{App, ClickEvent, ElementId, FontWeight, SharedString, Window};
 use gpui_component::button::{
     Button as GpuiButton, ButtonVariant as GpuiButtonVariant, ButtonVariants,
 };
 use gpui_component::{Disableable, Icon, Sizable};
 
-use crate::tokens::Radii;
+use crate::tokens::{FontSizes, Radii};
+use crate::typography::AppFonts;
 
 /// Visual variant of the button controlling color scheme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -122,6 +123,13 @@ impl RenderOnce for Button {
             .label(self.label)
             .with_variant(gpui_variant)
             .rounded(Radii::SM)
+            .font_family(AppFonts::BODY)
+            .font_weight(FontWeight::MEDIUM)
+            .text_size(if self.size == ButtonSize::Small {
+                FontSizes::SM
+            } else {
+                FontSizes::BASE
+            })
             .disabled(self.disabled)
             .when(self.variant == ButtonVariant::Dropdown, |b| {
                 b.dropdown_caret(true)

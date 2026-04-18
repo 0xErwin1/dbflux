@@ -1,15 +1,14 @@
-use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
+use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
-use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::primitives::Text;
+use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 
 use super::general_section::{GeneralFormRow, GeneralSection};
 use super::layout;
@@ -598,11 +597,12 @@ impl GeneralSection {
         border: Hsla,
         _muted_fg: Hsla,
     ) -> impl IntoElement {
-        div().pt_2().pb_1().border_b_1().border_color(border).child(
-            Text::heading(label.to_string())
-                .font_size(FontSizes::SM)
-                .muted_foreground(),
-        )
+        div()
+            .pt_2()
+            .pb_1()
+            .border_b_1()
+            .border_color(border)
+            .child(SubSectionLabel::new(label.to_string()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -651,7 +651,7 @@ impl GeneralSection {
                     cx.notify();
                 },
             )))
-            .child(div().text_sm().child(label))
+            .child(Body::new(label))
     }
 
     fn render_gen_dropdown(
@@ -690,7 +690,7 @@ impl GeneralSection {
                     cx.notify();
                 }),
             )
-            .child(div().text_sm().child(label.to_string()))
+            .child(FieldLabel::new(label.to_string()))
             .child(div().min_w(px(140.0)).child(dropdown.clone()))
     }
 
@@ -707,7 +707,7 @@ impl GeneralSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(Text::label_sm(label.to_string()))
+            .child(FieldLabel::new(label.to_string()))
             .child(
                 div()
                     .rounded(px(4.0))
