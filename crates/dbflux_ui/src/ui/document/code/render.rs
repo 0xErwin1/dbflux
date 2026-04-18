@@ -1,8 +1,15 @@
 use super::*;
+use dbflux_components::composites::split_toolbar_action;
 use dbflux_components::controls::Button;
 use dbflux_components::helpers::text_color_for_active;
-use dbflux_components::primitives::{overlay_bg, surface_panel, Badge, BadgeVariant, Icon, Text};
+use dbflux_components::primitives::{
+    Badge, BadgeVariant, Icon, Text, focus_frame, overlay_bg, surface_panel,
+};
 use gpui_component::scroll::ScrollableElement;
+
+fn code_pane_is_focused(focus_mode: SqlQueryFocus, pane: SqlQueryFocus) -> bool {
+    focus_mode == pane
+}
 
 impl CodeDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -138,49 +145,36 @@ impl CodeDocument {
             })
             .child(Text::caption(shortcut_hint))
             .when(is_db_language, |el| {
-                el.child(
+                el.child(split_toolbar_action(
                     div()
-                        .id("sql-refresh-control")
+                        .id("sql-refresh-action")
+                        .h_full()
+                        .px(Spacing::SM)
                         .flex()
                         .items_center()
-                        .gap_0()
-                        .h(Heights::BUTTON)
-                        .bg(theme.background)
-                        .border_1()
-                        .border_color(theme.input)
-                        .rounded(Radii::SM)
+                        .gap_1()
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.accent.opacity(0.08)))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.runner.is_primary_active() {
+                                this.cancel_query(cx);
+                            } else {
+                                this.run_query(window, cx);
+                            }
+                        }))
                         .child(
-                            div()
-                                .id("sql-refresh-action")
-                                .h_full()
-                                .px(Spacing::SM)
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    if this.runner.is_primary_active() {
-                                        this.cancel_query(cx);
-                                    } else {
-                                        this.run_query(window, cx);
-                                    }
-                                }))
-                                .child(
-                                    Icon::new(refresh_icon)
-                                        .size(px(12.0))
-                                        .color(theme.foreground),
-                                )
-                                .child(Text::body(refresh_label)),
+                            Icon::new(refresh_icon)
+                                .size(px(12.0))
+                                .color(theme.foreground),
                         )
-                        .child(div().w(px(1.0)).h_full().bg(theme.input))
-                        .child(
-                            div()
-                                .w(px(28.0))
-                                .h_full()
-                                .child(self.refresh_dropdown.clone()),
-                        ),
-                )
+                        .child(Text::body(refresh_label)),
+                    div()
+                        .id("sql-refresh-control")
+                        .w(px(28.0))
+                        .h_full()
+                        .child(self.refresh_dropdown.clone()),
+                    cx,
+                ))
             })
             .child(div().flex_1())
             .when_some(execution_time, |el, duration| {
@@ -190,39 +184,41 @@ impl CodeDocument {
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_focused = self.focus_mode == SqlQueryFocus::Editor;
+        let is_focused = code_pane_is_focused(self.focus_mode, SqlQueryFocus::Editor);
         let bg = cx.theme().background;
         let accent = cx.theme().accent;
 
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(bg)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.enter_editor_mode(cx);
-                    this.input_state
-                        .update(cx, |state, cx| state.focus(window, cx));
-                    cx.emit(DocumentEvent::RequestFocus);
-                }),
-            )
-            .when(is_focused, |el| {
-                el.border_2().border_color(accent.opacity(0.3))
-            })
-            .child(
-                div().flex_1().overflow_hidden().child(
-                    Input::new(&self.input_state)
-                        .appearance(false)
-                        .w_full()
-                        .h_full(),
+        focus_frame(
+            is_focused,
+            Some(accent.opacity(0.3)),
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .bg(bg)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.enter_editor_mode(cx);
+                        this.input_state
+                            .update(cx, |state, cx| state.focus(window, cx));
+                        cx.emit(DocumentEvent::RequestFocus);
+                    }),
+                )
+                .child(
+                    div().flex_1().overflow_hidden().child(
+                        Input::new(&self.input_state)
+                            .appearance(false)
+                            .w_full()
+                            .h_full(),
+                    ),
                 ),
-            )
+            cx,
+        )
     }
 
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_focused = self.focus_mode == SqlQueryFocus::Results;
+        let is_focused = code_pane_is_focused(self.focus_mode, SqlQueryFocus::Results);
         let bg = cx.theme().background;
         let accent = cx.theme().accent;
 
@@ -237,28 +233,30 @@ impl CodeDocument {
         let has_grid = active_grid.is_some();
         let has_tabs = !has_live_output && !self.result_tabs.is_empty();
 
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(bg)
-            .when(is_focused, |el| {
-                el.border_2().border_color(accent.opacity(0.3))
-            })
-            .when(has_tabs, |el| el.child(self.render_results_header(cx)))
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
-                    .when(has_live_output, |el| el.child(self.render_live_output(cx)))
-                    .when(!has_live_output, |el| {
-                        el.when_some(active_grid, |el, grid| el.child(grid))
-                    })
-                    .when(!has_live_output && !has_grid && !has_error, |el| {
-                        el.child(self.render_empty_results(cx))
-                    }),
-            )
+        focus_frame(
+            is_focused,
+            Some(accent.opacity(0.3)),
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .bg(bg)
+                .when(has_tabs, |el| el.child(self.render_results_header(cx)))
+                .child(
+                    div()
+                        .flex_1()
+                        .overflow_hidden()
+                        .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
+                        .when(has_live_output, |el| el.child(self.render_live_output(cx)))
+                        .when(!has_live_output, |el| {
+                            el.when_some(active_grid, |el, grid| el.child(grid))
+                        })
+                        .when(!has_live_output && !has_grid && !has_error, |el| {
+                            el.child(self.render_empty_results(cx))
+                        }),
+                ),
+            cx,
+        )
     }
 
     fn render_live_output(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -670,5 +668,35 @@ impl Render for CodeDocument {
             .when(self.pending_dangerous_query.is_some(), |el| {
                 el.child(self.render_dangerous_query_modal(cx))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::code_pane_is_focused;
+    use crate::ui::document::code::SqlQueryFocus;
+
+    #[test]
+    fn editor_focus_shell_tracks_editor_mode_only() {
+        assert!(code_pane_is_focused(
+            SqlQueryFocus::Editor,
+            SqlQueryFocus::Editor,
+        ));
+        assert!(!code_pane_is_focused(
+            SqlQueryFocus::Results,
+            SqlQueryFocus::Editor,
+        ));
+    }
+
+    #[test]
+    fn results_focus_shell_tracks_results_mode_only() {
+        assert!(code_pane_is_focused(
+            SqlQueryFocus::Results,
+            SqlQueryFocus::Results,
+        ));
+        assert!(!code_pane_is_focused(
+            SqlQueryFocus::ContextBar,
+            SqlQueryFocus::Results,
+        ));
     }
 }

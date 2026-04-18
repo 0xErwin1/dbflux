@@ -6,8 +6,8 @@
 use crate::ui::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use gpui::{
-    div, px, App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement,
-    Stateful, Styled, Window, WindowDecorations, WindowKind, WindowOptions,
+    App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement, Stateful, Styled,
+    Window, WindowDecorations, WindowKind, WindowOptions, div, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::InteractiveElementExt;

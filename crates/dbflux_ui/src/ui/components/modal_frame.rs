@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dbflux_components::icon::IconSource;
-use dbflux_components::primitives::{surface_panel, Icon, IconButton, Text};
+use dbflux_components::primitives::{Icon, IconButton, Text, surface_panel};
 use dbflux_components::tokens::{Heights, Spacing};
 use gpui::*;
 use gpui_component::ActiveTheme;
