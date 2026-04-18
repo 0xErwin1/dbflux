@@ -1,4 +1,5 @@
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
+use crate::ui::theme::AppFonts;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Text;
 use dbflux_mcp::{PendingExecutionDetail, PendingExecutionSummary};
@@ -163,6 +164,7 @@ impl Render for McpApprovalsView {
                     .h_full()
                     .border_r_1()
                     .border_color(theme.border)
+                    .font_family(AppFonts::CODE)
                     .p_3()
                     .flex()
                     .flex_col()
