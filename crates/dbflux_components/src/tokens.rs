@@ -47,6 +47,16 @@ impl Radii {
 
 pub struct SyntaxColors;
 
+pub struct ChromeColors;
+
+impl ChromeColors {
+    pub fn ghost_border() -> Hsla {
+        let mut color: Hsla = rgb(0x524436).into();
+        color.a = 0.15;
+        color
+    }
+}
+
 impl SyntaxColors {
     pub fn table() -> Hsla {
         rgb(0x4EC9B0).into()
