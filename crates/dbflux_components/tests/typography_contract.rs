@@ -1,4 +1,4 @@
-use dbflux_components::typography::{bundled_font_data, AppFonts, BUNDLED_FONT_ASSETS};
+use dbflux_components::typography::{AppFonts, BUNDLED_FONT_ASSETS, bundled_font_data};
 
 #[test]
 fn app_fonts_define_shared_family_contract() {
@@ -54,7 +54,9 @@ fn bundled_font_data_registers_all_shared_font_assets() {
             .count(),
         expected_assets.len()
     );
-    assert!(BUNDLED_FONT_ASSETS
-        .iter()
-        .all(|asset| asset.family == AppFonts::BODY));
+    assert!(
+        BUNDLED_FONT_ASSETS
+            .iter()
+            .all(|asset| asset.family == AppFonts::BODY)
+    );
 }

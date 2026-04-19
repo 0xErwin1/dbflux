@@ -10,7 +10,9 @@ use crate::ui::icons::AppIcon;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::primitives::{Icon, Label};
-use dbflux_components::typography::{Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel};
+use dbflux_components::typography::{
+    Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel,
+};
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
@@ -786,9 +788,10 @@ impl DriversSection {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(Body::new("Select a driver to configure settings").color(
-                    theme.muted_foreground,
-                ));
+                .child(
+                    Body::new("Select a driver to configure settings")
+                        .color(theme.muted_foreground),
+                );
         };
 
         let global = &self.gen_settings;
@@ -815,9 +818,10 @@ impl DriversSection {
                             .gap_1()
                             .child(PanelTitle::new(entry.metadata.display_name.clone()))
                             .child(MonoMeta::new(entry.driver_key.clone()))
-                            .child(Body::new(entry.metadata.description.clone()).color(
-                                theme.muted_foreground,
-                            )),
+                            .child(
+                                Body::new(entry.metadata.description.clone())
+                                    .color(theme.muted_foreground),
+                            ),
                     ),
             )
             .child(
@@ -929,8 +933,10 @@ impl DriversSection {
             .flex_col()
             .gap_3()
             .child(FieldLabel::new("Global Overrides"))
-            .child(Body::new("Enable override to replace the global default for this driver.")
-                .color(theme.muted_foreground))
+            .child(
+                Body::new("Enable override to replace the global default for this driver.")
+                    .color(theme.muted_foreground),
+            )
             .child(
                 div()
                     .flex()
@@ -1268,9 +1274,10 @@ impl DriversSection {
                 .flex_col()
                 .gap_2()
                 .child(FieldLabel::new("Driver Settings"))
-                .child(Body::new("No custom settings for this driver.").color(
-                    cx.theme().muted_foreground,
-                ));
+                .child(
+                    Body::new("No custom settings for this driver.")
+                        .color(cx.theme().muted_foreground),
+                );
         };
 
         div()
@@ -1288,9 +1295,7 @@ impl DriversSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(
-                                SubSectionLabel::new(section.title.to_uppercase()),
-                            )
+                            .child(SubSectionLabel::new(section.title.to_uppercase()))
                             .children(section.fields.iter().filter_map(|field| {
                                 let enabled = form_renderer::is_field_enabled(
                                     field,

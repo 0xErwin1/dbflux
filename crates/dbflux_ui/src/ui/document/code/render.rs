@@ -195,6 +195,7 @@ impl CodeDocument {
                 .size_full()
                 .flex()
                 .flex_col()
+                .min_h_0()
                 .bg(bg)
                 .on_mouse_down(
                     MouseButton::Left,
@@ -206,7 +207,7 @@ impl CodeDocument {
                     }),
                 )
                 .child(
-                    div().flex_1().overflow_hidden().child(
+                    div().flex_1().min_h_0().overflow_hidden().child(
                         Input::new(&self.input_state)
                             .appearance(false)
                             .w_full()
@@ -215,6 +216,7 @@ impl CodeDocument {
                 ),
             cx,
         )
+        .size_full()
     }
 
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -240,11 +242,13 @@ impl CodeDocument {
                 .size_full()
                 .flex()
                 .flex_col()
+                .min_h_0()
                 .bg(bg)
                 .when(has_tabs, |el| el.child(self.render_results_header(cx)))
                 .child(
                     div()
                         .flex_1()
+                        .min_h_0()
                         .overflow_hidden()
                         .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
                         .when(has_live_output, |el| el.child(self.render_live_output(cx)))
@@ -257,6 +261,7 @@ impl CodeDocument {
                 ),
             cx,
         )
+        .size_full()
     }
 
     fn render_live_output(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -633,33 +638,38 @@ impl Render for CodeDocument {
             .size_full()
             .flex()
             .flex_col()
+            .min_h_0()
             .bg(bg)
             .track_focus(&self.focus_handle)
             .child(context_bar)
             .child(toolbar)
             .child(
-                div().flex_1().overflow_hidden().child(match self.layout {
-                    SqlQueryLayout::Split => {
-                        v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
-                            .child(
-                                resizable_panel()
-                                    .size(px(200.0))
-                                    .size_range(px(100.0)..px(1000.0))
-                                    .child(editor_view),
-                            )
-                            .child(
-                                resizable_panel()
-                                    .size(px(200.0))
-                                    .size_range(px(100.0)..px(1000.0))
-                                    .child(results_view),
-                            )
-                            .into_any_element()
-                    }
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(match self.layout {
+                        SqlQueryLayout::Split => {
+                            v_resizable(SharedString::from(format!("sql-split-{}", self.id.0)))
+                                .child(
+                                    resizable_panel()
+                                        .size(px(200.0))
+                                        .size_range(px(100.0)..px(1000.0))
+                                        .child(editor_view),
+                                )
+                                .child(
+                                    resizable_panel()
+                                        .size(px(200.0))
+                                        .size_range(px(100.0)..px(1000.0))
+                                        .child(results_view),
+                                )
+                                .into_any_element()
+                        }
 
-                    SqlQueryLayout::EditorOnly => editor_view,
+                        SqlQueryLayout::EditorOnly => editor_view,
 
-                    SqlQueryLayout::ResultsOnly => results_view,
-                }),
+                        SqlQueryLayout::ResultsOnly => results_view,
+                    }),
             )
             .when(has_collapsed_results, |el| {
                 el.child(self.render_collapsed_results_bar(cx))

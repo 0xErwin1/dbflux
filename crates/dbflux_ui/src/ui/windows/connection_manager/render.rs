@@ -180,9 +180,7 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                SubSectionLabel::new(title.to_uppercase()),
-            )
+            .child(SubSectionLabel::new(title.to_uppercase()))
             .child(content)
     }
 

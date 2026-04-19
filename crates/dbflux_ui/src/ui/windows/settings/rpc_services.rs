@@ -839,7 +839,9 @@ impl ServicesSection {
                                                                 .px_1()
                                                                 .rounded(px(3.0))
                                                                 .bg(theme.secondary)
-                                                                .child(MonoCaption::new("Disabled")),
+                                                                .child(MonoCaption::new(
+                                                                    "Disabled",
+                                                                )),
                                                         )
                                                     }),
                                             )

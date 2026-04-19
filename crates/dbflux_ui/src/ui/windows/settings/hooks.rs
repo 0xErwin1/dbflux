@@ -1234,9 +1234,7 @@ impl HooksSection {
                     .flex_col()
                     .gap_1()
                     .when(hook_ids.is_empty(), |container| {
-                        container.child(Body::new("No hooks defined").color(
-                            theme.muted_foreground,
-                        ))
+                        container.child(Body::new("No hooks defined").color(theme.muted_foreground))
                     })
                     .children(hook_ids.into_iter().enumerate().map(|(idx, hook_id)| {
                         let selected = self.editing_hook_id.as_deref() == Some(hook_id.as_str());
@@ -1277,9 +1275,10 @@ impl HooksSection {
                                             .gap_1()
                                             .child(MonoLabel::new(hook_id.clone()))
                                             .when_some(hook, |container, hook| {
-                                                container.child(Body::new(hook.summary()).color(
-                                                    theme.muted_foreground,
-                                                ))
+                                                container.child(
+                                                    Body::new(hook.summary())
+                                                        .color(theme.muted_foreground),
+                                                )
                                             }),
                                     ),
                             )

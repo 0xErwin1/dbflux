@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, AnyElement, App, FontWeight, Hsla, SharedString, Window};
+use gpui::{AnyElement, App, FontWeight, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 use std::borrow::Cow;
 
@@ -993,7 +993,7 @@ impl RenderOnce for AppPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppFonts, Body, Caption, FieldLabel, Headline, RequiredMarker, BUNDLED_FONT_ASSETS,
+        AppFonts, BUNDLED_FONT_ASSETS, Body, Caption, FieldLabel, Headline, RequiredMarker,
     };
     use crate::primitives::TextVariant;
 

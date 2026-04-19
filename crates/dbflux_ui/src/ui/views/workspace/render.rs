@@ -167,6 +167,7 @@ impl Render for Workspace {
                                             .flex()
                                             .flex_col()
                                             .flex_1()
+                                            .min_h_0()
                                             .overflow_hidden()
                                             .child(doc),
                                     )
