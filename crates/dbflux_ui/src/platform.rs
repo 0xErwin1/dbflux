@@ -15,20 +15,40 @@ use gpui_component::InteractiveElementExt;
 /// Title bar height for Linux CSD mode. Used for layout and client inset reporting.
 pub const TITLE_BAR_HEIGHT: gpui::Pixels = px(32.0);
 
+/// Returns `true` when the current Linux desktop is expected to prefer app-drawn
+/// title bars instead of server-side decorations.
+#[cfg(target_os = "linux")]
+fn prefers_client_side_decorations() -> bool {
+    [
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "DESKTOP_SESSION",
+    ]
+    .into_iter()
+    .filter_map(|key| std::env::var(key).ok())
+    .flat_map(|value| {
+        value
+            .split(':')
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| segment.to_ascii_lowercase())
+            .collect::<Vec<_>>()
+    })
+    .any(|desktop| matches!(desktop.as_str(), "gnome" | "ubuntu" | "pop"))
+}
+
 /// Returns the `WindowDecorations` value to request when creating a top-level window.
 ///
-/// On Linux, requests `Client` (CSD) so Wayland compositors that honor the request
-/// (e.g. GNOME, Sway) grant CSD mode and the app renders its own title bar.
-/// On X11, requesting `Client` is safe because:
-/// - Most X11 window managers ignore the request and keep server-side decorations.
-/// - GPUI's `window.window_decorations()` returns the *actual negotiated result* at
-///   runtime, so `should_render_csd()` will return `false` when the compositor kept SSD.
-/// - No custom title bar renders unless the compositor actually switched to CSD mode.
-///
-/// On other platforms, returns `Server` explicitly to preserve the original behavior.
+/// On Linux, only GNOME-like desktop sessions request `Client` (CSD). Other Linux
+/// environments keep `Server` decorations so the window manager/compositor remains in
+/// control of the title bar.
 #[cfg(target_os = "linux")]
 pub fn decoration_request() -> Option<WindowDecorations> {
-    Some(WindowDecorations::Client)
+    Some(if prefers_client_side_decorations() {
+        WindowDecorations::Client
+    } else {
+        WindowDecorations::Server
+    })
 }
 
 /// Returns the `WindowDecorations` value to request when creating a top-level window.

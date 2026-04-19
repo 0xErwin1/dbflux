@@ -3,7 +3,6 @@ use gpui::prelude::*;
 use gpui::*;
 
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
-use dbflux_components::controls::Input;
 use dbflux_core::values::ValueRef;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,13 +89,13 @@ impl ValueSourceSelector {
                 locator, json_key, ..
             }) => (
                 ValueSourceKind::Secret,
-                locator.clone(),
-                json_key.clone().unwrap_or_default(),
+                format_inline_reference(locator, json_key.as_deref()),
+                String::new(),
             ),
             Some(ValueRef::Parameter { name, json_key, .. }) => (
                 ValueSourceKind::Parameter,
-                name.clone(),
-                json_key.clone().unwrap_or_default(),
+                format_inline_reference(name, json_key.as_deref()),
+                String::new(),
             ),
             Some(ValueRef::Auth { field }) => (ValueSourceKind::Auth, field.clone(), String::new()),
         };
@@ -116,28 +115,16 @@ impl ValueSourceSelector {
         let source_kind = self.selected_source(cx);
 
         let primary_value = primary_value.trim().to_string();
-        let secondary_value = self.secondary_input.read(cx).value().trim().to_string();
-
         match source_kind {
             ValueSourceKind::Literal => None,
             ValueSourceKind::Env if !primary_value.is_empty() => Some(ValueRef::env(primary_value)),
             ValueSourceKind::Secret if !primary_value.is_empty() => {
-                let (locator, inline_key) = parse_secret_inline_reference(&primary_value);
-                let json_key = if secondary_value.is_empty() {
-                    inline_key
-                } else {
-                    Some(secondary_value)
-                };
+                let (locator, json_key) = parse_secret_inline_reference(&primary_value);
 
                 Some(ValueRef::secret("aws-secrets-manager", locator, json_key))
             }
             ValueSourceKind::Parameter if !primary_value.is_empty() => {
-                let (name, inline_key) = parse_secret_inline_reference(&primary_value);
-                let json_key = if secondary_value.is_empty() {
-                    inline_key
-                } else {
-                    Some(secondary_value)
-                };
+                let (name, json_key) = parse_secret_inline_reference(&primary_value);
 
                 Some(ValueRef::parameter_with_key("aws-ssm", name, json_key))
             }
@@ -210,6 +197,13 @@ impl ValueSourceSelector {
     }
 }
 
+fn format_inline_reference(locator: &str, json_key: Option<&str>) -> String {
+    match json_key.map(str::trim).filter(|key| !key.is_empty()) {
+        Some(json_key) => format!("{}#{}", locator.trim(), json_key),
+        None => locator.trim().to_string(),
+    }
+}
+
 fn parse_secret_inline_reference(value: &str) -> (String, Option<String>) {
     let trimmed = value.trim();
 
@@ -226,24 +220,12 @@ fn parse_secret_inline_reference(value: &str) -> (String, Option<String>) {
 }
 
 impl Render for ValueSourceSelector {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let source_kind = self.selected_source(cx);
-
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
             .items_center()
             .gap_2()
             .child(div().w(px(170.0)).child(self.source_dropdown.clone()))
-            .when(
-                source_kind == ValueSourceKind::Secret || source_kind == ValueSourceKind::Parameter,
-                |el| {
-                    el.child(
-                        div()
-                            .w(px(140.0))
-                            .child(Input::new(&self.secondary_input).small()),
-                    )
-                },
-            )
             .into_any_element()
     }
 }

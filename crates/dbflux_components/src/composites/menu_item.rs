@@ -97,10 +97,12 @@ fn menu_item_visual_state(item: &MenuItem, is_selected: bool) -> MenuItemVisualS
         MenuItemColorRole::Muted
     };
 
-    let submenu_color = if is_selected && !item.is_danger {
+    let submenu_color = if item.is_danger {
+        MenuItemColorRole::Danger
+    } else if is_selected {
         MenuItemColorRole::AccentForeground
     } else {
-        MenuItemColorRole::Muted
+        MenuItemColorRole::Foreground
     };
 
     let background = if is_selected {
@@ -266,7 +268,7 @@ pub fn render_menu_item(
             div()
                 .flex_1()
                 .truncate()
-                .child(Text::body(label).text_color(text_color)),
+                .child(Text::body_sm(label).text_color(text_color)),
         );
 
     if let Some(sc) = shortcut {
@@ -362,7 +364,7 @@ mod tests {
         assert_eq!(state.text_color, MenuItemColorRole::Danger);
         assert_eq!(state.icon_color, MenuItemColorRole::Danger);
         assert_eq!(state.shortcut_color, MenuItemColorRole::Muted);
-        assert_eq!(state.submenu_color, MenuItemColorRole::Muted);
+        assert_eq!(state.submenu_color, MenuItemColorRole::Danger);
     }
 
     #[test]
