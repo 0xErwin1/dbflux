@@ -325,7 +325,7 @@ fn apply_ayu_light(cx: &mut App) {
     theme.primary = accent;
     theme.primary_hover = rgb_to_hsla(0xE68A3A);
     theme.primary_active = rgb_to_hsla(0xCC7A33);
-    theme.primary_foreground = rgb_to_hsla(0xFFFFFF);
+    theme.primary_foreground = rgb_to_hsla(0x0A0E14);
 
     theme.secondary = raised;
     theme.secondary_hover = rgb_to_hsla(0xE4E4E4);
@@ -343,17 +343,17 @@ fn apply_ayu_light(cx: &mut App) {
     theme.success = success;
     theme.success_hover = rgb_to_hsla(0x79A100);
     theme.success_active = rgb_to_hsla(0x6D9000);
-    theme.success_foreground = rgb_to_hsla(0xFFFFFF);
+    theme.success_foreground = rgb_to_hsla(0x0A0E14);
 
     theme.warning = warning;
     theme.warning_hover = rgb_to_hsla(0xDA9D42);
     theme.warning_active = rgb_to_hsla(0xC28C3B);
-    theme.warning_foreground = rgb_to_hsla(0xFFFFFF);
+    theme.warning_foreground = rgb_to_hsla(0x0A0E14);
 
     theme.info = info;
     theme.info_hover = rgb_to_hsla(0x338ECF);
     theme.info_active = rgb_to_hsla(0x2D7EB8);
-    theme.info_foreground = rgb_to_hsla(0xFFFFFF);
+    theme.info_foreground = rgb_to_hsla(0x0A0E14);
 
     theme.popover = rgb_to_hsla(0xFFFFFF);
     theme.popover_foreground = foreground;
@@ -374,7 +374,7 @@ fn apply_ayu_light(cx: &mut App) {
     theme.sidebar_accent = rgb_to_hsla_alpha(0x5C6166, 0.06);
     theme.sidebar_accent_foreground = foreground;
     theme.sidebar_primary = accent;
-    theme.sidebar_primary_foreground = rgb_to_hsla(0xFFFFFF);
+    theme.sidebar_primary_foreground = rgb_to_hsla(0x0A0E14);
 
     theme.tab = panel;
     theme.tab_bar = panel;
