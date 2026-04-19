@@ -1,7 +1,7 @@
 use dbflux_components::typography::AppFonts;
 use dbflux_core::ThemeSetting;
 use dbflux_ui::ui::theme;
-use gpui::{SharedString, TestAppContext, Window, hsla};
+use gpui::{hsla, SharedString, TestAppContext, Window};
 use gpui_component::theme::Theme;
 
 fn rgb_to_hsla(hex: u32) -> gpui::Hsla {
@@ -83,6 +83,7 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
         assert_eq!(theme.foreground, rgb_to_hsla(0x5C6166));
         assert_eq!(theme.border, rgb_to_hsla(0xDCDCDC));
         assert_eq!(theme.primary_foreground, rgb_to_hsla(0x0A0E14));
+        assert_eq!(theme.danger_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.success_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.warning_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.info_foreground, rgb_to_hsla(0x0A0E14));

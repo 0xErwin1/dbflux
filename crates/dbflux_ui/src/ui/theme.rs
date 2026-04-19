@@ -1,7 +1,7 @@
-pub use dbflux_components::typography::AppFonts;
 use dbflux_components::typography::load_bundled_fonts;
+pub use dbflux_components::typography::AppFonts;
 use dbflux_core::ThemeSetting;
-use gpui::{App, Hsla, SharedString, Window, hsla};
+use gpui::{hsla, App, Hsla, SharedString, Window};
 use gpui_component::theme::{Theme, ThemeMode};
 use std::rc::Rc;
 
@@ -146,7 +146,7 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.danger = error;
     theme.danger_hover = rgb_to_hsla(0xD8656B);
     theme.danger_active = rgb_to_hsla(0xC05A5E);
-    theme.danger_foreground = rgb_to_hsla(0xFFFFFF);
+    theme.danger_foreground = rgb_to_hsla(0x0A0E14);
 
     // Semantic colors - Success
     theme.success = success;
@@ -338,7 +338,7 @@ fn apply_ayu_light(cx: &mut App) {
     theme.danger = error;
     theme.danger_hover = rgb_to_hsla(0xCF4848);
     theme.danger_active = rgb_to_hsla(0xB84040);
-    theme.danger_foreground = rgb_to_hsla(0xFFFFFF);
+    theme.danger_foreground = rgb_to_hsla(0x0A0E14);
 
     theme.success = success;
     theme.success_hover = rgb_to_hsla(0x79A100);
