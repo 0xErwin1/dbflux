@@ -1,9 +1,9 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::layout;
 use super::proxies::ProxyFormNav;
 use super::section_trait::SectionFocusEvent;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
@@ -985,7 +985,7 @@ impl Render for ProxiesSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Proxy Profiles",
                 "Manage proxy configurations for database connections",
                 cx,

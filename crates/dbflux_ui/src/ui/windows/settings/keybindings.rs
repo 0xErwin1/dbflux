@@ -1,4 +1,4 @@
-use crate::keymap::{ContextId, KeyChord, default_keymap};
+use crate::keymap::{default_keymap, ContextId, KeyChord};
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::Icon as FluxIcon;
 use dbflux_components::typography::{Body, FieldLabel, KeyHint, MonoCaption};
@@ -8,7 +8,6 @@ use gpui_component::ActiveTheme;
 use gpui_component::IconName;
 
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};
-use super::layout;
 
 impl KeybindingsSection {
     pub(super) fn render_keybindings_section(
@@ -104,7 +103,7 @@ impl KeybindingsSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Keyboard Shortcuts",
                 "View all keyboard shortcuts by context",
                 cx,

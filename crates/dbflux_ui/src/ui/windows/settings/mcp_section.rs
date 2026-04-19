@@ -1,8 +1,7 @@
-use super::layout;
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId};
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
-use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
+use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::components::multi_select::MultiSelect;
 use dbflux_components::controls::{Button, Checkbox, Input};
@@ -12,8 +11,8 @@ use dbflux_components::typography::{Body, FieldLabel, MonoCaption, MonoMeta, Sub
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
 use std::collections::HashSet;
 
 /// Tool display metadata: (id, label, description)
@@ -809,7 +808,7 @@ impl McpSection {
             .h_full()
             .flex()
             .flex_col()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Trusted Clients",
                 "AI agent identities allowed to connect via MCP",
                 cx,
@@ -1016,7 +1015,7 @@ impl McpSection {
             .h_full()
             .flex()
             .flex_col()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Roles",
                 "Group policies into named roles assigned to actors per connection",
                 cx,
@@ -1197,7 +1196,7 @@ impl McpSection {
             .h_full()
             .flex()
             .flex_col()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Policies",
                 "Define which tools and execution classes are allowed",
                 cx,

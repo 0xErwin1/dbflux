@@ -16,7 +16,6 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Icon, IconName};
 use std::collections::HashMap;
 
-use super::layout;
 use super::services_section::{ServiceFocus, ServiceFormRow, ServicesSection};
 
 impl ServicesSection {
@@ -700,7 +699,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Services",
                 "Manage external driver services. Changes require restart.",
                 cx,

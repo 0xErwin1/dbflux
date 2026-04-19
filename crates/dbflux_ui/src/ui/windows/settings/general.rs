@@ -1,17 +1,16 @@
-use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
+use crate::keymap::{key_chord_from_gpui, KeyChord, Modifiers};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
 
 use super::general_section::{GeneralFormRow, GeneralSection};
-use super::layout;
 use super::section_trait::SectionFocusEvent;
 
 impl GeneralSection {
@@ -415,7 +414,7 @@ impl GeneralSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "General",
                 "Configure startup, session, refresh, and safety behavior",
                 cx,

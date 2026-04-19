@@ -1,11 +1,11 @@
-use super::{SettingsSection, SettingsSectionId, layout};
+use super::{SettingsSection, SettingsSectionId};
 use crate::ui::icons::AppIcon;
 use dbflux_components::primitives::Icon;
 use dbflux_components::typography::{Body, FieldLabel, Headline, MonoCaption};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::ActiveTheme;
 
 pub(super) struct AboutSection;
 
@@ -45,7 +45,11 @@ impl Render for AboutSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header("About", "Project information", cx))
+            .child(dbflux_components::composites::section_header(
+                "About",
+                "Project information",
+                cx,
+            ))
             .child(
                 div().flex_1().min_h_0().overflow_y_scrollbar().p_6().child(
                     div()
