@@ -1,9 +1,8 @@
+use super::section_trait::SectionFocusEvent;
 use super::SettingsSection;
 use super::SettingsSectionId;
-use super::layout;
-use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
-use crate::keymap::{Modifiers, key_chord_from_gpui};
+use crate::keymap::{key_chord_from_gpui, Modifiers};
 use crate::ui::components::toast::ToastExt;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;
@@ -486,7 +485,7 @@ impl AuditSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Audit",
                 "Configure global audit event capture and retention",
                 cx,

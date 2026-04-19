@@ -1,9 +1,9 @@
-use super::SettingsSection;
-use super::SettingsSectionId;
-use super::form_section::{FormSection, create_blur_subscription};
+use super::form_section::{create_blur_subscription, FormSection};
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use super::ssh_tunnels::SshFormNav;
+use super::SettingsSection;
+use super::SettingsSectionId;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
@@ -1000,7 +1000,7 @@ impl Render for SshTunnelsSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "SSH Tunnels",
                 "Manage reusable SSH tunnels for bastion and jump-host access",
                 cx,

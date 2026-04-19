@@ -676,7 +676,7 @@ impl DriversSection {
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .child(layout::section_header(
+                .child(dbflux_components::composites::section_header(
                     "Drivers",
                     "Configure per-driver overrides and driver-defined settings",
                     cx,

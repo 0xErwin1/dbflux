@@ -7,30 +7,6 @@ use dbflux_components::typography::Body;
 use gpui_component::IconName;
 
 impl Workspace {
-    fn background_tasks_panel_header(
-        &self,
-        is_expanded: bool,
-        is_focused: bool,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let workspace = cx.entity().clone();
-
-        panel_header_collapsible_variant(
-            "panel-header-Background Tasks",
-            "Background Tasks",
-            PanelHeaderVariant::WorkspaceTasks,
-            !is_expanded,
-            is_focused,
-            Some(IconName::Loader),
-            move |_, _, app| {
-                let _ = workspace.update(app, |workspace, cx| {
-                    workspace.toggle_tasks_panel(cx);
-                });
-            },
-            cx,
-        )
-    }
-
     /// Renders the active document from TabManager (v0.3).
     fn render_active_document(&self, cx: &App) -> Option<AnyElement> {
         self.tab_manager
@@ -91,8 +67,21 @@ impl Render for Workspace {
         let linux_title_bar = platform::render_csd_title_bar(window, cx, "DBFlux");
 
         let right_pane = if has_tabs {
-            let tasks_header =
-                self.background_tasks_panel_header(tasks_expanded, tasks_focused, cx);
+            let workspace = cx.entity().clone();
+            let tasks_header = panel_header_collapsible_variant(
+                "panel-header-Background Tasks",
+                "Background Tasks",
+                PanelHeaderVariant::WorkspaceTasks,
+                !tasks_expanded,
+                tasks_focused,
+                Some(IconName::Loader),
+                move |_, _, app| {
+                    let _ = workspace.update(app, |workspace, cx| {
+                        workspace.toggle_tasks_panel(cx);
+                    });
+                },
+                cx,
+            );
 
             v_resizable("main-panels")
                 .child(
@@ -173,8 +162,21 @@ impl Render for Workspace {
                 )
         } else {
             // Empty state: welcome message + tasks panel
-            let tasks_header_empty =
-                self.background_tasks_panel_header(tasks_expanded, tasks_focused, cx);
+            let workspace = cx.entity().clone();
+            let tasks_header_empty = panel_header_collapsible_variant(
+                "panel-header-Background Tasks",
+                "Background Tasks",
+                PanelHeaderVariant::WorkspaceTasks,
+                !tasks_expanded,
+                tasks_focused,
+                Some(IconName::Loader),
+                move |_, _, app| {
+                    let _ = workspace.update(app, |workspace, cx| {
+                        workspace.toggle_tasks_panel(cx);
+                    });
+                },
+                cx,
+            );
 
             v_resizable("main-panels")
                 .child(
@@ -882,6 +884,7 @@ mod tests {
 
         assert!(source.contains("panel_header_collapsible_variant("));
         assert!(source.contains("PanelHeaderVariant::WorkspaceTasks"));
+        assert!(!source.contains("fn background_tasks_panel_header("));
         assert!(!source.contains("fn render_panel_header("));
         assert!(!source.contains("fn panel_header_title("));
     }

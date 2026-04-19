@@ -1,4 +1,3 @@
-use dbflux_components::composites::section_header as component_section_header;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
@@ -20,14 +19,6 @@ pub(super) fn editor_panel_title(noun: &str, is_editing: bool) -> String {
     let prefix = if is_editing { "Edit" } else { "New" };
 
     format!("{} {}", prefix, noun)
-}
-
-pub(super) fn section_header(
-    title: impl Into<SharedString>,
-    subtitle: impl Into<SharedString>,
-    cx: &App,
-) -> Div {
-    component_section_header(title, subtitle, cx)
 }
 
 pub(super) fn section_container(content: impl IntoElement) -> Div {
@@ -81,7 +72,7 @@ pub(super) fn sticky_form_shell(
 #[cfg(test)]
 mod tests {
     use super::{
-        StickyFooterLayout, compact_input_shell, editor_panel_title, sticky_footer_layout,
+        compact_input_shell, editor_panel_title, sticky_footer_layout, StickyFooterLayout,
     };
     use gpui::div;
     use std::fs;
@@ -119,17 +110,28 @@ mod tests {
     }
 
     #[test]
-    fn settings_section_header_forwards_to_shared_component_contract() {
+    fn settings_layout_keeps_section_container_and_editor_helpers_only() {
         let source = read_settings_file("layout.rs");
         let production_source = source
             .split("#[cfg(test)]")
             .next()
             .expect("layout.rs should contain production code before tests");
 
-        assert!(production_source.contains("dbflux_components::composites::section_header"));
-        assert!(!production_source.contains("Headline::new"));
-        assert!(!production_source.contains("Body::new"));
-        assert!(!production_source.contains("ghost_border_color"));
+        assert!(production_source.contains("pub(super) fn compact_input_shell("));
+        assert!(production_source.contains("pub(super) fn editor_panel_title("));
+        assert!(production_source.contains("pub(super) fn section_container("));
+        assert!(production_source.contains("pub(super) fn sticky_form_shell("));
+    }
+
+    #[test]
+    fn settings_layout_no_longer_defines_a_section_header_shim() {
+        let source = read_settings_file("layout.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("layout.rs should contain production code before tests");
+
+        assert!(!production_source.contains("pub(super) fn section_header("));
     }
 
     #[test]
@@ -156,6 +158,30 @@ mod tests {
                         && !source.contains(",\n                &theme,")
                         && !source.contains(",\n                    &theme,"),
                 "{file_name} still passes theme into layout::section_header"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_sections_stop_calling_layout_section_header() {
+        for file_name in [
+            "about_section.rs",
+            "audit_section.rs",
+            "auth_profiles_section.rs",
+            "drivers.rs",
+            "general.rs",
+            "hooks.rs",
+            "keybindings.rs",
+            "mcp_section.rs",
+            "proxies_section.rs",
+            "rpc_services.rs",
+            "ssh_tunnels_section.rs",
+        ] {
+            let source = read_settings_file(file_name);
+
+            assert!(
+                !source.contains("layout::section_header("),
+                "{file_name} still calls layout::section_header"
             );
         }
     }

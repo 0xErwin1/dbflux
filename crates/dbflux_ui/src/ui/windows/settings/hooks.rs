@@ -21,7 +21,6 @@ use super::form_section::FormSection;
 use super::hooks_section::{
     HookFocus, HookFormField, HookKindSelection, HooksSection, ScriptSourceSelection,
 };
-use super::layout;
 
 impl HooksSection {
     fn hook_script_editor_mode(&self, cx: &App) -> &'static str {
@@ -1163,7 +1162,7 @@ impl HooksSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Hooks",
                 "Create reusable hooks and associate them from connection settings",
                 cx,
