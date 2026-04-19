@@ -931,6 +931,30 @@ mod tests {
         assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
     }
 
+    #[test]
+    fn tabbed_and_empty_workspace_paths_both_use_the_workspace_tasks_contract() {
+        let invocations = background_tasks_header_invocations();
+
+        assert_eq!(invocations.len(), 2);
+
+        for invocation in invocations {
+            assert!(invocation.contains("panel_header_collapsible_variant("));
+            assert!(invocation.contains("PanelHeaderVariant::WorkspaceTasks"));
+            assert!(invocation.contains("tasks_focused"));
+            assert!(invocation.contains("Some(IconName::Loader)"));
+        }
+    }
+
+    #[test]
+    fn workspace_background_tasks_contract_stays_out_of_local_helper_code_paths() {
+        let invocations = background_tasks_header_invocations();
+
+        for invocation in invocations {
+            assert!(!invocation.contains("theme.tab_bar"));
+            assert!(!invocation.contains("theme.primary"));
+        }
+    }
+
     fn workspace_render_source() -> String {
         let source = fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -943,5 +967,24 @@ mod tests {
             .next()
             .expect("render.rs should contain production code before tests")
             .to_string()
+    }
+
+    fn background_tasks_header_invocations() -> Vec<String> {
+        let source = workspace_render_source();
+        let mut invocations = Vec::new();
+        let mut remaining = source.as_str();
+
+        while let Some(start) = remaining.find("panel_header_collapsible_variant(") {
+            let tail = &remaining[start..];
+            let end = tail
+                .find(",\n                cx,\n            );")
+                .map(|index| index + ",\n                cx,\n            );".len())
+                .expect("workspace render should close the panel_header_collapsible_variant call");
+
+            invocations.push(tail[..end].to_string());
+            remaining = &tail[end..];
+        }
+
+        invocations
     }
 }

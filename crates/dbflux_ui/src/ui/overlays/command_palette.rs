@@ -344,6 +344,20 @@ mod tests {
             .expect("command_palette.rs should contain a render implementation")
     }
 
+    fn command_palette_overlay_source() -> String {
+        let source = command_palette_source();
+        let start = source
+            .find(".id(\"command-palette-overlay\")")
+            .expect("command_palette render should define the overlay container");
+
+        let remaining = &source[start..];
+        let end = remaining
+            .find(".child(\n                        div()\n                            .id(\"command-palette-list\")")
+            .unwrap_or(remaining.len());
+
+        remaining[..end].to_string()
+    }
+
     #[gpui::test]
     fn action_shortcuts_use_mono_caption_instead_of_bold_key_hint(cx: &mut TestAppContext) {
         cx.update(theme::init);
@@ -405,6 +419,24 @@ mod tests {
         assert!(source.contains(".id(\"command-palette-overlay\")"));
         assert!(source.contains(".key_context(ContextId::CommandPalette.as_gpui_context())"));
         assert!(source.contains("this.hide(cx);"));
+    }
+
+    #[test]
+    fn command_palette_overlay_chain_starts_from_the_shared_modal_container() {
+        let source = command_palette_overlay_source();
+
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(source.contains(".id(\"command-palette-container\")"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn command_palette_overlay_chain_keeps_the_shared_scrim_close_path() {
+        let source = command_palette_overlay_source();
+
+        assert!(source.contains(".bg(overlay_bg())"));
+        assert!(source.contains("this.hide(cx);"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
     }
 }
 

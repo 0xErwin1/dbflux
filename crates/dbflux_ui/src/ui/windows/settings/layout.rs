@@ -84,6 +84,20 @@ mod tests {
             .unwrap_or_else(|error| panic!("failed to read {name}: {error}"))
     }
 
+    fn representative_settings_section_sources() -> Vec<(&'static str, String)> {
+        [
+            "about_section.rs",
+            "audit_section.rs",
+            "general.rs",
+            "hooks.rs",
+            "mcp_section.rs",
+            "rpc_services.rs",
+        ]
+        .into_iter()
+        .map(|file_name| (file_name, read_settings_file(file_name)))
+        .collect()
+    }
+
     #[test]
     fn editor_panel_title_uses_new_prefix_when_creating() {
         assert_eq!(editor_panel_title("Proxy", false), "New Proxy");
@@ -184,5 +198,31 @@ mod tests {
                 "{file_name} still calls layout::section_header"
             );
         }
+    }
+
+    #[test]
+    fn representative_settings_sections_call_the_canonical_section_header_directly() {
+        for (file_name, source) in representative_settings_section_sources() {
+            assert!(
+                source.contains("dbflux_components::composites::section_header("),
+                "{file_name} should call the canonical section_header"
+            );
+            assert!(
+                !source.contains("layout::section_header("),
+                "{file_name} should not call the removed layout::section_header helper"
+            );
+        }
+    }
+
+    #[test]
+    fn representative_settings_sections_keep_header_chrome_out_of_layout_rs() {
+        let layout_source = read_settings_file("layout.rs");
+        let production_source = layout_source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("layout.rs should contain production code before tests");
+
+        assert!(!production_source.contains("section_header("));
+        assert!(!production_source.contains("SectionHeaderVariant"));
     }
 }
