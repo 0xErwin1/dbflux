@@ -1,19 +1,14 @@
-use dbflux_components::typography::load_bundled_fonts;
 pub use dbflux_components::typography::AppFonts;
+use dbflux_components::typography::load_bundled_fonts;
 use dbflux_core::ThemeSetting;
-use gpui::{hsla, App, Hsla, SharedString, Window};
+use gpui::{App, Hsla, SharedString, Window, hsla};
 use gpui_component::theme::{Theme, ThemeMode};
 use std::rc::Rc;
 
 /// Ghost border: `#524436` at 15% opacity. Felt-not-seen structural separator.
 /// Use instead of solid `theme.border` when separating major UI regions.
 pub fn ghost_border_color() -> Hsla {
-    rgb_to_hsla_alpha(0x524436, 0.15)
-}
-
-/// Surface highest: `#31353C`. Use for modal/overlay backgrounds to lift them above panel.
-pub fn surface_highest_color() -> Hsla {
-    rgb_to_hsla(0x31353C)
+    dbflux_components::tokens::ChromeColors::ghost_border()
 }
 
 pub fn init(cx: &mut App) {
@@ -166,8 +161,8 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.info_active = rgb_to_hsla(0x479ACC);
     theme.info_foreground = rgb_to_hsla(0x0A0E14);
 
-    // Popover / modal surface — elevated above panel using surface_highest (#31353C)
-    theme.popover = surface_highest_color();
+    // Popover / modal surface — elevated above panel.
+    theme.popover = rgb_to_hsla(0x31353C);
     theme.popover_foreground = foreground;
 
     // Selection
