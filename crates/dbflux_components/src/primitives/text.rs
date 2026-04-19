@@ -552,4 +552,19 @@ mod tests {
         assert_eq!(field_label.size, FontSizes::BASE);
         assert_eq!(field_label.weight, FontWeight::MEDIUM);
     }
+
+    #[test]
+    fn shared_header_and_modal_roles_keep_expected_semantic_defaults() {
+        let section_title = TextVariant::Headline1.role_contract();
+        assert_eq!(section_title.family, Some(AppFonts::HEADLINE));
+        assert_eq!(section_title.fallbacks, NO_FALLBACKS);
+        assert_eq!(section_title.size, FontSizes::LG);
+        assert_eq!(section_title.weight, FontWeight::BOLD);
+
+        let modal_title = TextVariant::LabelSm.role_contract();
+        assert_eq!(modal_title.family, None);
+        assert_eq!(modal_title.fallbacks, NO_FALLBACKS);
+        assert_eq!(modal_title.size, FontSizes::SM);
+        assert_eq!(modal_title.weight, FontWeight::MEDIUM);
+    }
 }

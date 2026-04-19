@@ -14,8 +14,9 @@ pub use icon_button::IconButton;
 pub use label::Label;
 pub use status_indicator::{Status, StatusIndicator};
 pub use surface::{
-    SurfaceVariant, overlay_bg, surface, surface_card, surface_overlay, surface_panel,
-    surface_raised,
+    SurfaceInspection, SurfaceRole, SurfaceThemeColorSlot, SurfaceVariant, inspect_surface_role,
+    overlay_bg, surface, surface_card, surface_modal_container, surface_overlay, surface_panel,
+    surface_raised, surface_role,
 };
 pub use text::{Text, TextVariant};
 pub(crate) use text::{TextColorSelection, TextDefaultColor};
