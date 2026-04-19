@@ -669,8 +669,6 @@ impl DriversSection {
     }
 
     pub(super) fn render_drivers_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
         layout::section_container(
             div()
                 .flex_1()
@@ -681,7 +679,7 @@ impl DriversSection {
                 .child(layout::section_header(
                     "Drivers",
                     "Configure per-driver overrides and driver-defined settings",
-                    theme,
+                    cx,
                 ))
                 .child(
                     div()

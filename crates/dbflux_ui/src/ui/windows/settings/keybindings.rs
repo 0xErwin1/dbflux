@@ -107,7 +107,7 @@ impl KeybindingsSection {
             .child(layout::section_header(
                 "Keyboard Shortcuts",
                 "View all keyboard shortcuts by context",
-                theme,
+                cx,
             ))
             .child(
                 div().p_4().border_b_1().border_color(border).child(

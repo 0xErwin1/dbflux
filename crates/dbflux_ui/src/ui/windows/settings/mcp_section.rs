@@ -812,7 +812,7 @@ impl McpSection {
             .child(layout::section_header(
                 "Trusted Clients",
                 "AI agent identities allowed to connect via MCP",
-                &theme,
+                cx,
             ))
             .child(
                 div()
@@ -1019,7 +1019,7 @@ impl McpSection {
             .child(layout::section_header(
                 "Roles",
                 "Group policies into named roles assigned to actors per connection",
-                &theme,
+                cx,
             ))
             .child(
                 div()
@@ -1200,7 +1200,7 @@ impl McpSection {
             .child(layout::section_header(
                 "Policies",
                 "Define which tools and execution classes are allowed",
-                &theme,
+                cx,
             ))
             .child(
                 div()

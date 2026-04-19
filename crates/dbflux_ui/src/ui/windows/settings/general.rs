@@ -418,7 +418,7 @@ impl GeneralSection {
             .child(layout::section_header(
                 "General",
                 "Configure startup, session, refresh, and safety behavior",
-                theme,
+                cx,
             ))
             .child(
                 div()

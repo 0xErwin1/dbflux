@@ -45,11 +45,7 @@ impl Render for AboutSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
-                "About",
-                "Project information",
-                theme,
-            ))
+            .child(layout::section_header("About", "Project information", cx))
             .child(
                 div().flex_1().min_h_0().overflow_y_scrollbar().p_6().child(
                     div()

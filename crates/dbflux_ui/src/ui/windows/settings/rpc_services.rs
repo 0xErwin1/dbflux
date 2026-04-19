@@ -691,7 +691,6 @@ impl ServicesSection {
 
 impl ServicesSection {
     pub(super) fn render_services_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let services = self.svc_services.clone();
         let editing_idx = self.editing_svc_idx;
 
@@ -704,7 +703,7 @@ impl ServicesSection {
             .child(layout::section_header(
                 "Services",
                 "Manage external driver services. Changes require restart.",
-                theme,
+                cx,
             ))
             .child(
                 div()

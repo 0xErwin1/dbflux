@@ -955,7 +955,6 @@ impl Render for ProxiesSection {
             state.set_masked(!show_proxy_password, window, cx);
         });
 
-        let theme = cx.theme();
         let (proxies, keyring_available) = {
             let state = self.app_state.read(cx);
             (state.proxies().to_vec(), state.secret_store_available())
@@ -989,7 +988,7 @@ impl Render for ProxiesSection {
             .child(layout::section_header(
                 "Proxy Profiles",
                 "Manage proxy configurations for database connections",
-                theme,
+                cx,
             ))
             .child(
                 div()

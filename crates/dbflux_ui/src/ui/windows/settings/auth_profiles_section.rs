@@ -1863,7 +1863,7 @@ impl Render for AuthProfilesSection {
                 .child(layout::section_header(
                     "Auth Profiles",
                     "Manage reusable authentication profiles for connection access",
-                    cx.theme(),
+                    cx,
                 ))
                 .when(!detected_profiles.is_empty(), |root| {
                     root.child(self.render_import_banner(&detected_profiles, cx))

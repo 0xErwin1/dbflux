@@ -1,9 +1,7 @@
-use dbflux_components::typography::{Body, Headline};
+use dbflux_components::composites::section_header as component_section_header;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
-
-use crate::ui::theme::ghost_border_color;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StickyFooterLayout {
@@ -27,19 +25,9 @@ pub(super) fn editor_panel_title(noun: &str, is_editing: bool) -> String {
 pub(super) fn section_header(
     title: impl Into<SharedString>,
     subtitle: impl Into<SharedString>,
-    _theme: &gpui_component::Theme,
+    cx: &App,
 ) -> Div {
-    div()
-        .px_6()
-        .py_5()
-        .border_b_1()
-        .border_color(ghost_border_color())
-        .child(Headline::new(title).xl())
-        .child(
-            div()
-                .mt_1()
-                .child(Body::new(subtitle).color(_theme.muted_foreground)),
-        )
+    component_section_header(title, subtitle, cx)
 }
 
 pub(super) fn section_container(content: impl IntoElement) -> Div {
@@ -96,6 +84,14 @@ mod tests {
         StickyFooterLayout, compact_input_shell, editor_panel_title, sticky_footer_layout,
     };
     use gpui::div;
+    use std::fs;
+
+    const SETTINGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ui/windows/settings");
+
+    fn read_settings_file(name: &str) -> String {
+        fs::read_to_string(format!("{SETTINGS_DIR}/{name}"))
+            .unwrap_or_else(|error| panic!("failed to read {name}: {error}"))
+    }
 
     #[test]
     fn editor_panel_title_uses_new_prefix_when_creating() {
@@ -120,5 +116,47 @@ mod tests {
     #[test]
     fn compact_settings_inputs_skip_standard_control_shell() {
         let _ = compact_input_shell(div());
+    }
+
+    #[test]
+    fn settings_section_header_forwards_to_shared_component_contract() {
+        let source = read_settings_file("layout.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("layout.rs should contain production code before tests");
+
+        assert!(production_source.contains("dbflux_components::composites::section_header"));
+        assert!(!production_source.contains("Headline::new"));
+        assert!(!production_source.contains("Body::new"));
+        assert!(!production_source.contains("ghost_border_color"));
+    }
+
+    #[test]
+    fn settings_sections_stop_passing_theme_into_local_section_header_helper() {
+        for file_name in [
+            "about_section.rs",
+            "audit_section.rs",
+            "auth_profiles_section.rs",
+            "drivers.rs",
+            "general.rs",
+            "hooks.rs",
+            "keybindings.rs",
+            "mcp_section.rs",
+            "proxies_section.rs",
+            "rpc_services.rs",
+            "ssh_tunnels_section.rs",
+        ] {
+            let source = read_settings_file(file_name);
+
+            assert!(
+                !source.contains("layout::section_header(")
+                    || !source.contains(",\n                theme,")
+                        && !source.contains(",\n                    theme,")
+                        && !source.contains(",\n                &theme,")
+                        && !source.contains(",\n                    &theme,"),
+                "{file_name} still passes theme into layout::section_header"
+            );
+        }
     }
 }

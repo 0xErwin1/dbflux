@@ -975,7 +975,6 @@ impl Render for SshTunnelsSection {
             state.set_masked(!show_ssh_password, window, cx);
         });
 
-        let theme = cx.theme();
         let (tunnels, keyring_available) = {
             let state = self.app_state.read(cx);
             (state.ssh_tunnels().to_vec(), state.secret_store_available())
@@ -1004,7 +1003,7 @@ impl Render for SshTunnelsSection {
             .child(layout::section_header(
                 "SSH Tunnels",
                 "Manage reusable SSH tunnels for bastion and jump-host access",
-                theme,
+                cx,
             ))
             .child(
                 div()

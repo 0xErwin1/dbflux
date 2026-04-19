@@ -489,7 +489,7 @@ impl AuditSection {
             .child(layout::section_header(
                 "Audit",
                 "Configure global audit event capture and retention",
-                theme,
+                cx,
             ))
             .child(
                 div()

@@ -1157,8 +1157,6 @@ impl HooksSection {
     }
 
     pub(super) fn render_hooks_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
         div()
             .flex_1()
             .min_h_0()
@@ -1168,7 +1166,7 @@ impl HooksSection {
             .child(layout::section_header(
                 "Hooks",
                 "Create reusable hooks and associate them from connection settings",
-                theme,
+                cx,
             ))
             .child(
                 div()
