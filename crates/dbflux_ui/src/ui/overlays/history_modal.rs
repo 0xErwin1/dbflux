@@ -5,7 +5,7 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::helpers::text_color_for_active;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_modal_container};
+use dbflux_components::primitives::{overlay_bg, surface_modal_container, Icon, Text};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -863,6 +863,19 @@ mod source_contract_tests {
         .to_string()
     }
 
+    fn history_modal_render_source(function_name: &str) -> String {
+        let source = history_modal_source();
+        let function_marker = format!("fn {function_name}(");
+        let start = source
+            .find(&function_marker)
+            .unwrap_or_else(|| panic!("history_modal.rs should contain {function_marker}"));
+
+        let remaining = &source[start..];
+        let end = remaining.find("\n    fn ").unwrap_or(remaining.len());
+
+        remaining[..end].to_string()
+    }
+
     #[test]
     fn browse_modal_uses_canonical_scrim_and_modal_container_contracts() {
         let source = history_modal_source();
@@ -876,6 +889,24 @@ mod source_contract_tests {
     fn save_modal_stops_reusing_panel_surface_for_modal_chrome() {
         let source = history_modal_source();
 
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn browse_modal_contracts_are_scoped_to_the_browse_render_path() {
+        let source = history_modal_render_source("render_browse");
+
+        assert!(source.contains(".bg(overlay_bg())"));
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn save_modal_contracts_are_scoped_to_the_save_render_path() {
+        let source = history_modal_render_source("render_save");
+
+        assert!(source.contains(".bg(overlay_bg())"));
         assert!(source.contains("surface_modal_container(cx)"));
         assert!(!source.contains("surface_panel(cx)"));
     }
