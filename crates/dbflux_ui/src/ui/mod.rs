@@ -8,6 +8,9 @@ pub mod tokens;
 pub mod views;
 pub mod windows;
 
+#[cfg(test)]
+mod design_system_guardrails;
+
 /// Extension trait for `anyhow::Result` from async `cx.update()` calls.
 ///
 /// Replaces bare `.ok()` on fallible update calls inside detached tasks,
