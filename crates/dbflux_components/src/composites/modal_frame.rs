@@ -1,9 +1,225 @@
+use std::sync::Arc;
+
 use gpui::prelude::*;
-use gpui::{App, SharedString, div};
+use gpui::{div, px, App, ElementId, FocusHandle, MouseButton, Pixels, SharedString, Window};
 use gpui_component::ActiveTheme;
 
-use crate::primitives::{SurfaceRole, Text, surface_modal_container};
+use crate::icon::IconSource;
+use crate::primitives::{surface_modal_container, IconButton, SurfaceRole, Text};
+use crate::tokens::Heights;
 use crate::tokens::Spacing;
+
+type CloseHandler = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
+
+enum ModalHeight {
+    Fixed(Pixels),
+    Max(Pixels),
+}
+
+enum ModalFrameCloseAffordance {
+    Label,
+    Icon(IconSource),
+}
+
+pub struct ModalFrame {
+    id: ElementId,
+    focus_handle: FocusHandle,
+    key_context: Option<String>,
+    title: SharedString,
+    width: Pixels,
+    height: ModalHeight,
+    top_offset: Pixels,
+    on_close: CloseHandler,
+    header_leading: Option<gpui::AnyElement>,
+    header_extra: Option<gpui::AnyElement>,
+    close_affordance: ModalFrameCloseAffordance,
+    block_scroll: bool,
+    children: Vec<gpui::AnyElement>,
+}
+
+impl ModalFrame {
+    pub fn new(
+        id: impl Into<ElementId>,
+        focus_handle: &FocusHandle,
+        on_close: impl Fn(&mut Window, &mut App) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            focus_handle: focus_handle.clone(),
+            key_context: None,
+            title: SharedString::default(),
+            width: px(900.0),
+            height: ModalHeight::Fixed(px(600.0)),
+            top_offset: px(80.0),
+            on_close: Arc::new(on_close),
+            header_leading: None,
+            header_extra: None,
+            close_affordance: ModalFrameCloseAffordance::Label,
+            block_scroll: false,
+            children: Vec::new(),
+        }
+    }
+
+    pub fn key_context(mut self, key_context: impl Into<String>) -> Self {
+        self.key_context = Some(key_context.into());
+        self
+    }
+
+    pub fn title(mut self, title: impl Into<SharedString>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    pub fn width(mut self, width: Pixels) -> Self {
+        self.width = width;
+        self
+    }
+
+    pub fn height(mut self, height: Pixels) -> Self {
+        self.height = ModalHeight::Fixed(height);
+        self
+    }
+
+    pub fn max_height(mut self, height: Pixels) -> Self {
+        self.height = ModalHeight::Max(height);
+        self
+    }
+
+    pub fn top_offset(mut self, offset: Pixels) -> Self {
+        self.top_offset = offset;
+        self
+    }
+
+    pub fn header_leading(mut self, element: impl IntoElement) -> Self {
+        self.header_leading = Some(element.into_any_element());
+        self
+    }
+
+    pub fn header_extra(mut self, element: impl IntoElement) -> Self {
+        self.header_extra = Some(element.into_any_element());
+        self
+    }
+
+    pub fn close_icon(mut self, icon: IconSource) -> Self {
+        self.close_affordance = ModalFrameCloseAffordance::Icon(icon);
+        self
+    }
+
+    pub fn block_scroll(mut self) -> Self {
+        self.block_scroll = true;
+        self
+    }
+
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(child.into_any_element());
+        self
+    }
+
+    pub fn render(self, cx: &App) -> gpui::AnyElement {
+        let theme = cx.theme();
+
+        let close_for_overlay = self.on_close.clone();
+        let close_for_button = self.on_close.clone();
+        let close_for_action = self.on_close.clone();
+
+        let inspection =
+            inspect_modal_frame(ModalFrameVariant::Dialog, self.header_extra.is_some());
+
+        let mut container = surface_modal_container(cx)
+            .w(self.width)
+            .shadow_lg()
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            });
+
+        match self.height {
+            ModalHeight::Fixed(height) => container = container.h(height),
+            ModalHeight::Max(height) => container = container.max_h(height),
+        };
+
+        let mut header_left = div().flex().items_center().gap(Spacing::SM);
+
+        if let Some(leading) = self.header_leading {
+            header_left = header_left.child(leading);
+        }
+
+        header_left = header_left.child(Text::label_sm(self.title));
+
+        if let Some(extra) = self.header_extra {
+            header_left = header_left.child(extra);
+        }
+
+        let close_control = match self.close_affordance {
+            ModalFrameCloseAffordance::Label => div()
+                .px(Spacing::SM)
+                .py(Spacing::XS)
+                .rounded_sm()
+                .cursor_pointer()
+                .text_size(crate::tokens::FontSizes::SM)
+                .text_color(theme.muted_foreground)
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    (close_for_button)(window, cx);
+                })
+                .child("Close")
+                .into_any_element(),
+            ModalFrameCloseAffordance::Icon(icon) => IconButton::new("close-btn", icon)
+                .icon_size(Heights::ICON_SM)
+                .on_click(move |_, window, cx| {
+                    (close_for_button)(window, cx);
+                })
+                .into_any_element(),
+        };
+
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(inspection.header_padding_x)
+            .py(inspection.header_padding_y)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(header_left)
+            .child(close_control);
+
+        container = container.child(header);
+
+        for child in self.children {
+            container = container.child(child);
+        }
+
+        let mut overlay = div()
+            .id(self.id)
+            .track_focus(&self.focus_handle)
+            .absolute()
+            .inset_0()
+            .bg(crate::primitives::overlay_bg())
+            .flex()
+            .justify_center()
+            .items_start()
+            .pt(self.top_offset)
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                (close_for_overlay)(window, cx);
+            })
+            .on_action(move |_: &crate::actions::Cancel, window, cx| {
+                (close_for_action)(window, cx);
+            });
+
+        if let Some(key_context) = self.key_context {
+            overlay = overlay.key_context(key_context.as_str());
+        }
+
+        if self.block_scroll {
+            overlay = overlay.on_scroll_wheel(|_, _, cx| {
+                cx.stop_propagation();
+            });
+        }
+
+        overlay.child(container).into_any_element()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModalFrameVariant {
@@ -113,7 +329,7 @@ pub fn modal_frame_with_header_extra(
 
 #[cfg(test)]
 mod tests {
-    use super::{ModalFrameVariant, inspect_modal_frame};
+    use super::{inspect_modal_frame, ModalFrameVariant};
     use crate::primitives::{SurfaceRole, TextVariant};
     use crate::tokens::Spacing;
 
