@@ -4,8 +4,8 @@ use dbflux_components::primitives::Icon;
 use dbflux_components::typography::{Body, FieldLabel, Headline, MonoCaption};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
 
 pub(super) struct AboutSection;
 

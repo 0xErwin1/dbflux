@@ -149,6 +149,7 @@ pub fn panel_header_variant_with_actions(
     panel_header_layout(title.into(), variant, false, false, None, actions, cx)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn panel_header_collapsible_variant(
     id: impl Into<gpui::ElementId>,
     title: impl Into<SharedString>,
@@ -265,20 +266,20 @@ fn panel_header_layout(
         );
     }
 
-    if contract.supports_leading_icon {
-        if let Some(leading_icon) = leading_icon {
-            left = left.child(
-                Icon::new(IconSource::Named(leading_icon))
-                    .size(Heights::ICON_SM)
-                    .color(title_color(
-                        contract
-                            .focus_title_color
-                            .filter(|_| focused)
-                            .unwrap_or(contract.base_title_color),
-                        theme,
-                    )),
-            );
-        }
+    if contract.supports_leading_icon
+        && let Some(leading_icon) = leading_icon
+    {
+        left = left.child(
+            Icon::new(IconSource::Named(leading_icon))
+                .size(Heights::ICON_SM)
+                .color(title_color(
+                    contract
+                        .focus_title_color
+                        .filter(|_| focused)
+                        .unwrap_or(contract.base_title_color),
+                    theme,
+                )),
+        );
     }
 
     let title = MonoCaption::new(title)
@@ -363,19 +364,19 @@ fn panel_header_layout_stateful(
         );
     }
 
-    if contract.supports_leading_icon {
-        if let Some(leading_icon) = leading_icon {
-            let tone = contract
-                .focus_title_color
-                .filter(|_| focused)
-                .unwrap_or(contract.base_title_color);
+    if contract.supports_leading_icon
+        && let Some(leading_icon) = leading_icon
+    {
+        let tone = contract
+            .focus_title_color
+            .filter(|_| focused)
+            .unwrap_or(contract.base_title_color);
 
-            left = left.child(
-                Icon::new(IconSource::Named(leading_icon))
-                    .size(Heights::ICON_SM)
-                    .color(title_color(tone, theme)),
-            );
-        }
+        left = left.child(
+            Icon::new(IconSource::Named(leading_icon))
+                .size(Heights::ICON_SM)
+                .color(title_color(tone, theme)),
+        );
     }
 
     let tone = contract

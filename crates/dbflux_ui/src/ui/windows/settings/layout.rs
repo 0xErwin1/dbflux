@@ -72,7 +72,7 @@ pub(super) fn sticky_form_shell(
 #[cfg(test)]
 mod tests {
     use super::{
-        compact_input_shell, editor_panel_title, sticky_footer_layout, StickyFooterLayout,
+        StickyFooterLayout, compact_input_shell, editor_panel_title, sticky_footer_layout,
     };
     use gpui::div;
     use std::fs;

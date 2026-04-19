@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use gpui::prelude::*;
-use gpui::{div, px, App, ElementId, FocusHandle, MouseButton, Pixels, SharedString, Window};
+use gpui::{App, ElementId, FocusHandle, MouseButton, Pixels, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
 
 use crate::icon::IconSource;
-use crate::primitives::{surface_modal_container, IconButton, SurfaceRole, Text};
+use crate::primitives::{IconButton, SurfaceRole, Text, surface_modal_container};
 use crate::tokens::Heights;
 use crate::tokens::Spacing;
 
@@ -329,7 +329,7 @@ pub fn modal_frame_with_header_extra(
 
 #[cfg(test)]
 mod tests {
-    use super::{inspect_modal_frame, ModalFrameVariant};
+    use super::{ModalFrameVariant, inspect_modal_frame};
     use crate::primitives::{SurfaceRole, TextVariant};
     use crate::tokens::Spacing;
 

@@ -5,7 +5,7 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::helpers::text_color_for_active;
-use dbflux_components::primitives::{overlay_bg, surface_modal_container, Icon, Text};
+use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_modal_container};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;

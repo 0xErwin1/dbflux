@@ -76,7 +76,7 @@ impl Render for Workspace {
                 tasks_focused,
                 Some(IconName::Loader),
                 move |_, _, app| {
-                    let _ = workspace.update(app, |workspace, cx| {
+                    workspace.update(app, |workspace, cx| {
                         workspace.toggle_tasks_panel(cx);
                     });
                 },
@@ -171,7 +171,7 @@ impl Render for Workspace {
                 tasks_focused,
                 Some(IconName::Loader),
                 move |_, _, app| {
-                    let _ = workspace.update(app, |workspace, cx| {
+                    workspace.update(app, |workspace, cx| {
                         workspace.toggle_tasks_panel(cx);
                     });
                 },
