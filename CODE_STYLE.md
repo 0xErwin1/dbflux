@@ -12,10 +12,10 @@
 
 ## File Organization
 
-- Workspace crates live under `crates/`, with UI in `crates/dbflux_ui/`, runtime/domain in `crates/dbflux_app/`, and shared types in `crates/dbflux_core/` (Cargo.toml).
-- Module directories use `mod.rs` (e.g., `core/mod.rs`). `dbflux_core` is organized into thematic subdirectories: `core/`, `driver/`, `schema/`, `sql/`, `query/`, `connection/`, `storage/`, `data/`, `config/`, `facade/`.
-- UI is organized by pane, window, and component in `crates/dbflux_ui/src/ui/` (workspace, sidebar, editor, dock, document, windows, components).
-- Drivers and supporting libraries live in their own crates (`crates/dbflux_driver_postgres/`, `crates/dbflux_driver_sqlite/`, `crates/dbflux_driver_mysql/`, `crates/dbflux_driver_mongodb/`, `crates/dbflux_driver_redis/`, `crates/dbflux_driver_dynamodb/`, `crates/dbflux_aws/`, `crates/dbflux_ssm/`, `crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`, `crates/dbflux_tunnel_core/`, `crates/dbflux_proxy/`, `crates/dbflux_ssh/`, `crates/dbflux_export/`, `crates/dbflux_test_support/`, `crates/dbflux_mcp/`, `crates/dbflux_mcp_server/`, `crates/dbflux_policy/`, `crates/dbflux_approval/`, `crates/dbflux_audit/`).
+- The canonical repo layout, crate map, and key-file overview live in `ARCHITECTURE.md`.
+- Workspace crates live under `crates/`. In practice, most changes land in `dbflux_ui`, `dbflux_app`, `dbflux_core`, or one of the `dbflux_driver_*` crates.
+- Module directories use `mod.rs`.
+- Keep new code in the existing crate and area that already owns the behavior instead of creating parallel structure.
 
 ## Import Style
 

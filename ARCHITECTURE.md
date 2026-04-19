@@ -5,6 +5,7 @@
 - DBFlux is a keyboard-first database client built with Rust and GPUI, focused on fast workflows and a clean desktop UI (README.md).
 - The repo is a Rust workspace with a UI app crate plus shared core types, driver implementations, and supporting libraries (Cargo.toml, crates/).
 - Supports multiple database paradigms: relational (SQL), document (MongoDB, DynamoDB), key-value, graph, time-series, and wide-column stores.
+- This is the canonical top-level document for project structure, architecture overview, crate boundaries, key files, and the cross-crate map. Other top-level docs should link here instead of duplicating that material.
 
 ## Tech Stack
 

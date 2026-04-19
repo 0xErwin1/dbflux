@@ -12,6 +12,10 @@ The long-term goal is to provide a fully open-source alternative to DBeaver, sup
 
 ## Documentation
 
+- [Architecture](ARCHITECTURE.md)
+- [Code Style](CODE_STYLE.md)
+- [Agent Instructions](AGENTS.md)
+- [Claude Instructions](CLAUDE.md)
 - [Audit](docs/AUDIT.md)
 - [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md)
 - [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md)
