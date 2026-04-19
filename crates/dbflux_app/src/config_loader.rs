@@ -32,10 +32,7 @@ pub fn save_general_settings(
     let repo = runtime.general_settings();
     let dto = GeneralSettingsDto {
         id: 1,
-        theme: match settings.theme {
-            dbflux_core::ThemeSetting::Light => "light".to_string(),
-            dbflux_core::ThemeSetting::Dark => "dark".to_string(),
-        },
+        theme: general_settings_theme_to_storage(settings.theme).to_string(),
         restore_session_on_startup: if settings.restore_session_on_startup {
             1
         } else {
@@ -940,10 +937,7 @@ fn load_general_settings(
     };
 
     GeneralSettings {
-        theme: match dto.theme.as_str() {
-            "light" => dbflux_core::ThemeSetting::Light,
-            _ => dbflux_core::ThemeSetting::Dark,
-        },
+        theme: theme_setting_from_storage(&dto.theme),
         restore_session_on_startup: dto.restore_session_on_startup != 0,
         reopen_last_connections: dto.reopen_last_connections != 0,
         default_focus_on_startup: match dto.default_focus_on_startup.as_str() {
@@ -963,6 +957,22 @@ fn load_general_settings(
         confirm_dangerous_queries: dto.confirm_dangerous_queries != 0,
         dangerous_requires_where: dto.dangerous_requires_where != 0,
         dangerous_requires_preview: dto.dangerous_requires_preview != 0,
+    }
+}
+
+fn general_settings_theme_to_storage(theme: dbflux_core::ThemeSetting) -> &'static str {
+    match theme {
+        dbflux_core::ThemeSetting::Dark => "dark",
+        dbflux_core::ThemeSetting::Mirage => "mirage",
+        dbflux_core::ThemeSetting::Light => "light",
+    }
+}
+
+fn theme_setting_from_storage(theme: &str) -> dbflux_core::ThemeSetting {
+    match theme {
+        "light" => dbflux_core::ThemeSetting::Light,
+        "mirage" => dbflux_core::ThemeSetting::Mirage,
+        _ => dbflux_core::ThemeSetting::Dark,
     }
 }
 
@@ -1596,12 +1606,110 @@ fn load_ssh_tunnels(
 
 #[cfg(test)]
 mod tests {
-    use super::{load_config, save_profiles, save_ssh_tunnels};
+    use super::{
+        general_settings_theme_to_storage, load_config, save_profiles, save_ssh_tunnels,
+        theme_setting_from_storage,
+    };
     use dbflux_core::{
-        AccessKind, ConnectionProfile, DbConfig, SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
+        AccessKind, ConnectionProfile, DbConfig, GeneralSettings, SshAuthMethod, SshTunnelConfig,
+        SshTunnelProfile, ThemeSetting,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
     use uuid::Uuid;
+
+    #[test]
+    fn theme_setting_storage_round_trip_supports_exactly_three_ayu_values() {
+        assert_eq!(
+            general_settings_theme_to_storage(ThemeSetting::Dark),
+            "dark"
+        );
+        assert_eq!(
+            general_settings_theme_to_storage(ThemeSetting::Mirage),
+            "mirage"
+        );
+        assert_eq!(
+            general_settings_theme_to_storage(ThemeSetting::Light),
+            "light"
+        );
+
+        assert_eq!(theme_setting_from_storage("dark"), ThemeSetting::Dark);
+        assert_eq!(theme_setting_from_storage("mirage"), ThemeSetting::Mirage);
+        assert_eq!(theme_setting_from_storage("light"), ThemeSetting::Light);
+    }
+
+    #[test]
+    fn invalid_theme_storage_value_falls_back_to_dark_without_touching_other_settings() {
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "twilight".to_string(),
+            restore_session_on_startup: 0,
+            reopen_last_connections: 1,
+            default_focus_on_startup: "last_tab".to_string(),
+            max_history_entries: 222,
+            auto_save_interval_ms: 999,
+            default_refresh_policy: "interval".to_string(),
+            default_refresh_interval_secs: 15,
+            max_concurrent_background_tasks: 4,
+            auto_refresh_pause_on_error: 0,
+            auto_refresh_only_if_visible: 1,
+            confirm_dangerous_queries: 0,
+            dangerous_requires_where: 0,
+            dangerous_requires_preview: 1,
+            updated_at: String::new(),
+        };
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("save general settings dto");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.general_settings.theme, ThemeSetting::Dark);
+        assert_eq!(loaded.general_settings.restore_session_on_startup, false);
+        assert_eq!(loaded.general_settings.reopen_last_connections, true);
+        assert_eq!(
+            loaded.general_settings.default_focus_on_startup,
+            dbflux_core::StartupFocus::LastTab
+        );
+        assert_eq!(loaded.general_settings.max_history_entries, 222);
+        assert_eq!(loaded.general_settings.auto_save_interval_ms, 999);
+        assert_eq!(
+            loaded.general_settings.default_refresh_policy,
+            dbflux_core::RefreshPolicySetting::Interval
+        );
+        assert_eq!(loaded.general_settings.default_refresh_interval_secs, 15);
+        assert_eq!(loaded.general_settings.max_concurrent_background_tasks, 4);
+        assert_eq!(loaded.general_settings.auto_refresh_pause_on_error, false);
+        assert_eq!(loaded.general_settings.auto_refresh_only_if_visible, true);
+        assert_eq!(loaded.general_settings.confirm_dangerous_queries, false);
+        assert_eq!(loaded.general_settings.dangerous_requires_where, false);
+        assert_eq!(loaded.general_settings.dangerous_requires_preview, true);
+    }
+
+    #[test]
+    fn save_general_settings_persists_mirage_without_mutating_fonts_or_other_fields() {
+        let mut settings = GeneralSettings::default();
+        settings.theme = ThemeSetting::Mirage;
+        settings.max_history_entries = 77;
+        settings.auto_save_interval_ms = 1234;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        super::save_general_settings(&runtime, &settings).expect("save general settings");
+
+        let dto = runtime
+            .general_settings()
+            .get()
+            .expect("load saved dto")
+            .expect("general settings row");
+
+        assert_eq!(dto.theme, "mirage");
+        assert_eq!(dto.max_history_entries, 77);
+        assert_eq!(dto.auto_save_interval_ms, 1234);
+    }
 
     #[test]
     fn save_and_reload_preserves_ssh_tunnel_profile_reference() {

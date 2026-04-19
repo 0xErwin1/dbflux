@@ -88,7 +88,7 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
 
         assert_centralized_fonts(theme);
         assert_eq!(theme.foreground, rgb_to_hsla(0x5C6166));
-        assert_eq!(theme.border, rgb_to_hsla(0xDCDCDC));
+        assert_eq!(theme.border, rgb_to_hsla(0xD9DEE8));
         assert_eq!(theme.primary_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.danger_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.success_foreground, rgb_to_hsla(0x0A0E14));
@@ -96,6 +96,41 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
         assert_eq!(theme.info_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.sidebar_primary_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.popover, rgb_to_hsla(0xFFFFFF));
+    });
+}
+
+#[gpui::test]
+fn mirage_theme_uses_dark_mode_palette_while_preserving_centralized_fonts(cx: &mut TestAppContext) {
+    cx.update(theme::init);
+    cx.update(|cx| theme::apply_theme(ThemeSetting::Mirage, Option::<&mut Window>::None, cx));
+
+    cx.update(|cx| {
+        let theme = Theme::global_mut(cx);
+
+        assert_centralized_fonts(theme);
+        assert_eq!(theme.background, rgb_to_hsla(0x1F2430));
+        assert_eq!(theme.foreground, rgb_to_hsla(0xCBCCC6));
+        assert_eq!(theme.primary, rgb_to_hsla(0xFFCC66));
+        assert_eq!(theme.primary_foreground, rgb_to_hsla(0x1F2430));
+        assert_eq!(theme.popover, rgb_to_hsla(0x242936));
+        assert_eq!(theme.title_bar_border, rgb_to_hsla(0x3A4052));
+        assert_eq!(theme.window_border, rgb_to_hsla(0x3A4052));
+        assert_eq!(
+            theme.highlight_theme.style.editor_background,
+            Some(rgb_to_hsla(0x1F2430))
+        );
+        assert_eq!(
+            theme.highlight_theme.style.editor_active_line,
+            Some(rgb_to_hsla(0x242936))
+        );
+        assert_eq!(
+            theme.highlight_theme.style.editor_line_number,
+            Some(rgb_to_hsla(0x707A8C))
+        );
+        assert_eq!(
+            theme.highlight_theme.style.editor_active_line_number,
+            Some(rgb_to_hsla(0xCBCCC6))
+        );
     });
 }
 
@@ -124,6 +159,8 @@ fn theme_module_keeps_palette_and_font_mapping_but_not_shared_chrome_helpers() {
 
     assert!(source.contains("pub use dbflux_components::typography::AppFonts;"));
     assert!(source.contains("load_bundled_fonts(cx);"));
+    assert!(source.contains("ThemeSetting::Mirage"));
+    assert!(source.contains("apply_ayu_mirage(cx);"));
     assert!(source.contains("theme.popover = rgb_to_hsla(0x31353C);"));
     assert!(!source.contains("pub fn surface_highest_color()"));
 }

@@ -4,9 +4,30 @@ use gpui_component::{ActiveTheme, IconName};
 
 use crate::icon::IconSource;
 use crate::primitives::{Icon, Text};
-use crate::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::tokens::{
+    ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Heights, Radii, Spacing,
+};
 
 pub(crate) const DEFAULT_MENU_CONTAINER_MIN_WIDTH: Pixels = px(160.0);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MenuChromeInspection {
+    pub container_background: ChromeColorSlot,
+    pub container_edge: ChromeEdgeRole,
+    pub container_radius: Pixels,
+    pub separator_edge: ChromeEdgeRole,
+}
+
+pub(crate) fn inspect_menu_chrome() -> MenuChromeInspection {
+    let shell = ChromeSurfaceRole::PopoverShell.inspect();
+
+    MenuChromeInspection {
+        container_background: shell.background,
+        container_edge: shell.edge,
+        container_radius: shell.radius,
+        separator_edge: ChromeEdgeRole::Separator,
+    }
+}
 
 /// Purely visual menu item data type.
 ///
@@ -292,12 +313,13 @@ pub fn render_menu_item(
 /// Render a thin horizontal separator line.
 pub fn render_separator(cx: &App) -> Div {
     let theme = cx.theme();
+    let chrome = inspect_menu_chrome();
 
     div()
         .h(px(1.0))
         .mx(Spacing::SM)
         .my(Spacing::XS)
-        .bg(theme.border)
+        .bg(chrome.separator_edge.resolve(theme))
 }
 
 /// Render the popup panel container for a menu.
@@ -312,13 +334,14 @@ pub fn render_menu_container_with_min_width(
     cx: &App,
 ) -> Div {
     let theme = cx.theme();
+    let chrome = inspect_menu_chrome();
 
     div()
         .min_w(min_width)
-        .bg(theme.popover)
+        .bg(chrome.container_background.resolve(theme))
         .border_1()
-        .border_color(theme.border)
-        .rounded(Radii::MD)
+        .border_color(chrome.container_edge.resolve(theme))
+        .rounded(chrome.container_radius)
         .shadow_lg()
         .py(Spacing::XS)
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -334,8 +357,9 @@ pub fn render_menu_container_with_min_width(
 mod tests {
     use super::{
         DEFAULT_MENU_CONTAINER_MIN_WIDTH, MenuItem, MenuItemBackgroundRole, MenuItemColorRole,
-        menu_item_interaction_state, menu_item_visual_state,
+        inspect_menu_chrome, menu_item_interaction_state, menu_item_visual_state,
     };
+    use crate::tokens::{ChromeColorSlot, ChromeEdgeRole, Radii};
     use gpui::px;
 
     #[test]
@@ -413,5 +437,15 @@ mod tests {
     #[test]
     fn default_menu_container_min_width_preserves_shared_baseline() {
         assert_eq!(DEFAULT_MENU_CONTAINER_MIN_WIDTH, px(160.0));
+    }
+
+    #[test]
+    fn menu_chrome_prefers_popover_shells_and_separator_tokens() {
+        let chrome = inspect_menu_chrome();
+
+        assert_eq!(chrome.container_background, ChromeColorSlot::Popover);
+        assert_eq!(chrome.container_edge, ChromeEdgeRole::Popover);
+        assert_eq!(chrome.container_radius, Radii::MD);
+        assert_eq!(chrome.separator_edge, ChromeEdgeRole::Separator);
     }
 }

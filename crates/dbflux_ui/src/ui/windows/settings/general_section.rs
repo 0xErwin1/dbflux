@@ -199,7 +199,11 @@ impl GeneralSection {
     }
 
     fn theme_items() -> Vec<DropdownItem> {
-        vec![DropdownItem::new("Dark"), DropdownItem::new("Light")]
+        vec![
+            DropdownItem::new("Ayu Dark"),
+            DropdownItem::new("Ayu Mirage"),
+            DropdownItem::new("Ayu Light"),
+        ]
     }
 
     fn startup_focus_items() -> Vec<DropdownItem> {
@@ -213,13 +217,15 @@ impl GeneralSection {
     fn theme_index(theme: ThemeSetting) -> usize {
         match theme {
             ThemeSetting::Dark => 0,
-            ThemeSetting::Light => 1,
+            ThemeSetting::Mirage => 1,
+            ThemeSetting::Light => 2,
         }
     }
 
     fn theme_for_index(index: usize) -> ThemeSetting {
         match index {
-            1 => ThemeSetting::Light,
+            1 => ThemeSetting::Mirage,
+            2 => ThemeSetting::Light,
             _ => ThemeSetting::Dark,
         }
     }
@@ -281,6 +287,34 @@ impl SettingsSection for GeneralSection {
 
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_general_changes(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GeneralSection;
+    use dbflux_core::ThemeSetting;
+
+    #[test]
+    fn theme_dropdown_exposes_exactly_three_ayu_labels() {
+        let labels: Vec<_> = GeneralSection::theme_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+
+        assert_eq!(labels, vec!["Ayu Dark", "Ayu Mirage", "Ayu Light"]);
+    }
+
+    #[test]
+    fn theme_index_and_reverse_mapping_cover_all_supported_ayu_themes() {
+        assert_eq!(GeneralSection::theme_index(ThemeSetting::Dark), 0);
+        assert_eq!(GeneralSection::theme_index(ThemeSetting::Mirage), 1);
+        assert_eq!(GeneralSection::theme_index(ThemeSetting::Light), 2);
+
+        assert_eq!(GeneralSection::theme_for_index(0), ThemeSetting::Dark);
+        assert_eq!(GeneralSection::theme_for_index(1), ThemeSetting::Mirage);
+        assert_eq!(GeneralSection::theme_for_index(2), ThemeSetting::Light);
+        assert_eq!(GeneralSection::theme_for_index(99), ThemeSetting::Dark);
     }
 }
 

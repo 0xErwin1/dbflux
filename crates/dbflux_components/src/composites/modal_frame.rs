@@ -6,8 +6,7 @@ use gpui_component::ActiveTheme;
 
 use crate::icon::IconSource;
 use crate::primitives::{IconButton, SurfaceRole, Text, surface_modal_container};
-use crate::tokens::Heights;
-use crate::tokens::Spacing;
+use crate::tokens::{ChromeEdgeRole, Heights, Spacing};
 
 type CloseHandler = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
 
@@ -180,7 +179,7 @@ impl ModalFrame {
             .px(inspection.header_padding_x)
             .py(inspection.header_padding_y)
             .border_b_1()
-            .border_color(theme.border)
+            .border_color(inspection.header_separator_edge.resolve(theme))
             .child(header_left)
             .child(close_control);
 
@@ -236,6 +235,7 @@ pub struct ModalFrameTitleInspection {
 pub struct ModalFrameInspection {
     pub scrim_role: SurfaceRole,
     pub container_role: SurfaceRole,
+    pub header_separator_edge: ChromeEdgeRole,
     pub header_padding_x: gpui::Pixels,
     pub header_padding_y: gpui::Pixels,
     pub has_close_button: bool,
@@ -254,6 +254,7 @@ pub fn inspect_modal_frame(
     ModalFrameInspection {
         scrim_role: SurfaceRole::Scrim,
         container_role: SurfaceRole::ModalContainer,
+        header_separator_edge: ChromeEdgeRole::ModalSeparator,
         header_padding_x: Spacing::MD,
         header_padding_y: Spacing::SM,
         has_close_button: true,
@@ -295,7 +296,7 @@ pub fn modal_frame_with_header_extra(
         .px(inspection.header_padding_x)
         .py(inspection.header_padding_y)
         .border_b_1()
-        .border_color(theme.border)
+        .border_color(inspection.header_separator_edge.resolve(theme))
         .child(header_left)
         .child(
             div()
@@ -331,6 +332,7 @@ pub fn modal_frame_with_header_extra(
 mod tests {
     use super::{ModalFrameVariant, inspect_modal_frame};
     use crate::primitives::{SurfaceRole, TextVariant};
+    use crate::tokens::ChromeEdgeRole;
     use crate::tokens::Spacing;
 
     #[test]
@@ -341,6 +343,10 @@ mod tests {
         assert_eq!(inspection.container_role, SurfaceRole::ModalContainer);
         assert_eq!(inspection.title.variant, TextVariant::LabelSm);
         assert!(inspection.title.uses_role_default_color);
+        assert_eq!(
+            inspection.header_separator_edge,
+            ChromeEdgeRole::ModalSeparator
+        );
     }
 
     #[test]

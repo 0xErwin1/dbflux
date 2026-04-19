@@ -2,7 +2,7 @@ use gpui::prelude::*;
 use gpui::{App, Hsla, Pixels, div};
 use gpui_component::ActiveTheme;
 
-use crate::tokens::Radii;
+use crate::tokens::{ChromeEdgeRole, Radii};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceRole {
@@ -35,7 +35,7 @@ impl SurfaceThemeColorSlot {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceInspection {
     pub background: SurfaceThemeColorSlot,
-    pub has_border: bool,
+    pub edge: Option<ChromeEdgeRole>,
     pub radius: Pixels,
 }
 
@@ -49,27 +49,27 @@ pub fn inspect_surface_role(role: SurfaceRole) -> SurfaceInspection {
     match role {
         SurfaceRole::Panel => SurfaceInspection {
             background: SurfaceThemeColorSlot::Background,
-            has_border: true,
+            edge: Some(ChromeEdgeRole::Surface),
             radius: Radii::LG,
         },
         SurfaceRole::Card => SurfaceInspection {
             background: SurfaceThemeColorSlot::Secondary,
-            has_border: true,
+            edge: Some(ChromeEdgeRole::Surface),
             radius: Radii::LG,
         },
         SurfaceRole::Raised => SurfaceInspection {
             background: SurfaceThemeColorSlot::Popover,
-            has_border: true,
+            edge: Some(ChromeEdgeRole::Popover),
             radius: Radii::MD,
         },
         SurfaceRole::Scrim => SurfaceInspection {
             background: SurfaceThemeColorSlot::Overlay,
-            has_border: false,
+            edge: None,
             radius: Radii::LG,
         },
         SurfaceRole::ModalContainer => SurfaceInspection {
             background: SurfaceThemeColorSlot::Popover,
-            has_border: true,
+            edge: Some(ChromeEdgeRole::Popover),
             radius: Radii::LG,
         },
     }
@@ -119,8 +119,8 @@ pub fn surface_role(role: SurfaceRole, cx: &App) -> gpui::Div {
 
     let mut el = div().bg(role_bg(role, theme)).rounded(inspection.radius);
 
-    if inspection.has_border {
-        el = el.border_1().border_color(theme.border);
+    if let Some(edge) = inspection.edge {
+        el = el.border_1().border_color(edge.resolve(theme));
     }
 
     el
@@ -173,8 +173,8 @@ pub fn surface(variant: SurfaceVariant, cx: &App) -> gpui::Div {
 
     let mut el = div().bg(bg).rounded(radius);
 
-    if variant != SurfaceVariant::Overlay {
-        el = el.border_1().border_color(theme.border);
+    if let Some(edge) = inspect_surface_role(variant.into()).edge {
+        el = el.border_1().border_color(edge.resolve(theme));
     }
 
     el
@@ -194,23 +194,23 @@ mod tests {
     use super::{
         SurfaceRole, SurfaceThemeColorSlot, inspect_surface_role, overlay_bg, surface_overlay,
     };
-    use crate::tokens::Radii;
+    use crate::tokens::{ChromeEdgeRole, Radii};
 
     #[test]
     fn semantic_surface_roles_stay_on_canonical_theme_slots() {
         let panel = inspect_surface_role(SurfaceRole::Panel);
         assert_eq!(panel.background, SurfaceThemeColorSlot::Background);
-        assert!(panel.has_border);
+        assert_eq!(panel.edge, Some(ChromeEdgeRole::Surface));
         assert_eq!(panel.radius, Radii::LG);
 
         let card = inspect_surface_role(SurfaceRole::Card);
         assert_eq!(card.background, SurfaceThemeColorSlot::Secondary);
-        assert!(card.has_border);
+        assert_eq!(card.edge, Some(ChromeEdgeRole::Surface));
         assert_eq!(card.radius, Radii::LG);
 
         let raised = inspect_surface_role(SurfaceRole::Raised);
         assert_eq!(raised.background, SurfaceThemeColorSlot::Popover);
-        assert!(raised.has_border);
+        assert_eq!(raised.edge, Some(ChromeEdgeRole::Popover));
         assert_eq!(raised.radius, Radii::MD);
     }
 
@@ -218,12 +218,12 @@ mod tests {
     fn scrim_and_modal_container_keep_distinct_shared_roles() {
         let scrim = inspect_surface_role(SurfaceRole::Scrim);
         assert_eq!(scrim.background, SurfaceThemeColorSlot::Overlay);
-        assert!(!scrim.has_border);
+        assert_eq!(scrim.edge, None);
         assert_eq!(scrim.radius, Radii::LG);
 
         let modal = inspect_surface_role(SurfaceRole::ModalContainer);
         assert_eq!(modal.background, SurfaceThemeColorSlot::Popover);
-        assert!(modal.has_border);
+        assert_eq!(modal.edge, Some(ChromeEdgeRole::Popover));
         assert_eq!(modal.radius, Radii::LG);
 
         let _ = surface_overlay;

@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use crate::composites::control_shell_with_padding;
 use crate::primitives::focus_frame;
-use crate::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::tokens::{ChromeEdgeRole, FontSizes, Heights, Radii, Spacing};
 use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{
     ClickEvent, Context, Corner, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Render, ScrollHandle, ScrollWheelEvent, SharedString,
+    MouseButton, ParentElement, Pixels, Render, ScrollHandle, ScrollWheelEvent, SharedString,
     StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
 };
 use gpui_component::ActiveTheme;
@@ -115,6 +115,19 @@ fn dropdown_selection_transition(
 struct DropdownDismissTransition {
     open: bool,
     highlighted_index: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DropdownMenuChromeInspection {
+    edge: ChromeEdgeRole,
+    radius: Pixels,
+}
+
+fn dropdown_menu_chrome() -> DropdownMenuChromeInspection {
+    DropdownMenuChromeInspection {
+        edge: ChromeEdgeRole::Popover,
+        radius: Radii::MD,
+    }
 }
 
 fn dropdown_dismiss_transition(open: bool) -> Option<DropdownDismissTransition> {
@@ -445,6 +458,7 @@ impl Dropdown {
 
         let theme = cx.theme();
         let is_disabled = self.disabled;
+        let chrome = dropdown_menu_chrome();
 
         let items: Vec<gpui::AnyElement> = self
             .items
@@ -494,9 +508,9 @@ impl Dropdown {
             .max_h(px(220.0))
             .p(Spacing::XS)
             .border_1()
-            .border_color(theme.border)
+            .border_color(chrome.edge.resolve(theme))
             .bg(theme.popover)
-            .rounded(Radii::MD)
+            .rounded(chrome.radius)
             .overflow_scroll()
             .track_scroll(&self.menu_scroll_handle)
             .on_scroll_wheel(cx.listener(Self::handle_menu_scroll_wheel))
@@ -653,8 +667,9 @@ impl EventEmitter<DropdownDismissed> for Dropdown {}
 mod tests {
     use super::{
         Dropdown, DropdownTriggerVariant, dropdown_dismiss_transition, dropdown_focus_ring_state,
-        dropdown_selection_transition, dropdown_trigger_render_plan,
+        dropdown_menu_chrome, dropdown_selection_transition, dropdown_trigger_render_plan,
     };
+    use crate::tokens::{ChromeEdgeRole, Radii};
 
     #[test]
     fn selection_transition_closes_menu_and_clears_highlight() {
@@ -776,5 +791,13 @@ mod tests {
 
         assert_eq!(focus_ring_color, Some(custom_color));
         assert!(focus_ring_visible);
+    }
+
+    #[test]
+    fn dropdown_menu_shell_uses_shared_popover_chrome_contract() {
+        let chrome = dropdown_menu_chrome();
+
+        assert_eq!(chrome.edge, ChromeEdgeRole::Popover);
+        assert_eq!(chrome.radius, Radii::MD);
     }
 }

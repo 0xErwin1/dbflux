@@ -360,6 +360,7 @@ pub enum RefreshPolicySetting {
 pub enum ThemeSetting {
     #[default]
     Dark,
+    Mirage,
     Light,
 }
 
