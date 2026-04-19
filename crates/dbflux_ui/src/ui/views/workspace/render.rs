@@ -1,67 +1,34 @@
 use super::*;
 use crate::platform;
 use crate::ui::tokens::FontSizes;
+use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
 use dbflux_components::primitives::{Icon, Text, overlay_bg};
-use dbflux_components::typography::{Body, MonoCaption};
-use gpui::FontWeight;
+use dbflux_components::typography::Body;
+use gpui_component::IconName;
 
 impl Workspace {
-    fn render_panel_header(
+    fn background_tasks_panel_header(
         &self,
-        title: &'static str,
-        icon: AppIcon,
         is_expanded: bool,
         is_focused: bool,
-        on_toggle: impl Fn(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let theme = cx.theme().clone();
-        let chevron = if is_expanded {
-            AppIcon::ChevronDown
-        } else {
-            AppIcon::ChevronRight
-        };
+        let workspace = cx.entity().clone();
 
-        let title_color = if is_focused {
-            theme.primary
-        } else {
-            theme.foreground
-        };
-
-        div()
-            .id(SharedString::from(format!("panel-header-{}", title)))
-            .flex()
-            .items_center()
-            .justify_between()
-            .h(px(24.0))
-            .px_2()
-            .bg(theme.tab_bar)
-            .border_b_1()
-            .border_color(theme.border)
-            .cursor_pointer()
-            .hover(|s| s.bg(theme.secondary))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                on_toggle(this, cx);
-            }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(Icon::new(chevron).size(px(12.0)).color(title_color))
-                    .child(Icon::new(icon).size(px(12.0)).color(title_color))
-                    .child(Self::panel_header_title(title, is_focused, title_color)),
-            )
-    }
-
-    fn panel_header_title(title: &'static str, is_focused: bool, color: Hsla) -> MonoCaption {
-        let weight = if is_focused {
-            FontWeight::BOLD
-        } else {
-            FontWeight::MEDIUM
-        };
-
-        MonoCaption::new(title).font_weight(weight).color(color)
+        panel_header_collapsible_variant(
+            "panel-header-Background Tasks",
+            "Background Tasks",
+            PanelHeaderVariant::WorkspaceTasks,
+            !is_expanded,
+            is_focused,
+            Some(IconName::Loader),
+            move |_, _, app| {
+                let _ = workspace.update(app, |workspace, cx| {
+                    workspace.toggle_tasks_panel(cx);
+                });
+            },
+            cx,
+        )
     }
 
     /// Renders the active document from TabManager (v0.3).
@@ -124,14 +91,8 @@ impl Render for Workspace {
         let linux_title_bar = platform::render_csd_title_bar(window, cx, "DBFlux");
 
         let right_pane = if has_tabs {
-            let tasks_header = self.render_panel_header(
-                "Background Tasks",
-                AppIcon::Loader,
-                tasks_expanded,
-                tasks_focused,
-                Self::toggle_tasks_panel,
-                cx,
-            );
+            let tasks_header =
+                self.background_tasks_panel_header(tasks_expanded, tasks_focused, cx);
 
             v_resizable("main-panels")
                 .child(
@@ -212,14 +173,8 @@ impl Render for Workspace {
                 )
         } else {
             // Empty state: welcome message + tasks panel
-            let tasks_header_empty = self.render_panel_header(
-                "Background Tasks",
-                AppIcon::Loader,
-                tasks_expanded,
-                tasks_focused,
-                Self::toggle_tasks_panel,
-                cx,
-            );
+            let tasks_header_empty =
+                self.background_tasks_panel_header(tasks_expanded, tasks_focused, cx);
 
             v_resizable("main-panels")
                 .child(
@@ -895,26 +850,95 @@ impl Render for Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::Workspace;
+    use std::fs;
+
+    use dbflux_components::composites::{
+        PanelHeaderBackground, PanelHeaderTitleColor, PanelHeaderVariant, inspect_panel_header,
+    };
+    use dbflux_components::primitives::SurfaceRole;
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
     use gpui::FontWeight;
 
     #[test]
     fn panel_headers_keep_mono_family_and_focus_weight_difference() {
-        let focused =
-            Workspace::panel_header_title("Background Tasks", true, gpui::blue()).inspect();
+        let focused = inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, true, false);
         let unfocused =
-            Workspace::panel_header_title("Background Tasks", false, gpui::red()).inspect();
+            inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, false, false);
 
-        for inspection in [focused, unfocused] {
+        for inspection in [&focused.title, &unfocused.title] {
             assert_eq!(inspection.family, Some(AppFonts::MONO));
             assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
-            assert!(inspection.has_custom_color_override);
+            assert_eq!(inspection.size_override, Some(FontSizes::SM));
         }
 
-        assert_eq!(focused.weight_override, Some(FontWeight::BOLD));
-        assert_eq!(unfocused.weight_override, Some(FontWeight::MEDIUM));
+        assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
+        assert_eq!(unfocused.title.weight_override, Some(FontWeight::MEDIUM));
+    }
+
+    #[test]
+    fn workspace_render_uses_canonical_panel_header_contract() {
+        let source = workspace_render_source();
+
+        assert!(source.contains("panel_header_collapsible_variant("));
+        assert!(source.contains("PanelHeaderVariant::WorkspaceTasks"));
+        assert!(!source.contains("fn render_panel_header("));
+        assert!(!source.contains("fn panel_header_title("));
+    }
+
+    #[test]
+    fn workspace_render_drops_local_background_tasks_header_styling() {
+        let source = workspace_render_source();
+
+        assert!(!source.contains(".bg(theme.tab_bar)"));
+        assert!(!source.contains(".hover(|s| s.bg(theme.secondary))"));
+        assert!(!source.contains("theme.primary"));
+    }
+
+    #[test]
+    fn workspace_render_keeps_loader_icon_in_the_tasks_header_contract() {
+        let source = workspace_render_source();
+
+        assert!(source.contains("Some(IconName::Loader)"));
+    }
+
+    #[test]
+    fn workspace_tasks_panel_variant_matches_expected_shared_chrome() {
+        let collapsed =
+            inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, false, false);
+
+        assert_eq!(collapsed.background, PanelHeaderBackground::ThemeTabBar);
+        assert_eq!(
+            collapsed.hover_background,
+            Some(PanelHeaderBackground::Surface(SurfaceRole::Card))
+        );
+        assert_eq!(
+            collapsed.base_title_color,
+            PanelHeaderTitleColor::Foreground
+        );
+
+        let focused = inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, true, false);
+
+        assert_eq!(
+            focused.focus_title_color,
+            Some(PanelHeaderTitleColor::Primary)
+        );
+        assert_eq!(focused.title.family, Some(AppFonts::MONO));
+        assert_eq!(focused.title.size_override, Some(FontSizes::SM));
+        assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
+    }
+
+    fn workspace_render_source() -> String {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/ui/views/workspace/render.rs"
+        ))
+        .expect("render.rs should be readable for source-inspection tests");
+
+        source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("render.rs should contain production code before tests")
+            .to_string()
     }
 }
