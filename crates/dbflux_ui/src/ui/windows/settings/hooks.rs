@@ -1159,28 +1159,26 @@ impl HooksSection {
     pub(super) fn render_hooks_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        layout::section_container(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .child(layout::section_header(
-                    "Hooks",
-                    "Create reusable hooks and associate them from connection settings",
-                    theme,
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .overflow_hidden()
-                        .child(self.render_hooks_list(cx))
-                        .child(self.render_hook_form(cx)),
-                ),
-        )
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(layout::section_header(
+                "Hooks",
+                "Create reusable hooks and associate them from connection settings",
+                theme,
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .overflow_hidden()
+                    .child(self.render_hooks_list(cx))
+                    .child(self.render_hook_form(cx)),
+            )
     }
 
     fn render_hooks_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

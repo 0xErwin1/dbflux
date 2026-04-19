@@ -55,7 +55,7 @@ impl RenderOnce for Label {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let label = Self::build_text(self.text, self.color_override);
 
-        let mut el = div().child(label);
+        let mut el = div().flex().items_center().gap(gpui::px(2.0)).child(label);
 
         if self.required {
             el = el.child(RequiredMarker::new());
