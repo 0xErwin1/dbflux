@@ -82,7 +82,11 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
         assert_centralized_fonts(theme);
         assert_eq!(theme.foreground, rgb_to_hsla(0x5C6166));
         assert_eq!(theme.border, rgb_to_hsla(0xDCDCDC));
-        assert_eq!(theme.primary_foreground, rgb_to_hsla(0xFFFFFF));
+        assert_eq!(theme.primary_foreground, rgb_to_hsla(0x0A0E14));
+        assert_eq!(theme.success_foreground, rgb_to_hsla(0x0A0E14));
+        assert_eq!(theme.warning_foreground, rgb_to_hsla(0x0A0E14));
+        assert_eq!(theme.info_foreground, rgb_to_hsla(0x0A0E14));
+        assert_eq!(theme.sidebar_primary_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.popover, rgb_to_hsla(0xFFFFFF));
     });
 }

@@ -656,6 +656,10 @@ impl Render for HooksSection {
 
         div()
             .size_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
             .child(self.render_hooks_section(cx))
             .when(show_hook_delete, |element| {
                 let entity = cx.entity().clone();
