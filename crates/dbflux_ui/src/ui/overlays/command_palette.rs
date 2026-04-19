@@ -2,7 +2,7 @@ use crate::keymap::ContextId;
 use crate::ui::tokens::{Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::helpers::text_color_for_selected;
-use dbflux_components::primitives::surface_panel;
+use dbflux_components::primitives::{overlay_bg, surface_modal_container};
 use dbflux_components::typography::{Body, KeyHint, MonoCaption, MonoLabel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
@@ -328,6 +328,21 @@ mod tests {
     use dbflux_components::typography::AppFonts;
     use gpui::TestAppContext;
     use gpui_component::theme::Theme;
+    use std::fs;
+
+    fn command_palette_source() -> String {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/ui/overlays/command_palette.rs"
+        ))
+        .unwrap_or_else(|error| panic!("failed to read command_palette.rs: {error}"));
+
+        source
+            .rsplit("impl Render for CommandPalette")
+            .next()
+            .map(|render_impl| format!("impl Render for CommandPalette{render_impl}"))
+            .expect("command_palette.rs should contain a render implementation")
+    }
 
     #[gpui::test]
     fn action_shortcuts_use_mono_caption_instead_of_bold_key_hint(cx: &mut TestAppContext) {
@@ -371,6 +386,25 @@ mod tests {
             assert_eq!(inspection.weight_override, None);
             assert!(inspection.has_custom_color_override);
         }
+    }
+
+    #[test]
+    fn command_palette_overlay_uses_canonical_scrim_and_modal_container_contracts() {
+        let source = command_palette_source();
+
+        assert!(source.contains(".bg(overlay_bg())"));
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn command_palette_render_keeps_overlay_identity_and_close_behavior() {
+        let source = command_palette_source();
+
+        assert!(source.contains(".id(\"command-palette-overlay\")"));
+        assert!(source.contains(".key_context(ContextId::CommandPalette.as_gpui_context())"));
+        assert!(source.contains("this.hide(cx);"));
     }
 }
 
@@ -764,7 +798,7 @@ impl Render for CommandPalette {
             .flex()
             .justify_center()
             .pt(px(80.0))
-            .bg(gpui::black().opacity(0.5))
+            .bg(overlay_bg())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -784,7 +818,7 @@ impl Render for CommandPalette {
                 this.execute_selected(window, cx);
             }))
             .child(
-                surface_panel(cx)
+                surface_modal_container(cx)
                     .id("command-palette-container")
                     .w(px(500.0))
                     .max_h(px(400.0))

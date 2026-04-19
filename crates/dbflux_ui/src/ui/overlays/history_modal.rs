@@ -5,7 +5,7 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::helpers::text_color_for_active;
-use dbflux_components::primitives::{Icon, Text, surface_panel};
+use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_modal_container};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -415,7 +415,7 @@ impl HistoryModal {
             .key_context(ContextId::HistoryModal.as_gpui_context())
             .absolute()
             .inset_0()
-            .bg(gpui::black().opacity(0.5))
+            .bg(overlay_bg())
             .flex()
             .justify_center()
             .items_start()
@@ -460,7 +460,7 @@ impl HistoryModal {
                 this.close(cx);
             }))
             .child(
-                surface_panel(cx)
+                surface_modal_container(cx)
                     .w(px(620.0))
                     .max_h(px(520.0))
                     .shadow_lg()
@@ -784,7 +784,7 @@ impl HistoryModal {
             .key_context(ContextId::HistoryModal.as_gpui_context())
             .absolute()
             .inset_0()
-            .bg(gpui::black().opacity(0.5))
+            .bg(overlay_bg())
             .flex()
             .justify_center()
             .items_start()
@@ -802,7 +802,7 @@ impl HistoryModal {
                 this.close(cx);
             }))
             .child(
-                surface_panel(cx)
+                surface_modal_container(cx)
                     .w(px(420.0))
                     .shadow_lg()
                     .overflow_hidden()
@@ -846,6 +846,40 @@ impl Render for HistoryModal {
 
 impl EventEmitter<HistoryQuerySelected> for HistoryModal {}
 impl EventEmitter<QuerySaved> for HistoryModal {}
+
+#[cfg(test)]
+mod source_contract_tests {
+    use std::fs;
+
+    fn history_modal_source() -> String {
+        fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/ui/overlays/history_modal.rs"
+        ))
+        .unwrap_or_else(|error| panic!("failed to read history_modal.rs: {error}"))
+        .split("#[cfg(test)]")
+        .next()
+        .expect("history_modal.rs should contain production code before tests")
+        .to_string()
+    }
+
+    #[test]
+    fn browse_modal_uses_canonical_scrim_and_modal_container_contracts() {
+        let source = history_modal_source();
+
+        assert!(source.contains(".bg(overlay_bg())"));
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
+    }
+
+    #[test]
+    fn save_modal_stops_reusing_panel_surface_for_modal_chrome() {
+        let source = history_modal_source();
+
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+}
 
 fn filter_history_entries(
     entries: &[HistoryEntry],
