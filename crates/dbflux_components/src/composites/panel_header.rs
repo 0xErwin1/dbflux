@@ -87,7 +87,7 @@ fn background_color(selection: PanelHeaderBackground, theme: &gpui_component::Th
         PanelHeaderBackground::Surface(SurfaceRole::Card) => theme.secondary,
         PanelHeaderBackground::Surface(SurfaceRole::Raised) => theme.popover,
         PanelHeaderBackground::Surface(SurfaceRole::ModalContainer) => theme.popover,
-        PanelHeaderBackground::Surface(SurfaceRole::Scrim) => gpui::black().opacity(0.5),
+        PanelHeaderBackground::Surface(SurfaceRole::Scrim) => theme.overlay.opacity(0.5),
         PanelHeaderBackground::ThemeTabBar => theme.tab_bar,
     }
 }

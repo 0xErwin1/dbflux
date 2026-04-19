@@ -415,7 +415,7 @@ impl HistoryModal {
             .key_context(ContextId::HistoryModal.as_gpui_context())
             .absolute()
             .inset_0()
-            .bg(overlay_bg())
+            .bg(overlay_bg(theme))
             .flex()
             .justify_center()
             .items_start()
@@ -784,7 +784,7 @@ impl HistoryModal {
             .key_context(ContextId::HistoryModal.as_gpui_context())
             .absolute()
             .inset_0()
-            .bg(overlay_bg())
+            .bg(overlay_bg(theme))
             .flex()
             .justify_center()
             .items_start()
@@ -880,7 +880,7 @@ mod source_contract_tests {
     fn browse_modal_uses_canonical_scrim_and_modal_container_contracts() {
         let source = history_modal_source();
 
-        assert!(source.contains(".bg(overlay_bg())"));
+        assert!(source.contains(".bg(overlay_bg(theme))"));
         assert!(source.contains("surface_modal_container(cx)"));
         assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
     }
@@ -897,7 +897,7 @@ mod source_contract_tests {
     fn browse_modal_contracts_are_scoped_to_the_browse_render_path() {
         let source = history_modal_render_source("render_browse");
 
-        assert!(source.contains(".bg(overlay_bg())"));
+        assert!(source.contains(".bg(overlay_bg(theme))"));
         assert!(source.contains("surface_modal_container(cx)"));
         assert!(!source.contains("surface_panel(cx)"));
     }
@@ -906,7 +906,7 @@ mod source_contract_tests {
     fn save_modal_contracts_are_scoped_to_the_save_render_path() {
         let source = history_modal_render_source("render_save");
 
-        assert!(source.contains(".bg(overlay_bg())"));
+        assert!(source.contains(".bg(overlay_bg(theme))"));
         assert!(source.contains("surface_modal_container(cx)"));
         assert!(!source.contains("surface_panel(cx)"));
     }

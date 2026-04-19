@@ -807,7 +807,7 @@ fn render_delete_confirm_modal(
         .id("kv-delete-modal-overlay")
         .absolute()
         .inset_0()
-        .bg(overlay_bg())
+        .bg(overlay_bg(theme))
         .flex()
         .items_center()
         .justify_center()

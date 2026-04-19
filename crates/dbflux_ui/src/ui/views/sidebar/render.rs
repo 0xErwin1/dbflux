@@ -247,7 +247,7 @@ impl Sidebar {
             color_gray: SyntaxColors::folder_dim(),
             color_orange: SyntaxColors::database(),
             color_schema: SyntaxColors::schema(),
-            color_green: gpui::green(),
+            color_green: theme.success,
         };
 
         div()
@@ -392,7 +392,7 @@ impl Render for Sidebar {
             color_gray: SyntaxColors::folder_dim(),
             color_orange: SyntaxColors::database(),
             color_schema: SyntaxColors::schema(),
-            color_green: gpui::green(),
+            color_green: theme.success,
         };
 
         let active_tab = self.active_tab;
