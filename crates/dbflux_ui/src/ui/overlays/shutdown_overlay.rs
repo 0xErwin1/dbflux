@@ -88,7 +88,7 @@ impl Render for ShutdownOverlay {
             .id("shutdown-overlay")
             .absolute()
             .inset_0()
-            .bg(hsla(0.0, 0.0, 0.0, 0.7))
+            .bg(theme.overlay.opacity(0.7))
             .flex()
             .items_center()
             .justify_center()

@@ -730,7 +730,7 @@ impl ConnectionManagerWindow {
                                                             .w(px(8.0))
                                                             .h(px(8.0))
                                                             .rounded(px(1.0))
-                                                            .bg(gpui::white()),
+                                                            .bg(cx.theme().primary_foreground),
                                                     )
                                                 }),
                                         )

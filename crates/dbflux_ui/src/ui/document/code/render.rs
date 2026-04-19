@@ -538,7 +538,7 @@ impl CodeDocument {
             .id("dangerous-query-modal-overlay")
             .absolute()
             .inset_0()
-            .bg(overlay_bg())
+            .bg(overlay_bg(theme))
             .flex()
             .items_center()
             .justify_center()

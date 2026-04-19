@@ -18,7 +18,7 @@ pub enum SurfaceThemeColorSlot {
     Background,
     Secondary,
     Popover,
-    ScrimBlack50,
+    Overlay,
 }
 
 impl SurfaceThemeColorSlot {
@@ -27,7 +27,7 @@ impl SurfaceThemeColorSlot {
             Self::Background => theme.background,
             Self::Secondary => theme.secondary,
             Self::Popover => theme.popover,
-            Self::ScrimBlack50 => gpui::black().opacity(0.5),
+            Self::Overlay => theme.overlay.opacity(0.5),
         }
     }
 }
@@ -40,11 +40,8 @@ pub struct SurfaceInspection {
 }
 
 impl SurfaceInspection {
-    pub fn resolve_background_color(self) -> Hsla {
-        match self.background {
-            SurfaceThemeColorSlot::ScrimBlack50 => gpui::black().opacity(0.5),
-            _ => panic!("theme-backed colors require a theme to resolve"),
-        }
+    pub fn resolve_background_color(self, theme: &gpui_component::Theme) -> Hsla {
+        self.background.resolve(theme)
     }
 }
 
@@ -66,7 +63,7 @@ pub fn inspect_surface_role(role: SurfaceRole) -> SurfaceInspection {
             radius: Radii::MD,
         },
         SurfaceRole::Scrim => SurfaceInspection {
-            background: SurfaceThemeColorSlot::ScrimBlack50,
+            background: SurfaceThemeColorSlot::Overlay,
             has_border: false,
             radius: Radii::LG,
         },
@@ -183,13 +180,13 @@ pub fn surface(variant: SurfaceVariant, cx: &App) -> gpui::Div {
     el
 }
 
-/// Returns the default overlay background color (semi-transparent black at 0.5 opacity).
+/// Returns the default overlay background color backed by the active theme overlay slot.
 ///
 /// Use this when building overlay containers that need their own element ID,
-/// click handlers, or key contexts — situations where `surface_overlay` cannot
+/// click handlers, or key contexts - situations where `surface_overlay` cannot
 /// be used directly because it returns an un-styled `Div` without an ID.
-pub fn overlay_bg() -> Hsla {
-    inspect_surface_role(SurfaceRole::Scrim).resolve_background_color()
+pub fn overlay_bg(theme: &gpui_component::Theme) -> Hsla {
+    inspect_surface_role(SurfaceRole::Scrim).resolve_background_color(theme)
 }
 
 #[cfg(test)]
@@ -220,7 +217,7 @@ mod tests {
     #[test]
     fn scrim_and_modal_container_keep_distinct_shared_roles() {
         let scrim = inspect_surface_role(SurfaceRole::Scrim);
-        assert_eq!(scrim.background, SurfaceThemeColorSlot::ScrimBlack50);
+        assert_eq!(scrim.background, SurfaceThemeColorSlot::Overlay);
         assert!(!scrim.has_border);
         assert_eq!(scrim.radius, Radii::LG);
 
@@ -230,6 +227,6 @@ mod tests {
         assert_eq!(modal.radius, Radii::LG);
 
         let _ = surface_overlay;
-        assert_eq!(overlay_bg(), scrim.resolve_background_color());
+        let _ = overlay_bg;
     }
 }

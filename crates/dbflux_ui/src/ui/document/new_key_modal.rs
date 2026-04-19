@@ -846,7 +846,7 @@ impl Render for NewKeyModal {
                             .justify_center()
                             .rounded(Radii::SM)
                             .cursor_pointer()
-                            .hover(|d| d.bg(gpui::red()))
+                            .hover(|d| d.bg(theme.danger.opacity(0.15)))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _, cx| {

@@ -406,7 +406,7 @@ mod tests {
     fn command_palette_overlay_uses_canonical_scrim_and_modal_container_contracts() {
         let source = command_palette_source();
 
-        assert!(source.contains(".bg(overlay_bg())"));
+        assert!(source.contains(".bg(overlay_bg(theme))"));
         assert!(source.contains("surface_modal_container(cx)"));
         assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
         assert!(!source.contains("surface_panel(cx)"));
@@ -434,7 +434,7 @@ mod tests {
     fn command_palette_overlay_chain_keeps_the_shared_scrim_close_path() {
         let source = command_palette_overlay_source();
 
-        assert!(source.contains(".bg(overlay_bg())"));
+        assert!(source.contains(".bg(overlay_bg(theme))"));
         assert!(source.contains("this.hide(cx);"));
         assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
     }
@@ -750,7 +750,7 @@ impl CommandPalette {
                     div()
                         .size(px(8.0))
                         .rounded_full()
-                        .bg(gpui::green())
+                        .bg(theme.success)
                         .when(is_selected, |d| {
                             d.border_1()
                                 .border_color(theme.primary_foreground.opacity(0.5))
@@ -830,7 +830,7 @@ impl Render for CommandPalette {
             .flex()
             .justify_center()
             .pt(px(80.0))
-            .bg(overlay_bg())
+            .bg(overlay_bg(theme))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
