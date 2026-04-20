@@ -135,6 +135,7 @@ impl MigrationRegistry {
         registry.register(mod_002_audit_extended::MigrationImpl);
         registry.register(mod_003_audit_settings::MigrationImpl);
         registry.register(mod_004_audit_saved_filters::MigrationImpl);
+        registry.register(mod_005_rpc_service_kind::MigrationImpl);
         registry
     }
 
@@ -277,11 +278,13 @@ mod mod_001_initial;
 mod mod_002_audit_extended;
 mod mod_003_audit_settings;
 mod mod_004_audit_saved_filters;
+mod mod_005_rpc_service_kind;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
 pub use mod_003_audit_settings::MigrationImpl as MigrationImplAuditSettings;
 pub use mod_004_audit_saved_filters::MigrationImpl as MigrationImplAuditSavedFilters;
+pub use mod_005_rpc_service_kind::MigrationImpl as MigrationImplRpcServiceKind;
 
 // ---------------------------------------------------------------------------
 // Database verification utilities
@@ -313,6 +316,29 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
+    fn column_names(conn: &Connection, table: &str) -> std::collections::HashSet<String> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "dbflux_migration_{}_{}_{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
     /// Helper to get all table names from sqlite_master.
     fn table_names(conn: &Connection) -> std::collections::HashSet<String> {
         let mut stmt = conn
@@ -326,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_run_all_idempotent() {
-        let temp_dir = std::env::temp_dir().join("dbflux_migration_idempotent");
+        let temp_dir = temp_dir("idempotent");
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
         let db_path = temp_dir.join("test.db");
@@ -339,7 +365,7 @@ mod tests {
         let count_first: i64 = conn
             .query_row("SELECT COUNT(*) FROM sys_migrations", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(count_first, 4, "expected 4 migrations after first run");
+        assert_eq!(count_first, 5, "expected 5 migrations after first run");
 
         registry.run_all(&conn).unwrap();
 
@@ -347,8 +373,8 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sys_migrations", [], |row| row.get(0))
             .unwrap();
         assert_eq!(
-            count_second, 4,
-            "expected still 4 migrations after second run (idempotent)"
+            count_second, 5,
+            "expected still 5 migrations after second run (idempotent)"
         );
 
         drop(conn);
@@ -357,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_run_all_creates_all_tables() {
-        let temp_dir = std::env::temp_dir().join("dbflux_migration_tables");
+        let temp_dir = temp_dir("tables");
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
         let db_path = temp_dir.join("test.db");
@@ -463,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_get_pending_returns_unapplied() {
-        let temp_dir = std::env::temp_dir().join("dbflux_migration_pending");
+        let temp_dir = temp_dir("pending");
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
         let db_path = temp_dir.join("test.db");
@@ -474,13 +500,14 @@ mod tests {
         let pending_before = registry.get_pending(&conn).unwrap();
         assert_eq!(
             pending_before.len(),
-            4,
-            "expected 4 pending migrations before running"
+            5,
+            "expected 5 pending migrations before running"
         );
         assert_eq!(pending_before[0].name(), "001_initial");
         assert_eq!(pending_before[1].name(), "002_audit_extended");
         assert_eq!(pending_before[2].name(), "003_audit_settings");
         assert_eq!(pending_before[3].name(), "004_audit_saved_filters");
+        assert_eq!(pending_before[4].name(), "005_rpc_service_kind");
 
         registry.run_all(&conn).unwrap();
 
@@ -532,6 +559,77 @@ mod tests {
                 fk_check_result
             );
         }
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_run_all_adds_service_kind_column_to_cfg_services() {
+        let temp_dir = temp_dir("service_kind_column");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        MigrationRegistry::new().run_all(&conn).unwrap();
+
+        let columns = column_names(&conn, "cfg_services");
+        assert!(columns.contains("service_kind"));
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_pending_service_kind_migration_upgrades_legacy_rows_to_driver() {
+        let temp_dir = temp_dir("service_kind_legacy");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "CREATE TABLE sys_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))",
+            [],
+        )
+        .unwrap();
+        for migration in [
+            "001_initial",
+            "002_audit_extended",
+            "003_audit_settings",
+            "004_audit_saved_filters",
+        ] {
+            conn.execute("INSERT INTO sys_migrations (name) VALUES (?1)", [migration])
+                .unwrap();
+        }
+
+        conn.execute_batch(
+            r#"
+            CREATE TABLE cfg_services (
+                socket_id TEXT PRIMARY KEY,
+                enabled INTEGER DEFAULT 1,
+                command TEXT,
+                startup_timeout_ms INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms)
+            VALUES ('legacy-socket', 1, 'dbflux-driver-host', 5000);
+            "#,
+        )
+        .unwrap();
+
+        MigrationRegistry::new().run_all(&conn).unwrap();
+
+        let service_kind: String = conn
+            .query_row(
+                "SELECT service_kind FROM cfg_services WHERE socket_id = ?1",
+                ["legacy-socket"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(service_kind, "driver");
 
         drop(conn);
         let _ = std::fs::remove_dir_all(temp_dir);

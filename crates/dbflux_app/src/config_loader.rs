@@ -8,7 +8,7 @@ use dbflux_core::{
     AccessKind, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionMcpGovernance,
     ConnectionMcpPolicyBinding, ConnectionProfile, DbKind, DriverKey, FormValues, GeneralSettings,
     GlobalOverrides, HookExecutionMode, HookFailureMode, HookKind, HookPhase, ProxyProfile,
-    ScriptLanguage, ScriptSource, ServiceConfig, SshTunnelProfile, ValueRef,
+    RpcServiceKind, ScriptLanguage, ScriptSource, ServiceConfig, SshTunnelProfile, ValueRef,
 };
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::repositories::connection_driver_configs::ConnectionDriverConfigDto;
@@ -246,6 +246,7 @@ pub fn save_services(
             enabled: svc.enabled,
             command: svc.command.clone(),
             startup_timeout_ms: svc.startup_timeout_ms.map(|v| v as i64),
+            service_kind: rpc_service_kind_to_storage(svc.kind).to_string(),
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1102,11 +1103,33 @@ fn load_services(
                     args,
                     env,
                     startup_timeout_ms: dto.startup_timeout_ms.map(|v| v as u64),
+                    kind: rpc_service_kind_from_storage(&dto.service_kind),
                 }
             })
             .collect()
     } else {
         Vec::new()
+    }
+}
+
+fn rpc_service_kind_to_storage(kind: RpcServiceKind) -> &'static str {
+    match kind {
+        RpcServiceKind::Driver => "driver",
+        RpcServiceKind::AuthProvider => "auth_provider",
+    }
+}
+
+fn rpc_service_kind_from_storage(kind: &str) -> RpcServiceKind {
+    match kind {
+        "driver" => RpcServiceKind::Driver,
+        "auth_provider" => RpcServiceKind::AuthProvider,
+        other => {
+            log::warn!(
+                "Unknown RPC service kind '{}'; defaulting to driver for compatibility",
+                other
+            );
+            RpcServiceKind::Driver
+        }
     }
 }
 
@@ -1607,12 +1630,12 @@ fn load_ssh_tunnels(
 #[cfg(test)]
 mod tests {
     use super::{
-        general_settings_theme_to_storage, load_config, save_profiles, save_ssh_tunnels,
-        theme_setting_from_storage,
+        general_settings_theme_to_storage, load_config, save_profiles, save_services,
+        save_ssh_tunnels, theme_setting_from_storage,
     };
     use dbflux_core::{
-        AccessKind, ConnectionProfile, DbConfig, GeneralSettings, SshAuthMethod, SshTunnelConfig,
-        SshTunnelProfile, ThemeSetting,
+        AccessKind, ConnectionProfile, DbConfig, GeneralSettings, RpcServiceKind, ServiceConfig,
+        SshAuthMethod, SshTunnelConfig, SshTunnelProfile, ThemeSetting,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
@@ -1779,5 +1802,79 @@ mod tests {
             }
             other => panic!("expected postgres config, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn load_config_defaults_legacy_service_rows_to_driver_kind() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+
+        conn.execute(
+            "INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms) VALUES (?1, ?2, ?3, ?4)",
+            [
+                "legacy-socket",
+                "1",
+                "dbflux-driver-host",
+                "5000",
+            ],
+        )
+            .expect("insert legacy service row");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].socket_id, "legacy-socket");
+        assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
+    }
+
+    #[test]
+    fn save_services_persists_service_kind_for_roundtrip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let services = vec![ServiceConfig {
+            socket_id: "auth-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-driver-host".to_string()),
+            args: vec!["--stdio".to_string()],
+            env: std::collections::HashMap::new(),
+            startup_timeout_ms: Some(5_000),
+            kind: RpcServiceKind::AuthProvider,
+        }];
+
+        save_services(&runtime, &services).expect("save services");
+
+        let dto = runtime
+            .services()
+            .get("auth-socket")
+            .expect("load service dto")
+            .expect("service row");
+
+        assert_eq!(dto.service_kind, "auth_provider");
+
+        let loaded = load_config(&runtime);
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].kind, RpcServiceKind::AuthProvider);
+    }
+
+    #[test]
+    fn load_config_defaults_unknown_service_kind_to_driver() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+
+        conn.execute(
+            "INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms, service_kind) VALUES (?1, ?2, ?3, ?4, ?5)",
+            [
+                "unknown-socket",
+                "1",
+                "dbflux-driver-host",
+                "5000",
+                "mystery_kind",
+            ],
+        )
+        .expect("insert unknown-kind service row");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
     }
 }

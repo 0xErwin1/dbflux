@@ -44,7 +44,7 @@ impl SettingsCoordinator {
             super::SettingsSectionId::Proxies => "Proxy",
             super::SettingsSectionId::SshTunnels => "SSH Tunnels",
             super::SettingsSectionId::AuthProfiles => "Auth Profiles",
-            super::SettingsSectionId::Services => "Services",
+            super::SettingsSectionId::Services => "RPC Services",
             super::SettingsSectionId::Hooks => "Hooks",
             super::SettingsSectionId::Drivers => "Drivers",
             super::SettingsSectionId::About => "About",
