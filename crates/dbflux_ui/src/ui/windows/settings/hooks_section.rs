@@ -643,6 +643,14 @@ impl SettingsSection for HooksSection {
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_hook_changes(cx)
     }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_hook_footer_actions(cx))
+    }
 }
 
 impl EventEmitter<SectionFocusEvent> for HooksSection {}

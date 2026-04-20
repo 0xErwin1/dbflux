@@ -12,10 +12,10 @@ use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Icon, IconName};
 use std::collections::HashMap;
 
+use super::layout;
 use super::services_section::{ServiceFocus, ServiceFormRow, ServicesSection};
 
 impl ServicesSection {
@@ -693,26 +693,15 @@ impl ServicesSection {
         let services = self.svc_services.clone();
         let editing_idx = self.editing_svc_idx;
 
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+        layout::split_section_shell(
+            dbflux_components::composites::section_header(
                 "Services",
                 "Manage external driver services. Changes require restart.",
                 cx,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .overflow_hidden()
-                    .child(self.render_service_list(&services, editing_idx, cx))
-                    .child(self.render_service_form(editing_idx, cx)),
-            )
+            ),
+            self.render_service_list(&services, editing_idx, cx),
+            self.render_service_form(editing_idx, cx),
+        )
     }
 
     fn render_service_list(
@@ -792,6 +781,7 @@ impl ServicesSection {
                             .px_3()
                             .py_2()
                             .rounded(px(4.0))
+                            .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused && !is_selected {
@@ -855,10 +845,8 @@ impl ServicesSection {
         editing_idx: Option<usize>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let primary = theme.primary;
-        let border = theme.border;
-
         let is_form_focused = self.content_focused && self.svc_focus == ServiceFocus::Form;
         let cursor = self.svc_form_cursor;
         let rows = self.svc_form_rows();
@@ -873,130 +861,94 @@ impl ServicesSection {
             is_form_focused && rows.get(cursor).copied() == Some(row)
         };
 
+        layout::sticky_form_shell(
+            PanelTitle::new(title),
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(self.render_svc_input_field(
+                    "Socket ID",
+                    &self.input_socket_id,
+                    is_row_focused(ServiceFormRow::SocketId),
+                    primary,
+                    ServiceFormRow::SocketId,
+                    cx,
+                ))
+                .child(self.render_svc_input_field(
+                    "Command",
+                    &self.input_svc_command,
+                    is_row_focused(ServiceFormRow::Command),
+                    primary,
+                    ServiceFormRow::Command,
+                    cx,
+                ))
+                .child(self.render_svc_input_field(
+                    "Startup Timeout (ms)",
+                    &self.input_svc_timeout,
+                    is_row_focused(ServiceFormRow::Timeout),
+                    primary,
+                    ServiceFormRow::Timeout,
+                    cx,
+                ))
+                .child(self.render_svc_enabled_checkbox(
+                    is_row_focused(ServiceFormRow::Enabled),
+                    primary,
+                    cx,
+                ))
+                .child(self.render_svc_args_section(is_form_focused, cursor, &rows, primary, cx))
+                .child(self.render_svc_env_section(is_form_focused, cursor, &rows, primary, cx)),
+            None,
+            &theme,
+        )
+    }
+
+    pub(super) fn render_service_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let is_form_focused = self.content_focused && self.svc_focus == ServiceFocus::Form;
+        let cursor = self.svc_form_cursor;
+        let rows = self.svc_form_rows();
+        let is_row_focused = |row: ServiceFormRow| -> bool {
+            is_form_focused && rows.get(cursor).copied() == Some(row)
+        };
+
         div()
-            .flex_1()
-            .h_full()
             .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(PanelTitle::new(title)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(self.render_svc_input_field(
-                        "Socket ID",
-                        &self.input_socket_id,
-                        is_row_focused(ServiceFormRow::SocketId),
-                        primary,
-                        ServiceFormRow::SocketId,
-                        cx,
-                    ))
-                    .child(self.render_svc_input_field(
-                        "Command",
-                        &self.input_svc_command,
-                        is_row_focused(ServiceFormRow::Command),
-                        primary,
-                        ServiceFormRow::Command,
-                        cx,
-                    ))
-                    .child(self.render_svc_input_field(
-                        "Startup Timeout (ms)",
-                        &self.input_svc_timeout,
-                        is_row_focused(ServiceFormRow::Timeout),
-                        primary,
-                        ServiceFormRow::Timeout,
-                        cx,
-                    ))
-                    .child(self.render_svc_enabled_checkbox(
-                        is_row_focused(ServiceFormRow::Enabled),
-                        primary,
-                        cx,
-                    ))
-                    .child(self.render_svc_args_section(
-                        is_form_focused,
-                        cursor,
-                        &rows,
-                        primary,
-                        cx,
-                    ))
-                    .child(self.render_svc_env_section(
-                        is_form_focused,
-                        cursor,
-                        &rows,
-                        primary,
-                        cx,
-                    )),
-            )
-            .child(
-                div()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(border)
-                    .flex()
-                    .gap_2()
-                    .justify_end()
-                    .when(editing_idx.is_some(), |container| {
-                        let is_delete_focused = is_row_focused(ServiceFormRow::DeleteButton);
-                        container.child(
-                            div()
-                                .rounded(px(4.0))
-                                .border_1()
-                                .border_color(if is_delete_focused {
-                                    primary
-                                } else {
-                                    transparent_black()
-                                })
-                                .child(
-                                    Button::new("delete-service")
-                                        .label("Delete")
-                                        .small()
-                                        .danger()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            if let Some(idx) = this.editing_svc_idx {
-                                                this.request_delete_service(idx, cx);
-                                            }
-                                        })),
-                                ),
-                        )
+            .items_center()
+            .gap_3()
+            .when(self.editing_svc_idx.is_some(), |container| {
+                container.child(layout::footer_action_frame(
+                    is_row_focused(ServiceFormRow::DeleteButton),
+                    theme.primary,
+                    Button::new("delete-service")
+                        .label("Delete")
+                        .small()
+                        .danger()
+                        .w_full()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(idx) = this.editing_svc_idx {
+                                this.request_delete_service(idx, cx);
+                            }
+                        })),
+                ))
+            })
+            .child(layout::footer_action_frame(
+                is_row_focused(ServiceFormRow::SaveButton),
+                theme.primary,
+                Button::new("save-service")
+                    .label(if self.editing_svc_idx.is_some() {
+                        "Update"
+                    } else {
+                        "Create"
                     })
-                    .child(div().flex_1())
-                    .child({
-                        let is_save_focused = is_row_focused(ServiceFormRow::SaveButton);
-                        div()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_save_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .child(
-                                Button::new("save-service")
-                                    .label(if editing_idx.is_some() {
-                                        "Update"
-                                    } else {
-                                        "Create"
-                                    })
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.save_service(window, cx);
-                                    })),
-                            )
-                    }),
-            )
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_service(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     fn render_svc_input_field(

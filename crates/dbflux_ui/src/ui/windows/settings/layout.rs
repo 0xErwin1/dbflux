@@ -2,15 +2,6 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StickyFooterLayout {
-    FullWidth,
-}
-
-fn sticky_footer_layout() -> StickyFooterLayout {
-    StickyFooterLayout::FullWidth
-}
-
 pub(super) fn compact_input_shell(child: impl IntoElement) -> Div {
     div().w_full().child(child)
 }
@@ -31,13 +22,55 @@ pub(super) fn section_container(content: impl IntoElement) -> Div {
         .child(content)
 }
 
+pub(super) fn split_section_shell(
+    header: impl IntoElement,
+    list: impl IntoElement,
+    detail: impl IntoElement,
+) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .child(header)
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .overflow_hidden()
+                .child(list)
+                .child(detail),
+        )
+}
+
+pub(super) fn single_form_section_shell(header: impl IntoElement, body: impl IntoElement) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .child(header)
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .p_4()
+                .flex()
+                .flex_col()
+                .gap_6()
+                .child(body),
+        )
+}
+
 pub(super) fn sticky_form_shell(
     header: impl IntoElement,
     body: impl IntoElement,
-    footer: impl IntoElement,
+    footer: Option<AnyElement>,
     theme: &gpui_component::Theme,
 ) -> Div {
-    div()
+    let shell = div()
         .flex_1()
         .h_full()
         .min_h_0()
@@ -61,20 +94,36 @@ pub(super) fn sticky_form_shell(
                 .flex_col()
                 .gap_5()
                 .child(body),
-        )
-        .child(div().p_4().border_t_1().border_color(theme.border).child(
-            match sticky_footer_layout() {
-                StickyFooterLayout::FullWidth => div().w_full().child(footer),
-            },
-        ))
+        );
+
+    match footer {
+        Some(footer) => shell.child(
+            div()
+                .p_4()
+                .border_t_1()
+                .border_color(theme.border)
+                .child(div().w_full().child(footer)),
+        ),
+        None => shell,
+    }
+}
+
+pub(super) fn footer_action_frame(is_focused: bool, primary: Hsla, child: impl IntoElement) -> Div {
+    div()
+        .min_w(px(108.0))
+        .border_1()
+        .border_color(if is_focused {
+            primary
+        } else {
+            transparent_black()
+        })
+        .child(div().w_full().child(child))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        StickyFooterLayout, compact_input_shell, editor_panel_title, sticky_footer_layout,
-    };
-    use gpui::div;
+    use super::{compact_input_shell, editor_panel_title, footer_action_frame};
+    use gpui::{div, transparent_black};
     use std::fs;
 
     const SETTINGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ui/windows/settings");
@@ -114,8 +163,8 @@ mod tests {
     }
 
     #[test]
-    fn sticky_form_footer_preserves_full_width_layout() {
-        assert_eq!(sticky_footer_layout(), StickyFooterLayout::FullWidth);
+    fn footer_action_frame_accepts_unfocused_actions() {
+        let _ = footer_action_frame(false, transparent_black(), div());
     }
 
     #[test]
@@ -134,7 +183,10 @@ mod tests {
         assert!(production_source.contains("pub(super) fn compact_input_shell("));
         assert!(production_source.contains("pub(super) fn editor_panel_title("));
         assert!(production_source.contains("pub(super) fn section_container("));
+        assert!(production_source.contains("pub(super) fn split_section_shell("));
+        assert!(production_source.contains("pub(super) fn single_form_section_shell("));
         assert!(production_source.contains("pub(super) fn sticky_form_shell("));
+        assert!(production_source.contains("pub(super) fn footer_action_frame("));
     }
 
     #[test]

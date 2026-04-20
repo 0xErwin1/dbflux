@@ -260,6 +260,49 @@ impl ActiveSettingsSection {
             Self::SshTunnels(section) => section.read(cx).is_dirty(cx),
         }
     }
+
+    fn render_footer_actions(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<SettingsCoordinator>,
+    ) -> Option<AnyElement> {
+        match self {
+            Self::About(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            Self::Audit(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            Self::AuthProfiles(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            Self::Drivers(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            Self::General(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            Self::Hooks(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            Self::Keybindings(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            #[cfg(feature = "mcp")]
+            Self::McpClients(section) | Self::McpRoles(section) | Self::McpPolicies(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            Self::Proxies(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            Self::Services(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+            Self::SshTunnels(section) => {
+                section.update(cx, |section, cx| section.render_footer_actions(window, cx))
+            }
+        }
+    }
 }
 
 pub struct SettingsCoordinator {

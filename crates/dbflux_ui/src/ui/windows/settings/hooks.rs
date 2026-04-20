@@ -12,7 +12,6 @@ use dbflux_core::{
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::scroll::ScrollableElement;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -21,6 +20,7 @@ use super::form_section::FormSection;
 use super::hooks_section::{
     HookFocus, HookFormField, HookKindSelection, HooksSection, ScriptSourceSelection,
 };
+use super::layout;
 
 impl HooksSection {
     fn hook_script_editor_mode(&self, cx: &App) -> &'static str {
@@ -1156,30 +1156,19 @@ impl HooksSection {
     }
 
     pub(super) fn render_hooks_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+        layout::split_section_shell(
+            dbflux_components::composites::section_header(
                 "Hooks",
                 "Create reusable hooks and associate them from connection settings",
                 cx,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .overflow_hidden()
-                    .child(self.render_hooks_list(cx))
-                    .child(self.render_hook_form(cx)),
-            )
+            ),
+            self.render_hooks_list(cx),
+            self.render_hook_form(cx),
+        )
     }
 
-    fn render_hooks_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+    fn render_hooks_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
         let hook_ids = self.hook_sorted_ids();
         let list_focused = self.content_focused && self.hook_focus == HookFocus::List;
         let is_new_button_focused = list_focused && self.hook_list_idx.is_none();
@@ -1242,6 +1231,7 @@ impl HooksSection {
                             .px_3()
                             .py_2()
                             .rounded(px(4.0))
+                            .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if focused && !selected {
@@ -1294,13 +1284,9 @@ impl HooksSection {
         let preview = self.hook_form_preview(cx);
         let default_interpreter = self.default_script_interpreter_label(cx);
 
-        div()
-            .flex_1()
-            .min_h_0()
-            .h_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
+        layout::sticky_form_shell(
+            PanelTitle::new(title),
+            div()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| {
@@ -1308,16 +1294,7 @@ impl HooksSection {
                 }),
             )
             .child(
-                div().p_4().border_b_1().border_color(theme.border).child(
-                    PanelTitle::new(title),
-                ),
-            )
-            .child(
                 div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
                     .flex()
                     .flex_col()
                     .gap_4()
@@ -1630,38 +1607,48 @@ impl HooksSection {
                             .gap_1()
                             .child(Label::new("On Failure"))
                             .child(div().w(px(220.0)).child(self.hook_failure_dropdown.clone())),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .gap_2()
-                    .justify_end()
-                    .when(editing, |container| {
-                        let hook_id = self.editing_hook_id.clone().unwrap_or_default();
-                        container.child(
-                            Button::new("delete-hook", "Delete")
-                                .small()
-                                .danger()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.request_delete_hook(hook_id.clone(), cx);
-                                })),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("save-hook", if editing { "Update" } else { "Create" })
-                            .small()
-                            .primary()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_hook(window, cx);
-                            })),
-                    ),
-            )
+                    )),
+            None,
+            &theme,
+        )
+    }
+
+    pub(super) fn render_hook_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_form_focused = self.content_focused && self.hook_focus == HookFocus::Form;
+        let primary = cx.theme().primary;
+        let editing = self.editing_hook_id.is_some();
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .when(editing, |container| {
+                let hook_id = self.editing_hook_id.clone().unwrap_or_default();
+
+                container.child(layout::footer_action_frame(
+                    is_form_focused && self.hook_form_field == HookFormField::DeleteButton,
+                    primary,
+                    Button::new("delete-hook", "Delete")
+                        .small()
+                        .danger()
+                        .w_full()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.request_delete_hook(hook_id.clone(), cx);
+                        })),
+                ))
+            })
+            .child(layout::footer_action_frame(
+                is_form_focused && self.hook_form_field == HookFormField::SaveButton,
+                primary,
+                Button::new("save-hook", if editing { "Update" } else { "Create" })
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_hook(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     pub(super) fn handle_key_event(

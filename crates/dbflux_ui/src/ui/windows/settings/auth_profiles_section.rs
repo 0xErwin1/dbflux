@@ -979,7 +979,7 @@ impl AuthProfilesSection {
         &mut self,
         profiles: &[AuthProfile],
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let list_focused = self.content_focused && self.auth_focus == AuthFocus::ProfileList;
 
@@ -1041,6 +1041,7 @@ impl AuthProfilesSection {
                             .px_3()
                             .py_2()
                             .rounded(px(4.0))
+                            .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused {
@@ -1589,45 +1590,63 @@ impl AuthProfilesSection {
                         )
                         .child(Text::body("Enabled")),
                 ),
-            div()
-                .flex()
-                .gap_2()
-                .justify_end()
-                .when(is_editing, |root| {
-                    root.child(
-                        Button::new("delete-auth-profile", "Delete")
-                            .small()
-                            .danger()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.request_delete_selected_profile(cx);
-                            })),
-                    )
-                })
-                .child(
-                    Button::new("cancel-auth-profile", "Cancel")
-                        .small()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if let Some(selected_id) = this.selected_profile_id {
-                                this.load_profile_into_form(selected_id, window, cx);
-                            } else {
-                                this.clear_form(window, cx);
-                                cx.notify();
-                            }
-                        })),
-                )
-                .child(
-                    Button::new(
-                        "save-auth-profile",
-                        if is_editing { "Update" } else { "Create" },
-                    )
-                    .small()
-                    .primary()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.save_profile(window, cx);
-                    })),
-                ),
+            None,
             &theme,
         )
+    }
+
+    fn render_section_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_editing = self.editing_profile_id.is_some();
+        let is_form_focused = self.auth_focus == AuthFocus::Form && self.content_focused;
+        let primary = cx.theme().primary;
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .when(is_editing, |root| {
+                root.child(layout::footer_action_frame(
+                    is_form_focused && self.auth_form_field == AuthFormField::DeleteButton,
+                    primary,
+                    Button::new("delete-auth-profile", "Delete")
+                        .small()
+                        .danger()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_delete_selected_profile(cx);
+                        })),
+                ))
+            })
+            .child(layout::footer_action_frame(
+                false,
+                primary,
+                Button::new("cancel-auth-profile", "Cancel")
+                    .small()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(selected_id) = this.selected_profile_id {
+                            this.load_profile_into_form(selected_id, window, cx);
+                        } else {
+                            this.clear_form(window, cx);
+                            cx.notify();
+                        }
+                    })),
+            ))
+            .child(layout::footer_action_frame(
+                is_form_focused && self.auth_form_field == AuthFormField::SaveButton,
+                primary,
+                Button::new(
+                    "save-auth-profile",
+                    if is_editing { "Update" } else { "Create" },
+                )
+                .small()
+                .primary()
+                .w_full()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.save_profile(window, cx);
+                })),
+            ))
+            .into_any_element()
     }
 }
 
@@ -1825,6 +1844,14 @@ impl SettingsSection for AuthProfilesSection {
         self.auth_editing_field = false;
         cx.notify();
     }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_section_footer_actions(cx))
+    }
 }
 
 impl Render for AuthProfilesSection {
@@ -1854,29 +1881,19 @@ impl Render for AuthProfilesSection {
             .unwrap_or_else(|| (String::new(), 0));
 
         layout::section_container(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .child(dbflux_components::composites::section_header(
+            layout::split_section_shell(
+                dbflux_components::composites::section_header(
                     "Auth Profiles",
                     "Manage reusable authentication profiles for connection access",
                     cx,
-                ))
+                )
                 .when(!detected_profiles.is_empty(), |root| {
                     root.child(self.render_import_banner(&detected_profiles, cx))
                 })
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .overflow_hidden()
-                        .child(self.render_profile_list(&profiles, cx))
-                        .child(self.render_editor_panel(window, cx)),
-                )
+                ,
+                self.render_profile_list(&profiles, cx),
+                self.render_editor_panel(window, cx),
+            )
                 .when(show_delete_dialog, |element| {
                 let entity = cx.entity().clone();
                 let entity_cancel = entity.clone();

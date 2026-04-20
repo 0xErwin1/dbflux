@@ -702,6 +702,7 @@ impl SshTunnelsSection {
                             .px_3()
                             .py_2()
                             .rounded(px(4.0))
+                            .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused && !is_selected {
@@ -837,86 +838,70 @@ impl SshTunnelsSection {
                         .into_any_element(),
                 })
                 .when_some(self.render_test_status(cx), |div, status| div.child(status)),
-            div()
-                .flex()
-                .gap_2()
-                .justify_end()
-                .when(editing_id.is_some(), |root| {
-                    let tunnel_id = editing_id.expect("checked is_some");
-                    let is_delete_focused = is_form_focused && field == SshFormField::DeleteButton;
-
-                    root.child(
-                        div()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_delete_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .child(
-                                Button::new("delete-ssh-tunnel", "Delete")
-                                    .small()
-                                    .danger()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.request_delete_tunnel(tunnel_id, cx);
-                                    })),
-                            ),
-                    )
-                })
-                .child(div().flex_1())
-                .child({
-                    let is_test_focused = is_form_focused && field == SshFormField::TestButton;
-
-                    div()
-                        .rounded(px(4.0))
-                        .border_1()
-                        .border_color(if is_test_focused {
-                            primary
-                        } else {
-                            transparent_black()
-                        })
-                        .child(
-                            Button::new("test-ssh-tunnel", "Test")
-                                .small()
-                                .ghost()
-                                .disabled(self.ssh_test_status == SshTestStatus::Testing)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.test_ssh_tunnel(cx);
-                                })),
-                        )
-                })
-                .child({
-                    let is_save_focused = is_form_focused && field == SshFormField::SaveButton;
-
-                    div()
-                        .rounded(px(4.0))
-                        .border_1()
-                        .border_color(if is_save_focused {
-                            primary
-                        } else {
-                            transparent_black()
-                        })
-                        .child(
-                            Button::new(
-                                "save-ssh-tunnel",
-                                if editing_id.is_some() {
-                                    "Update"
-                                } else {
-                                    "Create"
-                                },
-                            )
-                            .small()
-                            .primary()
-                            .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.save_tunnel(window, cx);
-                                },
-                            )),
-                        )
-                }),
+            None,
             &theme,
         )
+    }
+
+    fn render_section_footer_actions(
+        &self,
+        editing_id: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let is_form_focused = self.ssh_focus == SshFocus::Form;
+        let field = self.ssh_form_field;
+        let primary = cx.theme().primary;
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .when(editing_id.is_some(), |root| {
+                let tunnel_id = editing_id.expect("checked is_some");
+
+                root.child(layout::footer_action_frame(
+                    is_form_focused && field == SshFormField::DeleteButton,
+                    primary,
+                    Button::new("delete-ssh-tunnel", "Delete")
+                        .small()
+                        .danger()
+                        .w_full()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.request_delete_tunnel(tunnel_id, cx);
+                        })),
+                ))
+            })
+            .child(layout::footer_action_frame(
+                is_form_focused && field == SshFormField::TestButton,
+                primary,
+                Button::new("test-ssh-tunnel", "Test")
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .disabled(self.ssh_test_status == SshTestStatus::Testing)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.test_ssh_tunnel(cx);
+                    })),
+            ))
+            .child(layout::footer_action_frame(
+                is_form_focused && field == SshFormField::SaveButton,
+                primary,
+                Button::new(
+                    "save-ssh-tunnel",
+                    if editing_id.is_some() {
+                        "Update"
+                    } else {
+                        "Create"
+                    },
+                )
+                .small()
+                .primary()
+                .w_full()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.save_tunnel(window, cx);
+                })),
+            ))
+            .into_any_element()
     }
 }
 
@@ -947,6 +932,14 @@ impl SettingsSection for SshTunnelsSection {
 
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_ssh_changes(cx)
+    }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_section_footer_actions(self.editing_tunnel_id, cx))
     }
 }
 
@@ -995,50 +988,40 @@ impl Render for SshTunnelsSection {
             })
             .unwrap_or_default();
 
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+        layout::split_section_shell(
+            dbflux_components::composites::section_header(
                 "SSH Tunnels",
                 "Manage reusable SSH tunnels for bastion and jump-host access",
                 cx,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .overflow_hidden()
-                    .child(self.render_ssh_list(&tunnels, editing_id, cx))
-                    .child(self.render_ssh_form(editing_id, keyring_available, cx)),
-            )
-            .when(show_delete_confirm, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
+            ),
+            self.render_ssh_list(&tunnels, editing_id, cx),
+            self.render_ssh_form(editing_id, keyring_available, cx),
+        )
+        .when(show_delete_confirm, |element| {
+            let entity = cx.entity().clone();
+            let entity_cancel = entity.clone();
 
-                element.child(
-                    Dialog::new(window, cx)
-                        .title("Delete SSH Tunnel")
-                        .confirm()
-                        .on_ok(move |_, _, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_tunnel(cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_tunnel(cx);
-                            });
-                            true
-                        })
-                        .child(div().text_sm().child(format!(
-                            "Are you sure you want to delete \"{}\"?",
-                            tunnel_delete_name
-                        ))),
-                )
-            })
+            element.child(
+                Dialog::new(window, cx)
+                    .title("Delete SSH Tunnel")
+                    .confirm()
+                    .on_ok(move |_, _, cx| {
+                        entity.update(cx, |section, cx| {
+                            section.confirm_delete_tunnel(cx);
+                        });
+                        true
+                    })
+                    .on_cancel(move |_, _, cx| {
+                        entity_cancel.update(cx, |section, cx| {
+                            section.cancel_delete_tunnel(cx);
+                        });
+                        true
+                    })
+                    .child(div().text_sm().child(format!(
+                        "Are you sure you want to delete \"{}\"?",
+                        tunnel_delete_name
+                    ))),
+            )
+        })
     }
 }

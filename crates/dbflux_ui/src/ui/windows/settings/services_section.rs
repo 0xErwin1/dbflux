@@ -231,6 +231,14 @@ impl SettingsSection for ServicesSection {
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_svc_changes(cx)
     }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_service_footer_actions(cx))
+    }
 }
 
 impl FormSection for ServicesSection {

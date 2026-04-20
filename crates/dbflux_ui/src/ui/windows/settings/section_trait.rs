@@ -60,6 +60,17 @@ pub trait SettingsSection: 'static {
     {
         false
     }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<AnyElement>
+    where
+        Self: Sized,
+    {
+        None
+    }
 }
 
 #[derive(Clone, Debug)]

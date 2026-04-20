@@ -1,11 +1,11 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, ElementId, SharedString, Window};
+use gpui::{App, ClickEvent, ElementId, SharedString, Window, px};
 use gpui_component::button::{
     Button as GpuiButton, ButtonVariant as GpuiButtonVariant, ButtonVariants,
 };
 use gpui_component::{Disableable, Icon, Sizable};
 
-use crate::{primitives::focus_frame, tokens::Radii};
+use crate::primitives::focus_frame;
 
 /// Visual variant of the button controlling color scheme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -126,7 +126,7 @@ impl RenderOnce for Button {
         let mut btn = GpuiButton::new(self.id)
             .label(self.label)
             .with_variant(gpui_variant)
-            .rounded(Radii::SM)
+            .rounded(px(0.0))
             .overflow_hidden()
             .disabled(self.disabled)
             .when(self.variant == ButtonVariant::Dropdown, |b| {

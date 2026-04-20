@@ -1,16 +1,16 @@
 use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
+use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::scroll::ScrollableElement;
 
 use super::general_section::{GeneralFormRow, GeneralSection};
+use super::layout;
 use super::section_trait::SectionFocusEvent;
 
 impl GeneralSection {
@@ -408,186 +408,169 @@ impl GeneralSection {
         let is_at =
             |row: GeneralFormRow| -> bool { is_focused && rows.get(cursor).copied() == Some(row) };
 
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+        layout::single_form_section_shell(
+            dbflux_components::composites::section_header(
                 "General",
                 "Configure startup, session, refresh, and safety behavior",
                 cx,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_6()
-                    .child(self.render_gen_group_header("Appearance", border, muted_fg))
-                    .child(self.render_gen_dropdown(
-                        "Theme",
-                        &self.dropdown_theme,
-                        is_at(GeneralFormRow::Theme),
-                        primary,
-                        GeneralFormRow::Theme,
-                        cx,
-                    ))
-                    .child(self.render_gen_group_header("Startup & Session", border, muted_fg))
-                    .child(self.render_gen_checkbox(
-                        "restore-session",
-                        "Restore session on startup",
-                        self.gen_settings.restore_session_on_startup,
-                        is_at(GeneralFormRow::RestoreSession),
-                        GeneralFormRow::RestoreSession,
-                        |this, value| this.gen_settings.restore_session_on_startup = value,
-                        cx,
-                    ))
-                    .child(self.render_gen_checkbox(
-                        "reopen-conns",
-                        "Reopen last connections",
-                        self.gen_settings.reopen_last_connections,
-                        is_at(GeneralFormRow::ReopenConnections),
-                        GeneralFormRow::ReopenConnections,
-                        |this, value| this.gen_settings.reopen_last_connections = value,
-                        cx,
-                    ))
-                    .child(self.render_gen_dropdown(
-                        "Default focus",
-                        &self.dropdown_default_focus,
-                        is_at(GeneralFormRow::DefaultFocus),
-                        primary,
-                        GeneralFormRow::DefaultFocus,
-                        cx,
-                    ))
-                    .child(self.render_gen_input_field(
-                        "Max history entries",
-                        &self.input_max_history,
-                        is_at(GeneralFormRow::MaxHistory),
-                        primary,
-                        GeneralFormRow::MaxHistory,
-                        cx,
-                    ))
-                    .child(self.render_gen_input_field(
-                        "Auto-save interval (ms)",
-                        &self.input_auto_save,
-                        is_at(GeneralFormRow::AutoSaveInterval),
-                        primary,
-                        GeneralFormRow::AutoSaveInterval,
-                        cx,
-                    ))
-                    .child(self.render_gen_group_header("Refresh & Background", border, muted_fg))
-                    .child(self.render_gen_dropdown(
-                        "Default refresh policy",
-                        &self.dropdown_refresh_policy,
-                        is_at(GeneralFormRow::DefaultRefreshPolicy),
-                        primary,
-                        GeneralFormRow::DefaultRefreshPolicy,
-                        cx,
-                    ))
-                    .child(self.render_gen_input_field(
-                        "Default refresh interval (seconds)",
-                        &self.input_refresh_interval,
-                        is_at(GeneralFormRow::DefaultRefreshInterval),
-                        primary,
-                        GeneralFormRow::DefaultRefreshInterval,
-                        cx,
-                    ))
-                    .child(self.render_gen_input_field(
-                        "Max concurrent background tasks",
-                        &self.input_max_bg_tasks,
-                        is_at(GeneralFormRow::MaxBackgroundTasks),
-                        primary,
-                        GeneralFormRow::MaxBackgroundTasks,
-                        cx,
-                    ))
-                    .child(self.render_gen_checkbox(
-                        "pause-on-error",
-                        "Pause auto-refresh on error",
-                        self.gen_settings.auto_refresh_pause_on_error,
-                        is_at(GeneralFormRow::PauseRefreshOnError),
-                        GeneralFormRow::PauseRefreshOnError,
-                        |this, value| this.gen_settings.auto_refresh_pause_on_error = value,
-                        cx,
-                    ))
-                    .child(self.render_gen_checkbox(
-                        "refresh-visible",
-                        "Auto-refresh only if tab is visible",
-                        self.gen_settings.auto_refresh_only_if_visible,
-                        is_at(GeneralFormRow::RefreshOnlyIfVisible),
-                        GeneralFormRow::RefreshOnlyIfVisible,
-                        |this, value| this.gen_settings.auto_refresh_only_if_visible = value,
-                        cx,
-                    ))
-                    .child(self.render_gen_group_header("Execution Safety", border, muted_fg))
-                    .child(self.render_gen_checkbox(
-                        "confirm-dangerous",
-                        "Confirm dangerous queries",
-                        self.gen_settings.confirm_dangerous_queries,
-                        is_at(GeneralFormRow::ConfirmDangerous),
-                        GeneralFormRow::ConfirmDangerous,
-                        |this, value| this.gen_settings.confirm_dangerous_queries = value,
-                        cx,
-                    ))
-                    .child(self.render_gen_checkbox(
-                        "requires-where",
-                        "Require WHERE for DELETE/UPDATE",
-                        self.gen_settings.dangerous_requires_where,
-                        is_at(GeneralFormRow::RequiresWhere),
-                        GeneralFormRow::RequiresWhere,
-                        |this, value| this.gen_settings.dangerous_requires_where = value,
-                        cx,
-                    ))
-                    .child(self.render_gen_checkbox(
-                        "requires-preview",
-                        "Always require preview (ignore suppressions)",
-                        self.gen_settings.dangerous_requires_preview,
-                        is_at(GeneralFormRow::RequiresPreview),
-                        GeneralFormRow::RequiresPreview,
-                        |this, value| this.gen_settings.dangerous_requires_preview = value,
-                        cx,
-                    )),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(border)
-                    .flex()
-                    .justify_end()
-                    .child({
-                        let is_save_focused = is_at(GeneralFormRow::SaveButton);
+            ),
+            div()
+                .flex()
+                .flex_col()
+                .gap_6()
+                .child(self.render_gen_group_header("Appearance", border, muted_fg))
+                .child(self.render_gen_dropdown(
+                    "Theme",
+                    &self.dropdown_theme,
+                    is_at(GeneralFormRow::Theme),
+                    primary,
+                    GeneralFormRow::Theme,
+                    cx,
+                ))
+                .child(self.render_gen_group_header("Startup & Session", border, muted_fg))
+                .child(self.render_gen_checkbox(
+                    "restore-session",
+                    "Restore session on startup",
+                    self.gen_settings.restore_session_on_startup,
+                    is_at(GeneralFormRow::RestoreSession),
+                    GeneralFormRow::RestoreSession,
+                    |this, value| this.gen_settings.restore_session_on_startup = value,
+                    cx,
+                ))
+                .child(self.render_gen_checkbox(
+                    "reopen-conns",
+                    "Reopen last connections",
+                    self.gen_settings.reopen_last_connections,
+                    is_at(GeneralFormRow::ReopenConnections),
+                    GeneralFormRow::ReopenConnections,
+                    |this, value| this.gen_settings.reopen_last_connections = value,
+                    cx,
+                ))
+                .child(self.render_gen_dropdown(
+                    "Default focus",
+                    &self.dropdown_default_focus,
+                    is_at(GeneralFormRow::DefaultFocus),
+                    primary,
+                    GeneralFormRow::DefaultFocus,
+                    cx,
+                ))
+                .child(self.render_gen_input_field(
+                    "Max history entries",
+                    &self.input_max_history,
+                    is_at(GeneralFormRow::MaxHistory),
+                    primary,
+                    GeneralFormRow::MaxHistory,
+                    cx,
+                ))
+                .child(self.render_gen_input_field(
+                    "Auto-save interval (ms)",
+                    &self.input_auto_save,
+                    is_at(GeneralFormRow::AutoSaveInterval),
+                    primary,
+                    GeneralFormRow::AutoSaveInterval,
+                    cx,
+                ))
+                .child(self.render_gen_group_header("Refresh & Background", border, muted_fg))
+                .child(self.render_gen_dropdown(
+                    "Default refresh policy",
+                    &self.dropdown_refresh_policy,
+                    is_at(GeneralFormRow::DefaultRefreshPolicy),
+                    primary,
+                    GeneralFormRow::DefaultRefreshPolicy,
+                    cx,
+                ))
+                .child(self.render_gen_input_field(
+                    "Default refresh interval (seconds)",
+                    &self.input_refresh_interval,
+                    is_at(GeneralFormRow::DefaultRefreshInterval),
+                    primary,
+                    GeneralFormRow::DefaultRefreshInterval,
+                    cx,
+                ))
+                .child(self.render_gen_input_field(
+                    "Max concurrent background tasks",
+                    &self.input_max_bg_tasks,
+                    is_at(GeneralFormRow::MaxBackgroundTasks),
+                    primary,
+                    GeneralFormRow::MaxBackgroundTasks,
+                    cx,
+                ))
+                .child(self.render_gen_checkbox(
+                    "pause-on-error",
+                    "Pause auto-refresh on error",
+                    self.gen_settings.auto_refresh_pause_on_error,
+                    is_at(GeneralFormRow::PauseRefreshOnError),
+                    GeneralFormRow::PauseRefreshOnError,
+                    |this, value| this.gen_settings.auto_refresh_pause_on_error = value,
+                    cx,
+                ))
+                .child(self.render_gen_checkbox(
+                    "refresh-visible",
+                    "Auto-refresh only if tab is visible",
+                    self.gen_settings.auto_refresh_only_if_visible,
+                    is_at(GeneralFormRow::RefreshOnlyIfVisible),
+                    GeneralFormRow::RefreshOnlyIfVisible,
+                    |this, value| this.gen_settings.auto_refresh_only_if_visible = value,
+                    cx,
+                ))
+                .child(self.render_gen_group_header("Execution Safety", border, muted_fg))
+                .child(self.render_gen_checkbox(
+                    "confirm-dangerous",
+                    "Confirm dangerous queries",
+                    self.gen_settings.confirm_dangerous_queries,
+                    is_at(GeneralFormRow::ConfirmDangerous),
+                    GeneralFormRow::ConfirmDangerous,
+                    |this, value| this.gen_settings.confirm_dangerous_queries = value,
+                    cx,
+                ))
+                .child(self.render_gen_checkbox(
+                    "requires-where",
+                    "Require WHERE for DELETE/UPDATE",
+                    self.gen_settings.dangerous_requires_where,
+                    is_at(GeneralFormRow::RequiresWhere),
+                    GeneralFormRow::RequiresWhere,
+                    |this, value| this.gen_settings.dangerous_requires_where = value,
+                    cx,
+                ))
+                .child(self.render_gen_checkbox(
+                    "requires-preview",
+                    "Always require preview (ignore suppressions)",
+                    self.gen_settings.dangerous_requires_preview,
+                    is_at(GeneralFormRow::RequiresPreview),
+                    GeneralFormRow::RequiresPreview,
+                    |this, value| this.gen_settings.dangerous_requires_preview = value,
+                    cx,
+                )),
+        )
+    }
 
-                        div()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_save_focused {
-                                primary
-                            } else {
-                                gpui::transparent_black()
-                            })
-                            .child(
-                                Button::new("save-general")
-                                    .label("Save")
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.content_focused = true;
-                                        this.gen_form_cursor = this
-                                            .gen_form_rows()
-                                            .iter()
-                                            .position(|row| *row == GeneralFormRow::SaveButton)
-                                            .unwrap_or_default();
-                                        this.save_general_settings(window, cx);
-                                    })),
-                            )
-                    }),
-            )
+    pub(super) fn render_general_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_save_focused = self.content_focused
+            && self.gen_form_rows().get(self.gen_form_cursor).copied()
+                == Some(GeneralFormRow::SaveButton);
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(layout::footer_action_frame(
+                is_save_focused,
+                cx.theme().primary,
+                FluxButton::new("save-general", "Save")
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.content_focused = true;
+                        this.gen_form_cursor = this
+                            .gen_form_rows()
+                            .iter()
+                            .position(|row| *row == GeneralFormRow::SaveButton)
+                            .unwrap_or_default();
+                        this.save_general_settings(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     fn render_gen_group_header(
