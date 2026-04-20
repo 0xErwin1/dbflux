@@ -4,9 +4,9 @@ pub(crate) mod scripts_directory;
 
 pub use app::{
     AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
-    GlobalOverrides, GovernanceSettings, PolicyRoleConfig, RefreshPolicySetting, ServiceConfig,
-    StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, driver_maps_differ,
-    migrate_app_config,
+    GlobalOverrides, GovernanceSettings, PolicyRoleConfig, RefreshPolicySetting, RpcServiceKind,
+    ServiceConfig, StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig,
+    driver_maps_differ, migrate_app_config,
 };
 pub use refresh_policy::RefreshPolicy;
 pub use scripts_directory::{

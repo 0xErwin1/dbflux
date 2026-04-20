@@ -1,31 +1,35 @@
 # Driver RPC Protocol Specification
 
-This document defines how DBFlux discovers, launches, and talks to external driver services over local IPC.
+This document defines how DBFlux discovers, launches, and talks to RPC services over local IPC.
+
+Today, only RPC services with `RpcServiceKind::Driver` are adapted into runtime database drivers. `RpcServiceKind::AuthProvider` is already persisted and discoverable, but it is not wired into runtime auth features yet.
 
 ## Source of truth
 
-For external services, **the driver service is the source of truth** for:
+For active driver services, **the service is the source of truth** for:
 
 - driver kind (`DbKind`)
 - driver metadata (`DriverMetadataDto`: name, icon, category, capabilities, query language, etc.)
 - connection form definition (`DriverFormDefDto`)
 
-`config.json` is only runtime/process configuration (socket and launch command).
+DBFlux stores launch configuration in its SQLite-backed services config. Legacy `config.json` rows are imported for compatibility, but the runtime no longer reads that file on normal startup.
 
 ## Integration model
 
-At app startup, DBFlux reads `~/.config/dbflux/config.json`, then for each `rpc_service`:
+At app startup, DBFlux loads configured RPC services from `~/.local/share/dbflux/dbflux.db`, then for each service:
 
-1. ensures the service is running (starts it if needed)
-2. performs a `Hello` handshake
-3. reads `driver_kind`, `driver_metadata`, and `form_definition` from the service
-4. registers the driver in-memory so it appears in the connection manager
+1. discovers the persisted service descriptor, including `RpcServiceKind`
+2. adapts only `Driver` services into the current driver bootstrap path
+3. ensures the service is running (starts it if needed)
+4. performs a `Hello` handshake
+5. reads `driver_kind`, `driver_metadata`, and `form_definition` from the service
+6. registers the driver in-memory so it appears in the connection manager
 
-If any step fails, that service is skipped and not shown in the UI.
+If driver adaptation or handshake fails, that service is skipped and not shown in the UI as a driver. Non-driver service kinds remain persisted but inert.
 
 Important behavior:
 
-- Config is read at startup. Restart DBFlux after changing `config.json`.
+- Service configuration is read at startup. Restart DBFlux after changing RPC service settings.
 - `socket_id` is used as-is (it is not rewritten by DBFlux).
 - Internal registry key is `rpc:<socket_id>`.
 
@@ -46,9 +50,11 @@ Maximum message size: `16 MiB`.
 
 Socket cleanup is automatic on process exit/drop (provided by `interprocess`).
 
-## Runtime configuration (`config.json`)
+## Runtime configuration
 
-File path: `~/.config/dbflux/config.json`
+Primary storage: `~/.local/share/dbflux/dbflux.db` (`cfg_services`, `cfg_service_args`, `cfg_service_env`)
+
+Settings UI: **Settings → RPC Services**
 
 Schema used by DBFlux:
 
@@ -57,6 +63,7 @@ Schema used by DBFlux:
   "rpc_services": [
     {
       "socket_id": "my-driver.sock",
+      "kind": "driver",
       "command": "/absolute/path/to/driver-binary",
       "args": ["--socket", "my-driver.sock"],
       "env": {
@@ -71,9 +78,12 @@ Schema used by DBFlux:
 Notes:
 
 - `socket_id` is required.
+- `kind` supports `driver` and `auth_provider`.
 - `command` is optional. If omitted, DBFlux uses `dbflux-driver-host`.
 - `args`, `env`, and `startup_timeout_ms` are optional.
-- DBFlux derives an internal registry key as `rpc:<socket_id>`.
+- DBFlux derives an internal driver registry key as `rpc:<socket_id>`.
+- Only `driver` services are registered as database drivers today.
+- `auth_provider` services are stored and discovered but not yet consumed by runtime auth flows.
 
 ## Handshake contract
 
@@ -232,14 +242,15 @@ Use:
 - `examples/custom_driver/src/main.rs`
 - `examples/custom_driver/config.example.json`
 
-That example is compatible with the current DBFlux integration model.
+That example is compatible with the current active driver-service integration model.
 
 Quick test path:
 
-1. copy `examples/custom_driver/config.example.json` to `~/.config/dbflux/config.json`
-2. update `command` to your absolute binary path
-3. restart DBFlux
-4. create a connection using the external driver form fields
+1. add a new **Driver** service in **Settings → RPC Services**
+2. copy the values from `examples/custom_driver/config.example.json`
+3. update `command` to your absolute binary path
+4. restart DBFlux
+5. create a connection using the external driver form fields
 
 ## References
 

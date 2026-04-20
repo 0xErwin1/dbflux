@@ -12,6 +12,7 @@ pub mod hook_executor;
 pub mod keymap;
 pub mod mcp_command;
 pub mod proxy;
+pub mod rpc_services;
 
 pub use access_manager::AppAccessManager;
 pub use app_state::AppState;

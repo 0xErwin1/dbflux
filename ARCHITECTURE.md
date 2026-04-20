@@ -161,7 +161,7 @@ crates/
             ssh_tunnels.rs   # SSH tunnel CRUD form with FormGridNav
             hooks.rs         # Hook definitions CRUD
             drivers.rs       # Per-driver settings overrides
-            rpc_services.rs  # External RPC service management
+            rpc_services.rs  # RPC services settings UI (Driver/Auth Provider descriptors)
             mcp_section.rs   # MCP settings (trusted clients, roles, policies, audit)
           connection_manager/ # Connection manager window
             mod.rs
@@ -187,6 +187,7 @@ crates/
       hook_executor.rs       # Composite hook executor routing
       proxy.rs               # create_proxy_tunnel callback for CreateTunnelFn
       config_loader.rs       # SQLite-backed configuration persistence
+      rpc_services.rs        # RPC service discovery/adaptation seam for runtime bootstrap
       history_manager_sqlite.rs # SQLite-backed query history
       mcp_command.rs         # MCP subcommand integration and arg parsing
       keymap/                # Keyboard system (pure domain types)
@@ -635,7 +636,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
 - DynamoDB: `aws-sdk-dynamodb` driver with AWS profile/region support for remote DynamoDB, plus optional endpoint override for local emulators and tests (crates/dbflux_driver_dynamodb/src/driver.rs).
 - AWS auth stack: `dbflux_aws` provides AWS SSO/shared/static auth providers, SSO login orchestration, account/role discovery, and `~/.aws/config` profile write-back for newly saved auth profiles.
-- Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and external driver communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). Auth tokens are managed by `dbflux_ipc/src/auth.rs`.
+- Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and RPC service communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` discovers persisted service descriptors, adapts only `RpcServiceKind::Driver` into runtime `DbDriver`s today, and preserves `rpc:<socket_id>` compatibility. `RpcServiceKind::AuthProvider` is stored/discoverable but not yet wired into runtime auth flows. Auth tokens are managed by `dbflux_ipc/src/auth.rs`.
 - Proxy: SOCKS5/HTTP CONNECT tunnels via `dbflux_tunnel_core::Tunnel` (crates/dbflux_proxy/src/lib.rs).
 - SSH: `ssh2` sessions with local TCP forwarding via `dbflux_tunnel_core::Tunnel` (crates/dbflux_ssh/src/lib.rs).
 - OS keyring: optional secret storage for passwords, SSH passphrases, and proxy credentials (crates/dbflux_core/src/storage/secrets.rs).
@@ -650,7 +651,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - `cfg_auth_profiles` (provider-agnostic auth profile storage)
   - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
   - `cfg_hooks`, `cfg_hook_bindings`
-  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (external RPC services)
+  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (RPC service descriptors; `cfg_services.service_kind` records `driver` vs `auth_provider`)
   - `cfg_governance_*` tables (roles, policies, trusted clients)
   - `cfg_drivers` (per-driver settings overrides)
   - `cfg_folders` (connection tree organization)
@@ -661,7 +662,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - `~/.config/dbflux/profiles.json` → `cfg_connection_profiles`
   - `~/.config/dbflux/auth_profiles.json` → `cfg_auth_profiles`
   - `~/.config/dbflux/ssh_tunnels.json` → `cfg_ssh_tunnel_profiles`
-  - `~/.config/dbflux/config.json` (rpc_services only) → `cfg_services`
+  - `~/.config/dbflux/config.json` (legacy rpc_services only) → `cfg_services` with legacy rows defaulted to `service_kind='driver'`
   - Import is idempotent (tracked in `sys_legacy_imports`)
 - Session data (data dir):
   - `sessions/` scratch and shadow files for auto-save (crates/dbflux_core/src/storage/session.rs).
