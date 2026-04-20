@@ -1,7 +1,7 @@
 use dbflux_components::typography::AppFonts;
 use dbflux_core::ThemeSetting;
 use dbflux_ui::ui::theme;
-use gpui::{hsla, SharedString, TestAppContext, Window};
+use gpui::{SharedString, TestAppContext, Window, hsla};
 use gpui_component::theme::Theme;
 use std::fs;
 
