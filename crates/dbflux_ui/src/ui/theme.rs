@@ -1,7 +1,7 @@
-use dbflux_components::typography::load_bundled_fonts;
 pub use dbflux_components::typography::AppFonts;
+use dbflux_components::typography::load_bundled_fonts;
 use dbflux_core::ThemeSetting;
-use gpui::{hsla, App, Hsla, SharedString, Window};
+use gpui::{App, Hsla, SharedString, Window, hsla};
 use gpui_component::{
     highlighter::HighlightTheme,
     theme::{Theme, ThemeMode},

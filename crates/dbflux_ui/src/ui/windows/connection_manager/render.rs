@@ -290,6 +290,7 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .bg(cx.theme().tab_bar)
                     .overflow_scroll()
                     .track_scroll(&self.form_scroll_handle)
                     .gap_4()
