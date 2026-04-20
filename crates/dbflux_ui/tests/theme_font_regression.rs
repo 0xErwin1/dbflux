@@ -1,7 +1,7 @@
 use dbflux_components::typography::AppFonts;
 use dbflux_core::ThemeSetting;
 use dbflux_ui::ui::theme;
-use gpui::{SharedString, TestAppContext, Window, hsla};
+use gpui::{hsla, SharedString, TestAppContext, Window};
 use gpui_component::theme::Theme;
 use std::fs;
 
@@ -78,7 +78,7 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
 
         assert_centralized_fonts(theme);
         assert_eq!(theme.border, rgb_to_hsla(0x1F2430));
-        assert_eq!(theme.popover, rgb_to_hsla(0x31353C));
+        assert_eq!(theme.popover, rgb_to_hsla(0x141B24));
     });
 
     cx.update(|cx| theme::apply_theme(ThemeSetting::Light, Option::<&mut Window>::None, cx));
@@ -95,7 +95,7 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
         assert_eq!(theme.warning_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.info_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.sidebar_primary_foreground, rgb_to_hsla(0x0A0E14));
-        assert_eq!(theme.popover, rgb_to_hsla(0xFFFFFF));
+        assert_eq!(theme.popover, rgb_to_hsla(0xF7F8FA));
     });
 }
 
@@ -161,6 +161,6 @@ fn theme_module_keeps_palette_and_font_mapping_but_not_shared_chrome_helpers() {
     assert!(source.contains("load_bundled_fonts(cx);"));
     assert!(source.contains("ThemeSetting::Mirage"));
     assert!(source.contains("apply_ayu_mirage(cx);"));
-    assert!(source.contains("theme.popover = rgb_to_hsla(0x31353C);"));
+    assert!(source.contains("theme.popover = raised;"));
     assert!(!source.contains("pub fn surface_highest_color()"));
 }
