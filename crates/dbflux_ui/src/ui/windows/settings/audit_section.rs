@@ -4,13 +4,13 @@ use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::toast::ToastExt;
+use crate::ui::windows::settings::layout;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;
 use dbflux_components::typography::SubSectionLabel;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, Sizable};
@@ -387,6 +387,14 @@ impl SettingsSection for AuditSection {
         self.has_unsaved_audit_changes(cx)
     }
 
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_audit_footer_actions(cx))
+    }
+
     fn handle_key_event(
         &mut self,
         event: &KeyDownEvent,
@@ -588,42 +596,35 @@ impl AuditSection {
                         cx,
                     )),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(border)
-                    .flex()
-                    .justify_end()
-                    .child({
-                        let is_save_focused = is_at(AuditFormRow::SaveButton);
+    }
 
-                        div()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_save_focused {
-                                primary
-                            } else {
-                                gpui::transparent_black()
-                            })
-                            .child(
-                                Button::new("save-audit")
-                                    .label("Save")
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.content_focused = true;
-                                        this.audit_form_cursor = this
-                                            .audit_form_rows()
-                                            .iter()
-                                            .position(|row| *row == AuditFormRow::SaveButton)
-                                            .unwrap_or_default();
-                                        this.save_audit_settings(window, cx);
-                                    })),
-                            )
-                    }),
-            )
+    fn render_audit_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_save_focused = self.content_focused
+            && self.audit_form_rows().get(self.audit_form_cursor).copied()
+                == Some(AuditFormRow::SaveButton);
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(layout::footer_action_frame(
+                is_save_focused,
+                cx.theme().primary,
+                dbflux_components::controls::Button::new("save-audit", "Save")
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.content_focused = true;
+                        this.audit_form_cursor = this
+                            .audit_form_rows()
+                            .iter()
+                            .position(|row| *row == AuditFormRow::SaveButton)
+                            .unwrap_or_default();
+                        this.save_audit_settings(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     fn render_audit_group_header(

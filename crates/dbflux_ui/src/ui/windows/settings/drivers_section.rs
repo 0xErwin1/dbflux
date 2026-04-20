@@ -466,6 +466,15 @@ impl SettingsSection for DriversSection {
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_driver_changes(cx)
     }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        self.drv_selected_idx
+            .map(|_| self.render_driver_footer_actions(cx))
+    }
 }
 
 impl Render for DriversSection {

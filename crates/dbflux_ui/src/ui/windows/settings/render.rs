@@ -4,15 +4,15 @@ use crate::ui::theme::ghost_border_color;
 use crate::ui::tokens::Heights;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Icon;
-use dbflux_components::typography::{Body, FieldLabel, MonoCaption, SubSectionLabel};
+use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::ActiveTheme;
 use gpui_component::dialog::Dialog;
+use gpui_component::ActiveTheme;
 
 use super::{
-    SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
-    SettingsCoordinator, SettingsFocus, layout,
+    layout, SettingsCoordinator, SettingsFocus, SETTINGS_SIDEBAR_GRIP_WIDTH,
+    SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
 };
 
 const INDENT_PX: f32 = 16.0;
@@ -52,7 +52,6 @@ impl SettingsCoordinator {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border_color = cx.theme().border;
         let sidebar_bg = cx.theme().sidebar;
         let theme = cx.theme().clone();
         let focused = self.focus_area == SettingsFocus::Sidebar;
@@ -100,8 +99,6 @@ impl SettingsCoordinator {
         div()
             .w_full()
             .h_full()
-            .border_r_1()
-            .border_color(border_color)
             .bg(sidebar_bg)
             .flex()
             .flex_col()
@@ -255,11 +252,11 @@ impl Render for SettingsCoordinator {
                     .child(
                         layout::section_container(self.active_section_view.clone())
                             .h_full()
-                            .bg(cx.theme().background),
+                            .bg(cx.theme().sidebar),
                     ),
             )
             // Settings status footer
-            .child(self.render_settings_footer(cx))
+            .child(self.render_settings_footer(_window, cx))
             .when_some(self.pending_section_confirm, |element, target_section| {
                 let confirm_entity = cx.entity().clone();
                 let cancel_entity = confirm_entity.clone();
@@ -336,29 +333,50 @@ impl SettingsCoordinator {
             )
     }
 
-    fn render_settings_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        const VERSION: &str = env!("CARGO_PKG_VERSION");
+    fn render_settings_footer(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let section_actions = self.active_section_entity.render_footer_actions(window, cx);
 
         div()
             .flex_shrink_0()
-            .h(px(36.0))
+            .min_h(px(56.0))
             .px_4()
+            .py_2()
             .flex()
             .items_center()
             .justify_between()
+            .gap_4()
             .border_t_1()
             .border_color(ghost_border_color())
             .bg(cx.theme().background)
-            .child(div().child(MonoCaption::new(format!("v{} | UTF-8", VERSION))))
             .child(
-                div().flex().items_center().gap_2().child(
-                    Button::new("settings-close", "Close")
-                        .ghost()
-                        .small()
-                        .on_click(cx.listener(|this, _, window, _cx| {
-                            this.try_close(window);
-                        })),
-                ),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(layout::footer_action_frame(
+                        false,
+                        cx.theme().primary,
+                        Button::new("settings-close", "Close")
+                            .small()
+                            .ghost()
+                            .w_full()
+                            .on_click(cx.listener(|this, _, window, _cx| {
+                                this.try_close(window);
+                            })),
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_3()
+                    .min_w(px(120.0))
+                    .when_some(section_actions, |div, actions| div.child(actions)),
             )
     }
 }

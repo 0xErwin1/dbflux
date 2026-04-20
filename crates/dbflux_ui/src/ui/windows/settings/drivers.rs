@@ -669,31 +669,18 @@ impl DriversSection {
     }
 
     pub(super) fn render_drivers_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        layout::section_container(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .child(dbflux_components::composites::section_header(
-                    "Drivers",
-                    "Configure per-driver overrides and driver-defined settings",
-                    cx,
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .overflow_hidden()
-                        .child(self.render_driver_list(cx))
-                        .child(self.render_driver_editor(cx)),
-                ),
-        )
+        layout::section_container(layout::split_section_shell(
+            dbflux_components::composites::section_header(
+                "Drivers",
+                "Configure per-driver overrides and driver-defined settings",
+                cx,
+            ),
+            self.render_driver_list(cx),
+            self.render_driver_editor(cx),
+        ))
     }
 
-    fn render_driver_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_driver_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let list_focused = self.content_focused && self.drv_focus == DriversFocus::List;
 
@@ -738,6 +725,7 @@ impl DriversSection {
                             .px_3()
                             .py_2()
                             .rounded(px(4.0))
+                            .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if focused {
@@ -847,33 +835,35 @@ impl DriversSection {
             );
 
         let body = div()
+            .flex()
+            .flex_col()
+            .gap_5()
             .child(self.render_capabilities(entry, cx))
             .child(self.render_global_overrides(global, cx))
             .child(self.render_driver_schema(entry, cx));
 
-        let footer = {
-            let editor_focused = self.content_focused && self.drv_focus == DriversFocus::Editor;
-            div()
-                .rounded(px(4.0))
-                .border_1()
-                .border_color(
-                    if editor_focused && self.drv_editor_field == DriverEditorField::Save {
-                        theme.primary
-                    } else {
-                        gpui::transparent_black()
-                    },
-                )
-                .child(
-                    Button::new("save-driver-settings", "Save")
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.save_driver_settings(window, cx);
-                        })),
-                )
-        };
+        layout::sticky_form_shell(header, body, None, &theme)
+    }
 
-        layout::sticky_form_shell(header, body, footer, &theme)
+    pub(super) fn render_driver_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let editor_focused = self.content_focused && self.drv_focus == DriversFocus::Editor;
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(layout::footer_action_frame(
+                editor_focused && self.drv_editor_field == DriverEditorField::Save,
+                cx.theme().primary,
+                Button::new("save-driver-settings", "Save")
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_driver_settings(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     fn render_capabilities(

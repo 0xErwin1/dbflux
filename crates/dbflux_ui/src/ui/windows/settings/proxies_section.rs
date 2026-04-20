@@ -571,6 +571,7 @@ impl ProxiesSection {
                             .px_3()
                             .py_2()
                             .rounded(px(4.0))
+                            .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused && !is_selected {
@@ -730,66 +731,58 @@ impl ProxiesSection {
                         )
                         .child(Body::new("Enabled"))
                 }),
-            div()
-                .flex()
-                .gap_2()
-                .justify_end()
-                .when(editing_id.is_some(), |root| {
-                    let proxy_id = editing_id.expect("checked is_some");
-                    let is_delete_focused =
-                        is_form_focused && field == ProxyFormField::DeleteButton;
-
-                    root.child(
-                        div()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_delete_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .child(
-                                Button::new("delete-proxy", "Delete")
-                                    .small()
-                                    .danger()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.request_delete_proxy(proxy_id, cx);
-                                    })),
-                            ),
-                    )
-                })
-                .child(div().flex_1())
-                .child({
-                    let is_save_focused = is_form_focused && field == ProxyFormField::SaveButton;
-
-                    div()
-                        .rounded(px(4.0))
-                        .border_1()
-                        .border_color(if is_save_focused {
-                            primary
-                        } else {
-                            transparent_black()
-                        })
-                        .child(
-                            Button::new(
-                                "save-proxy",
-                                if editing_id.is_some() {
-                                    "Update"
-                                } else {
-                                    "Create"
-                                },
-                            )
-                            .small()
-                            .primary()
-                            .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.save_proxy(window, cx);
-                                },
-                            )),
-                        )
-                }),
+            None,
             &theme,
         )
+    }
+
+    fn render_section_footer_actions(
+        &self,
+        editing_id: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let is_form_focused = self.proxy_focus == ProxyFocus::Form;
+        let field = self.proxy_form_field;
+        let primary = cx.theme().primary;
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .when(editing_id.is_some(), |root| {
+                let proxy_id = editing_id.expect("checked is_some");
+
+                root.child(layout::footer_action_frame(
+                    is_form_focused && field == ProxyFormField::DeleteButton,
+                    primary,
+                    Button::new("delete-proxy", "Delete")
+                        .small()
+                        .danger()
+                        .w_full()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.request_delete_proxy(proxy_id, cx);
+                        })),
+                ))
+            })
+            .child(layout::footer_action_frame(
+                is_form_focused && field == ProxyFormField::SaveButton,
+                primary,
+                Button::new(
+                    "save-proxy",
+                    if editing_id.is_some() {
+                        "Update"
+                    } else {
+                        "Create"
+                    },
+                )
+                .small()
+                .primary()
+                .w_full()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.save_proxy(window, cx);
+                })),
+            ))
+            .into_any_element()
     }
 
     fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> Div {
@@ -941,6 +934,14 @@ impl SettingsSection for ProxiesSection {
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_proxy_changes(cx)
     }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_section_footer_actions(self.editing_proxy_id, cx))
+    }
 }
 
 impl Render for ProxiesSection {
@@ -980,25 +981,15 @@ impl Render for ProxiesSection {
             })
             .unwrap_or_default();
 
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+        layout::split_section_shell(
+            dbflux_components::composites::section_header(
                 "Proxy Profiles",
                 "Manage proxy configurations for database connections",
                 cx,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .overflow_hidden()
-                    .child(self.render_proxy_list(&proxies, editing_id, cx))
-                    .child(self.render_proxy_form(editing_id, keyring_available, cx)),
-            )
+            ),
+            self.render_proxy_list(&proxies, editing_id, cx),
+            self.render_proxy_form(editing_id, keyring_available, cx),
+        )
             .when(show_proxy_delete, |element| {
                 let entity = cx.entity().clone();
                 let entity_cancel = entity.clone();

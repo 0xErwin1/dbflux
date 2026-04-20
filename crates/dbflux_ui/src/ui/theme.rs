@@ -205,8 +205,8 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.scrollbar_thumb = rgb_to_hsla_alpha(0xB3B1AD, 0.15);
     theme.scrollbar_thumb_hover = rgb_to_hsla_alpha(0xB3B1AD, 0.25);
 
-    // Sidebar
-    theme.sidebar = panel;
+    // Sidebar tracks the primary workspace surface so nav and content stay visually aligned.
+    theme.sidebar = background;
     theme.sidebar_foreground = foreground;
     theme.sidebar_border = border;
     theme.sidebar_accent = rgb_to_hsla_alpha(0xB3B1AD, 0.05);
@@ -388,7 +388,7 @@ fn apply_ayu_mirage(cx: &mut App) {
     theme.scrollbar_thumb = rgb_to_hsla_alpha(0xCBCCC6, 0.14);
     theme.scrollbar_thumb_hover = rgb_to_hsla_alpha(0xCBCCC6, 0.22);
 
-    theme.sidebar = panel;
+    theme.sidebar = background;
     theme.sidebar_foreground = foreground;
     theme.sidebar_border = border;
     theme.sidebar_accent = rgb_to_hsla_alpha(0xCBCCC6, 0.05);
@@ -548,7 +548,7 @@ fn apply_ayu_light(cx: &mut App) {
     theme.scrollbar_thumb = rgb_to_hsla_alpha(0x5C6166, 0.15);
     theme.scrollbar_thumb_hover = rgb_to_hsla_alpha(0x5C6166, 0.3);
 
-    theme.sidebar = panel;
+    theme.sidebar = background;
     theme.sidebar_foreground = foreground;
     theme.sidebar_border = border;
     theme.sidebar_accent = rgb_to_hsla_alpha(0x5C6166, 0.06);

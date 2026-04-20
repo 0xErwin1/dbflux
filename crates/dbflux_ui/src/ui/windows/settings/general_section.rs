@@ -288,6 +288,14 @@ impl SettingsSection for GeneralSection {
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_general_changes(cx)
     }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_general_footer_actions(cx))
+    }
 }
 
 #[cfg(test)]
