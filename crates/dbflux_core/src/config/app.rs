@@ -463,6 +463,17 @@ pub struct ServiceConfig {
 
     #[serde(default)]
     pub startup_timeout_ms: Option<u64>,
+
+    #[serde(default)]
+    pub kind: RpcServiceKind,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RpcServiceKind {
+    #[default]
+    Driver,
+    AuthProvider,
 }
 
 fn default_enabled() -> bool {
@@ -1008,6 +1019,40 @@ mod tests {
         );
         assert!(restored.hook_definitions.is_empty());
         assert_eq!(restored.governance, GovernanceSettings::default());
+    }
+
+    #[test]
+    fn service_config_deserializes_missing_kind_as_driver() {
+        let json = r#"{
+            "socket_id": "legacy-socket",
+            "enabled": true,
+            "command": "dbflux-driver-host",
+            "args": ["--stdio"]
+        }"#;
+
+        let service: ServiceConfig = serde_json::from_str(json).unwrap();
+
+        assert_eq!(service.kind, RpcServiceKind::Driver);
+    }
+
+    #[test]
+    fn service_config_serializes_kind_for_roundtrip() {
+        let service = ServiceConfig {
+            socket_id: "auth-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-driver-host".to_string()),
+            args: vec!["--stdio".to_string()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(5_000),
+            kind: RpcServiceKind::AuthProvider,
+        };
+
+        let json = serde_json::to_value(&service).unwrap();
+
+        assert_eq!(json.get("kind"), Some(&serde_json::json!("auth_provider")));
+
+        let restored: ServiceConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.kind, RpcServiceKind::AuthProvider);
     }
 
     #[test]

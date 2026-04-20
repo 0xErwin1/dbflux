@@ -18,7 +18,6 @@ use dbflux_core::{
     SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
 
 #[cfg(feature = "mcp")]
@@ -56,16 +55,19 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
+use crate::rpc_services::{DriverServiceAdaptation, adapt_driver_service, discover_services};
+
+#[cfg(test)]
+use crate::rpc_services::{DriverProbe, adapt_driver_service_with};
+
+#[cfg(test)]
+use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
 
 pub use dbflux_core::{
     ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
     FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaTypesParams,
     FetchTableDetailsParams, SwitchDatabaseParams,
 };
-
-fn rpc_registry_id(socket_id: &str) -> String {
-    format!("rpc:{}", socket_id)
-}
 
 struct BuiltDrivers {
     drivers: HashMap<String, Arc<dyn DbDriver>>,
@@ -436,7 +438,7 @@ impl AppState {
         Vec<ProxyProfile>,
         Vec<SshTunnelProfile>,
     ) {
-        let drivers = Self::build_builtin_drivers();
+        let mut drivers = Self::build_builtin_drivers();
 
         let (
             general_settings,
@@ -448,7 +450,7 @@ impl AppState {
         ) = Self::load_app_config_from_storage();
 
         if !services.is_empty() {
-            Self::launch_rpc_services(&mut drivers.clone(), services);
+            Self::launch_rpc_services(&mut drivers, services);
         }
 
         let loaded = crate::config_loader::load_config(&runtime);
@@ -497,57 +499,85 @@ impl AppState {
         drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
         services: Vec<ServiceConfig>,
     ) {
-        for service in services {
-            if !service.enabled {
-                log::info!("Skipping disabled service '{}'", service.socket_id);
-                continue;
+        for descriptor in discover_services(services) {
+            match adapt_driver_service(descriptor, |driver_id| drivers.contains_key(driver_id)) {
+                DriverServiceAdaptation::Registered { driver_id, service } => {
+                    drivers.insert(driver_id, service);
+                }
+                DriverServiceAdaptation::SkippedDisabled { socket_id } => {
+                    log::info!("Skipping disabled service '{}'", socket_id);
+                }
+                DriverServiceAdaptation::SkippedNonDriver { socket_id, kind } => {
+                    log::info!(
+                        "Deferring non-driver RPC service '{}' of kind {:?}",
+                        socket_id,
+                        kind
+                    );
+                }
+                DriverServiceAdaptation::SkippedDuplicate { socket_id } => {
+                    log::warn!(
+                        "Skipping external RPC service '{}': driver id already exists",
+                        socket_id
+                    );
+                }
+                DriverServiceAdaptation::ProbeFailed { socket_id, error } => {
+                    log::warn!(
+                        "Skipping RPC service '{}': failed to probe driver metadata: {}",
+                        socket_id,
+                        error
+                    );
+                }
             }
+        }
+    }
 
-            let driver_id = rpc_registry_id(&service.socket_id);
-
-            if drivers.contains_key(&driver_id) {
-                log::warn!(
-                    "Skipping external RPC service '{}': driver id already exists",
-                    service.socket_id
-                );
-                continue;
+    #[cfg(test)]
+    fn launch_rpc_services_with<Probe, Build>(
+        drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
+        services: Vec<ServiceConfig>,
+        mut probe: Probe,
+        mut build: Build,
+    ) where
+        Probe:
+            FnMut(&str, &IpcDriverLaunchConfig) -> Result<DriverProbe, Box<dbflux_core::DbError>>,
+        Build: FnMut(String, String, DriverProbe, IpcDriverLaunchConfig) -> Arc<dyn DbDriver>,
+    {
+        for descriptor in discover_services(services) {
+            match adapt_driver_service_with(
+                descriptor,
+                |driver_id| drivers.contains_key(driver_id),
+                |socket_id, launch| probe(socket_id, launch),
+                |driver_id, socket_id, probe_result, launch| {
+                    build(driver_id, socket_id, probe_result, launch)
+                },
+            ) {
+                DriverServiceAdaptation::Registered { driver_id, service } => {
+                    drivers.insert(driver_id, service);
+                }
+                DriverServiceAdaptation::SkippedDisabled { socket_id } => {
+                    log::info!("Skipping disabled service '{}'", socket_id);
+                }
+                DriverServiceAdaptation::SkippedNonDriver { socket_id, kind } => {
+                    log::info!(
+                        "Deferring non-driver RPC service '{}' of kind {:?}",
+                        socket_id,
+                        kind
+                    );
+                }
+                DriverServiceAdaptation::SkippedDuplicate { socket_id } => {
+                    log::warn!(
+                        "Skipping external RPC service '{}': driver id already exists",
+                        socket_id
+                    );
+                }
+                DriverServiceAdaptation::ProbeFailed { socket_id, error } => {
+                    log::warn!(
+                        "Skipping RPC service '{}': failed to probe driver metadata: {}",
+                        socket_id,
+                        error
+                    );
+                }
             }
-
-            let launch = IpcDriverLaunchConfig {
-                program: service
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| "dbflux-driver-host".to_string()),
-                args: service.args.clone(),
-                env: service.env.into_iter().collect(),
-                startup_timeout: std::time::Duration::from_millis(
-                    service.startup_timeout_ms.unwrap_or(5_000),
-                ),
-            };
-
-            let (kind, metadata, form_definition, settings_schema) =
-                match IpcDriver::probe_driver(&service.socket_id, Some(&launch)) {
-                    Ok(info) => info,
-                    Err(error) => {
-                        log::warn!(
-                            "Skipping RPC service '{}': failed to probe driver metadata: {}",
-                            service.socket_id,
-                            error
-                        );
-                        continue;
-                    }
-                };
-
-            let ipc_driver = IpcDriver::new(
-                service.socket_id.clone(),
-                kind,
-                metadata,
-                form_definition,
-                settings_schema,
-            )
-            .with_launch_config(launch);
-
-            drivers.insert(driver_id, Arc::new(ipc_driver));
         }
     }
 
@@ -2479,5 +2509,94 @@ impl AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbflux_core::{
+        DatabaseCategory, DbError, DbKind, DriverFormDef, DriverMetadataBuilder, QueryLanguage,
+        RpcServiceKind,
+    };
+    use dbflux_driver_ipc::IpcDriver;
+
+    fn fake_probe() -> crate::rpc_services::DriverProbe {
+        let metadata = DriverMetadataBuilder::new(
+            "sqlite",
+            "SQLite",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+
+        (
+            DbKind::SQLite,
+            metadata,
+            DriverFormDef { tabs: vec![] },
+            None,
+        )
+    }
+
+    fn test_service(kind: RpcServiceKind) -> ServiceConfig {
+        ServiceConfig {
+            socket_id: "svc-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-driver-host".to_string()),
+            args: vec!["--stdio".to_string()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(1_000),
+            kind,
+        }
+    }
+
+    #[test]
+    fn launch_rpc_services_registers_driver_services_into_runtime_map() {
+        let mut drivers = HashMap::new();
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            vec![test_service(RpcServiceKind::Driver)],
+            |socket_id, _launch| {
+                assert_eq!(socket_id, "svc-socket");
+                Ok(fake_probe())
+            },
+            |_, socket_id, (kind, metadata, form_definition, settings_schema), launch| {
+                Arc::new(
+                    IpcDriver::new(socket_id, kind, metadata, form_definition, settings_schema)
+                        .with_launch_config(launch),
+                ) as Arc<dyn DbDriver>
+            },
+        );
+
+        assert!(drivers.contains_key("rpc:svc-socket"));
+    }
+
+    #[test]
+    fn launch_rpc_services_defers_non_driver_services_without_registration() {
+        let mut drivers = HashMap::new();
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            vec![test_service(RpcServiceKind::AuthProvider)],
+            |_, _| panic!("non-driver services must not be probed"),
+            |_, _, _, _| panic!("non-driver services must not be registered"),
+        );
+
+        assert!(drivers.is_empty());
+    }
+
+    #[test]
+    fn launch_rpc_services_skips_failed_driver_probes_without_registration() {
+        let mut drivers = HashMap::new();
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            vec![test_service(RpcServiceKind::Driver)],
+            |_, _| Err(Box::new(DbError::connection_failed("probe failed"))),
+            |_, _, _, _| panic!("failed probes must not build a driver"),
+        );
+
+        assert!(drivers.is_empty());
     }
 }

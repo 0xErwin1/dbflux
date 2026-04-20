@@ -83,7 +83,7 @@ impl ServiceRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
+                SELECT socket_id, enabled, command, startup_timeout_ms, service_kind, created_at, updated_at
                 FROM cfg_services
                 ORDER BY socket_id ASC
                 "#,
@@ -100,8 +100,9 @@ impl ServiceRepository {
                     enabled: row.get::<_, i32>(1)? != 0,
                     command: row.get(2)?,
                     startup_timeout_ms: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    service_kind: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -134,7 +135,7 @@ impl ServiceRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
+                SELECT socket_id, enabled, command, startup_timeout_ms, service_kind, created_at, updated_at
                 FROM cfg_services
                 WHERE socket_id = ?1
                 "#,
@@ -150,8 +151,9 @@ impl ServiceRepository {
                 enabled: row.get::<_, i32>(1)? != 0,
                 command: row.get(2)?,
                 startup_timeout_ms: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                service_kind: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         });
 
@@ -179,9 +181,9 @@ impl ServiceRepository {
         tx.execute(
             r#"
                 INSERT INTO cfg_services (
-                    socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
+                    socket_id, enabled, command, startup_timeout_ms, service_kind, created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, datetime('now'), datetime('now')
+                    ?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now')
                 )
                 "#,
             params![
@@ -189,6 +191,7 @@ impl ServiceRepository {
                 service.enabled as i32,
                 service.command,
                 service.startup_timeout_ms,
+                service.service_kind,
             ],
         )
         .map_err(|source| StorageError::Sqlite {
@@ -223,6 +226,7 @@ impl ServiceRepository {
                     enabled = ?2,
                     command = ?3,
                     startup_timeout_ms = ?4,
+                    service_kind = ?5,
                     updated_at = datetime('now')
                 WHERE socket_id = ?1
                 "#,
@@ -231,6 +235,7 @@ impl ServiceRepository {
                     service.enabled as i32,
                     service.command,
                     service.startup_timeout_ms,
+                    service.service_kind,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -267,12 +272,13 @@ impl ServiceRepository {
         tx.execute(
             r#"
                 INSERT INTO cfg_services (
-                    socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
+                    socket_id, enabled, command, startup_timeout_ms, service_kind, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))
                 ON CONFLICT(socket_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     command = excluded.command,
                     startup_timeout_ms = excluded.startup_timeout_ms,
+                    service_kind = excluded.service_kind,
                     updated_at = datetime('now')
                 "#,
             params![
@@ -280,6 +286,7 @@ impl ServiceRepository {
                 service.enabled as i32,
                 service.command,
                 service.startup_timeout_ms,
+                service.service_kind,
             ],
         )
         .map_err(|source| StorageError::Sqlite {
@@ -332,6 +339,7 @@ pub struct ServiceDto {
     pub enabled: bool,
     pub command: Option<String>,
     pub startup_timeout_ms: Option<i64>,
+    pub service_kind: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -344,6 +352,7 @@ impl ServiceDto {
             enabled: true,
             command: None,
             startup_timeout_ms: None,
+            service_kind: "driver".to_string(),
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -383,6 +392,42 @@ mod tests {
         let fetched = repo.all().expect("should fetch");
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].socket_id, "test-socket");
+        assert_eq!(fetched[0].service_kind, "driver");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn service_upsert_persists_service_kind() {
+        let path = temp_db("service_kind");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        let repo = ServiceRepository::new(Arc::new(conn));
+        let dto = ServiceDto {
+            socket_id: "auth-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-driver-host".to_string()),
+            startup_timeout_ms: Some(5_000),
+            service_kind: "auth_provider".to_string(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo
+            .get("auth-socket")
+            .expect("should load")
+            .expect("service row");
+
+        assert_eq!(fetched.service_kind, "auth_provider");
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

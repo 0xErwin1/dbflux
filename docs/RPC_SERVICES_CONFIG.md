@@ -1,6 +1,11 @@
 # RPC Services Config Reference
 
-This file documents the storage and management of external RPC driver services in DBFlux.
+This file documents the storage and management of RPC services in DBFlux.
+
+DBFlux now persists a first-class RPC services foundation through `RpcServiceKind`:
+
+- `Driver` — active today and adapted into runtime database drivers
+- `AuthProvider` — persisted and discoverable today, but not yet wired into runtime auth features
 
 ## Storage
 
@@ -8,7 +13,7 @@ RPC services are stored in SQLite at `~/.local/share/dbflux/dbflux.db`, not in a
 
 **Tables:**
 
-- `cfg_services` — main service record (socket_id, command, startup_timeout_ms, enabled)
+- `cfg_services` — main service record (socket_id, service_kind, command, startup_timeout_ms, enabled)
 - `cfg_service_args` — ordered process arguments
 - `cfg_service_env` — environment variables
 
@@ -18,6 +23,7 @@ RPC services are stored in SQLite at `~/.local/share/dbflux/dbflux.db`, not in a
 CREATE TABLE cfg_services (
     id TEXT PRIMARY KEY,
     socket_id TEXT NOT NULL UNIQUE,
+    service_kind TEXT NOT NULL DEFAULT 'driver',
     command TEXT,
     startup_timeout_ms INTEGER DEFAULT 5000,
     enabled INTEGER DEFAULT 1
@@ -40,13 +46,20 @@ CREATE TABLE cfg_service_env (
 
 ## Managing Services
 
-Services are managed through the Settings UI under the **Services** section, not by editing files directly.
+Services are managed through the Settings UI under the **RPC Services** section, not by editing files directly.
 
 To add or edit a service:
-1. Open Settings → Services
+1. Open Settings → RPC Services
 2. Add a new service or select an existing one
-3. Configure socket ID, command path, arguments, environment variables, and timeout
-4. Save changes
+3. Choose the service kind (`Driver` or `Auth Provider`)
+4. Configure socket ID, command path, arguments, environment variables, and timeout
+5. Save changes
+
+Notes:
+
+- Only `Driver` services are active in the runtime today.
+- `Auth Provider` services are preserved in storage and pass through discovery/classification, but they are not registered into any runtime auth-provider registry yet.
+- DBFlux preserves compatibility for driver registration IDs as `rpc:<socket_id>`.
 
 ## Legacy Migration
 
@@ -70,14 +83,16 @@ The legacy `config.json` format had this structure:
 }
 ```
 
-This is converted to the SQLite schema automatically. The `config.json` file itself is not used after import.
+This is converted to the SQLite schema automatically. Legacy rows are treated as `service_kind='driver'`. The `config.json` file itself is not used after import.
 
 ## Semantics
 
 - `socket_id` is used literally as the socket filename
 - DBFlux internally identifies each service as `rpc:<socket_id>`
+- DBFlux classifies each service by `service_kind` before runtime adaptation
 - Driver name/icon/category/form come from the service's `Hello` response (`driver_metadata`, `form_definition`), not from configuration
-- Services that fail to complete the RPC handshake (`Hello`) during startup are not registered
+- Services with `service_kind='driver'` that fail to complete the RPC handshake (`Hello`) during startup are not registered
+- Services with `service_kind='auth_provider'` are currently stored and discovered only; they do not participate in runtime features yet
 
 ## Common Mistakes
 

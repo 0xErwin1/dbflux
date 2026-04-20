@@ -291,6 +291,13 @@ Key abstractions for UI adaptation:
 
 **`TreeNav`**: Reusable tree navigation component (plain struct, not a GPUI Entity). Supports cursor movement, expand/collapse, select-by-id. Used by Settings sidebar and connections sidebar.
 
+### RPC Services Foundation
+
+- RPC services are first-class persisted descriptors with `RpcServiceKind` (`Driver`, `AuthProvider`).
+- Only `Driver` services are active today; `AuthProvider` services may be stored and discovered but must remain inert until a real auth-provider adapter exists.
+- The runtime seam for service discovery/classification lives in `dbflux_app::rpc_services`; extend that boundary for future RPC capabilities instead of hardcoding new driver-only bootstrap logic in `app_state.rs`.
+- Preserve compatibility for external driver registration IDs as `rpc:<socket_id>`.
+
 ### Connection Hooks
 
 - Hooks are reusable command definitions (name, command, args, cwd, env, timeout, failure policy)
@@ -314,6 +321,8 @@ Key abstractions for UI adaptation:
 5. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
 6. Add feature flag in `crates/dbflux/Cargo.toml`
 7. Register in `AppState::new()` under `#[cfg(feature = "name")]`
+
+For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_services` rather than adding a parallel bootstrap path.
 
 ### Driver Capabilities
 
