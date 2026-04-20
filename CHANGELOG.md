@@ -2,16 +2,24 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [0.4.7] – 2026-05-11
+## [0.5.0-dev.0] – 2026-04-19
+
+### Features
+
+* Add the `dbflux_components` crate with shared design-system primitives and begin migrating the UI onto it
+* Add shared icon and menu item primitives, plus Ayu Mirage and shared chrome semantics for the UI theme system
 
 ### Fixes
 
-* Make Ctrl+Enter run the query in the code editor, taking precedence over secondary-enter bindings (#47)
-* Keep editor focus after running a query so subsequent keystrokes are not lost (#48)
+* Restore full-height workspace editor layout, shared form/menu affordances, settings scroll behavior, and semantic button contrast after the dev/main merge
+* Realign panel and popover surfaces and restore context-menu test selectors needed for regression coverage
 
-### Tests
+### Improvements
 
-* Cover Ctrl+Enter precedence over secondary-enter in the code editor
+* Migrate remaining hardcoded colors, text styles, labels, surfaces, headers, modals, and tabs to the centralized component system
+* Expand design-system regression coverage and centralize architecture references used by the repo documentation
+
+---
 
 ## [0.4.6] – 2026-04-18
 

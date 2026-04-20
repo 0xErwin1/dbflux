@@ -1609,7 +1609,7 @@ impl HooksSection {
                             .child(div().w(px(220.0)).child(self.hook_failure_dropdown.clone())),
                     )),
             None,
-            &theme,
+            theme,
         )
     }
 
