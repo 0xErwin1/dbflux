@@ -241,12 +241,18 @@ pub fn save_services(
 
     // Upsert all services that are in the desired state.
     for svc in services {
+        let api_contract = svc.api_contract.clone();
         let dto = dbflux_storage::repositories::services::ServiceDto {
             socket_id: svc.socket_id.clone(),
             enabled: svc.enabled,
             command: svc.command.clone(),
             startup_timeout_ms: svc.startup_timeout_ms.map(|v| v as i64),
             service_kind: rpc_service_kind_to_storage(svc.kind).to_string(),
+            api_family: api_contract
+                .as_ref()
+                .map(|contract| contract.family.clone()),
+            api_major: api_contract.as_ref().map(|contract| contract.major as i64),
+            api_minor: api_contract.as_ref().map(|contract| contract.minor as i64),
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1095,6 +1101,7 @@ fn load_services(
             .map(|dto| {
                 let args = repo.get_args(&dto.socket_id).unwrap_or_default();
                 let env = repo.get_env(&dto.socket_id).unwrap_or_default();
+                let api_contract = service_api_contract_from_dto(&dto);
 
                 ServiceConfig {
                     socket_id: dto.socket_id,
@@ -1104,6 +1111,7 @@ fn load_services(
                     env,
                     startup_timeout_ms: dto.startup_timeout_ms.map(|v| v as u64),
                     kind: rpc_service_kind_from_storage(&dto.service_kind),
+                    api_contract,
                 }
             })
             .collect()
@@ -1130,6 +1138,45 @@ fn rpc_service_kind_from_storage(kind: &str) -> RpcServiceKind {
             );
             RpcServiceKind::Driver
         }
+    }
+}
+
+fn service_api_contract_from_dto(
+    dto: &dbflux_storage::repositories::services::ServiceDto,
+) -> Option<dbflux_core::ServiceRpcApiContract> {
+    match (&dto.api_family, dto.api_major, dto.api_minor) {
+        (Some(family), Some(major), Some(minor)) => {
+            let major = match u16::try_from(major) {
+                Ok(major) => major,
+                Err(_) => {
+                    log::warn!(
+                        "Ignoring persisted RPC API contract for service '{}' because api_major={} is out of range for u16",
+                        dto.socket_id,
+                        major,
+                    );
+                    return None;
+                }
+            };
+
+            let minor = match u16::try_from(minor) {
+                Ok(minor) => minor,
+                Err(_) => {
+                    log::warn!(
+                        "Ignoring persisted RPC API contract for service '{}' because api_minor={} is out of range for u16",
+                        dto.socket_id,
+                        minor,
+                    );
+                    return None;
+                }
+            };
+
+            Some(dbflux_core::ServiceRpcApiContract::new(
+                family.clone(),
+                major,
+                minor,
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -1838,6 +1885,11 @@ mod tests {
             env: std::collections::HashMap::new(),
             startup_timeout_ms: Some(5_000),
             kind: RpcServiceKind::AuthProvider,
+            api_contract: Some(dbflux_core::ServiceRpcApiContract::new(
+                "auth_provider_rpc",
+                1,
+                0,
+            )),
         }];
 
         save_services(&runtime, &services).expect("save services");
@@ -1849,10 +1901,17 @@ mod tests {
             .expect("service row");
 
         assert_eq!(dto.service_kind, "auth_provider");
+        assert_eq!(dto.api_family.as_deref(), Some("auth_provider_rpc"));
+        assert_eq!(dto.api_major, Some(1));
+        assert_eq!(dto.api_minor, Some(0));
 
         let loaded = load_config(&runtime);
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].kind, RpcServiceKind::AuthProvider);
+        assert_eq!(
+            loaded.services[0].resolved_api_contract(),
+            dbflux_core::ServiceRpcApiContract::new("auth_provider_rpc", 1, 0)
+        );
     }
 
     #[test]
@@ -1876,5 +1935,55 @@ mod tests {
 
         assert_eq!(loaded.services.len(), 1);
         assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
+    }
+
+    #[test]
+    fn load_config_defaults_missing_api_contract_to_driver_rpc_baseline() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+
+        conn.execute(
+            "INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms, service_kind) VALUES (?1, ?2, ?3, ?4, ?5)",
+            [
+                "driver-socket",
+                "1",
+                "dbflux-driver-host",
+                "5000",
+                "driver",
+            ],
+        )
+        .expect("insert driver service row");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(
+            loaded.services[0].resolved_api_contract(),
+            dbflux_core::ServiceRpcApiContract::new("driver_rpc", 1, 1)
+        );
+    }
+
+    #[test]
+    fn load_config_ignores_out_of_range_api_contract_versions() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+
+        conn.execute(
+            &format!(
+                "INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms, service_kind, api_family, api_major, api_minor) VALUES ('driver-socket', 1, 'dbflux-driver-host', 5000, 'driver', 'driver_rpc', {}, -1)",
+                i64::from(u16::MAX) + 1,
+            ),
+            [],
+        )
+        .expect("insert malformed api contract row");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].api_contract, None);
+        assert_eq!(
+            loaded.services[0].resolved_api_contract(),
+            dbflux_core::ServiceRpcApiContract::new("driver_rpc", 1, 1)
+        );
     }
 }

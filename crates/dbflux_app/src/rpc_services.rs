@@ -160,6 +160,7 @@ mod tests {
             env: std::collections::HashMap::from([("RUST_LOG".to_string(), "info".to_string())]),
             startup_timeout_ms: Some(7_500),
             kind,
+            api_contract: None,
         }
     }
 

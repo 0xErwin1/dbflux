@@ -2517,7 +2517,7 @@ mod tests {
     use super::*;
     use dbflux_core::{
         DatabaseCategory, DbError, DbKind, DriverFormDef, DriverMetadataBuilder, QueryLanguage,
-        RpcServiceKind,
+        RpcServiceKind, ServiceRpcApiContract,
     };
     use dbflux_driver_ipc::IpcDriver;
 
@@ -2547,6 +2547,7 @@ mod tests {
             env: HashMap::new(),
             startup_timeout_ms: Some(1_000),
             kind,
+            api_contract: None,
         }
     }
 
@@ -2557,6 +2558,35 @@ mod tests {
         AppState::launch_rpc_services_with(
             &mut drivers,
             vec![test_service(RpcServiceKind::Driver)],
+            |socket_id, _launch| {
+                assert_eq!(socket_id, "svc-socket");
+                Ok(fake_probe())
+            },
+            |_, socket_id, (kind, metadata, form_definition, settings_schema), launch| {
+                Arc::new(
+                    IpcDriver::new(socket_id, kind, metadata, form_definition, settings_schema)
+                        .with_launch_config(launch),
+                ) as Arc<dyn DbDriver>
+            },
+        );
+
+        assert!(drivers.contains_key("rpc:svc-socket"));
+    }
+
+    #[test]
+    fn launch_rpc_services_registers_legacy_driver_services_without_api_metadata() {
+        let mut drivers = HashMap::new();
+        let service = test_service(RpcServiceKind::Driver);
+
+        assert_eq!(service.api_contract, None);
+        assert_eq!(
+            service.resolved_api_contract(),
+            ServiceRpcApiContract::new("driver_rpc", 1, 1)
+        );
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            vec![service],
             |socket_id, _launch| {
                 assert_eq!(socket_id, "svc-socket");
                 Ok(fake_probe())

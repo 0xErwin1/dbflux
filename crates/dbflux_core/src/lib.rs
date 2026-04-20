@@ -26,9 +26,9 @@ pub use auth::{
 pub use config::{
     AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
     GlobalOverrides, GovernanceSettings, PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting,
-    RpcServiceKind, ScriptEntry, ScriptsDirectory, ServiceConfig, StartupFocus, ThemeSetting,
-    ToolPolicyConfig, TrustedClientConfig, all_script_extensions, driver_maps_differ,
-    filter_entries, hook_script_path, is_openable_script, migrate_app_config,
+    RpcServiceKind, ScriptEntry, ScriptsDirectory, ServiceConfig, ServiceRpcApiContract,
+    StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, all_script_extensions,
+    driver_maps_differ, filter_entries, hook_script_path, is_openable_script, migrate_app_config,
 };
 
 pub use connection::{

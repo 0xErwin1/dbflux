@@ -63,7 +63,17 @@ fn build_service_config(
         env,
         startup_timeout_ms,
         kind,
+        api_contract: None,
     }
+}
+
+fn preserved_api_contract_for_edit(
+    services: &[ServiceConfig],
+    editing_svc_idx: Option<usize>,
+) -> Option<dbflux_core::ServiceRpcApiContract> {
+    editing_svc_idx
+        .and_then(|idx| services.get(idx))
+        .and_then(|service| service.api_contract.clone())
 }
 
 fn service_form_rows(
@@ -108,10 +118,10 @@ fn service_row_max_col(row: ServiceFormRow) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        ServiceFormRow, build_service_config, editable_service_kind, service_form_rows,
-        service_row_max_col,
+        ServiceFormRow, build_service_config, editable_service_kind,
+        preserved_api_contract_for_edit, service_form_rows, service_row_max_col,
     };
-    use dbflux_core::{RpcServiceKind, ServiceConfig};
+    use dbflux_core::{RpcServiceKind, ServiceConfig, ServiceRpcApiContract};
     use std::collections::HashMap;
 
     #[test]
@@ -149,6 +159,7 @@ mod tests {
             env: HashMap::new(),
             startup_timeout_ms: Some(5000),
             kind: RpcServiceKind::AuthProvider,
+            api_contract: None,
         };
 
         assert_eq!(
@@ -171,6 +182,26 @@ mod tests {
 
         assert_eq!(service.kind, RpcServiceKind::AuthProvider);
         assert_eq!(service.socket_id, "auth.sock");
+    }
+
+    #[test]
+    fn preserved_api_contract_for_edit_returns_saved_metadata() {
+        let api_contract = ServiceRpcApiContract::new("auth_provider_rpc", 1, 0);
+        let services = vec![ServiceConfig {
+            socket_id: "auth.sock".into(),
+            enabled: true,
+            command: Some("dbflux-auth".into()),
+            args: vec!["--serve".into()],
+            env: HashMap::from([("MODE".into(), "auth".into())]),
+            startup_timeout_ms: Some(5000),
+            kind: RpcServiceKind::AuthProvider,
+            api_contract: Some(api_contract.clone()),
+        }];
+
+        assert_eq!(
+            preserved_api_contract_for_edit(&services, Some(0)),
+            Some(api_contract)
+        );
     }
 }
 
@@ -396,7 +427,7 @@ impl ServicesSection {
             })
             .collect();
 
-        let service = build_service_config(
+        let mut service = build_service_config(
             socket_id,
             self.svc_enabled,
             command,
@@ -405,6 +436,9 @@ impl ServicesSection {
             startup_timeout_ms,
             self.svc_kind,
         );
+
+        service.api_contract =
+            preserved_api_contract_for_edit(&self.svc_services, self.editing_svc_idx);
 
         let saved_idx = if let Some(idx) = self.editing_svc_idx {
             if idx < self.svc_services.len() {

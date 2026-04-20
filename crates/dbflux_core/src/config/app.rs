@@ -466,6 +466,34 @@ pub struct ServiceConfig {
 
     #[serde(default)]
     pub kind: RpcServiceKind,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_contract: Option<ServiceRpcApiContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceRpcApiContract {
+    pub family: String,
+    pub major: u16,
+    pub minor: u16,
+}
+
+impl ServiceRpcApiContract {
+    pub fn new(family: impl Into<String>, major: u16, minor: u16) -> Self {
+        Self {
+            family: family.into(),
+            major,
+            minor,
+        }
+    }
+}
+
+impl ServiceConfig {
+    pub fn resolved_api_contract(&self) -> ServiceRpcApiContract {
+        self.api_contract
+            .clone()
+            .unwrap_or_else(|| self.kind.default_api_contract())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -474,6 +502,15 @@ pub enum RpcServiceKind {
     #[default]
     Driver,
     AuthProvider,
+}
+
+impl RpcServiceKind {
+    pub fn default_api_contract(self) -> ServiceRpcApiContract {
+        match self {
+            RpcServiceKind::Driver => ServiceRpcApiContract::new("driver_rpc", 1, 1),
+            RpcServiceKind::AuthProvider => ServiceRpcApiContract::new("auth_provider_rpc", 1, 0),
+        }
+    }
 }
 
 fn default_enabled() -> bool {
@@ -1045,6 +1082,7 @@ mod tests {
             env: HashMap::new(),
             startup_timeout_ms: Some(5_000),
             kind: RpcServiceKind::AuthProvider,
+            api_contract: Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 0)),
         };
 
         let json = serde_json::to_value(&service).unwrap();
@@ -1053,6 +1091,29 @@ mod tests {
 
         let restored: ServiceConfig = serde_json::from_value(json).unwrap();
         assert_eq!(restored.kind, RpcServiceKind::AuthProvider);
+        assert_eq!(
+            restored.api_contract,
+            Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 0))
+        );
+    }
+
+    #[test]
+    fn service_config_defaults_missing_api_contract_from_kind() {
+        let service = ServiceConfig {
+            socket_id: "legacy-socket".to_string(),
+            enabled: true,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            startup_timeout_ms: None,
+            kind: RpcServiceKind::Driver,
+            api_contract: None,
+        };
+
+        assert_eq!(
+            service.resolved_api_contract(),
+            ServiceRpcApiContract::new("driver_rpc", 1, 1)
+        );
     }
 
     #[test]

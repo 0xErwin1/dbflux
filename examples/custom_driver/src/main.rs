@@ -24,7 +24,8 @@ use dbflux_ipc::{
         DriverHelloResponse, DriverRequestBody, DriverRequestEnvelope, DriverResponseBody,
         DriverResponseEnvelope, DriverRpcErrorCode, QueryResultDto,
     },
-    framing, DRIVER_RPC_VERSION,
+    driver_rpc_supported_versions, framing, negotiate_highest_mutual_version, ProtocolVersion,
+    RpcApiFamily, DRIVER_RPC_VERSION,
 };
 use interprocess::local_socket::{
     prelude::*, GenericNamespaced, ListenerOptions, Stream as IpcStream,
@@ -136,7 +137,7 @@ fn handle_connection(
     mut stream: IpcStream,
     sessions: Arc<Mutex<SessionManager>>,
 ) -> io::Result<()> {
-    let mut hello_done = false;
+    let mut negotiated_version = None;
     let mut current_session: Option<Uuid> = None;
 
     loop {
@@ -155,21 +156,66 @@ fn handle_connection(
 
         let request_id = envelope.request_id;
         let session_id = envelope.session_id;
+        let request_version = envelope.protocol_version;
+
+        if !matches!(envelope.body, DriverRequestBody::Hello(_)) {
+            let Some(selected_version) = negotiated_version else {
+                let response = return_error(
+                    request_version,
+                    request_id,
+                    "Hello required before OpenSession",
+                );
+                framing::send_msg(&mut stream, &response)?;
+                continue;
+            };
+
+            if request_version != selected_version {
+                let response = DriverResponseEnvelope::error(
+                    request_version,
+                    request_id,
+                    session_id,
+                    DriverRpcErrorCode::VersionMismatch,
+                    format!(
+                        "Protocol version drift detected: negotiated {}.{}, received {}.{}",
+                        selected_version.major,
+                        selected_version.minor,
+                        request_version.major,
+                        request_version.minor
+                    ),
+                    false,
+                );
+                framing::send_msg(&mut stream, &response)?;
+                continue;
+            }
+        }
 
         // Dispatch request
         let response = match envelope.body {
             // Step 1: Hello handshake (required first)
             DriverRequestBody::Hello(hello_req) => {
-                hello_done = true;
+                if let Some(selected_version) =
+                    choose_negotiated_version(&hello_req.supported_versions)
+                {
+                    negotiated_version = Some(selected_version);
 
-                // Check if we support any of the client's versions
-                let compatible = hello_req
-                    .supported_versions
-                    .iter()
-                    .any(|v| v.major == DRIVER_RPC_VERSION.major);
-
-                if !compatible {
+                    DriverResponseEnvelope::ok(
+                        selected_version,
+                        request_id,
+                        None,
+                        DriverResponseBody::Hello(DriverHelloResponse {
+                            server_name: "custom-mock-driver".to_string(),
+                            server_version: env!("CARGO_PKG_VERSION").to_string(),
+                            selected_version,
+                            capabilities: hello_req.requested_capabilities,
+                            driver_kind: DbKind::SQLite,
+                            driver_metadata: create_metadata(),
+                            form_definition: mock_form(),
+                            settings_schema: None,
+                        }),
+                    )
+                } else {
                     DriverResponseEnvelope::error(
+                        request_version,
                         request_id,
                         None,
                         DriverRpcErrorCode::VersionMismatch,
@@ -179,21 +225,6 @@ fn handle_connection(
                         ),
                         false,
                     )
-                } else {
-                    DriverResponseEnvelope::ok(
-                        request_id,
-                        None,
-                        DriverResponseBody::Hello(DriverHelloResponse {
-                            server_name: "custom-mock-driver".to_string(),
-                            server_version: env!("CARGO_PKG_VERSION").to_string(),
-                            selected_version: DRIVER_RPC_VERSION,
-                            capabilities: hello_req.requested_capabilities,
-                            driver_kind: DbKind::SQLite,
-                            driver_metadata: create_metadata(),
-                            form_definition: mock_form(),
-                            settings_schema: None,
-                        }),
-                    )
                 }
             }
 
@@ -202,101 +233,106 @@ fn handle_connection(
                 profile_json,
                 password,
                 ssh_secret,
-            } => {
-                if !hello_done {
-                    return_error(request_id, "Hello required before OpenSession")
-                } else {
-                    match serde_json::from_str::<ConnectionProfile>(&profile_json) {
-                        Ok(profile) => {
-                            if let DbConfig::External { values, .. } = &profile.config {
-                                let endpoint = values.get("endpoint").cloned().unwrap_or_default();
-                                if endpoint.trim().is_empty() {
-                                    DriverResponseEnvelope::error(
-                                        request_id,
-                                        None,
-                                        DriverRpcErrorCode::InvalidRequest,
-                                        "endpoint is required".to_string(),
-                                        false,
-                                    )
-                                } else {
-                                    let api_key_present = values
-                                        .get("api_key")
-                                        .map(|value| !value.is_empty())
-                                        .unwrap_or(false);
+            } => match serde_json::from_str::<ConnectionProfile>(&profile_json) {
+                Ok(profile) => {
+                    if let DbConfig::External { values, .. } = &profile.config {
+                        let endpoint = values.get("endpoint").cloned().unwrap_or_default();
+                        if endpoint.trim().is_empty() {
+                            DriverResponseEnvelope::error(
+                                negotiated_version.expect("validated before dispatch"),
+                                request_id,
+                                None,
+                                DriverRpcErrorCode::InvalidRequest,
+                                "endpoint is required".to_string(),
+                                false,
+                            )
+                        } else {
+                            let api_key_present = values
+                                .get("api_key")
+                                .map(|value| !value.is_empty())
+                                .unwrap_or(false);
 
-                                    log::info!(
-                                        "Opening session to endpoint='{}' api_key_present={}",
-                                        endpoint,
-                                        api_key_present
-                                    );
+                            log::info!(
+                                "Opening session to endpoint='{}' api_key_present={}",
+                                endpoint,
+                                api_key_present
+                            );
 
-                                    if password.is_some() {
-                                        log::info!(
-                                            "Password provided (length: {})",
-                                            password.as_ref().unwrap().len()
-                                        );
-                                    }
-                                    if ssh_secret.is_some() {
-                                        log::info!("SSH secret provided");
-                                    }
-
-                                    let session_id = sessions.lock().unwrap().create_session();
-                                    current_session = Some(session_id);
-
-                                    DriverResponseEnvelope::ok(
-                                        request_id,
-                                        Some(session_id),
-                                        DriverResponseBody::SessionOpened {
-                                            session_id,
-                                            kind: DbKind::SQLite,
-                                            metadata: create_metadata(),
-                                            schema_loading_strategy:
-                                                SchemaLoadingStrategy::LazyPerDatabase,
-                                            schema_features: dbflux_core::SchemaFeatures::empty(),
-                                            code_gen_capabilities:
-                                                dbflux_core::CodeGenCapabilities::empty(),
-                                        },
-                                    )
-                                }
-                            } else {
-                                DriverResponseEnvelope::error(
-                                    request_id,
-                                    None,
-                                    DriverRpcErrorCode::InvalidRequest,
-                                    "Expected DbConfig::External for custom driver".to_string(),
-                                    false,
-                                )
+                            if password.is_some() {
+                                log::info!(
+                                    "Password provided (length: {})",
+                                    password.as_ref().unwrap().len()
+                                );
                             }
+                            if ssh_secret.is_some() {
+                                log::info!("SSH secret provided");
+                            }
+
+                            let session_id = sessions.lock().unwrap().create_session();
+                            current_session = Some(session_id);
+
+                            DriverResponseEnvelope::ok(
+                                negotiated_version.expect("validated before dispatch"),
+                                request_id,
+                                Some(session_id),
+                                DriverResponseBody::SessionOpened {
+                                    session_id,
+                                    kind: DbKind::SQLite,
+                                    metadata: create_metadata(),
+                                    schema_loading_strategy: SchemaLoadingStrategy::LazyPerDatabase,
+                                    schema_features: dbflux_core::SchemaFeatures::empty(),
+                                    code_gen_capabilities: dbflux_core::CodeGenCapabilities::empty(
+                                    ),
+                                },
+                            )
                         }
-                        Err(error) => DriverResponseEnvelope::error(
+                    } else {
+                        DriverResponseEnvelope::error(
+                            negotiated_version.expect("validated before dispatch"),
                             request_id,
                             None,
                             DriverRpcErrorCode::InvalidRequest,
-                            format!("Invalid profile JSON: {error}"),
+                            "Expected DbConfig::External for custom driver".to_string(),
                             false,
-                        ),
+                        )
                     }
                 }
-            }
+                Err(error) => DriverResponseEnvelope::error(
+                    negotiated_version.expect("validated before dispatch"),
+                    request_id,
+                    None,
+                    DriverRpcErrorCode::InvalidRequest,
+                    format!("Invalid profile JSON: {error}"),
+                    false,
+                ),
+            },
 
             // Close session
             DriverRequestBody::CloseSession => {
                 if let Some(sid) = session_id {
                     sessions.lock().unwrap().close_session(&sid);
                     DriverResponseEnvelope::ok(
+                        negotiated_version.expect("validated before dispatch"),
                         request_id,
                         Some(sid),
                         DriverResponseBody::SessionClosed,
                     )
                 } else {
-                    return_error(request_id, "No session_id provided")
+                    return_error(
+                        negotiated_version.expect("validated before dispatch"),
+                        request_id,
+                        "No session_id provided",
+                    )
                 }
             }
 
             // Ping - health check
-            DriverRequestBody::Ping => {
-                DriverResponseEnvelope::ok(request_id, session_id, DriverResponseBody::Pong)
-            }
+            DriverRequestBody::Ping => DriverResponseEnvelope::ok(
+                negotiated_version.expect("validated before dispatch"),
+                request_id,
+                session_id,
+                DriverResponseBody::Pong,
+            ),
 
             // Execute a query
             DriverRequestBody::Execute { request } => match session_id {
@@ -304,6 +340,7 @@ fn handle_connection(
                     let result = execute_query(&request.sql, &mut sessions.lock().unwrap(), &sid);
                     match result {
                         Ok(query_result) => DriverResponseEnvelope::ok(
+                            negotiated_version.expect("validated before dispatch"),
                             request_id,
                             Some(sid),
                             DriverResponseBody::ExecuteResult {
@@ -311,6 +348,7 @@ fn handle_connection(
                             },
                         ),
                         Err(e) => DriverResponseEnvelope::error(
+                            negotiated_version.expect("validated before dispatch"),
                             request_id,
                             Some(sid),
                             DriverRpcErrorCode::Driver,
@@ -319,11 +357,16 @@ fn handle_connection(
                         ),
                     }
                 }
-                None => return_error(request_id, "No session_id provided"),
+                None => return_error(
+                    negotiated_version.expect("validated before dispatch"),
+                    request_id,
+                    "No session_id provided",
+                ),
             },
 
             // List databases
             DriverRequestBody::ListDatabases => DriverResponseEnvelope::ok(
+                negotiated_version.expect("validated before dispatch"),
                 request_id,
                 session_id,
                 DriverResponseBody::Databases {
@@ -336,6 +379,7 @@ fn handle_connection(
 
             // Get schema
             DriverRequestBody::Schema => DriverResponseEnvelope::ok(
+                negotiated_version.expect("validated before dispatch"),
                 request_id,
                 session_id,
                 DriverResponseBody::Schema {
@@ -345,6 +389,7 @@ fn handle_connection(
 
             // All other requests - not implemented in this example
             _ => DriverResponseEnvelope::error(
+                negotiated_version.expect("validated before dispatch"),
                 request_id,
                 session_id,
                 DriverRpcErrorCode::UnsupportedMethod,
@@ -511,8 +556,23 @@ fn mock_form() -> DriverFormDef {
     }
 }
 
-fn return_error(request_id: u64, message: &str) -> DriverResponseEnvelope {
+fn choose_negotiated_version(
+    client_supported_versions: &[ProtocolVersion],
+) -> Option<ProtocolVersion> {
+    negotiate_highest_mutual_version(
+        RpcApiFamily::DriverRpc,
+        driver_rpc_supported_versions(),
+        client_supported_versions,
+    )
+}
+
+fn return_error(
+    protocol_version: ProtocolVersion,
+    request_id: u64,
+    message: &str,
+) -> DriverResponseEnvelope {
     DriverResponseEnvelope::error(
+        protocol_version,
         request_id,
         None,
         DriverRpcErrorCode::InvalidRequest,
