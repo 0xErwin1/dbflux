@@ -1,7 +1,7 @@
-pub use dbflux_components::typography::AppFonts;
 use dbflux_components::typography::load_bundled_fonts;
+pub use dbflux_components::typography::AppFonts;
 use dbflux_core::ThemeSetting;
-use gpui::{App, Hsla, SharedString, Window, hsla};
+use gpui::{hsla, App, Hsla, SharedString, Window};
 use gpui_component::{
     highlighter::HighlightTheme,
     theme::{Theme, ThemeMode},
@@ -187,8 +187,8 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.info_active = rgb_to_hsla(0x479ACC);
     theme.info_foreground = rgb_to_hsla(0x0A0E14);
 
-    // Popover / modal surface — elevated above panel.
-    theme.popover = rgb_to_hsla(0x31353C);
+    // Popover / modal surface — match the shared raised chrome treatment.
+    theme.popover = raised;
     theme.popover_foreground = foreground;
 
     // Selection
@@ -535,7 +535,7 @@ fn apply_ayu_light(cx: &mut App) {
     theme.info_active = rgb_to_hsla(0x2D7EB8);
     theme.info_foreground = rgb_to_hsla(0x0A0E14);
 
-    theme.popover = rgb_to_hsla(0xFFFFFF);
+    theme.popover = raised;
     theme.popover_foreground = foreground;
 
     theme.selection = selection;
