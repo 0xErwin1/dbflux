@@ -14,6 +14,7 @@ RPC services are stored in SQLite at `~/.local/share/dbflux/dbflux.db`, not in a
 **Tables:**
 
 - `cfg_services` — main service record (socket_id, service_kind, command, startup_timeout_ms, enabled)
+- `cfg_services.api_family`, `cfg_services.api_major`, `cfg_services.api_minor` — optional RPC API contract metadata
 - `cfg_service_args` — ordered process arguments
 - `cfg_service_env` — environment variables
 
@@ -21,24 +22,26 @@ RPC services are stored in SQLite at `~/.local/share/dbflux/dbflux.db`, not in a
 
 ```sql
 CREATE TABLE cfg_services (
-    id TEXT PRIMARY KEY,
     socket_id TEXT NOT NULL UNIQUE,
     service_kind TEXT NOT NULL DEFAULT 'driver',
     command TEXT,
     startup_timeout_ms INTEGER DEFAULT 5000,
-    enabled INTEGER DEFAULT 1
+    enabled INTEGER DEFAULT 1,
+    api_family TEXT,
+    api_major INTEGER,
+    api_minor INTEGER
 );
 
 CREATE TABLE cfg_service_args (
     id INTEGER PRIMARY KEY,
-    service_id TEXT NOT NULL REFERENCES cfg_services(id),
+    service_id TEXT NOT NULL REFERENCES cfg_services(socket_id),
     position INTEGER NOT NULL,
     value TEXT NOT NULL
 );
 
 CREATE TABLE cfg_service_env (
     id INTEGER PRIMARY KEY,
-    service_id TEXT NOT NULL REFERENCES cfg_services(id),
+    service_id TEXT NOT NULL REFERENCES cfg_services(socket_id),
     key TEXT NOT NULL,
     value TEXT NOT NULL
 );
@@ -60,6 +63,9 @@ Notes:
 - Only `Driver` services are active in the runtime today.
 - `Auth Provider` services are preserved in storage and pass through discovery/classification, but they are not registered into any runtime auth-provider registry yet.
 - DBFlux preserves compatibility for driver registration IDs as `rpc:<socket_id>`.
+- If API metadata is missing on an existing driver row, DBFlux defaults it to the current `driver_rpc` contract at version `1.1`.
+- Auth-provider rows may persist API metadata, but they remain inert until runtime auth-provider support exists.
+- The stored `api_family` metadata is descriptive for discovery/config today; the current driver handshake still enforces compatibility through the dedicated driver RPC transport and negotiated protocol version rather than an on-wire family field.
 
 ## Legacy Migration
 
@@ -93,6 +99,7 @@ This is converted to the SQLite schema automatically. Legacy rows are treated as
 - Driver name/icon/category/form come from the service's `Hello` response (`driver_metadata`, `form_definition`), not from configuration
 - Services with `service_kind='driver'` that fail to complete the RPC handshake (`Hello`) during startup are not registered
 - Services with `service_kind='auth_provider'` are currently stored and discovered only; they do not participate in runtime features yet
+- Driver-path negotiation selects the highest mutually supported compatible minor version during `Hello`, then requires every later envelope to use that exact negotiated version
 
 ## Common Mistakes
 
