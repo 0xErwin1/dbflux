@@ -14,7 +14,11 @@ pub use driver_protocol::{
     DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope, DriverRpcError,
     DriverRpcErrorCode, QueryRequestDto, QueryResultChunk, QueryResultDto, QueryResultShapeDto,
 };
-pub use envelope::{APP_CONTROL_VERSION, DRIVER_RPC_VERSION, ProtocolVersion};
+pub use envelope::{
+    APP_CONTROL_VERSION, AUTH_PROVIDER_RPC_API_CONTRACT, DRIVER_RPC_API_CONTRACT,
+    DRIVER_RPC_SUPPORTED_VERSIONS, DRIVER_RPC_V1_0, DRIVER_RPC_VERSION, ProtocolVersion,
+    RpcApiContract, RpcApiFamily, driver_rpc_supported_versions, negotiate_highest_mutual_version,
+};
 pub use framing::{recv_msg, send_msg};
 pub use protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse};
 pub use socket::{driver_socket_name, socket_name};

@@ -89,13 +89,15 @@ Notes:
 
 DBFlux connects and sends `Hello` first.
 
+The active driver RPC API family is `driver_rpc`. In the current dedicated driver RPC transport, that family is implicit in the protocol itself rather than transmitted on the wire during `Hello`. Compatibility is enforced by the driver RPC endpoint plus the selected protocol major version; minor versions are additive and are negotiated deterministically within that major line.
+
 Client request:
 
 ```rust
 DriverRequestBody::Hello(DriverHelloRequest {
     client_name: "dbflux_driver_ipc".to_string(),
     client_version: "<version>".to_string(),
-    supported_versions: vec![DRIVER_RPC_VERSION],
+    supported_versions: vec![ProtocolVersion::new(1, 0), ProtocolVersion::new(1, 1)],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
         DriverCapability::ChunkedResults,
@@ -141,7 +143,16 @@ DriverResponseBody::Hello(DriverHelloResponse {
 })
 ```
 
+If multiple compatible minors overlap, the host must select the highest mutual minor version.
+
 If no compatible version exists, return `DriverRpcErrorCode::VersionMismatch`.
+
+After `Hello`, every request and response envelope must use the negotiated `selected_version`. A peer that receives a different post-handshake envelope version must reject it as a version mismatch.
+
+Current validation boundary:
+
+- DBFlux persists per-service API family/version metadata for discovery and future runtime seams.
+- The live driver handshake currently validates negotiated protocol versions, but it does not transmit or separately re-validate the API family string on the wire because the driver RPC transport is already family-specific.
 
 ## Form contract
 
@@ -234,6 +245,7 @@ Recommended:
 7. validate `DbConfig::External.values` in `OpenSession`
 8. return clear `InvalidRequest` errors for missing/invalid form values
 9. keep `Hello` metadata and `SessionOpened` metadata consistent
+10. stamp every post-`Hello` envelope with the negotiated version instead of assuming the latest constant
 
 ## Working example in this repository
 

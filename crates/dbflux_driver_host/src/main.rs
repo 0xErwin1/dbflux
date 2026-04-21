@@ -10,9 +10,12 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{ConnectionProfile, DbDriver};
 use dbflux_ipc::driver_protocol::{
     DriverHelloResponse, DriverRequestBody, DriverRequestEnvelope, DriverResponseBody,
-    DriverResponseEnvelope, DriverRpcErrorCode,
+    DriverResponseEnvelope, DriverRpcError, DriverRpcErrorCode,
 };
-use dbflux_ipc::{DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, framing};
+use dbflux_ipc::{
+    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ProtocolVersion, driver_rpc_supported_versions,
+    framing, negotiate_highest_mutual_version,
+};
 use interprocess::local_socket::{
     GenericNamespaced, ListenerNonblockingMode::Neither, ListenerOptions, prelude::*,
 };
@@ -74,7 +77,7 @@ fn handle_connection(
     expected_auth_token: Option<&str>,
 ) {
     let mut sessions = SessionManager::new();
-    let mut hello_done = false;
+    let mut negotiated_version = None;
 
     loop {
         let envelope: DriverRequestEnvelope = match framing::recv_msg(&mut stream) {
@@ -91,6 +94,47 @@ fn handle_connection(
 
         let request_id = envelope.request_id;
         let session_id = envelope.session_id;
+        let request_version = envelope.protocol_version;
+
+        if !matches!(envelope.body, DriverRequestBody::Hello(_)) {
+            let Some(selected_version) = negotiated_version else {
+                let response = DriverResponseEnvelope::error(
+                    request_version,
+                    request_id,
+                    session_id,
+                    DriverRpcErrorCode::InvalidRequest,
+                    "Hello handshake required before OpenSession",
+                    false,
+                );
+
+                if let Err(e) = framing::send_msg(&mut stream, &response) {
+                    log::warn!("Failed to send response: {e}");
+                    break;
+                }
+
+                continue;
+            };
+
+            if let Err(error) =
+                validate_negotiated_request_version(selected_version, request_version)
+            {
+                let response = DriverResponseEnvelope::error(
+                    request_version,
+                    request_id,
+                    session_id,
+                    error.code,
+                    error.message,
+                    error.retriable,
+                );
+
+                if let Err(e) = framing::send_msg(&mut stream, &response) {
+                    log::warn!("Failed to send response: {e}");
+                    break;
+                }
+
+                continue;
+            }
+        }
 
         let response = match envelope.body {
             DriverRequestBody::Hello(hello_req) => {
@@ -98,6 +142,7 @@ fn handle_connection(
                     && hello_req.auth_token.as_deref() != Some(expected_token)
                 {
                     DriverResponseEnvelope::error(
+                        request_version,
                         request_id,
                         None,
                         DriverRpcErrorCode::InvalidRequest,
@@ -105,41 +150,31 @@ fn handle_connection(
                         false,
                     )
                 } else {
-                    hello_done = true;
+                    match negotiate_hello_version(&hello_req.supported_versions) {
+                        Ok(selected_version) => {
+                            negotiated_version = Some(selected_version);
 
-                    let compatible = hello_req
-                        .supported_versions
-                        .iter()
-                        .any(|v| v.is_compatible_with(DRIVER_RPC_VERSION));
-
-                    if !compatible {
-                        DriverResponseEnvelope::error(
-                            request_id,
-                            None,
-                            DriverRpcErrorCode::VersionMismatch,
-                            format!(
-                                "No compatible protocol version. Server: {}.{}",
-                                DRIVER_RPC_VERSION.major, DRIVER_RPC_VERSION.minor
-                            ),
-                            false,
-                        )
-                    } else {
-                        DriverResponseEnvelope::ok(
-                            request_id,
-                            None,
-                            DriverResponseBody::Hello(DriverHelloResponse {
-                                server_name: "dbflux-driver-host".to_string(),
-                                server_version: env!("CARGO_PKG_VERSION").to_string(),
-                                selected_version: DRIVER_RPC_VERSION,
-                                capabilities: hello_req.requested_capabilities,
-                                driver_kind: driver.kind(),
-                                driver_metadata: driver.metadata().clone(),
-                                form_definition: driver.form_definition().clone(),
-                                settings_schema: driver
-                                    .settings_schema()
-                                    .map(|schema| schema.as_ref().clone()),
-                            }),
-                        )
+                            DriverResponseEnvelope::ok(
+                                selected_version,
+                                request_id,
+                                None,
+                                DriverResponseBody::Hello(DriverHelloResponse {
+                                    server_name: "dbflux-driver-host".to_string(),
+                                    server_version: env!("CARGO_PKG_VERSION").to_string(),
+                                    selected_version,
+                                    capabilities: hello_req.requested_capabilities,
+                                    driver_kind: driver.kind(),
+                                    driver_metadata: driver.metadata().clone(),
+                                    form_definition: driver.form_definition().clone(),
+                                    settings_schema: driver
+                                        .settings_schema()
+                                        .map(|schema| schema.as_ref().clone()),
+                                }),
+                            )
+                        }
+                        Err(error) => {
+                            hello_version_error_response(request_version, request_id, error)
+                        }
                     }
                 }
             }
@@ -148,32 +183,22 @@ fn handle_connection(
                 profile_json,
                 password,
                 ssh_secret,
-            } => {
-                if !hello_done {
-                    DriverResponseEnvelope::error(
-                        request_id,
-                        None,
-                        DriverRpcErrorCode::InvalidRequest,
-                        "Hello handshake required before OpenSession",
-                        false,
-                    )
-                } else {
-                    handle_open_session(
-                        request_id,
-                        driver,
-                        &mut sessions,
-                        &profile_json,
-                        password.as_deref(),
-                        ssh_secret.as_deref(),
-                    )
-                }
-            }
+            } => handle_open_session(
+                negotiated_version.expect("validated before dispatch"),
+                request_id,
+                driver,
+                &mut sessions,
+                &profile_json,
+                password.as_deref(),
+                ssh_secret.as_deref(),
+            ),
 
             DriverRequestBody::CloseSession => {
                 if let Some(sid) = session_id {
                     match sessions.remove(&sid) {
                         Some(mut conn) => match conn.close() {
                             Ok(()) => DriverResponseEnvelope::ok(
+                                negotiated_version.expect("validated before dispatch"),
                                 request_id,
                                 Some(sid),
                                 DriverResponseBody::SessionClosed,
@@ -181,6 +206,7 @@ fn handle_connection(
                             Err(e) => {
                                 log::warn!("Error closing session {sid}: {e}");
                                 DriverResponseEnvelope::error(
+                                    negotiated_version.expect("validated before dispatch"),
                                     request_id,
                                     Some(sid),
                                     DriverRpcErrorCode::Driver,
@@ -190,6 +216,7 @@ fn handle_connection(
                             }
                         },
                         None => DriverResponseEnvelope::error(
+                            negotiated_version.expect("validated before dispatch"),
                             request_id,
                             Some(sid),
                             DriverRpcErrorCode::SessionNotFound,
@@ -199,6 +226,7 @@ fn handle_connection(
                     }
                 } else {
                     DriverResponseEnvelope::error(
+                        negotiated_version.expect("validated before dispatch"),
                         request_id,
                         None,
                         DriverRpcErrorCode::SessionNotFound,
@@ -212,9 +240,15 @@ fn handle_connection(
                 if let Some(sid) = session_id {
                     if let Some(conn) = sessions.get(&sid) {
                         let body = session::dispatch(conn, other);
-                        DriverResponseEnvelope::ok(request_id, Some(sid), body)
+                        DriverResponseEnvelope::ok(
+                            negotiated_version.expect("validated before dispatch"),
+                            request_id,
+                            Some(sid),
+                            body,
+                        )
                     } else {
                         DriverResponseEnvelope::error(
+                            negotiated_version.expect("validated before dispatch"),
                             request_id,
                             Some(sid),
                             DriverRpcErrorCode::SessionNotFound,
@@ -224,6 +258,7 @@ fn handle_connection(
                     }
                 } else {
                     DriverResponseEnvelope::error(
+                        negotiated_version.expect("validated before dispatch"),
                         request_id,
                         None,
                         DriverRpcErrorCode::SessionNotFound,
@@ -244,6 +279,7 @@ fn handle_connection(
 }
 
 fn handle_open_session(
+    protocol_version: ProtocolVersion,
     request_id: u64,
     driver: &dyn DbDriver,
     sessions: &mut SessionManager,
@@ -255,6 +291,7 @@ fn handle_open_session(
         Ok(p) => p,
         Err(e) => {
             return DriverResponseEnvelope::error(
+                protocol_version,
                 request_id,
                 None,
                 DriverRpcErrorCode::InvalidRequest,
@@ -283,6 +320,7 @@ fn handle_open_session(
             sessions.insert(session_id, conn);
 
             DriverResponseEnvelope::ok(
+                protocol_version,
                 request_id,
                 Some(session_id),
                 DriverResponseBody::SessionOpened {
@@ -296,6 +334,7 @@ fn handle_open_session(
             )
         }
         Err(e) => DriverResponseEnvelope::error(
+            protocol_version,
             request_id,
             None,
             DriverRpcErrorCode::Driver,
@@ -303,6 +342,65 @@ fn handle_open_session(
             false,
         ),
     }
+}
+
+fn choose_negotiated_driver_version(
+    client_supported_versions: &[ProtocolVersion],
+) -> Option<ProtocolVersion> {
+    negotiate_highest_mutual_version(
+        dbflux_ipc::RpcApiFamily::DriverRpc,
+        driver_rpc_supported_versions(),
+        client_supported_versions,
+    )
+}
+
+fn hello_version_error_response(
+    request_version: ProtocolVersion,
+    request_id: u64,
+    error: DriverRpcError,
+) -> DriverResponseEnvelope {
+    DriverResponseEnvelope::error(
+        request_version,
+        request_id,
+        None,
+        error.code,
+        error.message,
+        error.retriable,
+    )
+}
+
+fn negotiate_hello_version(
+    client_supported_versions: &[ProtocolVersion],
+) -> Result<ProtocolVersion, DriverRpcError> {
+    choose_negotiated_driver_version(client_supported_versions).ok_or_else(|| DriverRpcError {
+        code: DriverRpcErrorCode::VersionMismatch,
+        message: format!(
+            "No compatible protocol version. Server: {}.{}",
+            DRIVER_RPC_VERSION.major, DRIVER_RPC_VERSION.minor
+        ),
+        retriable: false,
+    })
+}
+
+fn validate_negotiated_request_version(
+    negotiated_version: ProtocolVersion,
+    request_version: ProtocolVersion,
+) -> Result<(), DriverRpcError> {
+    if negotiated_version != request_version {
+        return Err(DriverRpcError {
+            code: DriverRpcErrorCode::VersionMismatch,
+            message: format!(
+                "Protocol version drift detected: negotiated {}.{}, received {}.{}",
+                negotiated_version.major,
+                negotiated_version.minor,
+                request_version.major,
+                request_version.minor
+            ),
+            retriable: false,
+        });
+    }
+
+    Ok(())
 }
 
 struct Args {
@@ -404,7 +502,14 @@ fn fatal(message: &str) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::create_driver;
+    use super::{
+        choose_negotiated_driver_version, create_driver, hello_version_error_response,
+        negotiate_hello_version, validate_negotiated_request_version,
+    };
+    use dbflux_ipc::{
+        ProtocolVersion,
+        driver_protocol::{DriverResponseBody, DriverRpcErrorCode},
+    };
 
     #[cfg(feature = "dynamodb")]
     #[test]
@@ -428,6 +533,72 @@ mod tests {
                 error.contains("No drivers compiled into this binary"),
                 "unexpected error when dynamodb feature is disabled: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn choose_negotiated_driver_version_prefers_highest_mutual_minor() {
+        let selected = choose_negotiated_driver_version(&[
+            ProtocolVersion::new(1, 0),
+            ProtocolVersion::new(1, 1),
+        ]);
+
+        assert_eq!(selected, Some(ProtocolVersion::new(1, 1)));
+    }
+
+    #[test]
+    fn choose_negotiated_driver_version_returns_none_without_overlap() {
+        let selected = choose_negotiated_driver_version(&[ProtocolVersion::new(2, 0)]);
+
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn validate_negotiated_request_version_rejects_post_hello_drift() {
+        let error = validate_negotiated_request_version(
+            ProtocolVersion::new(1, 0),
+            ProtocolVersion::new(1, 1),
+        )
+        .expect_err("drifted protocol version should be rejected");
+
+        assert_eq!(
+            error.code,
+            dbflux_ipc::driver_protocol::DriverRpcErrorCode::VersionMismatch
+        );
+        assert!(error.message.contains("1.0"));
+        assert!(error.message.contains("1.1"));
+    }
+
+    #[test]
+    fn negotiate_hello_version_returns_version_mismatch_response_without_overlap() {
+        let error = negotiate_hello_version(&[ProtocolVersion::new(2, 0)])
+            .expect_err("missing overlap should reject hello before opening a session");
+
+        assert_eq!(error.code, DriverRpcErrorCode::VersionMismatch);
+        assert!(error.message.contains("No compatible protocol version"));
+    }
+
+    #[test]
+    fn hello_version_error_response_preserves_request_metadata() {
+        let response = hello_version_error_response(
+            ProtocolVersion::new(1, 0),
+            17,
+            dbflux_ipc::driver_protocol::DriverRpcError {
+                code: DriverRpcErrorCode::VersionMismatch,
+                message: "No compatible protocol version. Server: 1.1".to_string(),
+                retriable: false,
+            },
+        );
+
+        assert_eq!(response.protocol_version, ProtocolVersion::new(1, 0));
+        assert_eq!(response.request_id, 17);
+
+        match response.body {
+            DriverResponseBody::Error(error) => {
+                assert_eq!(error.code, DriverRpcErrorCode::VersionMismatch);
+                assert!(error.message.contains("No compatible protocol version"));
+            }
+            other => panic!("expected version mismatch error, got {other:?}"),
         }
     }
 }
