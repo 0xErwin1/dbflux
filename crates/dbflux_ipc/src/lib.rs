@@ -12,7 +12,9 @@ pub use auth::{
     app_control_token_path, init_process_auth_tokens, read_app_control_token,
     write_app_control_token,
 };
-pub use auth_provider_client::{IpcServiceLaunchConfig, RpcAuthProvider, negotiate_auth_provider_version};
+pub use auth_provider_client::{
+    IpcServiceLaunchConfig, RpcAuthProvider, negotiate_auth_provider_version,
+};
 pub use auth_provider_protocol::{
     AuthProviderHelloRequest, AuthProviderHelloResponse, AuthProviderRequestBody,
     AuthProviderRequestEnvelope, AuthProviderResponseBody, AuthProviderResponseEnvelope,

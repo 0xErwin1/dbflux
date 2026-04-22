@@ -207,12 +207,7 @@ where
     };
 
     let socket_id = descriptor.config.socket_id;
-    let service = build(
-        driver_id.clone(),
-        socket_id,
-        probe_result,
-        driver_launch,
-    );
+    let service = build(driver_id.clone(), socket_id, probe_result, driver_launch);
 
     DriverServiceAdaptation::Registered { driver_id, service }
 }
@@ -406,8 +401,7 @@ fn validate_auth_provider_contract(
             ),
             details: Some(format!(
                 "Expected {}.x for family '{}'",
-                AUTH_PROVIDER_RPC_API_CONTRACT.version.major,
-                contract.family
+                AUTH_PROVIDER_RPC_API_CONTRACT.version.major, contract.family
             )),
         });
     }
@@ -442,7 +436,9 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use dbflux_core::auth::{AuthFormDef, AuthProfile, AuthSession, AuthSessionState, ResolvedCredentials, UrlCallback};
+    use dbflux_core::auth::{
+        AuthFormDef, AuthProfile, AuthSession, AuthSessionState, ResolvedCredentials, UrlCallback,
+    };
     use dbflux_core::{DatabaseCategory, DriverMetadataBuilder, QueryLanguage};
 
     fn fake_probe() -> DriverProbe {
@@ -507,7 +503,10 @@ mod tests {
             FORM.get_or_init(|| AuthFormDef { tabs: vec![] })
         }
 
-        async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
+        async fn validate_session(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<AuthSessionState, DbError> {
             Ok(AuthSessionState::LoginRequired)
         }
 
@@ -815,18 +814,25 @@ mod tests {
             panic!("expected valid descriptor");
         };
 
-        let adaptation = adapt_auth_provider_service_with(descriptor, |_| false, |socket_id, launch| {
-            let launch = launch.expect("managed auth provider should keep launch config");
-            assert_eq!(socket_id, "svc-socket");
-            assert_eq!(launch.program, "dbflux-driver-host");
+        let adaptation = adapt_auth_provider_service_with(
+            descriptor,
+            |_| false,
+            |socket_id, launch| {
+                let launch = launch.expect("managed auth provider should keep launch config");
+                assert_eq!(socket_id, "svc-socket");
+                assert_eq!(launch.program, "dbflux-driver-host");
 
-            Ok(FakeAuthProvider {
-                provider_id: "rpc-auth".to_string(),
-            })
-        });
+                Ok(FakeAuthProvider {
+                    provider_id: "rpc-auth".to_string(),
+                })
+            },
+        );
 
         match adaptation {
-            AuthProviderServiceAdaptation::Registered { provider_id, service } => {
+            AuthProviderServiceAdaptation::Registered {
+                provider_id,
+                service,
+            } => {
                 assert_eq!(provider_id, "rpc-auth");
                 assert_eq!(service.provider_id(), "rpc-auth");
             }
@@ -849,9 +855,11 @@ mod tests {
         };
 
         let adaptation: AuthProviderServiceAdaptation<FakeAuthProvider> =
-            adapt_auth_provider_service_with(descriptor, |_| false, |_, _| {
-            panic!("incompatible auth-provider descriptors must not be probed")
-            });
+            adapt_auth_provider_service_with(
+                descriptor,
+                |_| false,
+                |_, _| panic!("incompatible auth-provider descriptors must not be probed"),
+            );
 
         match adaptation {
             AuthProviderServiceAdaptation::Incompatible { diagnostic } => {

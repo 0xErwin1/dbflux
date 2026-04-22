@@ -5,7 +5,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dbflux_core::DbError;
-use dbflux_core::auth::{AuthFormDef, AuthProfile, AuthSession, AuthSessionState, DynAuthProvider, ResolvedCredentials, UrlCallback};
+use dbflux_core::auth::{
+    AuthFormDef, AuthProfile, AuthSession, AuthSessionState, DynAuthProvider, ResolvedCredentials,
+    UrlCallback,
+};
 use interprocess::local_socket::{Stream as IpcStream, prelude::*};
 
 use crate::auth::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV;
@@ -17,7 +20,7 @@ use crate::auth_provider_protocol::{
 use crate::envelope::{AUTH_PROVIDER_RPC_API_CONTRACT, ProtocolVersion};
 use crate::framing;
 use crate::socket::auth_provider_socket_name;
-use crate::{auth_provider_rpc_supported_versions, negotiate_highest_mutual_version, RpcApiFamily};
+use crate::{RpcApiFamily, auth_provider_rpc_supported_versions, negotiate_highest_mutual_version};
 
 const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 5_000;
 const MIN_STARTUP_TIMEOUT_MS: u64 = 1;
@@ -106,6 +109,7 @@ impl RpcAuthProvider {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     fn connect_stream(&self) -> Result<IpcStream, DbError> {
         ensure_host_running_for(&self.socket_id, self.launch.as_ref())?;
 
@@ -115,6 +119,7 @@ impl RpcAuthProvider {
         IpcStream::connect(name).map_err(|error| DbError::connection_failed(error.to_string()))
     }
 
+    #[allow(clippy::result_large_err)]
     fn perform_hello(
         socket_id: &str,
         launch: Option<&IpcServiceLaunchConfig>,
@@ -124,8 +129,8 @@ impl RpcAuthProvider {
         let name = auth_provider_socket_name(socket_id)
             .map_err(|error| DbError::connection_failed(error.to_string()))?;
 
-        let mut stream =
-            IpcStream::connect(name).map_err(|error| DbError::connection_failed(error.to_string()))?;
+        let mut stream = IpcStream::connect(name)
+            .map_err(|error| DbError::connection_failed(error.to_string()))?;
 
         let auth_token = std::env::var(AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
             .ok()
@@ -168,7 +173,11 @@ impl RpcAuthProvider {
         }
     }
 
-    fn send_request(&self, body: AuthProviderRequestBody) -> Result<Vec<AuthProviderResponseEnvelope>, DbError> {
+    #[allow(clippy::result_large_err)]
+    fn send_request(
+        &self,
+        body: AuthProviderRequestBody,
+    ) -> Result<Vec<AuthProviderResponseEnvelope>, DbError> {
         let mut stream = self.connect_stream()?;
         let request = AuthProviderRequestEnvelope::new(self.selected_version, 1, body);
 
@@ -217,9 +226,9 @@ impl DynAuthProvider for RpcAuthProvider {
             ValidateSessionRequest { profile_json },
         ))?;
 
-        let response = responses
-            .last()
-            .ok_or_else(|| DbError::connection_failed("Auth-provider returned no response".to_string()))?;
+        let response = responses.last().ok_or_else(|| {
+            DbError::connection_failed("Auth-provider returned no response".to_string())
+        })?;
 
         match &response.body {
             AuthProviderResponseBody::SessionState { state } => Ok(state.clone().into()),
@@ -286,14 +295,12 @@ impl DynAuthProvider for RpcAuthProvider {
             ResolveCredentialsRequest { profile_json },
         ))?;
 
-        let response = responses
-            .last()
-            .ok_or_else(|| DbError::connection_failed("Auth-provider returned no response".to_string()))?;
+        let response = responses.last().ok_or_else(|| {
+            DbError::connection_failed("Auth-provider returned no response".to_string())
+        })?;
 
         match &response.body {
-            AuthProviderResponseBody::Credentials { credentials } => {
-                Ok(credentials.clone().into())
-            }
+            AuthProviderResponseBody::Credentials { credentials } => Ok(credentials.clone().into()),
             AuthProviderResponseBody::Error(error) => Err(error.clone().into_db_error()),
             _ => Err(DbError::connection_failed(
                 "Unexpected response to ResolveCredentials".to_string(),
@@ -320,6 +327,7 @@ fn validate_socket_id(socket_id: &str) -> Result<(), DbError> {
         .map_err(|error| DbError::connection_failed(error.to_string()))
 }
 
+#[allow(clippy::result_large_err)]
 fn validate_hello_selected_version(
     selected_version: ProtocolVersion,
     supported_versions: &[ProtocolVersion],
@@ -352,9 +360,9 @@ fn socket_is_live_for(socket_id: &str) -> Result<bool, DbError> {
 
 #[allow(clippy::result_large_err)]
 fn managed_host_is_running(socket_id: &str) -> Result<bool, DbError> {
-    let mut hosts = managed_hosts()
-        .lock()
-        .map_err(|_| DbError::connection_failed("Managed auth-provider host registry is poisoned".to_string()))?;
+    let mut hosts = managed_hosts().lock().map_err(|_| {
+        DbError::connection_failed("Managed auth-provider host registry is poisoned".to_string())
+    })?;
 
     let mut should_remove = false;
     let is_running = if let Some(child) = hosts.get_mut(socket_id) {

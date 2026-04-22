@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use dbflux_core::auth::{AuthFormDef, AuthProfile, AuthSession, AuthSessionState, ResolvedCredentials};
+use dbflux_core::auth::{
+    AuthFormDef, AuthProfile, AuthSession, AuthSessionState, ResolvedCredentials,
+};
 use dbflux_core::chrono;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -75,7 +77,9 @@ pub enum AuthProviderRequestBody {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthSessionStateDto {
-    Valid { expires_at: Option<chrono::DateTime<chrono::Utc>> },
+    Valid {
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    },
     Expired,
     LoginRequired,
 }
@@ -179,7 +183,11 @@ pub struct AuthProviderRequestEnvelope {
 }
 
 impl AuthProviderRequestEnvelope {
-    pub fn new(protocol_version: ProtocolVersion, request_id: u64, body: AuthProviderRequestBody) -> Self {
+    pub fn new(
+        protocol_version: ProtocolVersion,
+        request_id: u64,
+        body: AuthProviderRequestBody,
+    ) -> Self {
         Self {
             protocol_version,
             request_id,
@@ -197,7 +205,11 @@ pub struct AuthProviderResponseEnvelope {
 }
 
 impl AuthProviderResponseEnvelope {
-    pub fn ok(protocol_version: ProtocolVersion, request_id: u64, body: AuthProviderResponseBody) -> Self {
+    pub fn ok(
+        protocol_version: ProtocolVersion,
+        request_id: u64,
+        body: AuthProviderResponseBody,
+    ) -> Self {
         Self {
             protocol_version,
             request_id,
@@ -242,14 +254,18 @@ impl AuthProviderResponseEnvelope {
 impl AuthProviderRpcError {
     pub fn into_db_error(self) -> dbflux_core::DbError {
         match self.code {
-            AuthProviderRpcErrorCode::UnsupportedMethod => dbflux_core::DbError::NotSupported(self.message),
+            AuthProviderRpcErrorCode::UnsupportedMethod => {
+                dbflux_core::DbError::NotSupported(self.message)
+            }
             AuthProviderRpcErrorCode::Timeout => dbflux_core::DbError::Timeout,
             AuthProviderRpcErrorCode::Transport | AuthProviderRpcErrorCode::VersionMismatch => {
                 dbflux_core::DbError::connection_failed(self.message)
             }
             AuthProviderRpcErrorCode::InvalidRequest
             | AuthProviderRpcErrorCode::Provider
-            | AuthProviderRpcErrorCode::Internal => dbflux_core::DbError::QueryFailed(self.message.into()),
+            | AuthProviderRpcErrorCode::Internal => {
+                dbflux_core::DbError::QueryFailed(self.message.into())
+            }
         }
     }
 }
@@ -290,7 +306,10 @@ mod tests {
         }
         .into_db_error();
 
-        assert!(matches!(transport, dbflux_core::DbError::ConnectionFailed(_)));
+        assert!(matches!(
+            transport,
+            dbflux_core::DbError::ConnectionFailed(_)
+        ));
         assert!(matches!(timeout, dbflux_core::DbError::Timeout));
         assert!(matches!(unsupported, dbflux_core::DbError::NotSupported(_)));
     }
@@ -298,7 +317,9 @@ mod tests {
     #[test]
     fn resolved_credentials_dto_round_trips_without_provider_data() {
         let mut credentials = ResolvedCredentials::default();
-        credentials.fields.insert("region".to_string(), "us-east-1".to_string());
+        credentials
+            .fields
+            .insert("region".to_string(), "us-east-1".to_string());
         credentials.secret_fields.insert(
             "token".to_string(),
             SecretString::from("secret-token".to_string()),
@@ -307,9 +328,15 @@ mod tests {
         let dto = ResolvedCredentialsDto::from(&credentials);
         let restored = ResolvedCredentials::from(dto);
 
-        assert_eq!(restored.fields.get("region").map(String::as_str), Some("us-east-1"));
         assert_eq!(
-            restored.secret_fields.get("token").map(|value| value.expose_secret()),
+            restored.fields.get("region").map(String::as_str),
+            Some("us-east-1")
+        );
+        assert_eq!(
+            restored
+                .secret_fields
+                .get("token")
+                .map(|value| value.expose_secret()),
             Some("secret-token")
         );
         assert!(restored.provider_data.is_none());
@@ -329,6 +356,9 @@ mod tests {
             panic!("expected login progress response");
         };
 
-        assert_eq!(progress_body.verification_url.as_deref(), Some("https://verify.example"));
+        assert_eq!(
+            progress_body.verification_url.as_deref(),
+            Some("https://verify.example")
+        );
     }
 }

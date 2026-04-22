@@ -74,6 +74,7 @@ fn parse_mcp_args(args: &[String]) -> Result<dbflux_mcp_server::McpServerArgs, S
     })
 }
 
+#[cfg(feature = "mcp")]
 fn print_mcp_help() {
     eprintln!("Usage: dbflux mcp --client-id <id> [options]");
     eprintln!();

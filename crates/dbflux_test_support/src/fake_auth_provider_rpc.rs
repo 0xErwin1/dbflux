@@ -9,7 +9,7 @@ use dbflux_ipc::auth_provider_protocol::{
 };
 use dbflux_ipc::{
     AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, ProtocolVersion,
-    auth_provider_socket_name, auth_provider_rpc_supported_versions, framing,
+    auth_provider_rpc_supported_versions, auth_provider_socket_name, framing,
     negotiate_auth_provider_version,
 };
 use interprocess::local_socket::{ListenerNonblockingMode::Neither, ListenerOptions};
@@ -166,7 +166,8 @@ fn handle_request(
                 ));
             }
 
-            let Some(selected_version) = negotiate_auth_provider_version(&config.supported_versions)
+            let Some(selected_version) =
+                negotiate_auth_provider_version(&config.supported_versions)
             else {
                 return FakeResponse::Single(AuthProviderResponseEnvelope::error(
                     request.protocol_version,
@@ -198,18 +199,22 @@ fn handle_request(
             let _ = parse_auth_profile(&validate.profile_json);
 
             match &config.validate_session {
-                FakeAuthRpcResult::Ok(state) => FakeResponse::Single(AuthProviderResponseEnvelope::ok(
-                    request.protocol_version,
-                    request.request_id,
-                    AuthProviderResponseBody::SessionState {
-                        state: state.clone().into(),
-                    },
-                )),
-                FakeAuthRpcResult::Err(error) => FakeResponse::Single(AuthProviderResponseEnvelope::ok(
-                    request.protocol_version,
-                    request.request_id,
-                    AuthProviderResponseBody::Error(error.clone()),
-                )),
+                FakeAuthRpcResult::Ok(state) => {
+                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                        request.protocol_version,
+                        request.request_id,
+                        AuthProviderResponseBody::SessionState {
+                            state: state.clone().into(),
+                        },
+                    ))
+                }
+                FakeAuthRpcResult::Err(error) => {
+                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                        request.protocol_version,
+                        request.request_id,
+                        AuthProviderResponseBody::Error(error.clone()),
+                    ))
+                }
             }
         }
         AuthProviderRequestBody::Login(login) => {
@@ -247,18 +252,22 @@ fn handle_request(
             let _ = parse_auth_profile(&resolve.profile_json);
 
             match &config.resolve_credentials {
-                FakeAuthRpcResult::Ok(credentials) => FakeResponse::Single(AuthProviderResponseEnvelope::ok(
-                    request.protocol_version,
-                    request.request_id,
-                    AuthProviderResponseBody::Credentials {
-                        credentials: credentials.clone(),
-                    },
-                )),
-                FakeAuthRpcResult::Err(error) => FakeResponse::Single(AuthProviderResponseEnvelope::ok(
-                    request.protocol_version,
-                    request.request_id,
-                    AuthProviderResponseBody::Error(error.clone()),
-                )),
+                FakeAuthRpcResult::Ok(credentials) => {
+                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                        request.protocol_version,
+                        request.request_id,
+                        AuthProviderResponseBody::Credentials {
+                            credentials: credentials.clone(),
+                        },
+                    ))
+                }
+                FakeAuthRpcResult::Err(error) => {
+                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                        request.protocol_version,
+                        request.request_id,
+                        AuthProviderResponseBody::Error(error.clone()),
+                    ))
+                }
             }
         }
     }

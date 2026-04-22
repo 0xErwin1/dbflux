@@ -69,6 +69,21 @@ impl ConnectionFoldersRepository {
         }
     }
 
+    fn parse_uuid(value: &str, field: &str) -> Result<Uuid, StorageError> {
+        Uuid::parse_str(value).map_err(|error| {
+            StorageError::Data(format!("invalid {} uuid '{}': {}", field, value, error))
+        })
+    }
+
+    fn parse_optional_uuid(
+        value: Option<String>,
+        field: &str,
+    ) -> Result<Option<Uuid>, StorageError> {
+        value
+            .map(|value| Self::parse_uuid(&value, field))
+            .transpose()
+    }
+
     /// Checks if a profile exists in cfg_connection_profiles.
     fn profile_exists(&self, profile_id: &str) -> bool {
         let result = self.conn().query_row(
@@ -660,9 +675,9 @@ impl ConnectionFoldersRepository {
         let folders = self.all_folders()?;
         for folder in folders {
             let node = ConnectionTreeNode {
-                id: Uuid::parse_str(&folder.id).unwrap_or_else(|_| Uuid::new_v4()),
+                id: Self::parse_uuid(&folder.id, "folder.id")?,
                 kind: ConnectionTreeNodeKind::Folder,
-                parent_id: folder.parent_id.and_then(|p| Uuid::parse_str(&p).ok()),
+                parent_id: Self::parse_optional_uuid(folder.parent_id, "folder.parent_id")?,
                 sort_index: folder.position,
                 name: folder.name,
                 profile_id: None,
@@ -682,16 +697,106 @@ impl ConnectionFoldersRepository {
                 {
                     None
                 } else {
-                    Uuid::parse_str(&item.folder_id).ok()
+                    Some(Self::parse_uuid(&item.folder_id, "folder_item.folder_id")?)
                 },
                 sort_index: item.position,
                 name: String::new(),
-                profile_id: Uuid::parse_str(&item.profile_id).ok(),
+                profile_id: Some(Self::parse_uuid(
+                    &item.profile_id,
+                    "folder_item.profile_id",
+                )?),
                 collapsed: false,
             };
             tree.add_node(node);
         }
 
         Ok(tree)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bootstrap::StorageRuntime;
+
+    fn temp_repo() -> (tempfile::TempDir, ConnectionFoldersRepository) {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime = StorageRuntime::for_path(temp_dir.path().join("dbflux.db")).expect("runtime");
+
+        let repo = ConnectionFoldersRepository::new(runtime.dbflux_db());
+
+        (temp_dir, repo)
+    }
+
+    #[test]
+    fn load_tree_rejects_invalid_folder_item_profile_uuid() {
+        let (_temp_dir, repo) = temp_repo();
+        let folder_id = Uuid::new_v4().to_string();
+
+        repo.insert_folder(&ConnectionFolderDto {
+            id: folder_id.clone(),
+            parent_id: None,
+            name: "Work".to_string(),
+            position: 0,
+            collapsed: false,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        })
+        .expect("insert folder");
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'Broken Profile', 'postgres', 'postgres', datetime('now'), datetime('now'))
+                "#,
+                params!["not-a-uuid"],
+            )
+            .expect("insert invalid profile id row");
+
+        repo.conn()
+            .execute(
+                "INSERT INTO cfg_connection_folder_items (id, folder_id, profile_id, position) VALUES (?1, ?2, ?3, 0)",
+                params![Uuid::new_v4().to_string(), folder_id, "not-a-uuid"],
+            )
+            .expect("insert invalid folder item");
+
+        let error = repo.load_tree().expect_err("invalid profile id must fail");
+        let message = error.to_string();
+
+        assert!(message.contains("folder_item.profile_id"));
+    }
+
+    #[test]
+    fn load_tree_rejects_invalid_folder_uuid() {
+        let (_temp_dir, repo) = temp_repo();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_folders (
+                    id, parent_id, name, position, collapsed, created_at, updated_at
+                ) VALUES (?1, NULL, 'Broken Parent', 0, 0, datetime('now'), datetime('now'))
+                "#,
+                params!["not-a-uuid"],
+            )
+            .expect("insert invalid parent folder");
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_folders (
+                    id, parent_id, name, position, collapsed, created_at, updated_at
+                ) VALUES (?1, ?2, 'Broken Child', 1000, 0, datetime('now'), datetime('now'))
+                "#,
+                params![Uuid::new_v4().to_string(), "not-a-uuid"],
+            )
+            .expect("insert invalid child folder");
+
+        let error = repo.load_tree().expect_err("invalid folder id must fail");
+        let message = error.to_string();
+
+        assert!(message.contains("folder.id"));
     }
 }

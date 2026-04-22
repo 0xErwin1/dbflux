@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use dbflux_core::auth::{
-    DynAuthProvider, SharedDynAuthProvider,
-};
+use dbflux_core::auth::{DynAuthProvider, SharedDynAuthProvider};
 use indexmap::IndexMap;
 
 pub struct AuthProviderRegistry {

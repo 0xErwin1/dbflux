@@ -71,6 +71,7 @@ impl McpAccessManager {
                     "Managed access providers are not available in this build",
                 ))
             }
+            #[cfg(feature = "aws")]
             other => Err(dbflux_core::DbError::connection_failed(format!(
                 "Unknown managed access provider: '{}'. No handler registered.",
                 other

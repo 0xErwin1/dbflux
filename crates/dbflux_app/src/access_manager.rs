@@ -429,18 +429,18 @@ impl AppAccessManager {
     async fn open_managed(
         &self,
         provider: &str,
-        params: &std::collections::HashMap<String, String>,
-        remote_host: &str,
+        _params: &std::collections::HashMap<String, String>,
+        _remote_host: &str,
     ) -> Result<AccessHandle, DbError> {
         match provider {
             #[cfg(feature = "aws")]
             "aws-ssm" => {
-                let instance_id = params.get("instance_id").map(String::as_str).unwrap_or("");
-                let region = params
+                let instance_id = _params.get("instance_id").map(String::as_str).unwrap_or("");
+                let region = _params
                     .get("region")
                     .map(String::as_str)
                     .unwrap_or("us-east-1");
-                let remote_port: u16 = params
+                let remote_port: u16 = _params
                     .get("remote_port")
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0);
@@ -449,7 +449,7 @@ impl AppAccessManager {
                     DbError::connection_failed("SSM tunnel factory not available")
                 })?;
 
-                let tunnel = factory.start(instance_id, region, remote_host, remote_port)?;
+                let tunnel = factory.start(instance_id, region, _remote_host, remote_port)?;
                 let local_port = tunnel.local_port();
 
                 Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))

@@ -11,12 +11,12 @@ use dbflux_core::observability::{
 };
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionMcpGovernance,
-    ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues,
-    GeneralSettings, GlobalOverrides, HistoryEntry, HistoryManager, HookContext, HookPhase,
-    ProfileManager, ProxyProfile, SavedQuery, SavedQueryManager, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
-    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
+    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues, GeneralSettings,
+    GlobalOverrides, HistoryEntry, HistoryManager, HookContext, HookPhase, ProfileManager,
+    ProxyProfile, SavedQuery, SavedQueryManager, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade, ShutdownPhase,
+    SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
 use dbflux_storage::bootstrap::StorageRuntime;
 
@@ -61,7 +61,9 @@ use crate::rpc_services::{
 };
 
 #[cfg(test)]
-use crate::rpc_services::{DriverProbe, adapt_auth_provider_service_with, adapt_driver_service_with};
+use crate::rpc_services::{
+    DriverProbe, adapt_auth_provider_service_with, adapt_driver_service_with,
+};
 
 #[cfg(test)]
 use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
@@ -588,8 +590,13 @@ impl AppState {
                 }
             };
 
-            match adapt_auth_provider_service(descriptor, |provider_id| registry.get(provider_id).is_some()) {
-                AuthProviderServiceAdaptation::Registered { provider_id, service } => {
+            match adapt_auth_provider_service(descriptor, |provider_id| {
+                registry.get(provider_id).is_some()
+            }) {
+                AuthProviderServiceAdaptation::Registered {
+                    provider_id,
+                    service,
+                } => {
                     log::info!("Registered external RPC auth provider '{}'", provider_id);
                     registry.register(service);
                 }
@@ -692,10 +699,12 @@ impl AppState {
         services: Vec<ServiceConfig>,
         mut probe: Probe,
     ) where
-        Probe: FnMut(
-            &str,
-            Option<&dbflux_ipc::IpcServiceLaunchConfig>,
-        ) -> Result<Arc<dyn dbflux_core::auth::DynAuthProvider>, Box<dbflux_core::DbError>>,
+        Probe:
+            FnMut(
+                &str,
+                Option<&dbflux_ipc::IpcServiceLaunchConfig>,
+            )
+                -> Result<Arc<dyn dbflux_core::auth::DynAuthProvider>, Box<dbflux_core::DbError>>,
     {
         for discovery in discover_services(services) {
             let descriptor = match discovery {
@@ -2658,7 +2667,10 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::auth::{AuthFormDef, AuthSession, AuthSessionState, DynAuthProvider, ResolvedCredentials, UrlCallback};
+    use dbflux_core::auth::{
+        AuthFormDef, AuthSession, AuthSessionState, DynAuthProvider, ResolvedCredentials,
+        UrlCallback,
+    };
     use dbflux_core::{
         ConnectionProfile, DatabaseCategory, DbConfig, DbError, DbKind, DriverFormDef,
         DriverMetadataBuilder, PrepareConnectError, QueryLanguage, RpcServiceKind,

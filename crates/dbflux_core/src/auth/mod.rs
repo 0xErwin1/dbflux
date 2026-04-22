@@ -291,7 +291,10 @@ mod tests {
             &self.form_def
         }
 
-        async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
+        async fn validate_session(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<AuthSessionState, DbError> {
             Ok(AuthSessionState::LoginRequired)
         }
 

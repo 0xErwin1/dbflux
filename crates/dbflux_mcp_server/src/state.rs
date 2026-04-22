@@ -822,7 +822,9 @@ fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
     registry
 }
 
-fn build_auth_provider_registry(services: &[ServiceConfig]) -> HashMap<String, Arc<dyn DynAuthProvider>> {
+fn build_auth_provider_registry(
+    services: &[ServiceConfig],
+) -> HashMap<String, Arc<dyn DynAuthProvider>> {
     #[allow(unused_mut)]
     let mut registry: HashMap<String, Arc<dyn DynAuthProvider>> = HashMap::new();
 
@@ -941,7 +943,9 @@ mod tests {
     use dbflux_core::auth::{AuthProfile, AuthSessionState, UrlCallback};
     use dbflux_core::secrecy::ExposeSecret;
     use dbflux_storage::repositories::services::ServiceDto;
-    use dbflux_test_support::{FakeAuthProviderRpcConfig, FakeAuthProviderRpcServer, FakeAuthRpcResult};
+    use dbflux_test_support::{
+        FakeAuthProviderRpcConfig, FakeAuthProviderRpcServer, FakeAuthRpcResult,
+    };
 
     fn temp_runtime() -> (tempfile::TempDir, StorageRuntime) {
         let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -1043,7 +1047,10 @@ mod tests {
             .resolve_credentials(&profile)
             .await
             .expect("resolve credentials");
-        assert_eq!(resolved.fields.get("region").map(String::as_str), Some("us-east-1"));
+        assert_eq!(
+            resolved.fields.get("region").map(String::as_str),
+            Some("us-east-1")
+        );
         assert_eq!(
             resolved
                 .secret_fields
