@@ -4,8 +4,8 @@ This file documents the storage and management of RPC services in DBFlux.
 
 DBFlux now persists a first-class RPC services foundation through `RpcServiceKind`:
 
-- `Driver` — active today and adapted into runtime database drivers
-- `AuthProvider` — persisted and discoverable today, but not yet wired into runtime auth features
+- `Driver` — adapted into runtime database drivers
+- `AuthProvider` — adapted into runtime auth-provider registries in both the app and the MCP server
 
 ## Storage
 
@@ -60,12 +60,12 @@ To add or edit a service:
 
 Notes:
 
-- Only `Driver` services are active in the runtime today.
-- `Auth Provider` services are preserved in storage and pass through discovery/classification, but they are not registered into any runtime auth-provider registry yet.
+- `Driver` services are active in the runtime and keep the existing `rpc:<socket_id>` driver identity.
+- `Auth Provider` services are active in runtime auth-provider registries only; they never appear as drivers.
 - DBFlux preserves compatibility for driver registration IDs as `rpc:<socket_id>`.
 - If API metadata is missing on an existing driver row, DBFlux defaults it to the current `driver_rpc` contract at version `1.1`.
-- Auth-provider rows may persist API metadata, but they remain inert until runtime auth-provider support exists.
-- The stored `api_family` metadata is descriptive for discovery/config today; the current driver handshake still enforces compatibility through the dedicated driver RPC transport and negotiated protocol version rather than an on-wire family field.
+- If API metadata is missing on an auth-provider row, DBFlux defaults it to the current `auth_provider_rpc` contract at version `1.0`.
+- `api_family` / `api_major` are used as startup preflight for auth providers before DBFlux probes the socket.
 
 ## Legacy Migration
 
@@ -98,8 +98,9 @@ This is converted to the SQLite schema automatically. Legacy rows are treated as
 - DBFlux classifies each service by `service_kind` before runtime adaptation
 - Driver name/icon/category/form come from the service's `Hello` response (`driver_metadata`, `form_definition`), not from configuration
 - Services with `service_kind='driver'` that fail to complete the RPC handshake (`Hello`) during startup are not registered
-- Services with `service_kind='auth_provider'` are currently stored and discovered only; they do not participate in runtime features yet
+- Services with `service_kind='auth_provider'` are loaded into auth-provider registries when they pass compatibility checks and probe successfully
 - Driver-path negotiation selects the highest mutually supported compatible minor version during `Hello`, then requires every later envelope to use that exact negotiated version
+- Auth-provider negotiation follows the same family/major/minor scheme under `auth_provider_rpc`; incompatible family or major versions are skipped before registration
 
 ## Fields
 
@@ -109,8 +110,8 @@ This is converted to the SQLite schema automatically. Legacy rows are treated as
   - The value is passed to the platform socket namespace as-is, so keep it short and stable.
 - `command` (optional): executable to run when DBFlux needs to start the service.
   - If omitted and `args` is also empty, DBFlux treats the service as already running and does not spawn anything.
-  - If omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
-  - In that default-host mode, `args` must include both `--driver` and `--socket` so the host can start correctly.
+  - For `driver`, if omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
+  - For `auth_provider`, if DBFlux must launch the service, `command` must be set explicitly.
 - `args` (optional): process arguments.
 - `env` (optional): environment variables for the spawned process.
 - `startup_timeout_ms` (optional): max wait time for socket readiness after spawn.
@@ -123,3 +124,4 @@ This is converted to the SQLite schema automatically. Legacy rows are treated as
 - Editing the database directly instead of through the Settings UI
 - Service not implementing required `Hello` fields for the current RPC protocol version
 - Omitting `command` while providing partial `args`; if you want DBFlux to launch the default host, `args` must include both `--driver` and `--socket`.
+- Configuring an auth-provider service with `args` but no `command`; DBFlux will reject that launch config instead of assuming the driver host

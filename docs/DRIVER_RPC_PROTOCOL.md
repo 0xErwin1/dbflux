@@ -2,7 +2,10 @@
 
 This document defines how DBFlux discovers, launches, and talks to RPC services over local IPC.
 
-Today, only RPC services with `RpcServiceKind::Driver` are adapted into runtime database drivers. `RpcServiceKind::AuthProvider` is already persisted and discoverable, but it is not wired into runtime auth features yet.
+DBFlux now activates two runtime service families:
+
+- `RpcServiceKind::Driver` -> runtime database drivers
+- `RpcServiceKind::AuthProvider` -> runtime auth-provider registries in the app and MCP server
 
 ## Source of truth
 
@@ -19,14 +22,13 @@ DBFlux stores launch configuration in its SQLite-backed services config. Legacy 
 At app startup, DBFlux loads configured RPC services from `~/.local/share/dbflux/dbflux.db`, then for each service:
 
 1. discovers the persisted service descriptor, including `RpcServiceKind`
-2. adapts only `Driver` services into the current driver bootstrap path
+2. branches by `kind`
 3. ensures the service is running (starts it if needed)
-4. performs a `Hello` handshake
-5. reads `driver_kind`, `driver_metadata`, and `form_definition` from the service
-6. registers the driver in-memory so it appears in the connection manager
+4. performs the family-specific `Hello` handshake
+5. reads runtime metadata from the service
+6. registers the adapted runtime service in the appropriate in-memory registry
 
-If driver adaptation or handshake fails, that service is skipped and not shown in the UI as a driver. Non-driver service kinds remain persisted but inert.
-If any step fails, that service is skipped and not shown as a usable driver. Non-driver service kinds remain persisted but inert.
+If any step fails, that service is skipped without aborting startup. Driver failures do not break auth providers, and auth-provider failures do not break drivers.
 
 Important behavior:
 
@@ -80,17 +82,16 @@ Notes:
 
 - `socket_id` is required.
 - `kind` supports `driver` and `auth_provider`.
-- `command` is optional. If omitted, DBFlux uses `dbflux-driver-host`.
 - `kind` supports `driver` and `auth_provider`.
 - `services` is the canonical config key for legacy JSON import.
 - `command` is optional.
   - If `command` is omitted and `args` is empty, DBFlux expects the service to already be running.
-  - If `command` is omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
-  - In that default-host mode, `args` must include both `--driver` and `--socket`.
+  - For `driver`, if `command` is omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
+  - For `auth_provider`, managed launch requires an explicit `command`; DBFlux does not assume a default host binary.
 - `args`, `env`, and `startup_timeout_ms` are optional.
 - DBFlux derives an internal driver registry key as `rpc:<socket_id>`.
-- Only `driver` services are registered as database drivers today.
-- `auth_provider` services are stored and discovered but not yet consumed by runtime auth flows.
+- Only `driver` services are registered as database drivers.
+- `auth_provider` services are registered only in auth-provider registries and never receive a `rpc:<socket_id>` driver identity.
 
 ## Handshake contract
 
@@ -161,6 +162,46 @@ Current validation boundary:
 - DBFlux persists per-service API family/version metadata for discovery and future runtime seams.
 - The live driver handshake currently validates negotiated protocol versions, but it does not transmit or separately re-validate the API family string on the wire because the driver RPC transport is already family-specific.
 
+## Auth-provider RPC contract
+
+The active auth-provider RPC API family is `auth_provider_rpc` at `1.0`.
+
+DBFlux uses persisted `api_family` / `api_major` metadata as a startup preflight. Compatible rows then negotiate the highest shared minor version during `Hello`.
+
+Client request:
+
+```rust
+AuthProviderRequestBody::Hello(AuthProviderHelloRequest {
+    client_name: "dbflux_ipc".to_string(),
+    client_version: "<version>".to_string(),
+    supported_versions: vec![ProtocolVersion::new(1, 0)],
+    auth_token: Some("<token>".to_string()),
+})
+```
+
+Server response must include:
+
+- `selected_version`
+- `provider_id`
+- `display_name`
+- `form_definition`
+
+Supported request / response flow:
+
+| Request | Response | Purpose |
+|---|---|---|
+| `Hello` | `Hello` | protocol negotiation + provider identity |
+| `ValidateSession` | `SessionState` | validate cached auth state |
+| `Login` | `LoginUrlProgress?` + `LoginResult` | optional verification URL + terminal login result |
+| `ResolveCredentials` | `Credentials` | resolve runtime credential fields |
+
+Notes:
+
+- `Login` may emit zero or one `LoginUrlProgress` event before `LoginResult`.
+- If no progress event is sent, DBFlux treats the verification URL callback as `None`.
+- `detect_importable_profiles`, profile write-back hooks, and provider-specific value-provider registration are intentionally out of scope for the RPC contract in this change.
+- Auth-provider runtime failures surface through existing `DbError` handling and do not abort startup.
+
 ## Form contract
 
 The connection form shown in DBFlux is built from `form_definition` returned in `Hello`.
@@ -223,7 +264,7 @@ Common codes:
 - `Driver`
 - `Internal`
 
-Use `InvalidRequest` for malformed profiles/form values and `UnsupportedMethod` for methods intentionally not implemented.
+Use `InvalidRequest` for malformed profiles/form values and `UnsupportedMethod` for methods intentionally not implemented. Auth-provider RPC uses the parallel `AuthProviderRpcErrorCode` set with the same operational meaning (`VersionMismatch`, `UnsupportedMethod`, `Timeout`, `Transport`, etc.).
 
 ## Process lifecycle and cleanup
 

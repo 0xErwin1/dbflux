@@ -2245,6 +2245,7 @@ dependencies = [
  "dbflux_driver_postgres",
  "dbflux_driver_redis",
  "dbflux_driver_sqlite",
+ "dbflux_ipc",
  "dbflux_lua",
  "dbflux_mcp",
  "dbflux_mcp_server",
@@ -2486,11 +2487,13 @@ dependencies = [
 name = "dbflux_ipc"
 version = "0.5.0-dev.0"
 dependencies = [
+ "async-trait",
  "bincode",
  "dbflux_core",
  "dirs 5.0.1",
  "interprocess",
  "serde",
+ "serde_json",
  "uuid",
 ]
 
@@ -2537,6 +2540,7 @@ dependencies = [
  "dbflux_driver_postgres",
  "dbflux_driver_redis",
  "dbflux_driver_sqlite",
+ "dbflux_ipc",
  "dbflux_mcp",
  "dbflux_policy",
  "dbflux_ssm",
@@ -2624,6 +2628,8 @@ version = "0.5.0-dev.0"
 dependencies = [
  "dbflux_core",
  "dbflux_driver_redis",
+ "dbflux_ipc",
+ "interprocess",
  "serde_json",
  "testcontainers",
 ]

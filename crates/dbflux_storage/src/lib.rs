@@ -4,11 +4,13 @@ pub mod error;
 pub mod migrations;
 pub mod paths;
 pub mod repositories;
+pub mod service_configs;
 pub mod sqlite;
 pub mod sqlite_tree_store;
 
 pub use artifacts::ArtifactStore;
 pub use bootstrap::{OwnedConnection, StorageRuntime};
+pub use service_configs::load_service_configs;
 pub use repositories::audit::{
     AppendAuditEvent, AppendAuditEventExtended, AuditEventDto, AuditQueryFilter, AuditRepository,
 };

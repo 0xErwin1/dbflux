@@ -56,12 +56,12 @@ use uuid::Uuid;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 use crate::rpc_services::{
-    DriverServiceAdaptation, ExternalDriverDiagnostic, RpcServiceDiscovery, adapt_driver_service,
-    discover_services,
+    AuthProviderServiceAdaptation, DriverServiceAdaptation, ExternalDriverDiagnostic,
+    RpcServiceDiscovery, adapt_auth_provider_service, adapt_driver_service, discover_services,
 };
 
 #[cfg(test)]
-use crate::rpc_services::{DriverProbe, adapt_driver_service_with};
+use crate::rpc_services::{DriverProbe, adapt_auth_provider_service_with, adapt_driver_service_with};
 
 #[cfg(test)]
 use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
@@ -79,6 +79,7 @@ struct BuiltDrivers {
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, ConnectionHook>,
+    services: Vec<ServiceConfig>,
 }
 
 pub struct AppState {
@@ -115,6 +116,7 @@ impl AppState {
             built.driver_overrides,
             built.driver_settings,
             built.hook_definitions,
+            built.services,
             storage_runtime,
             profiles,
             auth_profiles,
@@ -131,6 +133,7 @@ impl AppState {
         driver_overrides: HashMap<DriverKey, GlobalOverrides>,
         driver_settings: HashMap<DriverKey, FormValues>,
         hook_definitions: HashMap<String, ConnectionHook>,
+        services: Vec<ServiceConfig>,
         storage_runtime: dbflux_storage::bootstrap::StorageRuntime,
         profiles: Vec<ConnectionProfile>,
         auth_profiles: Vec<dbflux_core::AuthProfile>,
@@ -176,6 +179,10 @@ impl AppState {
                 .register(Arc::new(dbflux_aws::AwsSharedCredentialsAuthProvider::new()));
             auth_provider_registry
                 .register(Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new()));
+        }
+
+        if !services.is_empty() {
+            Self::launch_rpc_auth_providers(&mut auth_provider_registry, services);
         }
 
         let (audit_service, audit_degraded) =
@@ -459,7 +466,11 @@ impl AppState {
         ) = Self::load_app_config_from_storage();
 
         if !services.is_empty() {
-            Self::launch_rpc_services(&mut drivers, &mut external_driver_diagnostics, services);
+            Self::launch_rpc_services(
+                &mut drivers,
+                &mut external_driver_diagnostics,
+                services.clone(),
+            );
         }
 
         let loaded = crate::config_loader::load_config(&runtime);
@@ -472,6 +483,7 @@ impl AppState {
                 driver_overrides,
                 driver_settings,
                 hook_definitions,
+                services,
             },
             runtime,
             loaded.profiles,
@@ -559,6 +571,60 @@ impl AppState {
         }
     }
 
+    fn launch_rpc_auth_providers(
+        registry: &mut AuthProviderRegistry,
+        services: Vec<ServiceConfig>,
+    ) {
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC auth-provider service '{}': invalid launch configuration: {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                    continue;
+                }
+            };
+
+            match adapt_auth_provider_service(descriptor, |provider_id| registry.get(provider_id).is_some()) {
+                AuthProviderServiceAdaptation::Registered { provider_id, service } => {
+                    log::info!("Registered external RPC auth provider '{}'", provider_id);
+                    registry.register(service);
+                }
+                AuthProviderServiceAdaptation::SkippedDisabled { socket_id } => {
+                    log::info!("Skipping disabled auth-provider service '{}'", socket_id);
+                }
+                AuthProviderServiceAdaptation::SkippedNonAuthProvider { socket_id, kind } => {
+                    log::info!(
+                        "Deferring non-auth RPC service '{}' of kind {:?}",
+                        socket_id,
+                        kind
+                    );
+                }
+                AuthProviderServiceAdaptation::SkippedDuplicate {
+                    socket_id,
+                    provider_id,
+                } => {
+                    log::warn!(
+                        "Skipping RPC auth-provider service '{}': provider id '{}' already exists",
+                        socket_id,
+                        provider_id
+                    );
+                }
+                AuthProviderServiceAdaptation::Incompatible { diagnostic }
+                | AuthProviderServiceAdaptation::ProbeFailed { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC auth-provider service '{}': {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                }
+            }
+        }
+    }
+
     #[cfg(test)]
     fn launch_rpc_services_with<Probe, Build>(
         drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
@@ -616,6 +682,40 @@ impl AppState {
                 DriverServiceAdaptation::ProbeFailed { diagnostic } => {
                     diagnostics.insert(diagnostic.socket_id.clone(), diagnostic);
                 }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn launch_rpc_auth_providers_with<Probe>(
+        registry: &mut AuthProviderRegistry,
+        services: Vec<ServiceConfig>,
+        mut probe: Probe,
+    ) where
+        Probe: FnMut(
+            &str,
+            Option<&dbflux_ipc::IpcServiceLaunchConfig>,
+        ) -> Result<Arc<dyn dbflux_core::auth::DynAuthProvider>, Box<dbflux_core::DbError>>,
+    {
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { .. } => continue,
+            };
+
+            match adapt_auth_provider_service_with(
+                descriptor,
+                |provider_id| registry.get(provider_id).is_some(),
+                |socket_id, launch| probe(socket_id, launch),
+            ) {
+                AuthProviderServiceAdaptation::Registered { service, .. } => {
+                    registry.register(service);
+                }
+                AuthProviderServiceAdaptation::SkippedDisabled { .. }
+                | AuthProviderServiceAdaptation::SkippedNonAuthProvider { .. }
+                | AuthProviderServiceAdaptation::SkippedDuplicate { .. }
+                | AuthProviderServiceAdaptation::Incompatible { .. }
+                | AuthProviderServiceAdaptation::ProbeFailed { .. } => {}
             }
         }
     }
@@ -2444,10 +2544,10 @@ impl AppState {
             );
         }
 
-        let registered_auth_provider_ids: HashSet<&str> = self
+        let registered_auth_provider_ids: HashSet<String> = self
             .auth_provider_registry
             .providers()
-            .map(|provider| provider.provider_id())
+            .map(|provider| provider.provider_id().to_string())
             .collect();
 
         let uses_registered_auth_value_sources =
@@ -2457,7 +2557,7 @@ impl AppState {
                 .any(|value_ref| match value_ref {
                     dbflux_core::values::ValueRef::Secret { provider, .. }
                     | dbflux_core::values::ValueRef::Parameter { provider, .. } => {
-                        registered_auth_provider_ids.contains(provider.as_str())
+                        registered_auth_provider_ids.contains(provider)
                     }
                     _ => false,
                 });
@@ -2558,6 +2658,7 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::auth::{AuthFormDef, AuthSession, AuthSessionState, DynAuthProvider, ResolvedCredentials, UrlCallback};
     use dbflux_core::{
         ConnectionProfile, DatabaseCategory, DbConfig, DbError, DbKind, DriverFormDef,
         DriverMetadataBuilder, PrepareConnectError, QueryLanguage, RpcServiceKind,
@@ -2595,6 +2696,55 @@ mod tests {
         }
     }
 
+    struct TestAuthProvider {
+        provider_id: String,
+    }
+
+    #[async_trait::async_trait]
+    impl DynAuthProvider for TestAuthProvider {
+        fn provider_id(&self) -> &str {
+            &self.provider_id
+        }
+
+        fn display_name(&self) -> &str {
+            "Test Auth Provider"
+        }
+
+        fn form_def(&self) -> &AuthFormDef {
+            static FORM: std::sync::OnceLock<AuthFormDef> = std::sync::OnceLock::new();
+            FORM.get_or_init(|| AuthFormDef { tabs: vec![] })
+        }
+
+        async fn validate_session(
+            &self,
+            _profile: &dbflux_core::AuthProfile,
+        ) -> Result<AuthSessionState, DbError> {
+            Ok(AuthSessionState::LoginRequired)
+        }
+
+        async fn login(
+            &self,
+            profile: &dbflux_core::AuthProfile,
+            url_callback: UrlCallback,
+        ) -> Result<AuthSession, DbError> {
+            url_callback(None);
+
+            Ok(AuthSession {
+                provider_id: self.provider_id.clone(),
+                profile_id: profile.id,
+                expires_at: None,
+                data: None,
+            })
+        }
+
+        async fn resolve_credentials(
+            &self,
+            _profile: &dbflux_core::AuthProfile,
+        ) -> Result<ResolvedCredentials, DbError> {
+            Ok(ResolvedCredentials::default())
+        }
+    }
+
     fn test_state_with_profiles(
         drivers: HashMap<String, Arc<dyn DbDriver>>,
         profiles: Vec<ConnectionProfile>,
@@ -2608,6 +2758,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            Vec::new(),
             runtime,
             profiles,
             Vec::new(),
@@ -2759,6 +2910,53 @@ mod tests {
             crate::rpc_services::ExternalDriverStage::Probe
         );
         assert_eq!(diagnostic.summary, "probe failed");
+    }
+
+    #[test]
+    fn launch_rpc_auth_providers_registers_runtime_provider_without_driver_side_effects() {
+        let mut registry = AuthProviderRegistry::new();
+
+        AppState::launch_rpc_auth_providers_with(
+            &mut registry,
+            vec![test_service(RpcServiceKind::AuthProvider)],
+            |socket_id, launch| {
+                let launch = launch.expect("managed auth provider should keep launch config");
+                assert_eq!(socket_id, "svc-socket");
+                assert_eq!(launch.program, "dbflux-driver-host");
+
+                Ok(Arc::new(TestAuthProvider {
+                    provider_id: "rpc-auth".to_string(),
+                }) as Arc<dyn DynAuthProvider>)
+            },
+        );
+
+        assert!(registry.get("rpc-auth").is_some());
+        assert!(registry.get("rpc:svc-socket").is_none());
+    }
+
+    #[test]
+    fn launch_rpc_auth_providers_preserves_existing_provider_on_duplicate() {
+        let mut registry = AuthProviderRegistry::new();
+        registry.register(Arc::new(TestAuthProvider {
+            provider_id: "aws-sso".to_string(),
+        }));
+
+        AppState::launch_rpc_auth_providers_with(
+            &mut registry,
+            vec![test_service(RpcServiceKind::AuthProvider)],
+            |_, _| {
+                Ok(Arc::new(TestAuthProvider {
+                    provider_id: "aws-sso".to_string(),
+                }) as Arc<dyn DynAuthProvider>)
+            },
+        );
+
+        let providers: Vec<String> = registry
+            .providers()
+            .map(|provider| provider.provider_id().to_string())
+            .collect();
+
+        assert_eq!(providers, vec!["aws-sso".to_string()]);
     }
 
     #[test]

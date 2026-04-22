@@ -53,8 +53,15 @@ pub const AUTH_PROVIDER_RPC_API_CONTRACT: RpcApiContract =
 pub const DRIVER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 2] =
     [DRIVER_RPC_V1_0, DRIVER_RPC_VERSION];
 
+pub const AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 1] =
+    [AUTH_PROVIDER_RPC_API_CONTRACT.version];
+
 pub const fn driver_rpc_supported_versions() -> &'static [ProtocolVersion] {
     &DRIVER_RPC_SUPPORTED_VERSIONS
+}
+
+pub const fn auth_provider_rpc_supported_versions() -> &'static [ProtocolVersion] {
+    &AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS
 }
 
 pub fn negotiate_highest_mutual_version(

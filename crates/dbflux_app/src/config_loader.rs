@@ -897,15 +897,13 @@ pub fn load_config(runtime: &StorageRuntime) -> LoadedConfig {
     let proxy_repo = runtime.proxy_profiles();
     let ssh_repo = runtime.ssh_tunnels();
     let hooks_repo = runtime.hook_definitions();
-    let services_repo = runtime.services();
-
     let general_settings = load_general_settings(&runtime.general_settings());
     let (driver_overrides, driver_settings) = load_driver_maps(
         &runtime.driver_overrides(),
         &runtime.driver_setting_values(),
     );
     let hook_definitions = load_hook_definitions(&hooks_repo);
-    let services = load_services(&services_repo);
+    let services = dbflux_storage::load_service_configs(runtime);
     let profiles = load_profiles(&profiles_repo);
     let auth_profiles = load_auth_profiles(&auth_repo);
     let proxy_profiles = load_proxy_profiles(&proxy_repo, &proxy_repo.auth_repo());
@@ -1092,91 +1090,10 @@ fn load_hook_definitions(
 // Services helpers
 // ---------------------------------------------------------------------------
 
-fn load_services(
-    repo: &dbflux_storage::repositories::services::ServiceRepository,
-) -> Vec<ServiceConfig> {
-    if let Ok(entries) = repo.all() {
-        entries
-            .into_iter()
-            .map(|dto| {
-                let args = repo.get_args(&dto.socket_id).unwrap_or_default();
-                let env = repo.get_env(&dto.socket_id).unwrap_or_default();
-                let api_contract = service_api_contract_from_dto(&dto);
-
-                ServiceConfig {
-                    socket_id: dto.socket_id,
-                    enabled: dto.enabled,
-                    command: dto.command,
-                    args,
-                    env,
-                    startup_timeout_ms: dto.startup_timeout_ms.map(|v| v as u64),
-                    kind: rpc_service_kind_from_storage(&dto.service_kind),
-                    api_contract,
-                }
-            })
-            .collect()
-    } else {
-        Vec::new()
-    }
-}
-
 fn rpc_service_kind_to_storage(kind: RpcServiceKind) -> &'static str {
     match kind {
         RpcServiceKind::Driver => "driver",
         RpcServiceKind::AuthProvider => "auth_provider",
-    }
-}
-
-fn rpc_service_kind_from_storage(kind: &str) -> RpcServiceKind {
-    match kind {
-        "driver" => RpcServiceKind::Driver,
-        "auth_provider" => RpcServiceKind::AuthProvider,
-        other => {
-            log::warn!(
-                "Unknown RPC service kind '{}'; defaulting to driver for compatibility",
-                other
-            );
-            RpcServiceKind::Driver
-        }
-    }
-}
-
-fn service_api_contract_from_dto(
-    dto: &dbflux_storage::repositories::services::ServiceDto,
-) -> Option<dbflux_core::ServiceRpcApiContract> {
-    match (&dto.api_family, dto.api_major, dto.api_minor) {
-        (Some(family), Some(major), Some(minor)) => {
-            let major = match u16::try_from(major) {
-                Ok(major) => major,
-                Err(_) => {
-                    log::warn!(
-                        "Ignoring persisted RPC API contract for service '{}' because api_major={} is out of range for u16",
-                        dto.socket_id,
-                        major,
-                    );
-                    return None;
-                }
-            };
-
-            let minor = match u16::try_from(minor) {
-                Ok(minor) => minor,
-                Err(_) => {
-                    log::warn!(
-                        "Ignoring persisted RPC API contract for service '{}' because api_minor={} is out of range for u16",
-                        dto.socket_id,
-                        minor,
-                    );
-                    return None;
-                }
-            };
-
-            Some(dbflux_core::ServiceRpcApiContract::new(
-                family.clone(),
-                major,
-                minor,
-            ))
-        }
-        _ => None,
     }
 }
 

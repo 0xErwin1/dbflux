@@ -20,3 +20,8 @@ pub fn driver_socket_name(id: &str) -> io::Result<Name<'static>> {
     let suffix = if cfg!(debug_assertions) { "-debug" } else { "" };
     format!("dbflux-driver-{id}{suffix}.sock").to_ns_name::<GenericNamespaced>()
 }
+
+pub fn auth_provider_socket_name(id: &str) -> io::Result<Name<'static>> {
+    let suffix = if cfg!(debug_assertions) { "-debug" } else { "" };
+    format!("dbflux-auth-provider-{id}{suffix}.sock").to_ns_name::<GenericNamespaced>()
+}

@@ -16,6 +16,7 @@ dbflux_storage.workspace = true
 dbflux_ssh.workspace = true
 dbflux_proxy.workspace = true
 dbflux_audit.workspace = true
+dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
 dbflux_driver_sqlite = { workspace = true, optional = true }
 dbflux_driver_postgres = { workspace = true, optional = true }
