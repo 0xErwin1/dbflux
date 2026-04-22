@@ -37,47 +37,39 @@ You should see:
 
 ## Integrate with DBFlux
 
-DBFlux now treats the external service as the source of truth for driver metadata. `config.json` only provides process/socket runtime configuration.
+DBFlux stores RPC services in its SQLite-backed internal settings. The supported setup path is the Services UI, not hand-editing `config.json`.
 
 1. Build the example binary.
-2. Create (or edit) `~/.config/dbflux/config.json`.
-3. Add this service entry:
-
-```json
-{
-  "services": [
-    {
-      "socket_id": "my-test-driver.sock",
-      "command": "/ABSOLUTE/PATH/TO/examples/custom_driver/target/debug/custom-driver",
-      "args": ["--socket", "my-test-driver.sock"],
-      "env": {
-        "RUST_LOG": "info"
-      },
-      "startup_timeout_ms": 5000
-    }
-  ]
-}
-```
-
-4. Start DBFlux normally.
-5. Open the connection manager. You should see a new driver entry using metadata served by this custom driver (`Mock Database`).
-6. Select it and fill the form fields:
+2. Start DBFlux normally.
+3. Open `Settings → RPC Services`.
+4. Add a new service with these values:
+   - `Socket ID`: `my-test-driver.sock`
+   - `Command`: the absolute path to `examples/custom_driver/target/debug/custom-driver`
+   - `Args`: `--socket my-test-driver.sock`
+   - Optional env: `RUST_LOG=info`
+5. Save the service. DBFlux persists it in the internal SQLite-backed settings store.
+6. Open the connection manager. You should see a new driver entry using metadata served by this custom driver (`Mock Database`).
+7. Select it and fill the form fields:
    - `Endpoint` (required)
    - `API Key` (optional)
-7. Save and connect.
+8. Save and connect.
+
+### Legacy import compatibility
+
+`~/.config/dbflux/config.json` is still accepted as a legacy import source for the canonical `services` key, but it is no longer the recommended way to configure RPC services. Prefer `Settings → RPC Services` so the runtime and persisted state stay aligned.
 
 ## Process ownership
 
-- If DBFlux starts this service from `config.json`, DBFlux tracks it and stops it on DBFlux shutdown.
-- If you start the service manually, DBFlux uses it but does not own/stop that process.
+- If DBFlux starts this service from `Settings → RPC Services`, DBFlux tracks it and stops it on DBFlux shutdown.
+- If you start the service manually and leave both `command` and `args` empty, DBFlux uses the running socket but does not own or stop that process.
 
 ## Notes
 
 - The service key used internally by DBFlux is `rpc:<socket_id>`.
 - If `command` and `args` are both omitted, DBFlux expects this service to already be running.
-- If `command` is omitted but `args` is present, DBFlux launches `dbflux-driver-host`, and your `args` must include both `--driver` and `--socket`.
+- If `command` is omitted but `args` is present, DBFlux launches `dbflux-driver-host`, and your `args` must include both `--driver` and `--socket` with the same socket ID.
 - Use absolute paths for `command` while testing to avoid PATH issues.
-- DBFlux only reads the canonical `services` key.
+- DBFlux only reads the canonical `services` key when importing legacy config.
 
 ## Queries to try
 
@@ -95,4 +87,4 @@ DELETE FROM users WHERE id = 1
 - **Permission denied**: ensure the binary in `command` is executable.
 - **Version mismatch**: ensure example and DBFlux are built from compatible code.
 - **No form fields appear**: verify your service returns `form_definition` in `Hello`.
-- **Service disappeared after app restart**: DBFlux reads config at startup; restart after changing `config.json`.
+- **Service disappeared after app restart**: re-open `Settings → RPC Services` and confirm the saved service still points to the same binary/socket.

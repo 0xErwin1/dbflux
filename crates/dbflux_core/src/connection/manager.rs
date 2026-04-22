@@ -1555,12 +1555,11 @@ pub struct FetchSchemaForeignKeysResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, QueryLanguage};
-    use secrecy::ExposeSecret;
     use crate::{
         DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, NoopSecretStore,
         QueryLanguage,
     };
+    use secrecy::ExposeSecret;
 
     struct TestConnection {
         kind: DbKind,

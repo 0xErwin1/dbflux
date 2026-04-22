@@ -1,6 +1,6 @@
-use crate::driver::form::FormValues;
 use crate::ConnectionHook;
 use crate::DbError;
+use crate::driver::form::FormValues;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -1489,6 +1489,7 @@ mod tests {
             env: HashMap::new(),
             startup_timeout_ms: None,
             kind: RpcServiceKind::Driver,
+            api_contract: None,
         });
 
         store.save_without_legacy_service_key(&config).unwrap();

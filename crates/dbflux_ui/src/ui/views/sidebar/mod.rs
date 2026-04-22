@@ -1018,7 +1018,9 @@ impl Sidebar {
 mod tests {
     use super::{ContextMenuAction, ContextMenuItem, ItemIdParts, NODE_KIND_NONE, parse_node_kind};
     use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
-    use crate::ui::views::sidebar::operations::format_connect_prepare_error;
+    use crate::ui::views::sidebar::operations::{
+        connect_prepare_error_toast, format_connect_prepare_error,
+    };
     use dbflux_core::PrepareConnectError;
     use dbflux_core::{SchemaNodeId, SchemaNodeKind};
     use uuid::Uuid;
@@ -1265,5 +1267,43 @@ mod tests {
         let message = format_connect_prepare_error(&error, None);
 
         assert_eq!(message, "No driver registered for 'sqlite'");
+    }
+
+    #[test]
+    fn connect_prepare_error_toast_formats_external_driver_diagnostics_for_real_connect_path() {
+        let error = PrepareConnectError::ExternalDriverUnavailable {
+            driver_id: "rpc:missing.sock".to_string(),
+            socket_id: "missing.sock".to_string(),
+        };
+        let diagnostic = ExternalDriverDiagnostic {
+            socket_id: "missing.sock".to_string(),
+            stage: ExternalDriverStage::Launch,
+            summary: "Driver host exited before socket was ready".to_string(),
+            details: Some("stdout:\nbooting\n\nstderr:\nmissing binary".to_string()),
+        };
+
+        let toast = connect_prepare_error_toast(&error, Some(&diagnostic));
+
+        assert!(toast.is_error);
+        assert!(toast.message.contains("rpc:missing.sock"));
+        assert!(toast.message.contains("missing.sock"));
+        assert!(toast.message.contains("did not start"));
+        assert!(
+            toast
+                .message
+                .contains("Driver host exited before socket was ready")
+        );
+    }
+
+    #[test]
+    fn connect_prepare_error_toast_falls_back_to_generic_prepare_error_message() {
+        let error = PrepareConnectError::DriverNotRegistered {
+            driver_id: "sqlite".to_string(),
+        };
+
+        let toast = connect_prepare_error_toast(&error, None);
+
+        assert!(toast.is_error);
+        assert_eq!(toast.message, "No driver registered for 'sqlite'");
     }
 }

@@ -55,10 +55,13 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
-use crate::rpc_services::{adapt_driver_service, discover_services, DriverServiceAdaptation};
+use crate::rpc_services::{
+    DriverServiceAdaptation, ExternalDriverDiagnostic, RpcServiceDiscovery, adapt_driver_service,
+    discover_services,
+};
 
 #[cfg(test)]
-use crate::rpc_services::{adapt_driver_service_with, DriverProbe};
+use crate::rpc_services::{DriverProbe, adapt_driver_service_with};
 
 #[cfg(test)]
 use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
@@ -71,6 +74,7 @@ pub use dbflux_core::{
 
 struct BuiltDrivers {
     drivers: HashMap<String, Arc<dyn DbDriver>>,
+    external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
     general_settings: GeneralSettings,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
@@ -79,6 +83,7 @@ struct BuiltDrivers {
 
 pub struct AppState {
     pub facade: SessionFacade,
+    external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
     general_settings: GeneralSettings,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
@@ -105,6 +110,7 @@ impl AppState {
 
         Self::new_with_drivers_and_settings(
             built.drivers,
+            built.external_driver_diagnostics,
             built.general_settings,
             built.driver_overrides,
             built.driver_settings,
@@ -120,6 +126,7 @@ impl AppState {
     #[allow(clippy::too_many_arguments)]
     fn new_with_drivers_and_settings(
         drivers: HashMap<String, Arc<dyn DbDriver>>,
+        external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
         general_settings: GeneralSettings,
         driver_overrides: HashMap<DriverKey, GlobalOverrides>,
         driver_settings: HashMap<DriverKey, FormValues>,
@@ -193,6 +200,7 @@ impl AppState {
 
         let mut state = Self {
             facade,
+            external_driver_diagnostics,
             general_settings,
             driver_overrides,
             driver_settings,
@@ -439,6 +447,7 @@ impl AppState {
         Vec<SshTunnelProfile>,
     ) {
         let mut drivers = Self::build_builtin_drivers();
+        let mut external_driver_diagnostics = HashMap::new();
 
         let (
             general_settings,
@@ -450,7 +459,7 @@ impl AppState {
         ) = Self::load_app_config_from_storage();
 
         if !services.is_empty() {
-            Self::launch_rpc_services(&mut drivers, services);
+            Self::launch_rpc_services(&mut drivers, &mut external_driver_diagnostics, services);
         }
 
         let loaded = crate::config_loader::load_config(&runtime);
@@ -458,6 +467,7 @@ impl AppState {
         (
             BuiltDrivers {
                 drivers,
+                external_driver_diagnostics,
                 general_settings,
                 driver_overrides,
                 driver_settings,
@@ -497,11 +507,28 @@ impl AppState {
 
     fn launch_rpc_services(
         drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
+        diagnostics: &mut HashMap<String, ExternalDriverDiagnostic>,
         services: Vec<ServiceConfig>,
     ) {
-        for descriptor in discover_services(services) {
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC service '{}': invalid launch configuration: {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                    diagnostics.insert(diagnostic.socket_id.clone(), diagnostic);
+                    continue;
+                }
+            };
+
             match adapt_driver_service(descriptor, |driver_id| drivers.contains_key(driver_id)) {
                 DriverServiceAdaptation::Registered { driver_id, service } => {
+                    if let Some(socket_id) = driver_id.strip_prefix("rpc:") {
+                        diagnostics.remove(socket_id);
+                    }
                     drivers.insert(driver_id, service);
                 }
                 DriverServiceAdaptation::SkippedDisabled { socket_id } => {
@@ -520,12 +547,13 @@ impl AppState {
                         socket_id
                     );
                 }
-                DriverServiceAdaptation::ProbeFailed { socket_id, error } => {
+                DriverServiceAdaptation::ProbeFailed { diagnostic } => {
                     log::warn!(
-                        "Skipping RPC service '{}': failed to probe driver metadata: {}",
-                        socket_id,
-                        error
+                        "Skipping RPC service '{}': {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
                     );
+                    diagnostics.insert(diagnostic.socket_id.clone(), diagnostic);
                 }
             }
         }
@@ -534,15 +562,27 @@ impl AppState {
     #[cfg(test)]
     fn launch_rpc_services_with<Probe, Build>(
         drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
+        diagnostics: &mut HashMap<String, ExternalDriverDiagnostic>,
         services: Vec<ServiceConfig>,
         mut probe: Probe,
         mut build: Build,
     ) where
-        Probe:
-            FnMut(&str, &IpcDriverLaunchConfig) -> Result<DriverProbe, Box<dbflux_core::DbError>>,
-        Build: FnMut(String, String, DriverProbe, IpcDriverLaunchConfig) -> Arc<dyn DbDriver>,
+        Probe: FnMut(
+            &str,
+            Option<&IpcDriverLaunchConfig>,
+        ) -> Result<DriverProbe, Box<dbflux_core::DbError>>,
+        Build:
+            FnMut(String, String, DriverProbe, Option<IpcDriverLaunchConfig>) -> Arc<dyn DbDriver>,
     {
-        for descriptor in discover_services(services) {
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                    diagnostics.insert(diagnostic.socket_id.clone(), diagnostic);
+                    continue;
+                }
+            };
+
             match adapt_driver_service_with(
                 descriptor,
                 |driver_id| drivers.contains_key(driver_id),
@@ -552,6 +592,9 @@ impl AppState {
                 },
             ) {
                 DriverServiceAdaptation::Registered { driver_id, service } => {
+                    if let Some(socket_id) = driver_id.strip_prefix("rpc:") {
+                        diagnostics.remove(socket_id);
+                    }
                     drivers.insert(driver_id, service);
                 }
                 DriverServiceAdaptation::SkippedDisabled { socket_id } => {
@@ -570,12 +613,8 @@ impl AppState {
                         socket_id
                     );
                 }
-                DriverServiceAdaptation::ProbeFailed { socket_id, error } => {
-                    log::warn!(
-                        "Skipping RPC service '{}': failed to probe driver metadata: {}",
-                        socket_id,
-                        error
-                    );
+                DriverServiceAdaptation::ProbeFailed { diagnostic } => {
+                    diagnostics.insert(diagnostic.socket_id.clone(), diagnostic);
                 }
             }
         }
@@ -869,7 +908,7 @@ impl AppState {
     pub fn prepare_connect_profile(
         &self,
         profile_id: Uuid,
-    ) -> Result<ConnectProfileParams, String> {
+    ) -> Result<ConnectProfileParams, dbflux_core::PrepareConnectError> {
         let secrets = &self.facade.secrets;
 
         let proxy_secret = {
@@ -885,18 +924,15 @@ impl AppState {
             }
         };
 
-        self.facade
-            .connections
-            .prepare_connect_profile(
-                profile_id,
-                &self.facade.profiles.profiles,
-                &self.facade.ssh_tunnels.items,
-                &self.facade.proxies.items,
-                &secrets.secret_store_arc(),
-                |profile, ssh_tunnels| secrets.get_ssh_secret_for_profile(profile, ssh_tunnels),
-                proxy_secret,
-            )
-            .map_err(|error| error.to_string())
+        self.facade.connections.prepare_connect_profile(
+            profile_id,
+            &self.facade.profiles.profiles,
+            &self.facade.ssh_tunnels.items,
+            &self.facade.proxies.items,
+            &secrets.secret_store_arc(),
+            |profile, ssh_tunnels| secrets.get_ssh_secret_for_profile(profile, ssh_tunnels),
+            proxy_secret,
+        )
     }
 
     pub fn apply_connect_profile(
@@ -1795,6 +1831,10 @@ impl AppState {
         &self.storage_runtime
     }
 
+    pub fn external_driver_diagnostic(&self, socket_id: &str) -> Option<&ExternalDriverDiagnostic> {
+        self.external_driver_diagnostics.get(socket_id)
+    }
+
     pub fn driver_for_profile(&self, profile: &ConnectionProfile) -> Option<Arc<dyn DbDriver>> {
         self.facade
             .connections
@@ -2519,8 +2559,9 @@ impl Default for AppState {
 mod tests {
     use super::*;
     use dbflux_core::{
-        DatabaseCategory, DbError, DbKind, DriverFormDef, DriverMetadataBuilder, QueryLanguage,
-        RpcServiceKind, ServiceRpcApiContract,
+        ConnectionProfile, DatabaseCategory, DbConfig, DbError, DbKind, DriverFormDef,
+        DriverMetadataBuilder, PrepareConnectError, QueryLanguage, RpcServiceKind,
+        ServiceRpcApiContract,
     };
     use dbflux_driver_ipc::IpcDriver;
 
@@ -2554,18 +2595,42 @@ mod tests {
         }
     }
 
+    fn test_state_with_profiles(
+        drivers: HashMap<String, Arc<dyn DbDriver>>,
+        profiles: Vec<ConnectionProfile>,
+    ) -> AppState {
+        let runtime = dbflux_storage::bootstrap::initialize().expect("storage runtime");
+
+        AppState::new_with_drivers_and_settings(
+            drivers,
+            HashMap::new(),
+            GeneralSettings::default(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            runtime,
+            profiles,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
     #[test]
     fn launch_rpc_services_registers_driver_services_into_runtime_map() {
         let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
 
         AppState::launch_rpc_services_with(
             &mut drivers,
+            &mut diagnostics,
             vec![test_service(RpcServiceKind::Driver)],
             |socket_id, _launch| {
                 assert_eq!(socket_id, "svc-socket");
                 Ok(fake_probe())
             },
             |_, socket_id, (kind, metadata, form_definition, settings_schema), launch| {
+                let launch = launch.expect("managed service should keep launch config");
                 Arc::new(
                     IpcDriver::new(socket_id, kind, metadata, form_definition, settings_schema)
                         .with_launch_config(launch),
@@ -2579,6 +2644,7 @@ mod tests {
     #[test]
     fn launch_rpc_services_registers_legacy_driver_services_without_api_metadata() {
         let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
         let service = test_service(RpcServiceKind::Driver);
 
         assert_eq!(service.api_contract, None);
@@ -2589,12 +2655,14 @@ mod tests {
 
         AppState::launch_rpc_services_with(
             &mut drivers,
+            &mut diagnostics,
             vec![service],
             |socket_id, _launch| {
                 assert_eq!(socket_id, "svc-socket");
                 Ok(fake_probe())
             },
             |_, socket_id, (kind, metadata, form_definition, settings_schema), launch| {
+                let launch = launch.expect("managed service should keep launch config");
                 Arc::new(
                     IpcDriver::new(socket_id, kind, metadata, form_definition, settings_schema)
                         .with_launch_config(launch),
@@ -2608,9 +2676,11 @@ mod tests {
     #[test]
     fn launch_rpc_services_defers_non_driver_services_without_registration() {
         let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
 
         AppState::launch_rpc_services_with(
             &mut drivers,
+            &mut diagnostics,
             vec![test_service(RpcServiceKind::AuthProvider)],
             |_, _| panic!("non-driver services must not be probed"),
             |_, _, _, _| panic!("non-driver services must not be registered"),
@@ -2622,14 +2692,108 @@ mod tests {
     #[test]
     fn launch_rpc_services_skips_failed_driver_probes_without_registration() {
         let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
 
         AppState::launch_rpc_services_with(
             &mut drivers,
+            &mut diagnostics,
             vec![test_service(RpcServiceKind::Driver)],
             |_, _| Err(Box::new(DbError::connection_failed("probe failed"))),
             |_, _, _, _| panic!("failed probes must not build a driver"),
         );
 
         assert!(drivers.is_empty());
+    }
+
+    #[test]
+    fn launch_rpc_services_records_config_diagnostics_without_registration() {
+        let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
+        let invalid_service = ServiceConfig {
+            socket_id: "svc-socket".to_string(),
+            enabled: true,
+            command: None,
+            args: vec!["--stdio".to_string()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(1_000),
+            kind: RpcServiceKind::Driver,
+            api_contract: None,
+        };
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            &mut diagnostics,
+            vec![invalid_service],
+            |_, _| panic!("invalid config must not reach probe"),
+            |_, _, _, _| panic!("invalid config must not build a driver"),
+        );
+
+        assert!(drivers.is_empty());
+
+        let diagnostic = diagnostics.get("svc-socket").expect("config diagnostic");
+        assert_eq!(
+            diagnostic.stage,
+            crate::rpc_services::ExternalDriverStage::Config
+        );
+        assert!(diagnostic.summary.contains("--driver"));
+    }
+
+    #[test]
+    fn launch_rpc_services_records_probe_diagnostics_without_registration() {
+        let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            &mut diagnostics,
+            vec![test_service(RpcServiceKind::Driver)],
+            |_, _| Err(Box::new(DbError::connection_failed("probe failed"))),
+            |_, _, _, _| panic!("failed probes must not build a driver"),
+        );
+
+        assert!(drivers.is_empty());
+
+        let diagnostic = diagnostics.get("svc-socket").expect("probe diagnostic");
+        assert_eq!(
+            diagnostic.stage,
+            crate::rpc_services::ExternalDriverStage::Probe
+        );
+        assert_eq!(diagnostic.summary, "probe failed");
+    }
+
+    #[test]
+    fn prepare_connect_profile_preserves_external_driver_unavailable_and_app_diagnostic() {
+        let mut profile = ConnectionProfile::new("rpc profile", DbConfig::default_postgres());
+        profile.set_driver_id("rpc:missing.sock".to_string());
+        let profile_id = profile.id;
+
+        let mut state = test_state_with_profiles(HashMap::new(), vec![profile]);
+        state.external_driver_diagnostics.insert(
+            "missing.sock".to_string(),
+            crate::rpc_services::ExternalDriverDiagnostic {
+                socket_id: "missing.sock".to_string(),
+                stage: crate::rpc_services::ExternalDriverStage::Probe,
+                summary: "Probe failed".to_string(),
+                details: Some("host exited before ready".to_string()),
+            },
+        );
+
+        let error = match state.prepare_connect_profile(profile_id) {
+            Ok(_) => panic!("missing rpc driver must return a typed error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            PrepareConnectError::ExternalDriverUnavailable {
+                driver_id: "rpc:missing.sock".to_string(),
+                socket_id: "missing.sock".to_string(),
+            }
+        );
+
+        let diagnostic = state
+            .external_driver_diagnostic("missing.sock")
+            .expect("app diagnostic");
+        assert_eq!(diagnostic.summary, "Probe failed");
     }
 }

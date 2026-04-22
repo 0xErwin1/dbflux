@@ -165,3 +165,21 @@ fn custom_driver_example_json_uses_only_canonical_services_key() {
     assert!(object.contains_key(EXTERNAL_SERVICES_CONFIG_KEY));
     assert!(!object.contains_key("rpc_services"));
 }
+
+#[test]
+fn custom_driver_readme_points_to_settings_backed_rpc_services_flow() {
+    let readme = read_workspace_file("examples/custom_driver/README.md");
+
+    assert!(readme.contains("Settings → RPC Services"));
+    assert!(readme.contains("SQLite-backed"));
+    assert!(readme.contains("legacy import"));
+}
+
+#[test]
+fn custom_driver_module_docs_match_manual_and_managed_launch_contract() {
+    let source = read_workspace_file("examples/custom_driver/src/main.rs");
+
+    assert!(source.contains("Settings → RPC Services"));
+    assert!(source.contains("legacy import path"));
+    assert!(source.contains("leave both `command` and `args` empty"));
+}

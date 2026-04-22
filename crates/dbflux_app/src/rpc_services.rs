@@ -1,17 +1,37 @@
-use std::sync::Arc;
-use std::time::Duration;
-
 use dbflux_core::{
     DbDriver, DbError, DbKind, DriverFormDef, DriverMetadata, RpcServiceKind, ServiceConfig,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
+use std::sync::Arc;
 
 pub(crate) type DriverProbe = (DbKind, DriverMetadata, DriverFormDef, Option<DriverFormDef>);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExternalDriverStage {
+    Config,
+    Launch,
+    Probe,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalDriverDiagnostic {
+    pub socket_id: String,
+    pub stage: ExternalDriverStage,
+    pub summary: String,
+    pub details: Option<String>,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct RpcServiceDescriptor {
     pub(crate) config: ServiceConfig,
-    pub(crate) launch: IpcDriverLaunchConfig,
+    pub(crate) launch: Option<IpcDriverLaunchConfig>,
+}
+
+pub(crate) enum RpcServiceDiscovery {
+    Descriptor(RpcServiceDescriptor),
+    InvalidConfig {
+        diagnostic: ExternalDriverDiagnostic,
+    },
 }
 
 pub(crate) enum DriverServiceAdaptation<T> {
@@ -30,8 +50,7 @@ pub(crate) enum DriverServiceAdaptation<T> {
         socket_id: String,
     },
     ProbeFailed {
-        socket_id: String,
-        error: Box<DbError>,
+        diagnostic: ExternalDriverDiagnostic,
     },
 }
 
@@ -39,24 +58,18 @@ pub(crate) fn rpc_registry_id(socket_id: &str) -> String {
     format!("rpc:{}", socket_id)
 }
 
-pub(crate) fn discover_services(services: Vec<ServiceConfig>) -> Vec<RpcServiceDescriptor> {
+pub(crate) fn discover_services(services: Vec<ServiceConfig>) -> Vec<RpcServiceDiscovery> {
     services
         .into_iter()
-        .map(|config| RpcServiceDescriptor {
-            launch: IpcDriverLaunchConfig {
-                program: config
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| "dbflux-driver-host".to_string()),
-                args: config.args.clone(),
-                env: config
-                    .env
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect(),
-                startup_timeout: Duration::from_millis(config.startup_timeout_ms.unwrap_or(5_000)),
+        .map(|config| match build_service_launch_config(&config) {
+            Ok(launch) => RpcServiceDiscovery::Descriptor(RpcServiceDescriptor { config, launch }),
+            Err(error) => RpcServiceDiscovery::InvalidConfig {
+                diagnostic: diagnostic_from_error(
+                    &config.socket_id,
+                    ExternalDriverStage::Config,
+                    &error,
+                ),
             },
-            config,
         })
         .collect()
 }
@@ -68,12 +81,16 @@ pub(crate) fn adapt_driver_service(
     adapt_driver_service_with(
         descriptor,
         driver_exists,
-        |socket_id, launch| IpcDriver::probe_driver(socket_id, Some(launch)).map_err(Box::new),
+        |socket_id, launch| IpcDriver::probe_driver(socket_id, launch).map_err(Box::new),
         |_, socket_id, (kind, metadata, form_definition, settings_schema), launch| {
-            Arc::new(
-                IpcDriver::new(socket_id, kind, metadata, form_definition, settings_schema)
-                    .with_launch_config(launch),
-            ) as Arc<dyn DbDriver>
+            let driver =
+                IpcDriver::new(socket_id, kind, metadata, form_definition, settings_schema);
+            let driver = match launch {
+                Some(launch) => driver.with_launch_config(launch),
+                None => driver,
+            };
+
+            Arc::new(driver) as Arc<dyn DbDriver>
         },
     )
 }
@@ -85,8 +102,8 @@ pub(crate) fn adapt_driver_service_with<T, Probe, Build>(
     build: Build,
 ) -> DriverServiceAdaptation<T>
 where
-    Probe: FnOnce(&str, &IpcDriverLaunchConfig) -> Result<DriverProbe, Box<DbError>>,
-    Build: FnOnce(String, String, DriverProbe, IpcDriverLaunchConfig) -> T,
+    Probe: FnOnce(&str, Option<&IpcDriverLaunchConfig>) -> Result<DriverProbe, Box<DbError>>,
+    Build: FnOnce(String, String, DriverProbe, Option<IpcDriverLaunchConfig>) -> T,
 {
     if !descriptor.config.enabled {
         return DriverServiceAdaptation::SkippedDisabled {
@@ -108,12 +125,15 @@ where
         };
     }
 
-    let probe_result = match probe(&descriptor.config.socket_id, &descriptor.launch) {
+    let probe_result = match probe(&descriptor.config.socket_id, descriptor.launch.as_ref()) {
         Ok(probe_result) => probe_result,
         Err(error) => {
             return DriverServiceAdaptation::ProbeFailed {
-                socket_id: descriptor.config.socket_id,
-                error,
+                diagnostic: diagnostic_from_error(
+                    &descriptor.config.socket_id,
+                    classify_probe_failure_stage(descriptor.launch.as_ref(), &error),
+                    &error,
+                ),
             };
         }
     };
@@ -129,9 +149,75 @@ where
     DriverServiceAdaptation::Registered { driver_id, service }
 }
 
+fn build_service_launch_config(
+    config: &ServiceConfig,
+) -> Result<Option<IpcDriverLaunchConfig>, Box<DbError>> {
+    IpcDriver::build_launch_config(
+        &config.socket_id,
+        config.command.as_deref(),
+        &config.args,
+        &config.env,
+        config.startup_timeout_ms,
+    )
+    .map_err(Box::new)
+}
+
+fn classify_probe_failure_stage(
+    launch: Option<&IpcDriverLaunchConfig>,
+    error: &DbError,
+) -> ExternalDriverStage {
+    if launch.is_none() {
+        return ExternalDriverStage::Probe;
+    }
+
+    let summary = normalize_error_message(error);
+    if summary.contains("Failed to start driver host")
+        || summary.contains("exited before socket was ready")
+        || summary.contains("did not become ready within")
+        || summary.contains("socket is unavailable")
+    {
+        ExternalDriverStage::Launch
+    } else {
+        ExternalDriverStage::Probe
+    }
+}
+
+fn diagnostic_from_error(
+    socket_id: &str,
+    stage: ExternalDriverStage,
+    error: &DbError,
+) -> ExternalDriverDiagnostic {
+    let message = normalize_error_message(error);
+    let (summary, details) = match message.split_once("\n\n") {
+        Some((summary, details)) => (
+            summary.trim().to_string(),
+            Some(details.trim().to_string()).filter(|details| !details.is_empty()),
+        ),
+        None => (message, None),
+    };
+
+    ExternalDriverDiagnostic {
+        socket_id: socket_id.to_string(),
+        stage,
+        summary,
+        details,
+    }
+}
+
+fn normalize_error_message(error: &DbError) -> String {
+    let rendered = error.to_string();
+
+    rendered
+        .strip_prefix("Connection failed: ")
+        .unwrap_or(&rendered)
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
     use dbflux_core::{DatabaseCategory, DriverMetadataBuilder, QueryLanguage};
 
     fn fake_probe() -> DriverProbe {
@@ -155,13 +241,150 @@ mod tests {
         ServiceConfig {
             socket_id: "svc-socket".to_string(),
             enabled,
-            command: None,
+            command: Some("dbflux-driver-host".to_string()),
             args: vec!["--stdio".to_string()],
             env: std::collections::HashMap::from([("RUST_LOG".to_string(), "info".to_string())]),
             startup_timeout_ms: Some(7_500),
             kind,
             api_contract: None,
         }
+    }
+
+    fn manual_service() -> ServiceConfig {
+        ServiceConfig {
+            socket_id: "manual-socket".to_string(),
+            enabled: true,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            startup_timeout_ms: None,
+            kind: RpcServiceKind::Driver,
+            api_contract: None,
+        }
+    }
+
+    #[test]
+    fn discover_and_adapt_manual_driver_service_keeps_manual_launch_and_rpc_registry_id() {
+        let descriptor = discover_services(vec![manual_service()])
+            .into_iter()
+            .next()
+            .expect("descriptor");
+
+        let RpcServiceDiscovery::Descriptor(descriptor) = descriptor else {
+            panic!("expected valid descriptor");
+        };
+
+        assert!(descriptor.launch.is_none());
+
+        let adaptation = adapt_driver_service_with(
+            descriptor,
+            |_| false,
+            |socket_id, launch| {
+                assert_eq!(socket_id, "manual-socket");
+                assert!(launch.is_none());
+                Ok(fake_probe())
+            },
+            |driver_id, socket_id, _, launch| (driver_id, socket_id, launch),
+        );
+
+        match adaptation {
+            DriverServiceAdaptation::Registered { driver_id, service } => {
+                assert_eq!(driver_id, "rpc:manual-socket");
+                assert_eq!(service.0, "rpc:manual-socket");
+                assert_eq!(service.1, "manual-socket");
+                assert!(service.2.is_none());
+            }
+            _ => panic!("expected manual driver registration"),
+        }
+    }
+
+    #[test]
+    fn discover_services_returns_config_diagnostic_for_missing_default_host_flags() {
+        let invalid_service = ServiceConfig {
+            socket_id: "svc-socket".to_string(),
+            enabled: true,
+            command: None,
+            args: vec!["--stdio".to_string()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(1_000),
+            kind: RpcServiceKind::Driver,
+            api_contract: None,
+        };
+
+        let discovery = discover_services(vec![invalid_service])
+            .into_iter()
+            .next()
+            .expect("discovery");
+
+        match discovery {
+            RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                assert_eq!(diagnostic.socket_id, "svc-socket");
+                assert_eq!(diagnostic.stage, ExternalDriverStage::Config);
+                assert!(diagnostic.summary.contains("--driver"));
+            }
+            _ => panic!("expected invalid config diagnostic"),
+        }
+    }
+
+    #[test]
+    fn discover_services_returns_config_diagnostic_for_socket_mismatch() {
+        let invalid_service = ServiceConfig {
+            socket_id: "svc-socket".to_string(),
+            enabled: true,
+            command: None,
+            args: vec![
+                "--driver".to_string(),
+                "example".to_string(),
+                "--socket".to_string(),
+                "other.sock".to_string(),
+            ],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(1_000),
+            kind: RpcServiceKind::Driver,
+            api_contract: None,
+        };
+
+        let discovery = discover_services(vec![invalid_service])
+            .into_iter()
+            .next()
+            .expect("discovery");
+
+        match discovery {
+            RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                assert_eq!(diagnostic.socket_id, "svc-socket");
+                assert_eq!(diagnostic.stage, ExternalDriverStage::Config);
+                assert!(diagnostic.summary.contains("socket mismatch"));
+            }
+            _ => panic!("expected invalid config diagnostic"),
+        }
+    }
+
+    #[test]
+    fn build_service_launch_config_preserves_manual_services_without_boxing_workarounds() {
+        let launch: Result<Option<IpcDriverLaunchConfig>, Box<DbError>> =
+            build_service_launch_config(&manual_service());
+
+        assert!(launch.expect("manual service should stay valid").is_none());
+    }
+
+    #[test]
+    fn build_service_launch_config_boxes_invalid_default_host_errors() {
+        let invalid_service = ServiceConfig {
+            socket_id: "svc-socket".to_string(),
+            enabled: true,
+            command: None,
+            args: vec!["--stdio".to_string()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(1_000),
+            kind: RpcServiceKind::Driver,
+            api_contract: None,
+        };
+
+        let launch: Result<Option<IpcDriverLaunchConfig>, Box<DbError>> =
+            build_service_launch_config(&invalid_service);
+        let error = launch.expect_err("invalid default host config should fail");
+
+        assert!(error.to_string().contains("--driver"));
     }
 
     #[test]
@@ -171,17 +394,25 @@ mod tests {
             .next()
             .expect("descriptor");
 
+        let RpcServiceDiscovery::Descriptor(descriptor) = descriptor else {
+            panic!("expected valid descriptor");
+        };
+
         let adaptation = adapt_driver_service_with(
             descriptor,
             |_| false,
             |socket_id, launch| {
+                let launch = launch.expect("managed service should have launch config");
                 assert_eq!(socket_id, "svc-socket");
                 assert_eq!(launch.program, "dbflux-driver-host");
                 assert_eq!(launch.args, vec!["--stdio".to_string()]);
-                assert_eq!(launch.startup_timeout, Duration::from_millis(7_500));
+                assert_eq!(launch.startup_timeout.as_millis(), 7_500);
                 Ok(fake_probe())
             },
-            |driver_id, socket_id, _, launch| (driver_id, socket_id, launch.program),
+            |driver_id, socket_id, _, launch| {
+                let launch = launch.expect("managed service should keep launch config");
+                (driver_id, socket_id, launch.program)
+            },
         );
 
         match adaptation {
@@ -201,6 +432,10 @@ mod tests {
             .into_iter()
             .next()
             .expect("descriptor");
+
+        let RpcServiceDiscovery::Descriptor(descriptor) = descriptor else {
+            panic!("expected valid descriptor");
+        };
 
         let adaptation = adapt_driver_service_with(
             descriptor,
@@ -225,6 +460,10 @@ mod tests {
             .next()
             .expect("descriptor");
 
+        let RpcServiceDiscovery::Descriptor(descriptor) = descriptor else {
+            panic!("expected valid descriptor");
+        };
+
         let adaptation = adapt_driver_service_with(
             descriptor,
             |_| false,
@@ -247,6 +486,10 @@ mod tests {
             .next()
             .expect("descriptor");
 
+        let RpcServiceDiscovery::Descriptor(descriptor) = descriptor else {
+            panic!("expected valid descriptor");
+        };
+
         let adaptation = adapt_driver_service_with(
             descriptor,
             |_| false,
@@ -255,9 +498,10 @@ mod tests {
         );
 
         match adaptation {
-            DriverServiceAdaptation::ProbeFailed { socket_id, error } => {
-                assert_eq!(socket_id, "svc-socket");
-                assert_eq!(error.to_string(), "Connection failed: probe failed");
+            DriverServiceAdaptation::ProbeFailed { diagnostic } => {
+                assert_eq!(diagnostic.socket_id, "svc-socket");
+                assert_eq!(diagnostic.stage, ExternalDriverStage::Probe);
+                assert_eq!(diagnostic.summary, "probe failed");
             }
             _ => panic!("expected probe failure"),
         }

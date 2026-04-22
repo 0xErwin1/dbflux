@@ -318,8 +318,12 @@ where
 {
     object
         .remove(key)
-        .map(serde_json::from_value)
+        .map(|value| match value {
+            Value::Null => Ok(None),
+            other => serde_json::from_value(other).map(Some),
+        })
         .transpose()
+        .map(|value| value.flatten())
         .map_err(|error| format!("invalid '{key}' field: {error}"))
 }
 

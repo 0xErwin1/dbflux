@@ -18,3 +18,4 @@ pub use access_manager::AppAccessManager;
 pub use app_state::AppState;
 pub use auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 pub use hook_executor::CompositeExecutor;
+pub use rpc_services::{ExternalDriverDiagnostic, ExternalDriverStage};

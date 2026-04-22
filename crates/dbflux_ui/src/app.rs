@@ -6,22 +6,8 @@
 //! from the parent crate.
 
 pub use dbflux_app::AppState;
+pub use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
 pub use dbflux_core::ConnectedProfile;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExternalDriverStage {
-    Config,
-    Launch,
-    Probe,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalDriverDiagnostic {
-    pub socket_id: String,
-    pub stage: ExternalDriverStage,
-    pub summary: String,
-    pub details: Option<String>,
-}
 
 // Re-export event types from the parent crate
 pub use crate::app_state_entity::{

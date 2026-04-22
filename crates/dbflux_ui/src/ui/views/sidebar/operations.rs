@@ -1,7 +1,9 @@
 use super::*;
 use crate::platform;
 use crate::ui::AsyncUpdateResultExt;
+use crate::ui::components::toast::PendingToast;
 use dbflux_app::hook_executor::CompositeExecutor;
+use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
 use dbflux_core::observability::actions::{
     CONNECTION_CONNECT, CONNECTION_CONNECT_FAILED, CONNECTION_CONNECTING, CONNECTION_DISCONNECT,
     HOOK_EXECUTE, HOOK_EXECUTE_FAILED,
@@ -10,8 +12,8 @@ use dbflux_core::{
     CancelToken, Connection, ConnectionHook, DatabaseConnection, DbSchemaInfo,
     DetachedProcessHandle, FetchTableDetailsParams, FetchTableDetailsResult, HookContext,
     HookExecutor, HookKind, HookPhase, HookResult, OutputReceiver, PipelineState,
-    ProcessExecutionError, SchemaDropTarget, SchemaObjectKind, TaskId, TaskKind, TaskTarget,
-    detached_process_channel, execute_streaming_process, output_channel,
+    PrepareConnectError, ProcessExecutionError, SchemaDropTarget, SchemaObjectKind, TaskId,
+    TaskKind, TaskTarget, detached_process_channel, execute_streaming_process, output_channel,
 };
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
@@ -123,13 +125,6 @@ enum HookPhaseState {
     Cancelled,
 }
 
-#[cfg(test)]
-use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
-
-#[cfg(test)]
-use dbflux_core::PrepareConnectError;
-
-#[cfg(test)]
 fn format_external_driver_stage_message(
     stage: &ExternalDriverStage,
     driver_id: &str,
@@ -152,7 +147,6 @@ fn format_external_driver_stage_message(
     }
 }
 
-#[cfg(test)]
 pub(super) fn format_connect_prepare_error(
     error: &PrepareConnectError,
     diagnostic: Option<&ExternalDriverDiagnostic>,
@@ -182,6 +176,16 @@ pub(super) fn format_connect_prepare_error(
             message
         }
         _ => error.to_string(),
+    }
+}
+
+pub(super) fn connect_prepare_error_toast(
+    error: &PrepareConnectError,
+    diagnostic: Option<&ExternalDriverDiagnostic>,
+) -> PendingToast {
+    PendingToast {
+        message: format_connect_prepare_error(error, diagnostic),
+        is_error: true,
     }
 }
 
@@ -2537,31 +2541,49 @@ impl Sidebar {
         let (params, profile_name, pre_connect_hooks, post_connect_hooks, hook_context) =
             match self.app_state.update(cx, |state, _cx| {
                 if state.is_operation_pending(profile_id, None) {
-                    return Err("Connection already pending".to_string());
+                    return Err(PendingToast {
+                        message: "Connection already pending".to_string(),
+                        is_error: true,
+                    });
                 }
 
                 let result = state.prepare_connect_profile(profile_id);
 
                 if result.is_ok() && !state.start_pending_operation(profile_id, None) {
-                    return Err("Operation started by another thread".to_string());
+                    return Err(PendingToast {
+                        message: "Operation started by another thread".to_string(),
+                        is_error: true,
+                    });
                 }
 
-                result.map(|p| {
-                    let name = p.profile.name.clone();
-                    let hook_execution = p.prepare_hooks(state.resolve_profile_hooks(&p.profile));
+                let diagnostic = result
+                    .as_ref()
+                    .err()
+                    .and_then(|error| error.socket_id())
+                    .and_then(|socket_id| state.external_driver_diagnostic(socket_id))
+                    .cloned();
 
-                    (
-                        p,
-                        name,
-                        hook_execution.hooks.pre_connect,
-                        hook_execution.hooks.post_connect,
-                        hook_execution.context,
-                    )
-                })
+                result
+                    .map(|p| {
+                        let name = p.profile.name.clone();
+                        let hook_execution =
+                            p.prepare_hooks(state.resolve_profile_hooks(&p.profile));
+
+                        (
+                            p,
+                            name,
+                            hook_execution.hooks.pre_connect,
+                            hook_execution.hooks.post_connect,
+                            hook_execution.context,
+                        )
+                    })
+                    .map_err(|error| connect_prepare_error_toast(&error, diagnostic.as_ref()))
             }) {
                 Ok(p) => p,
-                Err(e) => {
-                    log::info!("Connect skipped: {}", e);
+                Err(toast) => {
+                    self.pending_toast = Some(toast);
+                    self.refresh_tree(cx);
+                    cx.notify();
                     return;
                 }
             };
