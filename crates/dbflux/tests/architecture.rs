@@ -1,3 +1,4 @@
+use dbflux_core::EXTERNAL_SERVICES_CONFIG_KEY;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -26,6 +27,10 @@ fn workspace_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("workspace root")
         .to_path_buf()
+}
+
+fn read_workspace_file(relative_path: &str) -> String {
+    fs::read_to_string(workspace_root().join(relative_path)).expect("workspace file")
 }
 
 #[test]
@@ -134,4 +139,29 @@ fn postgres_config_pattern_is_confined_to_core_and_driver() {
         "Found postgres config variant outside allowed modules: {:?}",
         violations
     );
+}
+
+#[test]
+fn external_driver_docs_use_only_canonical_services_key() {
+    let docs = [
+        read_workspace_file("docs/RPC_SERVICES_CONFIG.md"),
+        read_workspace_file("docs/DRIVER_RPC_PROTOCOL.md"),
+        read_workspace_file("examples/custom_driver/README.md"),
+    ];
+
+    for content in docs {
+        assert!(content.contains(EXTERNAL_SERVICES_CONFIG_KEY));
+        assert!(!content.contains("rpc_services"));
+    }
+}
+
+#[test]
+fn custom_driver_example_json_uses_only_canonical_services_key() {
+    let example = read_workspace_file("examples/custom_driver/config.example.json");
+    let parsed: serde_json::Value = serde_json::from_str(&example).expect("valid example json");
+
+    let object = parsed.as_object().expect("top-level object");
+
+    assert!(object.contains_key(EXTERNAL_SERVICES_CONFIG_KEY));
+    assert!(!object.contains_key("rpc_services"));
 }

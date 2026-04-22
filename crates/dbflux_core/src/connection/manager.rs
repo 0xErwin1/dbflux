@@ -196,6 +196,48 @@ pub enum ConnectionResolutionError {
     PendingDatabaseConnection { database: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrepareConnectError {
+    ProfileNotFound,
+    AlreadyConnected,
+    DriverNotRegistered {
+        driver_id: String,
+    },
+    ExternalDriverUnavailable {
+        driver_id: String,
+        socket_id: String,
+    },
+}
+
+impl PrepareConnectError {
+    pub fn socket_id(&self) -> Option<&str> {
+        match self {
+            Self::ExternalDriverUnavailable { socket_id, .. } => Some(socket_id),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for PrepareConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProfileNotFound => write!(f, "Profile not found"),
+            Self::AlreadyConnected => write!(f, "Already connected"),
+            Self::DriverNotRegistered { driver_id } => {
+                write!(f, "No driver registered for '{}'", driver_id)
+            }
+            Self::ExternalDriverUnavailable {
+                driver_id,
+                socket_id,
+            } => write!(
+                f,
+                "External driver '{}' is unavailable because service '{}' was not registered",
+                driver_id, socket_id
+            ),
+        }
+    }
+}
+
 pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
@@ -748,24 +790,30 @@ impl ConnectionManager {
         secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
         get_ssh_secret: impl FnOnce(&ConnectionProfile, &[SshTunnelProfile]) -> Option<SecretString>,
         proxy_secret: Option<SecretString>,
-    ) -> Result<ConnectProfileParams, String> {
+    ) -> Result<ConnectProfileParams, PrepareConnectError> {
         let profile = profiles
             .iter()
             .find(|p| p.id == profile_id)
             .cloned()
-            .ok_or_else(|| "Profile not found".to_string())?;
+            .ok_or(PrepareConnectError::ProfileNotFound)?;
 
         if self.connections.contains_key(&profile_id) {
-            return Err("Already connected".to_string());
+            return Err(PrepareConnectError::AlreadyConnected);
         }
 
         let kind = profile.kind();
         let driver_id = profile.driver_id();
-        let driver = self
-            .drivers
-            .get(&driver_id)
-            .cloned()
-            .ok_or_else(|| format!("No driver registered for '{}'", driver_id))?;
+        let driver = self.drivers.get(&driver_id).cloned().ok_or_else(|| {
+            match driver_id.strip_prefix("rpc:") {
+                Some(socket_id) => PrepareConnectError::ExternalDriverUnavailable {
+                    driver_id: driver_id.clone(),
+                    socket_id: socket_id.to_string(),
+                },
+                None => PrepareConnectError::DriverNotRegistered {
+                    driver_id: driver_id.clone(),
+                },
+            }
+        })?;
 
         let secret_store_param = if kind == DbKind::SQLite {
             None
@@ -1509,6 +1557,10 @@ mod tests {
     use super::*;
     use crate::{DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, QueryLanguage};
     use secrecy::ExposeSecret;
+    use crate::{
+        DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, NoopSecretStore,
+        QueryLanguage,
+    };
 
     struct TestConnection {
         kind: DbKind,
@@ -1812,6 +1864,66 @@ mod tests {
         assert_eq!(
             resolved.profile.no_proxy.as_deref(),
             Some("localhost,10.0.0.0/8")
+        );
+    }
+
+    #[test]
+    fn prepare_connect_profile_returns_external_driver_unavailable_error_for_missing_rpc_driver() {
+        let manager = ConnectionManager::new(HashMap::new());
+
+        let mut profile = ConnectionProfile::new("rpc profile", DbConfig::default_postgres());
+        profile.set_driver_id("rpc:missing.sock".to_string());
+
+        let error = match manager.prepare_connect_profile(
+            profile.id,
+            &[profile],
+            &[],
+            &[],
+            &Arc::new(RwLock::new(
+                Box::new(NoopSecretStore) as Box<dyn SecretStore>
+            )),
+            |_profile, _ssh_tunnels| None,
+            None,
+        ) {
+            Ok(_) => panic!("expected missing rpc driver to return an error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            PrepareConnectError::ExternalDriverUnavailable {
+                driver_id: "rpc:missing.sock".to_string(),
+                socket_id: "missing.sock".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn prepare_connect_profile_keeps_generic_error_for_non_rpc_missing_driver() {
+        let manager = ConnectionManager::new(HashMap::new());
+
+        let profile = ConnectionProfile::new("sqlite", DbConfig::default_sqlite());
+
+        let error = match manager.prepare_connect_profile(
+            profile.id,
+            &[profile],
+            &[],
+            &[],
+            &Arc::new(RwLock::new(
+                Box::new(NoopSecretStore) as Box<dyn SecretStore>
+            )),
+            |_profile, _ssh_tunnels| None,
+            None,
+        ) {
+            Ok(_) => panic!("expected missing builtin driver to return an error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            PrepareConnectError::DriverNotRegistered {
+                driver_id: "sqlite".to_string(),
+            }
         );
     }
 

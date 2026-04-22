@@ -26,6 +26,7 @@ At app startup, DBFlux loads configured RPC services from `~/.local/share/dbflux
 6. registers the driver in-memory so it appears in the connection manager
 
 If driver adaptation or handshake fails, that service is skipped and not shown in the UI as a driver. Non-driver service kinds remain persisted but inert.
+If any step fails, that service is skipped and not shown as a usable driver. Non-driver service kinds remain persisted but inert.
 
 Important behavior:
 
@@ -60,7 +61,7 @@ Schema used by DBFlux:
 
 ```json
 {
-  "rpc_services": [
+  "services": [
     {
       "socket_id": "my-driver.sock",
       "kind": "driver",
@@ -80,6 +81,12 @@ Notes:
 - `socket_id` is required.
 - `kind` supports `driver` and `auth_provider`.
 - `command` is optional. If omitted, DBFlux uses `dbflux-driver-host`.
+- `kind` supports `driver` and `auth_provider`.
+- `services` is the canonical config key for legacy JSON import.
+- `command` is optional.
+  - If `command` is omitted and `args` is empty, DBFlux expects the service to already be running.
+  - If `command` is omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
+  - In that default-host mode, `args` must include both `--driver` and `--socket`.
 - `args`, `env`, and `startup_timeout_ms` are optional.
 - DBFlux derives an internal driver registry key as `rpc:<socket_id>`.
 - Only `driver` services are registered as database drivers today.
@@ -220,7 +227,7 @@ Use `InvalidRequest` for malformed profiles/form values and `UnsupportedMethod` 
 
 ## Process lifecycle and cleanup
 
-When DBFlux starts a service process itself (via `command`), that process is tracked as a managed host.
+When DBFlux starts a service process itself (via `command` or the supported default host command), that process is tracked as a managed host.
 
 On DBFlux shutdown:
 
@@ -228,6 +235,8 @@ On DBFlux shutdown:
 - hosts started manually outside DBFlux are not tracked and are not killed
 
 This guarantees DBFlux cleans up only the processes it owns.
+
+If a managed host exits early or times out before the socket is ready, DBFlux reports the service id together with a bounded tail of recent stdout/stderr to aid troubleshooting.
 
 ## Minimal implementation checklist
 

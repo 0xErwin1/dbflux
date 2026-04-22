@@ -3,13 +3,14 @@ pub(crate) mod refresh_policy;
 pub(crate) mod scripts_directory;
 
 pub use app::{
-    AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
-    GlobalOverrides, GovernanceSettings, PolicyRoleConfig, RefreshPolicySetting, RpcServiceKind,
+    driver_maps_differ, migrate_app_config, AppConfig, AppConfigStore, AppConfigWarning,
+    DangerousAction, DriverKey, EffectiveSettings, GeneralSettings, GlobalOverrides,
+    GovernanceSettings, LoadedAppConfig, PolicyRoleConfig, RefreshPolicySetting, RpcServiceKind,
     ServiceConfig, ServiceRpcApiContract, StartupFocus, ThemeSetting, ToolPolicyConfig,
-    TrustedClientConfig, driver_maps_differ, migrate_app_config,
+    TrustedClientConfig, EXTERNAL_SERVICES_CONFIG_KEY,
 };
 pub use refresh_policy::RefreshPolicy;
 pub use scripts_directory::{
-    ScriptEntry, ScriptsDirectory, all_script_extensions, filter_entries, hook_script_path,
-    is_openable_script,
+    all_script_extensions, filter_entries, hook_script_path, is_openable_script, ScriptEntry,
+    ScriptsDirectory,
 };

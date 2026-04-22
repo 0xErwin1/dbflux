@@ -123,6 +123,68 @@ enum HookPhaseState {
     Cancelled,
 }
 
+#[cfg(test)]
+use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
+
+#[cfg(test)]
+use dbflux_core::PrepareConnectError;
+
+#[cfg(test)]
+fn format_external_driver_stage_message(
+    stage: &ExternalDriverStage,
+    driver_id: &str,
+    socket_id: &str,
+    summary: &str,
+) -> String {
+    match stage {
+        ExternalDriverStage::Config => format!(
+            "External driver '{}' is unavailable because service '{}' has an invalid configuration: {}",
+            driver_id, socket_id, summary
+        ),
+        ExternalDriverStage::Launch => format!(
+            "External driver '{}' is unavailable because service '{}' did not start: {}",
+            driver_id, socket_id, summary
+        ),
+        ExternalDriverStage::Probe => format!(
+            "External driver '{}' is unavailable because service '{}' failed during driver probe: {}",
+            driver_id, socket_id, summary
+        ),
+    }
+}
+
+#[cfg(test)]
+pub(super) fn format_connect_prepare_error(
+    error: &PrepareConnectError,
+    diagnostic: Option<&ExternalDriverDiagnostic>,
+) -> String {
+    match (error, diagnostic) {
+        (
+            PrepareConnectError::ExternalDriverUnavailable {
+                driver_id,
+                socket_id,
+            },
+            Some(diagnostic),
+        ) => {
+            let mut message = format_external_driver_stage_message(
+                &diagnostic.stage,
+                driver_id,
+                socket_id,
+                &diagnostic.summary,
+            );
+
+            if let Some(details) = diagnostic.details.as_deref()
+                && !details.trim().is_empty()
+            {
+                message.push_str("\n\n");
+                message.push_str(details);
+            }
+
+            message
+        }
+        _ => error.to_string(),
+    }
+}
+
 fn hook_task_details(
     hook: &ConnectionHook,
     phase: HookPhase,
