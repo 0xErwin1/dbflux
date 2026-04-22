@@ -1,12 +1,70 @@
 use super::*;
+use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
 use dbflux_core::{
     CancelToken, ConnectionHook, HookContext, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
+    PrepareConnectError,
 };
 
 enum HookPhaseState {
     Continue { warnings: Vec<String> },
     Aborted { error: String },
     Cancelled,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        format_connect_prepare_error, is_quiet_connect_skip, sanitize_connect_skip_log_message,
+    };
+    use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
+    use dbflux_core::PrepareConnectError;
+
+    #[test]
+    fn format_connect_prepare_error_uses_diagnostic_stage_in_message() {
+        let error = PrepareConnectError::ExternalDriverUnavailable {
+            driver_id: "rpc:demo.sock".to_string(),
+            socket_id: "demo.sock".to_string(),
+        };
+
+        let config_message = format_connect_prepare_error(
+            &error,
+            Some(&ExternalDriverDiagnostic {
+                socket_id: "demo.sock".to_string(),
+                stage: ExternalDriverStage::Config,
+                summary: "bad config".to_string(),
+                details: None,
+            }),
+        );
+        let probe_message = format_connect_prepare_error(
+            &error,
+            Some(&ExternalDriverDiagnostic {
+                socket_id: "demo.sock".to_string(),
+                stage: ExternalDriverStage::Probe,
+                summary: "probe failed".to_string(),
+                details: None,
+            }),
+        );
+
+        assert!(config_message.contains("invalid configuration"));
+        assert!(probe_message.contains("failed during driver probe"));
+    }
+
+    #[test]
+    fn connect_skip_classifier_keeps_pending_and_racing_connects_quiet() {
+        assert!(is_quiet_connect_skip("Connection already pending"));
+        assert!(is_quiet_connect_skip("Operation started by another thread"));
+        assert!(!is_quiet_connect_skip("External driver unavailable"));
+    }
+
+    #[test]
+    fn sanitize_connect_skip_log_message_drops_recent_host_output_block() {
+        let message = "External driver unavailable\n\nRecent host output:\nstderr line";
+
+        assert_eq!(
+            sanitize_connect_skip_log_message(message),
+            "External driver unavailable"
+        );
+    }
 }
 
 fn single_hook_result(executions: Vec<dbflux_core::HookExecution>) -> Result<HookResult, String> {
@@ -58,6 +116,71 @@ fn hook_task_details(
                 error
             )
         }
+    }
+}
+
+fn format_external_driver_stage_message(
+    stage: &ExternalDriverStage,
+    driver_id: &str,
+    socket_id: &str,
+    summary: &str,
+) -> String {
+    match stage {
+        ExternalDriverStage::Config => format!(
+            "External driver '{}' is unavailable because service '{}' has an invalid configuration: {}",
+            driver_id, socket_id, summary
+        ),
+        ExternalDriverStage::Launch => format!(
+            "External driver '{}' is unavailable because service '{}' did not start: {}",
+            driver_id, socket_id, summary
+        ),
+        ExternalDriverStage::Probe => format!(
+            "External driver '{}' is unavailable because service '{}' failed during driver probe: {}",
+            driver_id, socket_id, summary
+        ),
+    }
+}
+
+fn is_quiet_connect_skip(message: &str) -> bool {
+    message.contains("already pending") || message.contains("another thread")
+}
+
+fn sanitize_connect_skip_log_message(message: &str) -> &str {
+    message
+        .split_once("\n\nRecent host output:\n")
+        .map(|(summary, _)| summary)
+        .unwrap_or(message)
+}
+
+pub(super) fn format_connect_prepare_error(
+    error: &PrepareConnectError,
+    diagnostic: Option<&ExternalDriverDiagnostic>,
+) -> String {
+    match (error, diagnostic) {
+        (
+            PrepareConnectError::ExternalDriverUnavailable {
+                driver_id,
+                socket_id,
+            },
+            Some(diagnostic),
+        ) => {
+            let mut message = format_external_driver_stage_message(
+                &diagnostic.stage,
+                driver_id,
+                socket_id,
+                &diagnostic.summary,
+            );
+
+            if let Some(details) = diagnostic.details.as_deref()
+                && !details.trim().is_empty()
+            {
+                message.push_str("\n\n");
+                message.push_str(details);
+            }
+
+            message
+        }
+        _ => error.to_string(),
     }
 }
 
@@ -913,22 +1036,44 @@ impl Sidebar {
                     return Err("Operation started by another thread".to_string());
                 }
 
-                result.map(|p| {
-                    let name = p.profile.name.clone();
-                    let hook_execution = p.prepare_hooks(state.resolve_profile_hooks(&p.profile));
+                match result {
+                    Ok(params) => {
+                        let name = params.profile.name.clone();
+                        let hook_execution =
+                            params.prepare_hooks(state.resolve_profile_hooks(&params.profile));
 
-                    (
-                        p,
-                        name,
-                        hook_execution.hooks.pre_connect,
-                        hook_execution.hooks.post_connect,
-                        hook_execution.context,
-                    )
-                })
+                        Ok((
+                            params,
+                            name,
+                            hook_execution.hooks.pre_connect,
+                            hook_execution.hooks.post_connect,
+                            hook_execution.context,
+                        ))
+                    }
+                    Err(error) => Err(format_connect_prepare_error(
+                        &error,
+                        error
+                            .socket_id()
+                            .and_then(|socket_id| state.external_driver_diagnostic(socket_id)),
+                    )),
+                }
             }) {
                 Ok(p) => p,
-                Err(e) => {
-                    log::info!("Connect skipped: {}", e);
+                Err(message) => {
+                    log::info!(
+                        "Connect skipped: {}",
+                        sanitize_connect_skip_log_message(&message)
+                    );
+
+                    if !is_quiet_connect_skip(&message) {
+                        self.pending_toast = Some(PendingToast {
+                            message,
+                            is_error: true,
+                        });
+                    }
+
+                    self.refresh_tree(cx);
+                    cx.notify();
                     return;
                 }
             };

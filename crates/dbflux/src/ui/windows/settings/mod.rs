@@ -266,6 +266,7 @@ pub struct SettingsWindow {
     // Services section state
     svc_services: Vec<ServiceConfig>,
     svc_config_store: Option<AppConfigStore>,
+    svc_load_error: Option<String>,
 
     svc_focus: ServiceFocus,
     svc_selected_idx: Option<usize>,

@@ -373,6 +373,7 @@ impl SettingsWindow {
 
             svc_services: Vec::new(),
             svc_config_store: None,
+            svc_load_error: None,
             svc_focus: ServiceFocus::List,
             svc_selected_idx: None,
             svc_form_cursor: 0,

@@ -586,7 +586,8 @@ impl SqlQueryDocument {
                     .database
                     .clone()
                     .or_else(|| connected.active_database.clone());
-                let target = task_target_for_execution(conn_id, connected, active_database.as_deref());
+                let target =
+                    task_target_for_execution(conn_id, connected, active_database.as_deref());
 
                 self.app_state.read(cx).cancel_query_for_target(&target);
             }

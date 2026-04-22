@@ -23,8 +23,8 @@ pub use manager::{
     FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
     FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaTypesParams,
     FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
-    OwnedCacheEntry, PendingOperation, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
-    SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
+    OwnedCacheEntry, PendingOperation, PrepareConnectError, RedisKeyCache, RedisKeyCacheEntry,
+    ResolvedProxy, SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
 };
 pub use profile::{
     ConnectionProfile, DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
