@@ -2375,7 +2375,7 @@ impl AppState {
     pub fn set_profile_mcp_governance(
         &mut self,
         profile_id: Uuid,
-        governance: Option<ConnectionMcpGovernance>,
+        governance: Option<dbflux_core::ConnectionMcpGovernance>,
     ) -> Result<(), String> {
         let Some(profile) = self
             .facade

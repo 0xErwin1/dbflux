@@ -37,7 +37,7 @@ You should see:
 
 ## Integrate with DBFlux
 
-DBFlux stores RPC services in its SQLite-backed internal settings. The supported setup path is the Services UI, not hand-editing `config.json`.
+RPC services are created from the DBFlux UI.
 
 1. Build the example binary.
 2. Start DBFlux normally.
@@ -54,10 +54,6 @@ DBFlux stores RPC services in its SQLite-backed internal settings. The supported
    - `API Key` (optional)
 8. Save and connect.
 
-### Legacy import compatibility
-
-`~/.config/dbflux/config.json` is still accepted as a legacy import source for the canonical `services` key, but it is no longer the recommended way to configure RPC services. Prefer `Settings → RPC Services` so the runtime and persisted state stay aligned.
-
 ## Process ownership
 
 - If DBFlux starts this service from `Settings → RPC Services`, DBFlux tracks it and stops it on DBFlux shutdown.
@@ -69,7 +65,6 @@ DBFlux stores RPC services in its SQLite-backed internal settings. The supported
 - If `command` and `args` are both omitted, DBFlux expects this service to already be running.
 - If `command` is omitted but `args` is present, DBFlux launches `dbflux-driver-host`, and your `args` must include both `--driver` and `--socket` with the same socket ID.
 - Use absolute paths for `command` while testing to avoid PATH issues.
-- DBFlux only reads the canonical `services` key when importing legacy config.
 
 ## Queries to try
 

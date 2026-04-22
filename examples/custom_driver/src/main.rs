@@ -7,7 +7,6 @@
 //!   cargo run --bin custom-driver -- --socket my-driver.sock
 //!
 //! Then register the binary from Settings → RPC Services in DBFlux.
-//! `config.json` is only a legacy import path for the canonical `services` key.
 //! If DBFlux manages the service, keep the launch command configured.
 //! If you want a manual/already-running service, leave both `command` and `args` empty in DBFlux.
 

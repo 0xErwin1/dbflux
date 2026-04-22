@@ -15,7 +15,7 @@ For active driver services, **the service is the source of truth** for:
 - driver metadata (`DriverMetadataDto`: name, icon, category, capabilities, query language, etc.)
 - connection form definition (`DriverFormDefDto`)
 
-DBFlux stores launch configuration in its SQLite-backed services config. Legacy `config.json` rows are imported for compatibility, but the runtime no longer reads that file on normal startup.
+DBFlux stores launch configuration in its SQLite-backed services config. RPC services are created and edited from **Settings → RPC Services**.
 
 ## Integration model
 
@@ -59,31 +59,11 @@ Primary storage: `~/.local/share/dbflux/dbflux.db` (`cfg_services`, `cfg_service
 
 Settings UI: **Settings → RPC Services**
 
-Schema used by DBFlux:
-
-```json
-{
-  "services": [
-    {
-      "socket_id": "my-driver.sock",
-      "kind": "driver",
-      "command": "/absolute/path/to/driver-binary",
-      "args": ["--socket", "my-driver.sock"],
-      "env": {
-        "RUST_LOG": "info"
-      },
-      "startup_timeout_ms": 5000
-    }
-  ]
-}
-```
-
 Notes:
 
 - `socket_id` is required.
 - `kind` supports `driver` and `auth_provider`.
 - `kind` supports `driver` and `auth_provider`.
-- `services` is the canonical config key for legacy JSON import.
 - `command` is optional.
   - If `command` is omitted and `args` is empty, DBFlux expects the service to already be running.
   - For `driver`, if `command` is omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
@@ -302,17 +282,19 @@ Recommended:
 Use:
 
 - `examples/custom_driver/src/main.rs`
-- `examples/custom_driver/config.example.json`
+- `examples/custom_driver/README.md`
+- `examples/custom_auth_provider/src/main.rs`
+- `examples/custom_auth_provider/README.md`
 
-That example is compatible with the current active driver-service integration model.
+Those examples are compatible with the current active driver-service integration model.
 
 Quick test path:
 
 1. add a new **Driver** service in **Settings → RPC Services**
-2. copy the values from `examples/custom_driver/config.example.json`
-3. update `command` to your absolute binary path
+2. point `command` to your built example binary
+3. set `args` to `--socket <your-socket-id>`
 4. restart DBFlux
-5. create a connection using the external driver form fields
+5. create either a connection (driver example) or an auth profile (auth-provider example) through the UI forms exposed by the service
 
 ## References
 

@@ -1,4 +1,4 @@
-# RPC Services Config Reference
+# RPC Services UI Reference
 
 This file documents the storage and management of RPC services in DBFlux.
 
@@ -66,30 +66,6 @@ Notes:
 - If API metadata is missing on an existing driver row, DBFlux defaults it to the current `driver_rpc` contract at version `1.1`.
 - If API metadata is missing on an auth-provider row, DBFlux defaults it to the current `auth_provider_rpc` contract at version `1.0`.
 - `api_family` / `api_major` are used as startup preflight for auth providers before DBFlux probes the socket.
-
-## Legacy Migration
-
-On first startup after upgrading, DBFlux imports any existing RPC services from `~/.config/dbflux/config.json` into `cfg_services`. This is handled automatically by `dbflux_storage/src/legacy.rs` and is idempotent (tracked in `sys_legacy_imports`).
-
-The legacy `config.json` format had this structure:
-
-```json
-{
-  "services": [
-    {
-      "socket_id": "my-driver.sock",
-      "command": "/absolute/path/to/driver",
-      "args": ["--socket", "my-driver.sock"],
-      "env": {
-        "RUST_LOG": "info"
-      },
-      "startup_timeout_ms": 5000
-    }
-  ]
-}
-```
-
-This is converted to the SQLite schema automatically. Legacy rows are treated as `service_kind='driver'`. The `config.json` file itself is not used after import.
 
 ## Semantics
 

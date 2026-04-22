@@ -1,4 +1,3 @@
-use dbflux_core::EXTERNAL_SERVICES_CONFIG_KEY;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -147,23 +146,23 @@ fn external_driver_docs_use_only_canonical_services_key() {
         read_workspace_file("docs/RPC_SERVICES_CONFIG.md"),
         read_workspace_file("docs/DRIVER_RPC_PROTOCOL.md"),
         read_workspace_file("examples/custom_driver/README.md"),
+        read_workspace_file("examples/custom_auth_provider/README.md"),
     ];
 
     for content in docs {
-        assert!(content.contains(EXTERNAL_SERVICES_CONFIG_KEY));
         assert!(!content.contains("rpc_services"));
+        assert!(!content.contains("config.json"));
     }
 }
 
 #[test]
-fn custom_driver_example_json_uses_only_canonical_services_key() {
-    let example = read_workspace_file("examples/custom_driver/config.example.json");
-    let parsed: serde_json::Value = serde_json::from_str(&example).expect("valid example json");
-
-    let object = parsed.as_object().expect("top-level object");
-
-    assert!(object.contains_key(EXTERNAL_SERVICES_CONFIG_KEY));
-    assert!(!object.contains_key("rpc_services"));
+fn custom_driver_example_json_was_removed() {
+    assert!(
+        !workspace_root()
+            .join("examples/custom_driver/config.example.json")
+            .exists(),
+        "legacy JSON example must not exist"
+    );
 }
 
 #[test]
@@ -171,8 +170,7 @@ fn custom_driver_readme_points_to_settings_backed_rpc_services_flow() {
     let readme = read_workspace_file("examples/custom_driver/README.md");
 
     assert!(readme.contains("Settings → RPC Services"));
-    assert!(readme.contains("SQLite-backed"));
-    assert!(readme.contains("legacy import"));
+    assert!(!readme.contains("config.json"));
 }
 
 #[test]
@@ -180,6 +178,18 @@ fn custom_driver_module_docs_match_manual_and_managed_launch_contract() {
     let source = read_workspace_file("examples/custom_driver/src/main.rs");
 
     assert!(source.contains("Settings → RPC Services"));
-    assert!(source.contains("legacy import path"));
     assert!(source.contains("leave both `command` and `args` empty"));
+}
+
+#[test]
+fn custom_auth_provider_docs_point_to_ui_only_flow() {
+    let readme = read_workspace_file("examples/custom_auth_provider/README.md");
+    let source = read_workspace_file("examples/custom_auth_provider/src/main.rs");
+
+    assert!(readme.contains("Settings → RPC Services"));
+    assert!(readme.contains("Settings → Auth Profiles"));
+    assert!(!readme.contains("config.json"));
+
+    assert!(source.contains("Settings → RPC Services"));
+    assert!(source.contains("Settings → Auth Profiles"));
 }
