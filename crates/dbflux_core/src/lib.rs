@@ -27,8 +27,9 @@ pub use config::{
     AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
     GlobalOverrides, GovernanceSettings, PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting,
     RpcServiceKind, ScriptEntry, ScriptsDirectory, ServiceConfig, ServiceRpcApiContract,
-    StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, all_script_extensions,
-    driver_maps_differ, filter_entries, hook_script_path, is_openable_script, migrate_app_config,
+    StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, AppConfigWarning,
+    EXTERNAL_SERVICES_CONFIG_KEY, LoadedAppConfig, all_script_extensions, driver_maps_differ,
+    filter_entries, hook_script_path, is_openable_script, migrate_app_config,
 };
 
 pub use connection::{
@@ -49,7 +50,7 @@ pub use connection::{
     RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod,
     SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode, SwitchDatabaseParams,
     SwitchDatabaseResult, TreeStore, detached_process_channel, execute_streaming_process,
-    host_matches_no_proxy, output_channel,
+    host_matches_no_proxy, output_channel, PrepareConnectError,
 };
 
 pub use core::{

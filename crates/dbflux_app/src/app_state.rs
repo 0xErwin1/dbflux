@@ -55,10 +55,10 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
-use crate::rpc_services::{DriverServiceAdaptation, adapt_driver_service, discover_services};
+use crate::rpc_services::{adapt_driver_service, discover_services, DriverServiceAdaptation};
 
 #[cfg(test)]
-use crate::rpc_services::{DriverProbe, adapt_driver_service_with};
+use crate::rpc_services::{adapt_driver_service_with, DriverProbe};
 
 #[cfg(test)]
 use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
@@ -885,15 +885,18 @@ impl AppState {
             }
         };
 
-        self.facade.connections.prepare_connect_profile(
-            profile_id,
-            &self.facade.profiles.profiles,
-            &self.facade.ssh_tunnels.items,
-            &self.facade.proxies.items,
-            &secrets.secret_store_arc(),
-            |profile, ssh_tunnels| secrets.get_ssh_secret_for_profile(profile, ssh_tunnels),
-            proxy_secret,
-        )
+        self.facade
+            .connections
+            .prepare_connect_profile(
+                profile_id,
+                &self.facade.profiles.profiles,
+                &self.facade.ssh_tunnels.items,
+                &self.facade.proxies.items,
+                &secrets.secret_store_arc(),
+                |profile, ssh_tunnels| secrets.get_ssh_secret_for_profile(profile, ssh_tunnels),
+                proxy_secret,
+            )
+            .map_err(|error| error.to_string())
     }
 
     pub fn apply_connect_profile(

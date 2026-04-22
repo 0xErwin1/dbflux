@@ -75,7 +75,7 @@ The legacy `config.json` format had this structure:
 
 ```json
 {
-  "rpc_services": [
+  "services": [
     {
       "socket_id": "my-driver.sock",
       "command": "/absolute/path/to/driver",
@@ -101,9 +101,25 @@ This is converted to the SQLite schema automatically. Legacy rows are treated as
 - Services with `service_kind='auth_provider'` are currently stored and discovered only; they do not participate in runtime features yet
 - Driver-path negotiation selects the highest mutually supported compatible minor version during `Hello`, then requires every later envelope to use that exact negotiated version
 
+## Fields
+
+- `socket_id` (required): local socket name used by DBFlux and the service.
+  - Allowed characters: ASCII letters, numbers, `.`, `_`, `-`
+  - Path separators, spaces, and other punctuation are rejected.
+  - The value is passed to the platform socket namespace as-is, so keep it short and stable.
+- `command` (optional): executable to run when DBFlux needs to start the service.
+  - If omitted and `args` is also empty, DBFlux treats the service as already running and does not spawn anything.
+  - If omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
+  - In that default-host mode, `args` must include both `--driver` and `--socket` so the host can start correctly.
+- `args` (optional): process arguments.
+- `env` (optional): environment variables for the spawned process.
+- `startup_timeout_ms` (optional): max wait time for socket readiness after spawn.
+  - Default: `5000`
+
 ## Common Mistakes
 
 - Mismatched socket names between the service configuration and service args
 - Relative `command` path that does not resolve under the DBFlux process environment
 - Editing the database directly instead of through the Settings UI
 - Service not implementing required `Hello` fields for the current RPC protocol version
+- Omitting `command` while providing partial `args`; if you want DBFlux to launch the default host, `args` must include both `--driver` and `--socket`.
