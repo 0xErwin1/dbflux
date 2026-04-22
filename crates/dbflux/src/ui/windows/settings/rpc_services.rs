@@ -1,10 +1,61 @@
 use crate::ui::components::toast::ToastExt;
-use dbflux_core::{AppConfig, AppConfigStore, ServiceConfig};
+use dbflux_core::{AppConfig, AppConfigStore, AppConfigWarning, LoadedAppConfig, ServiceConfig};
+use dbflux_driver_ipc::IpcDriver;
 use gpui::*;
 use gpui_component::input::InputState;
 use std::collections::HashMap;
 
 use super::{ServiceFocus, ServiceFormRow, SettingsWindow};
+
+fn validate_service_launch_config(
+    socket_id: &str,
+    command: Option<&str>,
+    args: &[String],
+    env: &HashMap<String, String>,
+    startup_timeout_ms: Option<u64>,
+) -> Result<(), String> {
+    IpcDriver::build_launch_config(socket_id, command, args, env, startup_timeout_ms)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn validate_service_for_save(service: &ServiceConfig) -> Result<(), String> {
+    IpcDriver::validate_socket_id(&service.socket_id).map_err(|error| error.to_string())?;
+
+    if !service.enabled {
+        return Ok(());
+    }
+
+    validate_service_launch_config(
+        &service.socket_id,
+        service.command.as_deref(),
+        &service.args,
+        &service.env,
+        service.startup_timeout_ms,
+    )
+}
+
+fn summarize_config_warnings(warnings: &[AppConfigWarning]) -> Option<String> {
+    if warnings.is_empty() {
+        None
+    } else {
+        Some(
+            warnings
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    }
+}
+
+fn finalize_service_config_save(
+    mut loaded: LoadedAppConfig,
+    services: &[ServiceConfig],
+) -> Result<AppConfig, String> {
+    loaded.config.services = services.to_vec();
+    Ok(loaded.config)
+}
 
 impl SettingsWindow {
     pub(super) fn load_services(&mut self) {
@@ -14,41 +65,61 @@ impl SettingsWindow {
                 log::error!("Failed to create config store: {}", e);
                 self.svc_services = Vec::new();
                 self.svc_config_store = None;
+                self.svc_load_error = Some(format!("Failed to create config store: {}", e));
                 return;
             }
         };
 
-        self.svc_services = match store.load() {
-            Ok(config) => config.services,
+        match store.load_with_warnings() {
+            Ok(loaded) => {
+                self.svc_load_error = summarize_config_warnings(&loaded.warnings);
+                self.svc_services = loaded.config.services;
+            }
             Err(e) => {
                 log::error!("Failed to load config: {}", e);
-                Vec::new()
+                self.svc_services = Vec::new();
+                self.svc_load_error = Some(format!("Failed to load config: {}", e));
             }
-        };
+        }
 
         self.svc_config_store = Some(store);
     }
 
-    fn persist_services(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn persist_services(
+        &self,
+        services: &[ServiceConfig],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(ref store) = self.svc_config_store else {
             cx.toast_error("Cannot save: config store unavailable", window);
-            return;
+            return false;
         };
 
-        let mut config = match store.load() {
-            Ok(c) => c,
+        let loaded = match store.load_with_warnings() {
+            Ok(config) => config,
             Err(e) => {
                 log::error!("Failed to load config before save: {}", e);
-                AppConfig::default()
+                cx.toast_error(format!("Cannot save services: {}", e), window);
+                return false;
             }
         };
 
-        config.services = self.svc_services.clone();
+        let config = match finalize_service_config_save(loaded, services) {
+            Ok(config) => config,
+            Err(error) => {
+                cx.toast_error(format!("Cannot save services: {}", error), window);
+                return false;
+            }
+        };
 
-        if let Err(e) = store.save(&config) {
+        if let Err(e) = store.save_without_legacy_service_key(&config) {
             log::error!("Failed to save config: {}", e);
             cx.toast_error(format!("Failed to save config: {}", e), window);
+            return false;
         }
+
+        true
     }
 
     // --- Form lifecycle ---
@@ -204,17 +275,28 @@ impl SettingsWindow {
             startup_timeout_ms,
         };
 
+        if let Err(error) = validate_service_for_save(&service) {
+            cx.toast_error(error, window);
+            return;
+        }
+
+        let mut next_services = self.svc_services.clone();
+
         let saved_idx = if let Some(idx) = self.editing_svc_idx {
-            if idx < self.svc_services.len() {
-                self.svc_services[idx] = service;
+            if idx < next_services.len() {
+                next_services[idx] = service;
             }
             idx
         } else {
-            self.svc_services.push(service);
-            self.svc_services.len() - 1
+            next_services.push(service);
+            next_services.len() - 1
         };
 
-        self.persist_services(window, cx);
+        if !self.persist_services(&next_services, window, cx) {
+            return;
+        }
+
+        self.svc_services = next_services;
         cx.toast_info("Service saved. Restart required to apply changes.", window);
 
         self.svc_selected_idx = Some(saved_idx);
@@ -238,7 +320,15 @@ impl SettingsWindow {
             return;
         }
 
-        self.svc_services.remove(idx);
+        let mut next_services = self.svc_services.clone();
+        next_services.remove(idx);
+
+        if !self.persist_services(&next_services, window, cx) {
+            self.pending_delete_svc_idx = Some(idx);
+            return;
+        }
+
+        self.svc_services = next_services;
 
         if self.editing_svc_idx == Some(idx) {
             self.clear_svc_form(window, cx);
@@ -259,7 +349,6 @@ impl SettingsWindow {
             }
         }
 
-        self.persist_services(window, cx);
         cx.toast_info(
             "Service deleted. Restart required to apply changes.",
             window,
@@ -626,5 +715,127 @@ impl SettingsWindow {
             self.svc_form_cursor = count - 1;
         }
         self.svc_env_col = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        finalize_service_config_save, summarize_config_warnings, validate_service_for_save,
+        validate_service_launch_config,
+    };
+    use dbflux_core::{AppConfig, AppConfigWarning, LoadedAppConfig, ServiceConfig};
+    use std::collections::HashMap;
+
+    fn service(
+        socket_id: &str,
+        enabled: bool,
+        command: Option<&str>,
+        timeout: Option<u64>,
+    ) -> ServiceConfig {
+        ServiceConfig {
+            socket_id: socket_id.to_string(),
+            enabled,
+            command: command.map(str::to_string),
+            args: Vec::new(),
+            env: HashMap::new(),
+            startup_timeout_ms: timeout,
+        }
+    }
+
+    #[test]
+    fn validate_service_launch_config_rejects_zero_timeout() {
+        let error = validate_service_launch_config(
+            "demo.sock",
+            Some("custom-host"),
+            &[],
+            &HashMap::new(),
+            Some(0),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("at least 1 ms"));
+    }
+
+    #[test]
+    fn validate_service_launch_config_rejects_invalid_default_host_args() {
+        let error = validate_service_launch_config(
+            "demo.sock",
+            None,
+            &["--driver".to_string(), "demo".to_string()],
+            &HashMap::new(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("--socket"));
+    }
+
+    #[test]
+    fn validate_service_for_save_allows_disabling_broken_service() {
+        let service = service("demo.sock", false, None, Some(0));
+
+        validate_service_for_save(&service).expect("disabled services should still be savable");
+    }
+
+    #[test]
+    fn validate_service_for_save_rejects_invalid_socket_id() {
+        let error =
+            validate_service_for_save(&service("bad/socket", true, None, None)).unwrap_err();
+
+        assert!(error.contains("bad/socket"));
+    }
+
+    #[test]
+    fn summarize_config_warnings_returns_none_for_empty_warning_list() {
+        assert_eq!(summarize_config_warnings(&[]), None);
+    }
+
+    #[test]
+    fn finalize_service_config_save_allows_legacy_warning_and_updates_services() {
+        let loaded = LoadedAppConfig {
+            config: AppConfig::default(),
+            warnings: vec![AppConfigWarning::LegacyRpcServicesIgnored],
+        };
+
+        let updated =
+            finalize_service_config_save(loaded, &[service("demo.sock", true, None, None)])
+                .unwrap();
+
+        assert_eq!(updated.services.len(), 1);
+        assert_eq!(updated.services[0].socket_id, "demo.sock");
+    }
+
+    #[test]
+    fn finalize_service_config_save_updates_services_without_touching_other_sections() {
+        let mut config = AppConfig::default();
+        config.general.theme = dbflux_core::ThemeSetting::Light;
+        config.hook_definitions.insert(
+            "after_connect".to_string(),
+            dbflux_core::ConnectionHook {
+                enabled: true,
+                command: "echo".to_string(),
+                args: Vec::new(),
+                cwd: None,
+                env: HashMap::new(),
+                inherit_env: true,
+                timeout_ms: None,
+                on_failure: dbflux_core::HookFailureMode::Warn,
+            },
+        );
+
+        let loaded = LoadedAppConfig {
+            config,
+            warnings: Vec::new(),
+        };
+
+        let updated =
+            finalize_service_config_save(loaded, &[service("demo.sock", true, None, None)])
+                .unwrap();
+
+        assert_eq!(updated.services.len(), 1);
+        assert_eq!(updated.services[0].socket_id, "demo.sock");
+        assert_eq!(updated.general.theme, dbflux_core::ThemeSetting::Light);
+        assert!(updated.hook_definitions.contains_key("after_connect"));
     }
 }

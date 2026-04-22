@@ -5,7 +5,7 @@ use dbflux_core::{
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
     SessionFacade, SessionStore, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{driver::IpcDriverLaunchConfig, IpcDriver};
+use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use std::collections::HashMap;
@@ -34,11 +34,33 @@ use dbflux_driver_redis::RedisDriver;
 pub use dbflux_core::{
     ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
     FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaTypesParams,
-    FetchTableDetailsParams, SwitchDatabaseParams,
+    FetchTableDetailsParams, PrepareConnectError, SwitchDatabaseParams,
 };
 
 fn rpc_registry_id(socket_id: &str) -> String {
     format!("rpc:{}", socket_id)
+}
+
+const EXTERNAL_DRIVER_STARTUP_OUTPUT_SEPARATOR: &str = "\n\nRecent host output:\n";
+const EXTERNAL_DRIVER_LAUNCH_FAILURE_MARKERS: &[&str] = &[
+    "Failed to start driver host '",
+    "exited before socket was ready",
+    "did not become ready within",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternalDriverStage {
+    Config,
+    Launch,
+    Probe,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalDriverDiagnostic {
+    pub socket_id: String,
+    pub stage: ExternalDriverStage,
+    pub summary: String,
+    pub details: Option<String>,
 }
 
 struct BuiltDrivers {
@@ -47,6 +69,7 @@ struct BuiltDrivers {
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, ConnectionHook>,
+    external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
 }
 
 pub struct AppState {
@@ -56,6 +79,7 @@ pub struct AppState {
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, ConnectionHook>,
+    external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
     recent_files: Option<RecentFilesStore>,
     scripts_directory: Option<ScriptsDirectory>,
     session_store: Option<SessionStore>,
@@ -71,6 +95,7 @@ impl AppState {
             built.driver_overrides,
             built.driver_settings,
             built.hook_definitions,
+            built.external_driver_diagnostics,
         )
     }
 
@@ -80,6 +105,7 @@ impl AppState {
         driver_overrides: HashMap<DriverKey, GlobalOverrides>,
         driver_settings: HashMap<DriverKey, FormValues>,
         hook_definitions: HashMap<String, ConnectionHook>,
+        external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
     ) -> Self {
         let recent_files = RecentFilesStore::new()
             .inspect_err(|e| log::warn!("Failed to initialize recent files store: {}", e))
@@ -105,6 +131,7 @@ impl AppState {
             driver_overrides,
             driver_settings,
             hook_definitions,
+            external_driver_diagnostics,
             recent_files,
             scripts_directory,
             session_store,
@@ -148,13 +175,20 @@ impl AppState {
         }
 
         let app_config = AppConfigStore::new()
-            .and_then(|store| store.load())
+            .and_then(|store| store.load_with_warnings())
             .inspect_err(|e| log::warn!("Failed to load app config: {}", e))
             .ok();
 
+        if let Some(loaded) = app_config.as_ref() {
+            for warning in &loaded.warnings {
+                log::warn!("App config warning: {}", warning);
+            }
+        }
+
         let (general_settings, driver_overrides, driver_settings, hook_definitions) = app_config
             .as_ref()
-            .map(|config| {
+            .map(|loaded| {
+                let config = &loaded.config;
                 (
                     config.general.clone(),
                     config.driver_overrides.clone(),
@@ -171,60 +205,16 @@ impl AppState {
                 )
             });
 
-        if let Some(config) = app_config {
-            for service in config.services {
-                if !service.enabled {
-                    log::info!("Skipping disabled service '{}'", service.socket_id);
-                    continue;
-                }
-
-                let driver_id = rpc_registry_id(&service.socket_id);
-
-                if drivers.contains_key(&driver_id) {
-                    log::warn!(
-                        "Skipping external RPC service '{}': driver id already exists",
-                        service.socket_id
-                    );
-                    continue;
-                }
-
-                let launch = IpcDriverLaunchConfig {
-                    program: service
-                        .command
-                        .clone()
-                        .unwrap_or_else(|| "dbflux-driver-host".to_string()),
-                    args: service.args.clone(),
-                    env: service.env.into_iter().collect(),
-                    startup_timeout: std::time::Duration::from_millis(
-                        service.startup_timeout_ms.unwrap_or(5_000),
-                    ),
-                };
-
-                let (kind, metadata, form_definition, settings_schema) =
-                    match IpcDriver::probe_driver(&service.socket_id, Some(&launch)) {
-                        Ok(info) => info,
-                        Err(error) => {
-                            log::warn!(
-                                "Skipping RPC service '{}': failed to probe driver metadata: {}",
-                                service.socket_id,
-                                error
-                            );
-                            continue;
-                        }
-                    };
-
-                let ipc_driver = IpcDriver::new(
-                    service.socket_id.clone(),
-                    kind,
-                    metadata,
-                    form_definition,
-                    settings_schema,
+        let external_driver_diagnostics = app_config
+            .map(|loaded| {
+                let config = loaded.config;
+                Self::register_external_services(
+                    &mut drivers,
+                    config.services,
+                    |service, launch| IpcDriver::probe_driver(&service.socket_id, launch),
                 )
-                .with_launch_config(launch);
-
-                drivers.insert(driver_id, Arc::new(ipc_driver));
-            }
-        }
+            })
+            .unwrap_or_default();
 
         BuiltDrivers {
             drivers,
@@ -232,6 +222,148 @@ impl AppState {
             driver_overrides,
             driver_settings,
             hook_definitions,
+            external_driver_diagnostics,
+        }
+    }
+
+    fn register_external_services<F, E>(
+        drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
+        services: Vec<dbflux_core::ServiceConfig>,
+        mut probe: F,
+    ) -> HashMap<String, ExternalDriverDiagnostic>
+    where
+        F: FnMut(
+            &dbflux_core::ServiceConfig,
+            Option<&IpcDriverLaunchConfig>,
+        ) -> Result<
+            (
+                DbKind,
+                dbflux_core::DriverMetadata,
+                dbflux_core::DriverFormDef,
+                Option<dbflux_core::DriverFormDef>,
+            ),
+            E,
+        >,
+        E: ToString,
+    {
+        let mut diagnostics = HashMap::new();
+
+        for service in services {
+            if !service.enabled {
+                log::info!("Skipping disabled service '{}'", service.socket_id);
+                continue;
+            }
+
+            let driver_id = rpc_registry_id(&service.socket_id);
+
+            if drivers.contains_key(&driver_id) {
+                let summary = format!(
+                    "Skipping external RPC service '{}': driver id already exists",
+                    service.socket_id
+                );
+                log::warn!("{}", summary);
+                diagnostics.insert(
+                    service.socket_id.clone(),
+                    ExternalDriverDiagnostic {
+                        socket_id: service.socket_id.clone(),
+                        stage: ExternalDriverStage::Config,
+                        summary,
+                        details: None,
+                    },
+                );
+                continue;
+            }
+
+            let launch = match IpcDriver::build_launch_config(
+                &service.socket_id,
+                service.command.as_deref(),
+                &service.args,
+                &service.env,
+                service.startup_timeout_ms,
+            ) {
+                Ok(launch) => launch,
+                Err(error) => {
+                    let summary = error.to_string();
+                    log::warn!(
+                        "Skipping RPC service '{}': invalid launch config: {}",
+                        service.socket_id,
+                        summary
+                    );
+                    diagnostics.insert(
+                        service.socket_id.clone(),
+                        ExternalDriverDiagnostic {
+                            socket_id: service.socket_id.clone(),
+                            stage: ExternalDriverStage::Config,
+                            summary,
+                            details: None,
+                        },
+                    );
+                    continue;
+                }
+            };
+
+            let (kind, metadata, form_definition, settings_schema) =
+                match probe(&service, launch.as_ref()) {
+                    Ok(info) => info,
+                    Err(error) => {
+                        let (summary, details) =
+                            Self::split_external_driver_error(error.to_string());
+                        let stage = Self::classify_external_driver_probe_failure_stage(&summary);
+                        log::warn!(
+                            "Skipping RPC service '{}': failed to probe driver metadata: {}",
+                            service.socket_id,
+                            summary
+                        );
+                        diagnostics.insert(
+                            service.socket_id.clone(),
+                            ExternalDriverDiagnostic {
+                                socket_id: service.socket_id.clone(),
+                                stage,
+                                summary,
+                                details,
+                            },
+                        );
+                        continue;
+                    }
+                };
+
+            let ipc_driver = IpcDriver::new(
+                service.socket_id.clone(),
+                kind,
+                metadata,
+                form_definition,
+                settings_schema,
+            );
+
+            let ipc_driver = match launch {
+                Some(launch) => ipc_driver.with_launch_config(launch),
+                None => ipc_driver,
+            };
+
+            drivers.insert(driver_id, Arc::new(ipc_driver));
+        }
+
+        diagnostics
+    }
+
+    fn split_external_driver_error(message: String) -> (String, Option<String>) {
+        match message.split_once(EXTERNAL_DRIVER_STARTUP_OUTPUT_SEPARATOR) {
+            Some((summary, details)) => (
+                summary.to_string(),
+                Some(format!("Recent host output:\n{}", details.trim())),
+            ),
+            None => (message, None),
+        }
+    }
+
+    fn classify_external_driver_probe_failure_stage(message: &str) -> ExternalDriverStage {
+        if EXTERNAL_DRIVER_LAUNCH_FAILURE_MARKERS
+            .iter()
+            .any(|marker| message.contains(marker))
+        {
+            ExternalDriverStage::Launch
+        } else {
+            ExternalDriverStage::Probe
         }
     }
 
@@ -479,7 +611,7 @@ impl AppState {
     pub fn prepare_connect_profile(
         &self,
         profile_id: Uuid,
-    ) -> Result<ConnectProfileParams, String> {
+    ) -> Result<ConnectProfileParams, PrepareConnectError> {
         let secrets = &self.facade.secrets;
 
         let proxy_secret = {
@@ -1010,6 +1142,10 @@ impl AppState {
         &self.facade.connections.drivers
     }
 
+    pub fn external_driver_diagnostic(&self, socket_id: &str) -> Option<&ExternalDriverDiagnostic> {
+        self.external_driver_diagnostics.get(socket_id)
+    }
+
     pub fn driver_for_profile(&self, profile: &ConnectionProfile) -> Option<Arc<dyn DbDriver>> {
         self.facade
             .connections
@@ -1237,11 +1373,17 @@ impl EventEmitter<AppStateChanged> for AppState {}
 
 #[cfg(test)]
 mod tests {
-    use super::AppState;
-    use dbflux_core::{DbDriver, DbKind, FormValues, GeneralSettings, RefreshPolicySetting};
+    use super::{
+        AppState, EXTERNAL_DRIVER_STARTUP_OUTPUT_SEPARATOR, ExternalDriverDiagnostic,
+        ExternalDriverStage,
+    };
+    use dbflux_core::{
+        DbDriver, DbKind, DriverFormDef, FormValues, GeneralSettings, RefreshPolicySetting,
+        ServiceConfig,
+    };
     use dbflux_test_support::FakeDriver;
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, RwLock};
 
     fn test_state(general_settings: GeneralSettings) -> AppState {
         let fake = FakeDriver::new(DbKind::SQLite);
@@ -1251,6 +1393,7 @@ mod tests {
         AppState::new_with_drivers_and_settings(
             drivers,
             general_settings,
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -1273,6 +1416,7 @@ mod tests {
         let state = AppState::new_with_drivers_and_settings(
             drivers,
             GeneralSettings::default(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -1509,5 +1653,189 @@ mod tests {
 
         assert!(!state.driver_overrides().contains_key("builtin:redis"));
         assert!(!state.driver_settings().contains_key("builtin:redis"));
+    }
+
+    fn service(socket_id: &str, command: Option<&str>, args: &[&str]) -> ServiceConfig {
+        ServiceConfig {
+            socket_id: socket_id.to_string(),
+            enabled: true,
+            command: command.map(str::to_string),
+            args: args.iter().map(|value| value.to_string()).collect(),
+            env: HashMap::new(),
+            startup_timeout_ms: None,
+        }
+    }
+
+    fn probed_driver_parts() -> (
+        DbKind,
+        dbflux_core::DriverMetadata,
+        DriverFormDef,
+        Option<DriverFormDef>,
+    ) {
+        let fake = FakeDriver::new(DbKind::SQLite);
+        (
+            fake.kind(),
+            fake.metadata().clone(),
+            fake.form_definition().clone(),
+            None,
+        )
+    }
+
+    #[test]
+    fn external_services_register_valid_driver_and_record_invalid_diagnostic() {
+        let fake = FakeDriver::new(DbKind::SQLite);
+        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
+        drivers.insert(fake.metadata().id.clone(), Arc::new(fake));
+
+        let services = vec![
+            service("valid.sock", Some("custom-host"), &["--serve"]),
+            service("invalid.sock", None, &["--driver", "demo"]),
+        ];
+
+        let diagnostics =
+            AppState::register_external_services(&mut drivers, services, |service, _launch| {
+                if service.socket_id == "valid.sock" {
+                    Ok(probed_driver_parts())
+                } else {
+                    Err("probe should not run for invalid launch config".to_string())
+                }
+            });
+
+        assert!(drivers.contains_key("rpc:valid.sock"));
+        assert!(!drivers.contains_key("rpc:invalid.sock"));
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = diagnostics.get("invalid.sock").unwrap();
+        assert_eq!(diagnostic.socket_id, "invalid.sock");
+        assert_eq!(diagnostic.stage, ExternalDriverStage::Config);
+        assert!(diagnostic.summary.contains("--socket"));
+    }
+
+    #[test]
+    fn external_services_probe_manual_live_service_without_launch_config() {
+        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
+        let services = vec![service("live.sock", None, &[])];
+        let probe_calls = Arc::new(RwLock::new(Vec::new()));
+        let probe_calls_for_closure = probe_calls.clone();
+
+        let diagnostics =
+            AppState::register_external_services(&mut drivers, services, move |service, launch| {
+                probe_calls_for_closure
+                    .write()
+                    .unwrap()
+                    .push((service.socket_id.clone(), launch.is_some()));
+                Ok::<_, String>(probed_driver_parts())
+            });
+
+        assert!(diagnostics.is_empty());
+        assert!(drivers.contains_key("rpc:live.sock"));
+        assert_eq!(
+            probe_calls.read().unwrap().as_slice(),
+            &[("live.sock".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn external_services_store_probe_failures_by_socket_id() {
+        let mut diagnostics = HashMap::new();
+        diagnostics.insert(
+            "broken.sock".to_string(),
+            ExternalDriverDiagnostic {
+                socket_id: "broken.sock".to_string(),
+                stage: ExternalDriverStage::Probe,
+                summary: "Probe failed".to_string(),
+                details: Some("socket missing".to_string()),
+            },
+        );
+
+        let state = AppState::new_with_drivers_and_settings(
+            HashMap::new(),
+            GeneralSettings::default(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            diagnostics,
+        );
+
+        let diagnostic = state.external_driver_diagnostic("broken.sock").unwrap();
+
+        assert_eq!(diagnostic.stage, ExternalDriverStage::Probe);
+        assert_eq!(diagnostic.details.as_deref(), Some("socket missing"));
+    }
+
+    #[test]
+    fn external_services_split_probe_failure_summary_and_details() {
+        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
+        let services = vec![service("broken.sock", Some("custom-host"), &["--serve"])];
+
+        let diagnostics = AppState::register_external_services(&mut drivers, services, |_, _| {
+            Err(format!(
+                "Driver host 'custom-host' exited before socket was ready (exit status: 1){EXTERNAL_DRIVER_STARTUP_OUTPUT_SEPARATOR}stderr line"
+            ))
+        });
+
+        assert!(!drivers.contains_key("rpc:broken.sock"));
+
+        let diagnostic = diagnostics.get("broken.sock").unwrap();
+        assert_eq!(diagnostic.stage, ExternalDriverStage::Launch);
+        assert_eq!(
+            diagnostic.summary,
+            "Driver host 'custom-host' exited before socket was ready (exit status: 1)"
+        );
+        assert_eq!(
+            diagnostic.details.as_deref(),
+            Some("Recent host output:\nstderr line")
+        );
+    }
+
+    #[test]
+    fn external_services_keep_probe_failure_without_startup_tail_in_summary_only() {
+        let mut drivers: HashMap<String, Arc<dyn DbDriver>> = HashMap::new();
+        let services = vec![service("broken.sock", Some("custom-host"), &["--serve"])];
+
+        let diagnostics = AppState::register_external_services(&mut drivers, services, |_, _| {
+            Err("probe failed".to_string())
+        });
+
+        assert!(!drivers.contains_key("rpc:broken.sock"));
+
+        let diagnostic = diagnostics.get("broken.sock").unwrap();
+        assert_eq!(diagnostic.summary, "probe failed");
+        assert_eq!(diagnostic.details, None);
+    }
+
+    #[test]
+    fn external_services_classify_launch_failures_separately_from_probe_failures() {
+        assert_eq!(
+            AppState::classify_external_driver_probe_failure_stage(
+                "Failed to start driver host 'custom-host': No such file or directory"
+            ),
+            ExternalDriverStage::Launch
+        );
+
+        assert_eq!(
+            AppState::classify_external_driver_probe_failure_stage(
+                "Driver host 'custom-host' exited before socket was ready (exit status: 1)"
+            ),
+            ExternalDriverStage::Launch
+        );
+
+        assert_eq!(
+            AppState::classify_external_driver_probe_failure_stage(
+                "Driver host socket 'manual.sock' is not available"
+            ),
+            ExternalDriverStage::Probe
+        );
+
+        assert_eq!(
+            AppState::classify_external_driver_probe_failure_stage(
+                "Managed RPC host for 'managed.sock' is running but socket is unavailable"
+            ),
+            ExternalDriverStage::Probe
+        );
+
+        assert_eq!(
+            AppState::classify_external_driver_probe_failure_stage("Unexpected response to Hello"),
+            ExternalDriverStage::Probe
+        );
     }
 }

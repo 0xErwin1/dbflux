@@ -12,7 +12,7 @@ DBFlux reads this file at startup.
 
 ```json
 {
-  "rpc_services": [
+  "services": [
     {
       "socket_id": "my-driver.sock",
       "command": "/absolute/path/to/driver",
@@ -29,8 +29,13 @@ DBFlux reads this file at startup.
 ## Fields
 
 - `socket_id` (required): local socket name used by DBFlux and the service.
+  - Allowed characters: ASCII letters, numbers, `.`, `_`, `-`
+  - Path separators, spaces, and other punctuation are rejected.
+  - The value is passed to the platform socket namespace as-is, so keep it short and stable.
 - `command` (optional): executable to run when DBFlux needs to start the service.
-  - Default: `dbflux-driver-host`
+  - If omitted and `args` is also empty, DBFlux treats the service as already running and does not spawn anything.
+  - If omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
+  - In that default-host mode, `args` must include both `--driver` and `--socket` so the host can start correctly.
 - `args` (optional): process arguments.
 - `env` (optional): environment variables for the spawned process.
 - `startup_timeout_ms` (optional): max wait time for socket readiness after spawn.
@@ -42,12 +47,13 @@ DBFlux reads this file at startup.
 - DBFlux internally identifies each service as `rpc:<socket_id>`.
 - Driver name/icon/category/form are **not** configured here.
   - They come from service `Hello` response (`driver_metadata`, `form_definition`).
+- `services` is the canonical key.
 
 ## Minimal example (service provides everything)
 
 ```json
 {
-  "rpc_services": [
+  "services": [
     {
       "socket_id": "my-test-driver.sock",
       "command": "/home/user/dbflux/examples/custom_driver/target/debug/custom-driver",
@@ -60,6 +66,7 @@ DBFlux reads this file at startup.
 ## Common mistakes
 
 - Mismatched socket names between config and service args.
+- Omitting `command` while providing partial `args`; if you want DBFlux to launch the default host, `args` must include both `--driver` and `--socket`.
 - Relative `command` path that does not resolve under DBFlux process environment.
 - Editing config without restarting DBFlux.
 - Service not implementing `Hello` fields required by current protocol.

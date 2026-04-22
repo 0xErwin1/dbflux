@@ -258,7 +258,7 @@ crates/
 
 - `crates/dbflux_ipc/` defines versioned app-control and driver RPC contracts, transport framing, and cross-platform socket naming.
 - `crates/dbflux/src/main.rs` uses app-control IPC for single-instance behavior (`Focus`, `OpenScript`) with protocol-version compatibility checks.
-- `crates/dbflux_core/src/config/app.rs` loads `~/.config/dbflux/config.json` and exposes `rpc_services` runtime configuration.
+- `crates/dbflux_core/src/config/app.rs` loads `~/.config/dbflux/config.json` and only accepts the canonical `services` runtime configuration.
 - `crates/dbflux/src/app.rs` probes each configured RPC service at startup (`Hello`) and registers it as an in-memory driver key `rpc:<socket_id>`.
 - `crates/dbflux_driver_ipc/src/driver.rs` implements `DbDriver` as an RPC proxy and only shuts down managed hosts that DBFlux spawned itself.
 - External connection profiles use `DbConfig::External { kind, values }`, where form values come from the remote `form_definition` returned during `Hello`.
@@ -322,7 +322,7 @@ crates/
 ## Data Flow
 
 - Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux/src/ui/workspace.rs).
-- External driver bootstrap: at startup, DBFlux reads `~/.config/dbflux/config.json`, probes each `rpc_service`, and only registers services that complete the RPC handshake (`Hello`) successfully.
+- External driver bootstrap: at startup, DBFlux reads `~/.config/dbflux/config.json`, validates each configured service launch contract, probes each service, and only registers services that complete the RPC handshake (`Hello`) successfully.
 - Connect flow: `AppState::prepare_connect_profile` selects a driver and builds `ConnectProfileParams`, which optionally creates a proxy tunnel, then connects and fetches schema (crates/dbflux/src/app.rs). Supports form-based configuration, direct URI input, optional proxy tunneling, and SSH tunneling (mutually exclusive). Connection hooks run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
 - Query flow: SqlQueryDocument submits queries to a `Connection` implementation; the query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs.
 - View mode selection: `DataGridPanel` automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB. Context menus include "Copy as Query" for generating INSERT/UPDATE/DELETE via the connection's `QueryGenerator`.
@@ -359,7 +359,7 @@ crates/
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
 - App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, and `redis` drivers (all enabled by default).
 - Runtime data (config dir via `dirs::config_dir`):
-  - `config.json` for external RPC services (`rpc_services` with socket id, command, args, env, startup timeout) (crates/dbflux_core/src/config/app.rs).
+  - `config.json` for external RPC services (`services` with socket id, command, args, env, startup timeout) (crates/dbflux_core/src/config/app.rs).
   - `profiles.json`, `ssh_tunnels.json`, and `proxies.json` (crates/dbflux_core/src/storage/json_store.rs).
   - `history.json` for query history (crates/dbflux_core/src/storage/history.rs).
   - `saved_queries.json` for user-saved queries (crates/dbflux_core/src/storage/saved_query.rs).

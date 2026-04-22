@@ -3,8 +3,9 @@ pub(crate) mod refresh_policy;
 pub(crate) mod scripts_directory;
 
 pub use app::{
-    AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
-    GlobalOverrides, RefreshPolicySetting, ServiceConfig, StartupFocus, ThemeSetting,
+    AppConfig, AppConfigStore, AppConfigWarning, DangerousAction, DriverKey,
+    EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, GeneralSettings, GlobalOverrides,
+    LoadedAppConfig, RefreshPolicySetting, ServiceConfig, StartupFocus, ThemeSetting,
     driver_maps_differ,
 };
 pub use refresh_policy::RefreshPolicy;

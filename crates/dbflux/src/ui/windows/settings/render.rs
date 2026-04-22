@@ -1,3 +1,4 @@
+use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
 use crate::ui::components::tree_nav::{self, FlatRow, TreeNavAction};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
@@ -19,6 +20,45 @@ use super::{
     ProxyAuthSelection, ProxyFocus, ProxyFormField, ServiceFocus, ServiceFormRow, SettingsFocus,
     SettingsSection, SettingsWindow, SshFocus, SshFormField, SshTestStatus,
 };
+
+const SERVICE_COMMAND_HELP_TEXT: &str = "Leave Command and Arguments empty to use an already running service. To launch the default dbflux-driver-host, leave Command empty and include Arguments with both --driver and --socket.";
+
+fn service_command_subtitle(service: &ServiceConfig) -> String {
+    match service
+        .command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(command) => command.to_string(),
+        None if service.args.is_empty() => "(manual service)".to_string(),
+        None => "dbflux-driver-host".to_string(),
+    }
+}
+
+fn service_diagnostic_lines(diagnostic: Option<&ExternalDriverDiagnostic>) -> Vec<String> {
+    diagnostic.map_or_else(Vec::new, |diagnostic| {
+        let prefix = match diagnostic.stage {
+            ExternalDriverStage::Config => "Config validation",
+            ExternalDriverStage::Launch => "Launch",
+            ExternalDriverStage::Probe => "Probe",
+        };
+
+        let mut lines = vec![format!("{prefix}: {}", diagnostic.summary)];
+
+        if let Some(details) = diagnostic.details.as_deref() {
+            lines.extend(
+                details
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(ToString::to_string),
+            );
+        }
+
+        lines
+    })
+}
 
 const INDENT_PX: f32 = 16.0;
 
@@ -1292,6 +1332,7 @@ impl SettingsWindow {
         let theme = cx.theme();
         let services = &self.svc_services;
         let editing_idx = self.editing_svc_idx;
+        let load_error = self.svc_load_error.clone();
 
         div()
             .flex_1()
@@ -1314,7 +1355,16 @@ impl SettingsWindow {
                             .text_sm()
                             .text_color(theme.muted_foreground)
                             .child("Manage external driver services. Changes require restart."),
-                    ),
+                    )
+                    .when_some(load_error, |section, error| {
+                        section.child(
+                            div()
+                                .mt_2()
+                                .text_sm()
+                                .text_color(theme.warning)
+                                .child(error),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -1388,12 +1438,14 @@ impl SettingsWindow {
                         let is_selected = editing_idx == Some(idx);
                         let is_focused = is_list_focused && self.svc_selected_idx == Some(idx);
                         let is_disabled = !service.enabled;
+                        let diagnostic = self
+                            .app_state
+                            .read(cx)
+                            .external_driver_diagnostic(&service.socket_id)
+                            .cloned();
 
-                        let subtitle = service
-                            .command
-                            .as_deref()
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or("(default)");
+                        let subtitle = service_command_subtitle(service);
+                        let diagnostic_lines = service_diagnostic_lines(diagnostic.as_ref());
 
                         div()
                             .id(SharedString::from(format!("svc-item-{}", idx)))
@@ -1460,8 +1512,18 @@ impl SettingsWindow {
                                                 div()
                                                     .text_xs()
                                                     .text_color(theme.muted_foreground)
-                                                    .child(subtitle.to_string()),
-                                            ),
+                                                    .child(subtitle),
+                                            )
+                                            .when(!diagnostic_lines.is_empty(), |d| {
+                                                d.child(div().flex().flex_col().gap_0p5().children(
+                                                    diagnostic_lines.into_iter().map(|message| {
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(theme.warning)
+                                                            .child(message)
+                                                    }),
+                                                ))
+                                            }),
                                     ),
                             )
                     })),
@@ -1476,6 +1538,7 @@ impl SettingsWindow {
         let theme = cx.theme();
         let primary = theme.primary;
         let border = theme.border;
+        let muted_foreground = theme.muted_foreground;
 
         let is_form_focused =
             self.focus_area == SettingsFocus::Content && self.svc_focus == ServiceFocus::Form;
@@ -1530,6 +1593,12 @@ impl SettingsWindow {
                         ServiceFormRow::Command,
                         cx,
                     ))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted_foreground)
+                            .child(SERVICE_COMMAND_HELP_TEXT),
+                    )
                     .child(self.render_svc_input_field(
                         "Startup Timeout (ms)",
                         &self.input_svc_timeout,
@@ -2479,6 +2548,72 @@ impl SettingsWindow {
             .cursor_pointer()
             .hover(move |d| d.bg(secondary))
             .child(svg().path(icon_path).size_4().text_color(muted_foreground))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SERVICE_COMMAND_HELP_TEXT, service_command_subtitle, service_diagnostic_lines};
+    use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
+    use dbflux_core::ServiceConfig;
+    use std::collections::HashMap;
+
+    fn service(command: Option<&str>, args: &[&str]) -> ServiceConfig {
+        ServiceConfig {
+            socket_id: "demo.sock".to_string(),
+            enabled: true,
+            command: command.map(ToString::to_string),
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            env: HashMap::new(),
+            startup_timeout_ms: None,
+        }
+    }
+
+    #[test]
+    fn service_command_subtitle_distinguishes_manual_and_default_host_services() {
+        assert_eq!(
+            service_command_subtitle(&service(Some("custom-host"), &[])),
+            "custom-host"
+        );
+        assert_eq!(
+            service_command_subtitle(&service(None, &[])),
+            "(manual service)"
+        );
+        assert_eq!(
+            service_command_subtitle(&service(
+                None,
+                &["--driver", "demo", "--socket", "demo.sock"]
+            )),
+            "dbflux-driver-host"
+        );
+    }
+
+    #[test]
+    fn service_diagnostic_lines_include_details_when_present() {
+        let lines = service_diagnostic_lines(Some(&ExternalDriverDiagnostic {
+            socket_id: "demo.sock".to_string(),
+            stage: ExternalDriverStage::Config,
+            summary: "missing --socket".to_string(),
+            details: Some("Recent host output:\nline one\nline two".to_string()),
+        }));
+
+        assert_eq!(
+            lines,
+            vec![
+                "Config validation: missing --socket".to_string(),
+                "Recent host output:".to_string(),
+                "line one".to_string(),
+                "line two".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn service_command_help_text_describes_manual_and_default_host_modes() {
+        assert!(SERVICE_COMMAND_HELP_TEXT.contains("already running service"));
+        assert!(SERVICE_COMMAND_HELP_TEXT.contains("dbflux-driver-host"));
+        assert!(SERVICE_COMMAND_HELP_TEXT.contains("--driver"));
+        assert!(SERVICE_COMMAND_HELP_TEXT.contains("--socket"));
     }
 }
 

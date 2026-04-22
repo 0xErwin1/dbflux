@@ -1,5 +1,5 @@
 {
-  "rpc_services": [
+  "services": [
     {
       "socket_id": "my-test-driver.sock",
       "command": "/ABSOLUTE/PATH/TO/examples/custom_driver/target/debug/custom-driver",

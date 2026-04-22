@@ -45,7 +45,7 @@ DBFlux now treats the external service as the source of truth for driver metadat
 
 ```json
 {
-  "rpc_services": [
+  "services": [
     {
       "socket_id": "my-test-driver.sock",
       "command": "/ABSOLUTE/PATH/TO/examples/custom_driver/target/debug/custom-driver",
@@ -74,8 +74,10 @@ DBFlux now treats the external service as the source of truth for driver metadat
 ## Notes
 
 - The service key used internally by DBFlux is `rpc:<socket_id>`.
-- If `command` is omitted, DBFlux defaults to `dbflux-driver-host`.
+- If `command` and `args` are both omitted, DBFlux expects this service to already be running.
+- If `command` is omitted but `args` is present, DBFlux launches `dbflux-driver-host`, and your `args` must include both `--driver` and `--socket`.
 - Use absolute paths for `command` while testing to avoid PATH issues.
+- DBFlux only reads the canonical `services` key.
 
 ## Queries to try
 
@@ -88,7 +90,7 @@ DELETE FROM users WHERE id = 1
 
 ## Troubleshooting
 
-- **Driver does not appear in UI**: check DBFlux logs for probe/launch errors.
+- **Driver does not appear in UI**: check the Services settings panel and DBFlux logs for launch/probe diagnostics.
 - **Connection refused**: ensure `socket_id` matches between config and `--socket` arg.
 - **Permission denied**: ensure the binary in `command` is executable.
 - **Version mismatch**: ensure example and DBFlux are built from compatible code.

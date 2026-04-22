@@ -890,6 +890,9 @@ impl Sidebar {
 #[cfg(test)]
 mod tests {
     use super::{ItemIdParts, NODE_KIND_NONE, parse_node_kind};
+    use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
+    use crate::ui::views::sidebar::operations::format_connect_prepare_error;
+    use dbflux_core::PrepareConnectError;
     use dbflux_core::{SchemaNodeId, SchemaNodeKind};
     use uuid::Uuid;
 
@@ -1079,5 +1082,36 @@ mod tests {
 
         let menu_items = ContextMenuItem::to_menu_items(&[]);
         assert!(menu_items.is_empty());
+    }
+
+    #[test]
+    fn format_connect_prepare_error_uses_external_driver_diagnostic_details() {
+        let error = PrepareConnectError::ExternalDriverUnavailable {
+            driver_id: "rpc:missing.sock".to_string(),
+            socket_id: "missing.sock".to_string(),
+        };
+        let diagnostic = ExternalDriverDiagnostic {
+            socket_id: "missing.sock".to_string(),
+            stage: ExternalDriverStage::Probe,
+            summary: "Probe failed".to_string(),
+            details: Some("host exited before ready".to_string()),
+        };
+
+        let message = format_connect_prepare_error(&error, Some(&diagnostic));
+
+        assert!(message.contains("rpc:missing.sock"));
+        assert!(message.contains("Probe failed"));
+        assert!(message.contains("host exited before ready"));
+    }
+
+    #[test]
+    fn format_connect_prepare_error_falls_back_to_generic_message_without_diagnostic() {
+        let error = PrepareConnectError::DriverNotRegistered {
+            driver_id: "sqlite".to_string(),
+        };
+
+        let message = format_connect_prepare_error(&error, None);
+
+        assert_eq!(message, "No driver registered for 'sqlite'");
     }
 }
