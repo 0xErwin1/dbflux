@@ -13,10 +13,16 @@ pub(crate) mod tree_store;
 
 use crate::DbError;
 
+#[derive(Debug, Clone)]
+pub struct TreeLoadResult {
+    pub tree: ConnectionTree,
+    pub recovered_from_error: bool,
+}
+
 /// Backend for persisting a connection tree.
 pub trait TreeStore {
     /// Loads the connection tree from the store.
-    fn load(&self) -> Result<ConnectionTree, DbError>;
+    fn load(&self) -> Result<TreeLoadResult, DbError>;
     /// Saves the connection tree to the store.
     fn save(&self, tree: &ConnectionTree) -> Result<(), DbError>;
 }

@@ -1,3 +1,4 @@
+use crate::connection::TreeLoadResult;
 use crate::connection::TreeStore;
 use crate::{ConnectionTree, ConnectionTreeNode};
 use log::{error, info};
@@ -6,6 +7,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TreeLoadState {
     Loaded,
+    Recovered,
     Failed,
 }
 
@@ -28,7 +30,17 @@ impl ConnectionTreeManager {
     /// Creates a manager with a caller-supplied store.
     pub fn with_store(store: Box<dyn TreeStore>) -> Self {
         let (tree, load_state) = match store.load() {
-            Ok(tree) => (tree, TreeLoadState::Loaded),
+            Ok(TreeLoadResult {
+                tree,
+                recovered_from_error,
+            }) => (
+                tree,
+                if recovered_from_error {
+                    TreeLoadState::Recovered
+                } else {
+                    TreeLoadState::Loaded
+                },
+            ),
             Err(e) => {
                 error!("Failed to load connection tree: {:?}", e);
                 (ConnectionTree::new(), TreeLoadState::Failed)
@@ -50,9 +62,12 @@ impl ConnectionTreeManager {
         let nodes_after = self.tree.nodes.len();
 
         if nodes_before != nodes_after {
-            if self.load_state == TreeLoadState::Failed {
+            if matches!(
+                self.load_state,
+                TreeLoadState::Recovered | TreeLoadState::Failed
+            ) {
                 error!(
-                    "Connection tree sync added fallback nodes after a load failure; skipping automatic save to avoid overwriting persisted folder layout"
+                    "Connection tree sync added fallback nodes after a degraded load; skipping automatic save to avoid overwriting persisted folder layout"
                 );
                 return;
             }
@@ -201,11 +216,14 @@ mod tests {
     }
 
     impl TreeStore for RecordingTreeStore {
-        fn load(&self) -> Result<ConnectionTree, DbError> {
+        fn load(&self) -> Result<TreeLoadResult, DbError> {
             if self.should_fail_load {
                 Err(DbError::query_failed("load failed"))
             } else {
-                Ok(self.loaded_tree.clone())
+                Ok(TreeLoadResult {
+                    tree: self.loaded_tree.clone(),
+                    recovered_from_error: false,
+                })
             }
         }
 
@@ -233,6 +251,43 @@ mod tests {
     fn sync_with_profiles_skips_persisting_fallback_tree_after_load_failure() {
         let saved_trees = Arc::new(Mutex::new(Vec::new()));
         let store = RecordingTreeStore::failing(saved_trees.clone());
+        let mut manager = ConnectionTreeManager::with_store(Box::new(store));
+
+        manager.sync_with_profiles(&[Uuid::new_v4()]);
+
+        assert!(saved_trees.lock().expect("saved trees lock").is_empty());
+        assert_eq!(manager.tree.nodes.len(), 1);
+    }
+
+    struct RecoveredTreeStore {
+        tree: ConnectionTree,
+        saved_trees: Arc<Mutex<Vec<ConnectionTree>>>,
+    }
+
+    impl TreeStore for RecoveredTreeStore {
+        fn load(&self) -> Result<TreeLoadResult, DbError> {
+            Ok(TreeLoadResult {
+                tree: self.tree.clone(),
+                recovered_from_error: true,
+            })
+        }
+
+        fn save(&self, tree: &ConnectionTree) -> Result<(), DbError> {
+            self.saved_trees
+                .lock()
+                .expect("saved trees lock")
+                .push(tree.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn sync_with_profiles_skips_persisting_fallback_tree_after_recovered_load() {
+        let saved_trees = Arc::new(Mutex::new(Vec::new()));
+        let store = RecoveredTreeStore {
+            tree: ConnectionTree::new(),
+            saved_trees: saved_trees.clone(),
+        };
         let mut manager = ConnectionTreeManager::with_store(Box::new(store));
 
         manager.sync_with_profiles(&[Uuid::new_v4()]);

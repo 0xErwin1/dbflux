@@ -49,8 +49,8 @@ pub use connection::{
     ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
     ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
     ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode,
-    SwitchDatabaseParams, SwitchDatabaseResult, TreeStore, detached_process_channel,
-    execute_streaming_process, host_matches_no_proxy, output_channel,
+    SwitchDatabaseParams, SwitchDatabaseResult, TreeLoadResult, TreeStore,
+    detached_process_channel, execute_streaming_process, host_matches_no_proxy, output_channel,
 };
 
 pub use core::{

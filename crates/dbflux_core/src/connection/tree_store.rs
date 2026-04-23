@@ -1,4 +1,4 @@
-use crate::{ConnectionTree, DbError, TreeStore};
+use crate::{ConnectionTree, DbError, TreeLoadResult, TreeStore};
 use std::fs;
 use std::path::PathBuf;
 
@@ -34,9 +34,12 @@ impl TreeStore for ConnectionTreeStore {
     ///
     /// Returns an empty tree if the file doesn't exist or is corrupted.
     /// Corruption is logged but doesn't fail the load.
-    fn load(&self) -> Result<ConnectionTree, DbError> {
+    fn load(&self) -> Result<TreeLoadResult, DbError> {
         if !self.path.exists() {
-            return Ok(ConnectionTree::new());
+            return Ok(TreeLoadResult {
+                tree: ConnectionTree::new(),
+                recovered_from_error: false,
+            });
         }
 
         let content = fs::read_to_string(&self.path).map_err(DbError::IoError)?;
@@ -47,14 +50,20 @@ impl TreeStore for ConnectionTreeStore {
                 if repaired > 0 {
                     log::info!("Repaired {} orphaned nodes in connection tree", repaired);
                 }
-                Ok(tree)
+                Ok(TreeLoadResult {
+                    tree,
+                    recovered_from_error: repaired > 0,
+                })
             }
             Err(e) => {
                 log::warn!(
                     "Failed to parse connection tree ({}), starting with empty tree",
                     e
                 );
-                Ok(ConnectionTree::new())
+                Ok(TreeLoadResult {
+                    tree: ConnectionTree::new(),
+                    recovered_from_error: true,
+                })
             }
         }
     }
