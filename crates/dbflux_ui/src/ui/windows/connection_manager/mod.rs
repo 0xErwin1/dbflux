@@ -30,6 +30,17 @@ use uuid::Uuid;
 
 const AUTH_PROFILE_NONE_INDEX: usize = 0;
 
+fn auth_profile_needs_login(
+    provider_supports_login: bool,
+    session_state: Option<&AuthSessionState>,
+) -> bool {
+    provider_supports_login
+        && matches!(
+            session_state,
+            Some(AuthSessionState::Expired) | Some(AuthSessionState::LoginRequired)
+        )
+}
+
 /// Focus state for driver selection screen
 #[derive(Clone, Copy, PartialEq, Default)]
 enum DriverFocus {
@@ -2228,91 +2239,56 @@ impl ConnectionManagerWindow {
             return;
         };
 
-        if profile.provider_id != "aws-sso" {
+        let Some(provider) = self
+            .app_state
+            .read(cx)
+            .auth_provider_by_id(&profile.provider_id)
+        else {
+            self.auth_profile_action_message = Some(format!(
+                "Auth provider '{}' is not available.",
+                profile.provider_id
+            ));
+            cx.notify();
+            return;
+        };
+
+        if !provider.capabilities().login.supported {
             self.auth_profile_action_message =
-                Some("Login is available only for AWS SSO profiles.".to_string());
+                Some("Interactive login is not available for this auth profile.".to_string());
             cx.notify();
             return;
         }
 
-        #[cfg(feature = "aws")]
-        {
-            let profile_name = profile
-                .fields
-                .get("profile_name")
-                .cloned()
-                .unwrap_or_else(|| profile.name.clone());
-            let region = profile.fields.get("region").cloned().unwrap_or_default();
-            let start_url = profile
-                .fields
-                .get("sso_start_url")
-                .cloned()
-                .unwrap_or_default();
-            let account_id = profile
-                .fields
-                .get("sso_account_id")
-                .cloned()
-                .unwrap_or_default();
-            let role_name = profile
-                .fields
-                .get("sso_role_name")
-                .cloned()
-                .unwrap_or_default();
+        self.auth_profile_login_in_progress = true;
+        self.auth_profile_action_message = Some(format!(
+            "Starting auth-provider login for '{}'...",
+            profile.name
+        ));
+        cx.notify();
 
-            if region.is_empty() || start_url.is_empty() {
-                self.auth_profile_action_message =
-                    Some("Selected AWS SSO profile is missing region or start URL.".to_string());
-                cx.notify();
-                return;
-            }
+        let this = cx.entity().clone();
 
-            self.auth_profile_login_in_progress = true;
-            self.auth_profile_action_message =
-                Some(format!("Starting AWS SSO login for '{}'...", profile_name));
-            cx.notify();
+        cx.spawn(async move |_entity, cx| {
+            let result = provider.login(&profile, Box::new(|_| {})).await;
 
-            let this = cx.entity().clone();
-            let task = cx.background_executor().spawn(async move {
-                dbflux_aws::login_sso_blocking(
-                    profile.id,
-                    &profile_name,
-                    &start_url,
-                    &region,
-                    &account_id,
-                    &role_name,
-                )
-            });
-
-            cx.spawn(async move |_entity, cx| {
-                let result = task.await;
-
-                if cx
-                    .update(|cx| {
-                        this.update(cx, |this, cx| {
-                            this.auth_profile_login_in_progress = false;
-
-                            this.auth_profile_action_message = Some(match result {
-                                Ok(_) => "AWS SSO login completed.".to_string(),
-                                Err(error) => format!("AWS SSO login failed: {}", error),
-                            });
-
-                            this.refresh_auth_profile_sessions(cx);
+            if cx
+                .update(|cx| {
+                    this.update(cx, |this, cx| {
+                        this.auth_profile_login_in_progress = false;
+                        this.auth_profile_action_message = Some(match result {
+                            Ok(_) => "Auth-provider login completed.".to_string(),
+                            Err(error) => format!("Auth-provider login failed: {}", error),
                         });
-                    })
-                    .is_err()
-                {
-                    // Window may have closed before async completion.
-                }
-            })
-            .detach();
-        }
 
-        #[cfg(not(feature = "aws"))]
-        {
-            self.auth_profile_action_message =
-                Some("AWS support is disabled in this build.".to_string());
-            cx.notify();
-        }
+                        this.refresh_auth_profile_sessions(cx);
+                    });
+                })
+                .is_err()
+            {
+                // Window may have closed before async completion.
+            }
+        })
+        .detach();
     }
 
     fn selected_auth_profile_status_text(&self, cx: &App) -> Option<String> {
@@ -2350,13 +2326,15 @@ impl ConnectionManagerWindow {
             return false;
         };
 
-        if profile.provider_id != "aws-sso" {
-            return false;
-        }
+        let provider_supports_login = self
+            .app_state
+            .read(cx)
+            .auth_provider_by_id(&profile.provider_id)
+            .is_some_and(|provider| provider.capabilities().login.supported);
 
-        matches!(
+        auth_profile_needs_login(
+            provider_supports_login,
             self.auth_profile_session_states.get(&profile.id),
-            Some(AuthSessionState::Expired) | Some(AuthSessionState::LoginRequired)
         )
     }
 
@@ -2368,7 +2346,7 @@ impl ConnectionManagerWindow {
         if event.index == AUTH_PROFILE_NONE_INDEX {
             self.pending_auth_profile_selection = Some(None);
         } else if event.item.value.as_ref() == "__new_auth_profile__" {
-            self.open_sso_wizard(cx);
+            self.open_auth_profiles_settings(cx);
 
             let selected_index = self
                 .selected_auth_profile_id
@@ -2914,6 +2892,8 @@ impl EventEmitter<DismissEvent> for ConnectionManagerWindow {}
 #[cfg(test)]
 mod tests {
     use super::ConnectionManagerWindow;
+    use super::auth_profile_needs_login;
+    use dbflux_core::AuthSessionState;
 
     // --- parse_hook_ids ---
 
@@ -2992,5 +2972,26 @@ mod tests {
         let (primary, extra) = ConnectionManagerWindow::split_primary_and_extra(&hooks);
         assert_eq!(primary, "");
         assert_eq!(extra, "");
+    }
+
+    #[test]
+    fn auth_profile_login_requires_capability_and_login_state() {
+        assert!(auth_profile_needs_login(
+            true,
+            Some(&AuthSessionState::LoginRequired)
+        ));
+        assert!(auth_profile_needs_login(
+            true,
+            Some(&AuthSessionState::Expired)
+        ));
+        assert!(!auth_profile_needs_login(
+            true,
+            Some(&AuthSessionState::Valid { expires_at: None })
+        ));
+        assert!(!auth_profile_needs_login(
+            false,
+            Some(&AuthSessionState::LoginRequired)
+        ));
+        assert!(!auth_profile_needs_login(true, None));
     }
 }

@@ -227,7 +227,7 @@ impl Command {
             Command::ToggleTasks => "Toggle Tasks Panel",
             Command::ToggleSidebar => "Toggle Sidebar",
             Command::OpenSettings => "Open Settings",
-            Command::OpenLoginModal => "Open Login Modal",
+            Command::OpenLoginModal => "Open Auth Profile Login",
             Command::OpenSsoWizard => "Open AWS SSO Wizard",
             Command::OpenAuditViewer => "Open Audit Viewer",
             #[cfg(feature = "mcp")]

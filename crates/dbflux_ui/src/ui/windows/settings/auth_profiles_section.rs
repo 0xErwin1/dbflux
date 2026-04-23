@@ -5,6 +5,7 @@ use super::layout;
 use super::section_trait::SectionFocusEvent;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Modifiers, key_chord_from_gpui};
+#[cfg(feature = "aws")]
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
@@ -20,15 +21,14 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[cfg(feature = "aws")]
-use dbflux_aws::{
-    AwsSsoAccount, list_sso_account_roles_blocking, list_sso_accounts_blocking, login_sso_blocking,
-};
+use dbflux_aws::{AwsSsoAccount, list_sso_account_roles_blocking, list_sso_accounts_blocking};
 
 pub(super) struct AuthProfilesSection {
     app_state: Entity<AppStateEntity>,
     selected_profile_id: Option<Uuid>,
     editing_profile_id: Option<Uuid>,
     selected_provider_id: Option<String>,
+    selected_provider_supports_login: bool,
     provider_entries_cache: Vec<(String, String)>,
     profile_enabled: bool,
     pending_delete_profile_id: Option<Uuid>,
@@ -37,6 +37,8 @@ pub(super) struct AuthProfilesSection {
     input_name: Entity<InputState>,
     form_inputs: HashMap<String, Entity<InputState>>,
     provider_field_order: Vec<String>,
+    provider_login_loading: bool,
+    provider_login_status: Option<(String, bool)>,
 
     #[cfg(feature = "aws")]
     sso_account_dropdown: Entity<Dropdown>,
@@ -86,8 +88,7 @@ pub(super) enum AuthFormField {
     Name,
     Provider(usize),
     DynamicField(usize),
-    #[cfg(feature = "aws")]
-    SsoLogin,
+    ProviderLogin,
     #[cfg(feature = "aws")]
     SsoAccount,
     #[cfg(feature = "aws")]
@@ -98,6 +99,67 @@ pub(super) enum AuthFormField {
 }
 
 impl EventEmitter<SectionFocusEvent> for AuthProfilesSection {}
+
+fn build_form_rows(
+    provider_count: usize,
+    dynamic_field_count: usize,
+    selected_provider_supports_login: bool,
+    _include_aws_sso_fields: bool,
+    is_editing: bool,
+) -> Vec<Vec<AuthFormField>> {
+    let mut rows = vec![vec![AuthFormField::Name]];
+
+    let provider_row: Vec<AuthFormField> =
+        (0..provider_count).map(AuthFormField::Provider).collect();
+    if !provider_row.is_empty() {
+        rows.push(provider_row);
+    }
+
+    for idx in 0..dynamic_field_count {
+        rows.push(vec![AuthFormField::DynamicField(idx)]);
+    }
+
+    if selected_provider_supports_login {
+        rows.push(vec![AuthFormField::ProviderLogin]);
+    }
+
+    #[cfg(feature = "aws")]
+    if _include_aws_sso_fields {
+        rows.push(vec![AuthFormField::SsoAccount]);
+        rows.push(vec![AuthFormField::SsoRole]);
+    }
+
+    rows.push(vec![AuthFormField::Enabled]);
+
+    if is_editing {
+        rows.push(vec![AuthFormField::DeleteButton, AuthFormField::SaveButton]);
+    } else {
+        rows.push(vec![AuthFormField::SaveButton]);
+    }
+
+    rows
+}
+
+fn build_auth_profile_from_form(
+    profile_id: Uuid,
+    name: &str,
+    provider_id: &str,
+    fields: HashMap<String, String>,
+    enabled: bool,
+) -> Option<AuthProfile> {
+    let trimmed_name = name.trim();
+    if trimmed_name.is_empty() || provider_id.is_empty() {
+        return None;
+    }
+
+    Some(AuthProfile {
+        id: profile_id,
+        name: trimmed_name.to_string(),
+        provider_id: provider_id.to_string(),
+        fields,
+        enabled,
+    })
+}
 
 impl AuthProfilesSection {
     pub(super) fn new(
@@ -187,6 +249,7 @@ impl AuthProfilesSection {
             selected_profile_id,
             editing_profile_id: None,
             selected_provider_id,
+            selected_provider_supports_login: false,
             provider_entries_cache,
             profile_enabled: true,
             pending_delete_profile_id: None,
@@ -194,6 +257,8 @@ impl AuthProfilesSection {
             input_name,
             form_inputs: HashMap::new(),
             provider_field_order: Vec::new(),
+            provider_login_loading: false,
+            provider_login_status: None,
 
             #[cfg(feature = "aws")]
             sso_account_dropdown,
@@ -267,13 +332,36 @@ impl AuthProfilesSection {
             .and_then(|provider_id| self.app_state.read(cx).auth_provider_by_id(provider_id))
     }
 
+    fn current_form_profile(&self, cx: &App) -> Option<AuthProfile> {
+        let name = self.input_name.read(cx).value().to_string();
+        let provider_id = self.selected_provider_id.clone()?;
+
+        let profile_id = self.editing_profile_id.unwrap_or_else(Uuid::new_v4);
+        let fields = self
+            .form_inputs
+            .iter()
+            .map(|(field_id, input)| (field_id.clone(), input.read(cx).value().to_string()))
+            .collect::<HashMap<_, _>>();
+
+        build_auth_profile_from_form(
+            profile_id,
+            &name,
+            &provider_id,
+            fields,
+            self.profile_enabled,
+        )
+    }
+
     fn rebuild_form_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(provider) = self.selected_provider(cx) else {
             self.form_inputs.clear();
             self.provider_field_order.clear();
+            self.selected_provider_supports_login = false;
             self.rebuild_blur_subscriptions(cx);
             return;
         };
+
+        self.selected_provider_supports_login = provider.capabilities().login.supported;
 
         let field_defs = provider
             .form_def()
@@ -334,6 +422,7 @@ impl AuthProfilesSection {
         self._blur_subscriptions = subs;
     }
 
+    #[cfg(feature = "aws")]
     fn form_value(&self, field_id: &str, cx: &App) -> String {
         self.form_inputs
             .get(field_id)
@@ -341,6 +430,7 @@ impl AuthProfilesSection {
             .unwrap_or_default()
     }
 
+    #[cfg(feature = "aws")]
     fn set_form_value_in_window(
         &mut self,
         field_id: &str,
@@ -585,6 +675,9 @@ impl AuthProfilesSection {
             self.sso_login_status = None;
         }
 
+        self.provider_login_loading = false;
+        self.provider_login_status = None;
+
         cx.notify();
     }
 
@@ -642,6 +735,88 @@ impl AuthProfilesSection {
 
         self.selected_profile_id = Some(profile_id);
         self.load_profile_into_form(profile_id, window, cx);
+    }
+
+    fn login_selected_profile(&mut self, cx: &mut Context<Self>) {
+        let Some(provider) = self.selected_provider(cx) else {
+            self.provider_login_status =
+                Some(("Select an auth provider before login.".to_string(), false));
+            cx.notify();
+            return;
+        };
+
+        if !provider.capabilities().login.supported {
+            self.provider_login_status = Some((
+                "Interactive login is not available for this provider.".to_string(),
+                false,
+            ));
+            cx.notify();
+            return;
+        }
+
+        let Some(profile) = self.current_form_profile(cx) else {
+            self.provider_login_status = Some((
+                "Provide a profile name and provider fields before login.".to_string(),
+                false,
+            ));
+            cx.notify();
+            return;
+        };
+
+        self.provider_login_loading = true;
+        self.provider_login_status = Some((
+            format!(
+                "Starting auth-provider login for profile '{}'...",
+                profile.name
+            ),
+            false,
+        ));
+        cx.notify();
+
+        let this = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            let result = provider.login(&profile, Box::new(|_| {})).await;
+
+            if let Err(err) = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    this.provider_login_loading = false;
+                    this.provider_login_status = Some(match result {
+                        Ok(_) => (
+                            format!(
+                                "Auth-provider login completed for profile '{}'.",
+                                profile.name
+                            ),
+                            true,
+                        ),
+                        Err(error) => (
+                            format!(
+                                "Auth-provider login failed for profile '{}': {}",
+                                profile.name, error
+                            ),
+                            false,
+                        ),
+                    });
+
+                    #[cfg(feature = "aws")]
+                    if this.is_aws_sso_selected()
+                        && this
+                            .provider_login_status
+                            .as_ref()
+                            .is_some_and(|status| status.1)
+                    {
+                        this.sso_accounts_context_key = None;
+                        this.sso_roles_context_key = None;
+                        this.ensure_sso_listing(cx);
+                    }
+
+                    cx.notify();
+                });
+            }) {
+                log::warn!("Failed to apply auth-provider login result: {:?}", err);
+            }
+        })
+        .detach();
     }
 
     fn request_delete_selected_profile(&mut self, cx: &mut Context<Self>) {
@@ -1352,83 +1527,6 @@ impl AuthProfilesSection {
         }
     }
 
-    #[cfg(feature = "aws")]
-    fn login_sso_profile(&mut self, cx: &mut Context<Self>) {
-        let Some((profile_name, region, start_url)) = self.sso_listing_context_from_form(cx) else {
-            self.sso_login_loading = false;
-            self.sso_login_status = Some((
-                "Provide AWS Profile Name, Region, and SSO Start URL before login".to_string(),
-                false,
-            ));
-            cx.notify();
-            return;
-        };
-
-        let sso_account_id = self.form_value("sso_account_id", cx);
-        let sso_role_name = self.form_value("sso_role_name", cx);
-
-        self.sso_login_loading = true;
-        self.sso_login_status = Some((
-            format!("Starting AWS SSO login for profile '{}'...", profile_name),
-            false,
-        ));
-        cx.notify();
-
-        let this = cx.entity().clone();
-        let profile_name_for_result = profile_name.clone();
-        let task = cx.background_executor().spawn(async move {
-            login_sso_blocking(
-                Uuid::new_v4(),
-                &profile_name,
-                &start_url,
-                &region,
-                &sso_account_id,
-                &sso_role_name,
-            )
-        });
-
-        cx.spawn(async move |_this, cx| {
-            let result = task.await;
-
-            if let Err(err) = cx.update(|cx| {
-                this.update(cx, |this, cx| {
-                    this.sso_login_loading = false;
-
-                    match result {
-                        Ok(_) => {
-                            this.sso_login_status = Some((
-                                format!(
-                                    "AWS SSO login succeeded for profile '{}'. Refreshing accounts and roles...",
-                                    profile_name_for_result
-                                ),
-                                true,
-                            ));
-                            this.sso_accounts_context_key = None;
-                            this.sso_roles_context_key = None;
-                            this.sso_accounts_error = None;
-                            this.sso_roles_error = None;
-                            this.ensure_sso_listing(cx);
-                        }
-                        Err(error) => {
-                            this.sso_login_status = Some((
-                                format!(
-                                    "AWS SSO login failed for profile '{}': {}",
-                                    profile_name_for_result, error
-                                ),
-                                false,
-                            ));
-                        }
-                    }
-
-                    cx.notify();
-                });
-            }) {
-                log::warn!("Failed to apply AWS SSO login result: {:?}", err);
-            }
-        })
-        .detach();
-    }
-
     fn render_editor_panel(
         &mut self,
         window: &mut Window,
@@ -1504,6 +1602,43 @@ impl AuthProfilesSection {
                         .child(self.render_provider_selector(window, cx)),
                 )
                 .children(dynamic_fields)
+                .when(self.selected_provider_supports_login, |content| {
+                    content
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Button::new(
+                                        "auth-provider-login",
+                                        if self.provider_login_loading {
+                                            "Logging in..."
+                                        } else {
+                                            "Login"
+                                        },
+                                    )
+                                    .small()
+                                    .primary()
+                                    .disabled(self.provider_login_loading)
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.login_selected_profile(cx);
+                                        },
+                                    )),
+                                )
+                                .child(Text::caption(
+                                    "Runs interactive login for this auth profile",
+                                )),
+                        )
+                        .when_some(self.provider_login_status.as_ref(), |content, status| {
+                            content.child(if status.1 {
+                                Text::caption(status.0.clone()).success()
+                            } else {
+                                Text::caption(status.0.clone()).warning()
+                            })
+                        })
+                })
                 .when(
                     cfg!(feature = "aws")
                         && self.selected_provider_id.as_deref() == Some("aws-sso"),
@@ -1511,33 +1646,6 @@ impl AuthProfilesSection {
                         #[cfg(feature = "aws")]
                         {
                             content
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            Button::new(
-                                                "auth-sso-login",
-                                                if self.sso_login_loading {
-                                                    "Logging in..."
-                                                } else {
-                                                    "Login"
-                                                },
-                                            )
-                                            .small()
-                                            .primary()
-                                            .disabled(self.sso_login_loading)
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| {
-                                                    this.login_sso_profile(cx);
-                                                }),
-                                            ),
-                                        )
-                                        .child(Text::caption(
-                                            "Runs AWS SSO login for this profile",
-                                        )),
-                                )
                                 .child(self.render_dropdown_row(
                                     "SSO Account ID",
                                     &self.sso_account_dropdown,
@@ -1559,13 +1667,6 @@ impl AuthProfilesSection {
                                         Text::caption(format!("Role listing failed: {}", error))
                                             .warning(),
                                     )
-                                })
-                                .when_some(self.sso_login_status.as_ref(), |content, status| {
-                                    content.child(if status.1 {
-                                        Text::caption(status.0.clone()).success()
-                                    } else {
-                                        Text::caption(status.0.clone()).warning()
-                                    })
                                 })
                         }
 
@@ -1703,38 +1804,13 @@ impl FormSection for AuthProfilesSection {
     }
 
     fn form_rows(&self) -> Vec<Vec<Self::FormField>> {
-        let providers = &self.provider_entries_cache;
-        let mut rows = vec![vec![AuthFormField::Name]];
-
-        let provider_row: Vec<AuthFormField> = providers
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| AuthFormField::Provider(idx))
-            .collect();
-        if !provider_row.is_empty() {
-            rows.push(provider_row);
-        }
-
-        for idx in 0..self.provider_field_order.len() {
-            rows.push(vec![AuthFormField::DynamicField(idx)]);
-        }
-
-        #[cfg(feature = "aws")]
-        if self.selected_provider_id.as_deref() == Some("aws-sso") {
-            rows.push(vec![AuthFormField::SsoLogin]);
-            rows.push(vec![AuthFormField::SsoAccount]);
-            rows.push(vec![AuthFormField::SsoRole]);
-        }
-
-        rows.push(vec![AuthFormField::Enabled]);
-
-        if self.editing_profile_id.is_some() {
-            rows.push(vec![AuthFormField::DeleteButton, AuthFormField::SaveButton]);
-        } else {
-            rows.push(vec![AuthFormField::SaveButton]);
-        }
-
-        rows
+        build_form_rows(
+            self.provider_entries_cache.len(),
+            self.provider_field_order.len(),
+            self.selected_provider_supports_login,
+            self.selected_provider_id.as_deref() == Some("aws-sso"),
+            self.editing_profile_id.is_some(),
+        )
     }
 
     fn is_input_field(field: Self::FormField) -> bool {
@@ -1791,9 +1867,8 @@ impl FormSection for AuthProfilesSection {
             AuthFormField::Enabled => {
                 self.profile_enabled = !self.profile_enabled;
             }
-            #[cfg(feature = "aws")]
-            AuthFormField::SsoLogin => {
-                self.login_sso_profile(cx);
+            AuthFormField::ProviderLogin => {
+                self.login_selected_profile(cx);
             }
             AuthFormField::SaveButton => {
                 self.save_profile(window, cx);
@@ -1817,6 +1892,49 @@ impl FormSection for AuthProfilesSection {
         }
 
         self.auth_form_field = AuthFormField::Name;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn form_rows_include_generic_provider_login_without_aws_feature() {
+        let rows = build_form_rows(1, 2, true, false, false);
+
+        assert!(
+            rows.iter()
+                .any(|row| row == &vec![AuthFormField::ProviderLogin])
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains(&AuthFormField::DeleteButton))
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn build_auth_profile_from_form_preserves_non_aws_provider_id() {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "issuer_url".to_string(),
+            "https://issuer.example".to_string(),
+        );
+
+        let profile = build_auth_profile_from_form(
+            Uuid::nil(),
+            "  Custom OIDC  ",
+            "custom-oidc",
+            fields.clone(),
+            true,
+        )
+        .expect("profile should be created");
+
+        assert_eq!(profile.name, "Custom OIDC");
+        assert_eq!(profile.provider_id, "custom-oidc");
+        assert_eq!(profile.fields, fields);
+        assert!(profile.enabled);
     }
 }
 

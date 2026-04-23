@@ -6,16 +6,16 @@ use std::time::{Duration, Instant};
 
 use dbflux_core::DbError;
 use dbflux_core::auth::{
-    AuthFormDef, AuthProfile, AuthSession, AuthSessionState, DynAuthProvider, ResolvedCredentials,
-    UrlCallback,
+    AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthSession, AuthSessionState,
+    DynAuthProvider, ResolvedCredentials, UrlCallback,
 };
 use interprocess::local_socket::{Stream as IpcStream, prelude::*};
 
 use crate::auth::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV;
 use crate::auth_provider_protocol::{
-    AuthProviderHelloRequest, AuthProviderHelloResponse, AuthProviderRequestBody,
-    AuthProviderRequestEnvelope, AuthProviderResponseBody, AuthProviderResponseEnvelope,
-    LoginRequest, ResolveCredentialsRequest, ValidateSessionRequest,
+    AuthProviderHelloRequest, AuthProviderRequestBody, AuthProviderRequestEnvelope,
+    AuthProviderResponseBody, AuthProviderResponseEnvelope, LoginRequest,
+    ResolveCredentialsRequest, ValidateSessionRequest,
 };
 use crate::envelope::{AUTH_PROVIDER_RPC_API_CONTRACT, ProtocolVersion};
 use crate::framing;
@@ -38,8 +38,18 @@ pub struct RpcAuthProvider {
     provider_id: String,
     display_name: String,
     form_definition: AuthFormDef,
+    capabilities: AuthProviderCapabilities,
     selected_version: ProtocolVersion,
     launch: Option<IpcServiceLaunchConfig>,
+}
+
+#[derive(Debug)]
+struct NormalizedAuthProviderHelloResponse {
+    provider_id: String,
+    display_name: String,
+    form_definition: AuthFormDef,
+    capabilities: AuthProviderCapabilities,
+    selected_version: ProtocolVersion,
 }
 
 impl RpcAuthProvider {
@@ -104,6 +114,7 @@ impl RpcAuthProvider {
             provider_id: hello.provider_id,
             display_name: hello.display_name,
             form_definition: hello.form_definition,
+            capabilities: hello.capabilities,
             selected_version: hello.selected_version,
             launch,
         })
@@ -123,7 +134,7 @@ impl RpcAuthProvider {
     fn perform_hello(
         socket_id: &str,
         launch: Option<&IpcServiceLaunchConfig>,
-    ) -> Result<AuthProviderHelloResponse, DbError> {
+    ) -> Result<NormalizedAuthProviderHelloResponse, DbError> {
         ensure_host_running_for(socket_id, launch)?;
 
         let name = auth_provider_socket_name(socket_id)
@@ -158,7 +169,9 @@ impl RpcAuthProvider {
         }
 
         match response.body {
-            AuthProviderResponseBody::Hello(hello) => {
+            AuthProviderResponseBody::Hello(_) | AuthProviderResponseBody::HelloV1_1(_) => {
+                let hello = normalize_hello_response(response.body)?;
+
                 validate_hello_selected_version(
                     hello.selected_version,
                     auth_provider_rpc_supported_versions(),
@@ -216,6 +229,10 @@ impl DynAuthProvider for RpcAuthProvider {
 
     fn form_def(&self) -> &AuthFormDef {
         &self.form_definition
+    }
+
+    fn capabilities(&self) -> &AuthProviderCapabilities {
+        &self.capabilities
     }
 
     async fn validate_session(&self, profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
@@ -340,6 +357,31 @@ fn validate_hello_selected_version(
         "Auth-provider selected unsupported protocol version {}.{}",
         selected_version.major, selected_version.minor
     )))
+}
+
+#[allow(clippy::result_large_err)]
+fn normalize_hello_response(
+    body: AuthProviderResponseBody,
+) -> Result<NormalizedAuthProviderHelloResponse, DbError> {
+    match body {
+        AuthProviderResponseBody::Hello(hello) => Ok(NormalizedAuthProviderHelloResponse {
+            provider_id: hello.provider_id,
+            display_name: hello.display_name,
+            form_definition: hello.form_definition,
+            capabilities: AuthProviderCapabilities::default(),
+            selected_version: hello.selected_version,
+        }),
+        AuthProviderResponseBody::HelloV1_1(hello) => Ok(NormalizedAuthProviderHelloResponse {
+            provider_id: hello.provider_id,
+            display_name: hello.display_name,
+            form_definition: hello.form_definition,
+            capabilities: hello.capabilities,
+            selected_version: hello.selected_version,
+        }),
+        _ => Err(DbError::connection_failed(
+            "Unexpected response to auth-provider Hello".to_string(),
+        )),
+    }
 }
 
 fn managed_hosts() -> &'static Mutex<HashMap<String, Child>> {
@@ -487,4 +529,51 @@ pub fn negotiate_auth_provider_version(
         auth_provider_rpc_supported_versions(),
         remote_versions,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth_provider_protocol::{AuthProviderHelloResponse, AuthProviderHelloResponseV1_1};
+    use dbflux_core::auth::{AuthProviderCapabilities, AuthProviderLoginCapabilities};
+
+    #[test]
+    fn normalize_hello_response_defaults_v1_0_capabilities_to_disabled() {
+        let normalized =
+            normalize_hello_response(AuthProviderResponseBody::Hello(AuthProviderHelloResponse {
+                server_name: "legacy-auth-provider".to_string(),
+                server_version: "0.0.0-test".to_string(),
+                selected_version: ProtocolVersion::new(1, 0),
+                provider_id: "legacy-auth".to_string(),
+                display_name: "Legacy Auth".to_string(),
+                form_definition: AuthFormDef { tabs: vec![] },
+            }))
+            .expect("legacy hello should normalize");
+
+        assert_eq!(normalized.capabilities, AuthProviderCapabilities::default());
+    }
+
+    #[test]
+    fn normalize_hello_response_keeps_v1_1_capabilities() {
+        let normalized = normalize_hello_response(AuthProviderResponseBody::HelloV1_1(
+            AuthProviderHelloResponseV1_1 {
+                server_name: "auth-provider".to_string(),
+                server_version: "0.0.0-test".to_string(),
+                selected_version: ProtocolVersion::new(1, 1),
+                provider_id: "rpc-auth".to_string(),
+                display_name: "RPC Auth".to_string(),
+                form_definition: AuthFormDef { tabs: vec![] },
+                capabilities: AuthProviderCapabilities {
+                    login: AuthProviderLoginCapabilities {
+                        supported: true,
+                        verification_url_progress: true,
+                    },
+                },
+            },
+        ))
+        .expect("v1.1 hello should normalize");
+
+        assert!(normalized.capabilities.login.supported);
+        assert!(normalized.capabilities.login.verification_url_progress);
+    }
 }

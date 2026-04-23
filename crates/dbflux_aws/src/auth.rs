@@ -18,8 +18,8 @@ use aws_sdk_sts::config::ProvideCredentials;
 
 use dbflux_core::DbError;
 use dbflux_core::auth::{
-    AuthFormDef, AuthProfile, AuthSession, AuthSessionState, ImportableProfile,
-    ResolvedCredentials, UrlCallback,
+    AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthProviderLoginCapabilities, AuthSession,
+    AuthSessionState, ImportableProfile, ResolvedCredentials, UrlCallback,
 };
 use dbflux_core::{FormFieldDef, FormFieldKind, FormSection, FormTab};
 
@@ -671,6 +671,17 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         FORM.get_or_init(build_aws_sso_form)
     }
 
+    fn capabilities(&self) -> &AuthProviderCapabilities {
+        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+            login: AuthProviderLoginCapabilities {
+                supported: true,
+                verification_url_progress: true,
+            },
+        };
+
+        &CAPABILITIES
+    }
+
     async fn validate_session(&self, profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
         let profile_name = profile
             .fields
@@ -832,6 +843,17 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
         FORM.get_or_init(build_aws_shared_credentials_form)
     }
 
+    fn capabilities(&self) -> &AuthProviderCapabilities {
+        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+            login: AuthProviderLoginCapabilities {
+                supported: false,
+                verification_url_progress: false,
+            },
+        };
+
+        &CAPABILITIES
+    }
+
     async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
         Ok(AuthSessionState::Valid { expires_at: None })
     }
@@ -909,6 +931,17 @@ impl dbflux_core::auth::DynAuthProvider for AwsStaticCredentialsAuthProvider {
     fn form_def(&self) -> &'static AuthFormDef {
         static FORM: OnceLock<AuthFormDef> = OnceLock::new();
         FORM.get_or_init(build_aws_static_credentials_form)
+    }
+
+    fn capabilities(&self) -> &AuthProviderCapabilities {
+        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+            login: AuthProviderLoginCapabilities {
+                supported: false,
+                verification_url_progress: false,
+            },
+        };
+
+        &CAPABILITIES
     }
 
     async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
@@ -1486,6 +1519,41 @@ mod tests {
             state,
             AuthSessionState::Valid { expires_at: None }
         ));
+    }
+
+    #[test]
+    fn aws_sso_capabilities_advertise_interactive_login() {
+        let provider = AwsSsoAuthProvider::new();
+
+        assert!(
+            <AwsSsoAuthProvider as dbflux_core::auth::DynAuthProvider>::capabilities(&provider)
+                .login
+                .supported
+        );
+        assert!(
+            <AwsSsoAuthProvider as dbflux_core::auth::DynAuthProvider>::capabilities(&provider)
+                .login
+                .verification_url_progress
+        );
+    }
+
+    #[test]
+    fn non_interactive_aws_providers_keep_login_disabled() {
+        let shared = AwsSharedCredentialsAuthProvider::new();
+        let shared_capabilities =
+            <AwsSharedCredentialsAuthProvider as dbflux_core::auth::DynAuthProvider>::capabilities(
+                &shared,
+            );
+        assert!(!shared_capabilities.login.supported);
+        assert!(!shared_capabilities.login.verification_url_progress);
+
+        let static_provider = AwsStaticCredentialsAuthProvider::new();
+        let static_capabilities =
+            <AwsStaticCredentialsAuthProvider as dbflux_core::auth::DynAuthProvider>::capabilities(
+                &static_provider,
+            );
+        assert!(!static_capabilities.login.supported);
+        assert!(!static_capabilities.login.verification_url_progress);
     }
 
     #[test]

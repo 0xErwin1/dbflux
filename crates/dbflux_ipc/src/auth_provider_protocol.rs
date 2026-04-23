@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use dbflux_core::auth::{
-    AuthFormDef, AuthProfile, AuthSession, AuthSessionState, ResolvedCredentials,
+    AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthSession, AuthSessionState,
+    ResolvedCredentials,
 };
 use dbflux_core::chrono;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
@@ -27,6 +28,17 @@ pub struct AuthProviderHelloResponse {
     pub provider_id: String,
     pub display_name: String,
     pub form_definition: AuthFormDef,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthProviderHelloResponseV1_1 {
+    pub server_name: String,
+    pub server_version: String,
+    pub selected_version: ProtocolVersion,
+    pub provider_id: String,
+    pub display_name: String,
+    pub form_definition: AuthFormDef,
+    pub capabilities: AuthProviderCapabilities,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +180,7 @@ impl From<ResolvedCredentialsDto> for ResolvedCredentials {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthProviderResponseBody {
     Hello(AuthProviderHelloResponse),
+    HelloV1_1(AuthProviderHelloResponseV1_1),
     SessionState { state: AuthSessionStateDto },
     LoginUrlProgress(LoginUrlProgress),
     LoginResult { session: AuthSessionDto },
@@ -281,6 +294,7 @@ pub fn parse_auth_profile(profile_json: &str) -> Result<AuthProfile, AuthProvide
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::auth::{AuthProviderCapabilities, AuthProviderLoginCapabilities};
     use dbflux_core::secrecy::ExposeSecret;
 
     #[test]
@@ -360,5 +374,26 @@ mod tests {
             progress_body.verification_url.as_deref(),
             Some("https://verify.example")
         );
+    }
+
+    #[test]
+    fn auth_provider_hello_v1_1_preserves_capabilities() {
+        let response = AuthProviderHelloResponseV1_1 {
+            server_name: "fake-auth-provider".to_string(),
+            server_version: "0.0.0-test".to_string(),
+            selected_version: ProtocolVersion::new(1, 1),
+            provider_id: "rpc-auth".to_string(),
+            display_name: "RPC Auth".to_string(),
+            form_definition: AuthFormDef { tabs: vec![] },
+            capabilities: AuthProviderCapabilities {
+                login: AuthProviderLoginCapabilities {
+                    supported: true,
+                    verification_url_progress: true,
+                },
+            },
+        };
+
+        assert!(response.capabilities.login.supported);
+        assert!(response.capabilities.login.verification_url_progress);
     }
 }

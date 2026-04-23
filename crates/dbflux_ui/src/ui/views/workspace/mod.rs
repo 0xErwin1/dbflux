@@ -380,8 +380,9 @@ impl Workspace {
             &login_modal,
             window,
             |this, _, event: &LoginModalEvent, window, cx| match event {
-                LoginModalEvent::OpenSsoWizard => {
-                    this.open_sso_wizard(window, cx);
+                LoginModalEvent::OpenAuthProfilesSettings => {
+                    let _ = window;
+                    this.open_auth_profiles_settings(cx);
                 }
             },
         )
@@ -862,7 +863,7 @@ impl Workspace {
             PaletteCommand::new("toggle_results", "Toggle Results Panel", "View"),
             PaletteCommand::new("toggle_tasks", "Toggle Tasks Panel", "View"),
             PaletteCommand::new("open_settings", "Open Settings", "View"),
-            PaletteCommand::new("open_login_modal", "Open Login Modal", "View"),
+            PaletteCommand::new("open_login_modal", "Open Auth Profile Login", "View"),
             PaletteCommand::new("open_sso_wizard", "Open AWS SSO Wizard", "View"),
             #[cfg(feature = "mcp")]
             PaletteCommand::new("open_mcp_approvals", "Open MCP Approvals", "View"),

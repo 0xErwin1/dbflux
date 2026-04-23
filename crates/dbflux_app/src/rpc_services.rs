@@ -841,6 +841,35 @@ mod tests {
     }
 
     #[test]
+    fn adapt_auth_provider_service_preserves_declared_provider_id_on_registration() {
+        let descriptor = discover_services(vec![test_service(RpcServiceKind::AuthProvider, true)])
+            .into_iter()
+            .next()
+            .expect("descriptor");
+
+        let RpcServiceDiscovery::Descriptor(descriptor) = descriptor else {
+            panic!("expected valid descriptor");
+        };
+
+        let adaptation = adapt_auth_provider_service_with(
+            descriptor,
+            |_| false,
+            |_, _| {
+                Ok(FakeAuthProvider {
+                    provider_id: "custom-oidc".to_string(),
+                })
+            },
+        );
+
+        match adaptation {
+            AuthProviderServiceAdaptation::Registered { provider_id, .. } => {
+                assert_eq!(provider_id, "custom-oidc");
+            }
+            _ => panic!("expected auth-provider registration"),
+        }
+    }
+
+    #[test]
     fn adapt_auth_provider_service_rejects_incompatible_contract_before_probe() {
         let mut service = test_service(RpcServiceKind::AuthProvider, true);
         service.api_contract = Some(ServiceRpcApiContract::new("driver_rpc", 1, 1));
@@ -898,6 +927,39 @@ mod tests {
             } => {
                 assert_eq!(socket_id, "svc-socket");
                 assert_eq!(provider_id, "aws-sso");
+            }
+            _ => panic!("expected duplicate provider rejection"),
+        }
+    }
+
+    #[test]
+    fn adapt_auth_provider_service_rejects_duplicate_non_aws_provider_ids() {
+        let descriptor = discover_services(vec![test_service(RpcServiceKind::AuthProvider, true)])
+            .into_iter()
+            .next()
+            .expect("descriptor");
+
+        let RpcServiceDiscovery::Descriptor(descriptor) = descriptor else {
+            panic!("expected valid descriptor");
+        };
+
+        let adaptation = adapt_auth_provider_service_with(
+            descriptor,
+            |provider_id| provider_id == "custom-oidc",
+            |_, _| {
+                Ok(FakeAuthProvider {
+                    provider_id: "custom-oidc".to_string(),
+                })
+            },
+        );
+
+        match adaptation {
+            AuthProviderServiceAdaptation::SkippedDuplicate {
+                socket_id,
+                provider_id,
+            } => {
+                assert_eq!(socket_id, "svc-socket");
+                assert_eq!(provider_id, "custom-oidc");
             }
             _ => panic!("expected duplicate provider rejection"),
         }

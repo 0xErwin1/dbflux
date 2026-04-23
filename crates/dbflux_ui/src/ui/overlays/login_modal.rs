@@ -31,7 +31,7 @@ pub enum LoginModalState {
 }
 
 pub enum LoginModalEvent {
-    OpenSsoWizard,
+    OpenAuthProfilesSettings,
 }
 
 pub struct LoginModal {
@@ -41,6 +41,10 @@ pub struct LoginModal {
     last_provider_name: Option<String>,
     timeout_generation: u64,
     success_generation: u64,
+}
+
+fn failed_state_shows_open_auth_profiles_button(provider_name: Option<&str>) -> bool {
+    provider_name.is_some()
 }
 
 impl LoginModal {
@@ -240,8 +244,8 @@ impl LoginModal {
         }
     }
 
-    fn open_sso_wizard(&mut self, cx: &mut Context<Self>) {
-        cx.emit(LoginModalEvent::OpenSsoWizard);
+    fn open_auth_profiles_settings(&mut self, cx: &mut Context<Self>) {
+        cx.emit(LoginModalEvent::OpenAuthProfilesSettings);
     }
 }
 
@@ -342,9 +346,8 @@ impl Render for LoginModal {
                 error,
                 provider_name,
             } => {
-                let show_sso_wizard_button = provider_name
-                    .as_ref()
-                    .is_some_and(|p| p.contains("AWS SSO"));
+                let show_auth_profiles_button =
+                    failed_state_shows_open_auth_profiles_button(provider_name.as_deref());
 
                 let error_content = div()
                     .p(Spacing::MD)
@@ -361,13 +364,13 @@ impl Render for LoginModal {
                         )),
                     ));
 
-                if show_sso_wizard_button {
+                if show_auth_profiles_button {
                     frame
                         .child(error_content)
                         .child(div().flex().justify_end().child(
-                            Button::new("sso-open-wizard", "Open AWS SSO Wizard").on_click(
+                            Button::new("login-open-auth-profiles", "Open Auth Profiles").on_click(
                                 cx.listener(|this, _, _, cx| {
-                                    this.open_sso_wizard(cx);
+                                    this.open_auth_profiles_settings(cx);
                                 }),
                             ),
                         ))
@@ -390,5 +393,18 @@ impl Render for LoginModal {
         };
 
         frame.render(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn failed_state_offers_auth_profiles_recovery_for_provider_backed_login() {
+        assert!(failed_state_shows_open_auth_profiles_button(Some(
+            "Custom OIDC"
+        )));
+        assert!(!failed_state_shows_open_auth_profiles_button(None));
     }
 }
