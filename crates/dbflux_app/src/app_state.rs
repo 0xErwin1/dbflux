@@ -2667,9 +2667,10 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::access::AccessKind;
     use dbflux_core::auth::{
-        AuthFormDef, AuthSession, AuthSessionState, DynAuthProvider, ResolvedCredentials,
-        UrlCallback,
+        AuthFormDef, AuthProfile, AuthSession, AuthSessionState, DynAuthProvider,
+        ResolvedCredentials, UrlCallback,
     };
     use dbflux_core::{
         ConnectionProfile, DatabaseCategory, DbConfig, DbError, DbKind, DriverFormDef,
@@ -2761,6 +2762,14 @@ mod tests {
         drivers: HashMap<String, Arc<dyn DbDriver>>,
         profiles: Vec<ConnectionProfile>,
     ) -> AppState {
+        test_state_with_profiles_and_auth_profiles(drivers, profiles, Vec::new())
+    }
+
+    fn test_state_with_profiles_and_auth_profiles(
+        drivers: HashMap<String, Arc<dyn DbDriver>>,
+        profiles: Vec<ConnectionProfile>,
+        auth_profiles: Vec<AuthProfile>,
+    ) -> AppState {
         let runtime = dbflux_storage::bootstrap::initialize().expect("storage runtime");
 
         AppState::new_with_drivers_and_settings(
@@ -2773,7 +2782,7 @@ mod tests {
             Vec::new(),
             runtime,
             profiles,
-            Vec::new(),
+            auth_profiles,
             Vec::new(),
             Vec::new(),
         )
@@ -2969,6 +2978,80 @@ mod tests {
             .collect();
 
         assert_eq!(providers, vec!["aws-sso".to_string()]);
+    }
+
+    #[test]
+    fn build_pipeline_input_preserves_connection_auth_profile_id_selection() {
+        let auth_profile = AuthProfile::new("OIDC", "custom-oidc", HashMap::new());
+
+        let mut profile = ConnectionProfile::new("rpc profile", DbConfig::default_postgres());
+        profile.auth_profile_id = Some(auth_profile.id);
+
+        let mut state = test_state_with_profiles_and_auth_profiles(
+            HashMap::new(),
+            vec![profile.clone()],
+            vec![auth_profile.clone()],
+        );
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider {
+                provider_id: "custom-oidc".to_string(),
+            }));
+
+        let input = state
+            .build_pipeline_input_for_profile(profile, CancelToken::new())
+            .expect("connection auth profile should be preserved");
+
+        let selected_auth_profile = input
+            .auth_profile
+            .expect("pipeline input should include the selected auth profile");
+
+        assert_eq!(selected_auth_profile.id, auth_profile.id);
+        assert_eq!(selected_auth_profile.provider_id, "custom-oidc");
+    }
+
+    #[test]
+    fn build_pipeline_input_preserves_managed_access_auth_profile_id_param() {
+        let fallback_auth_profile = AuthProfile::new("Fallback", "custom-oidc", HashMap::new());
+        let managed_auth_profile = AuthProfile::new("Managed", "custom-oidc", HashMap::new());
+
+        let mut managed_params = HashMap::new();
+        managed_params.insert("instance_id".to_string(), "i-abc123".to_string());
+        managed_params.insert("region".to_string(), "us-east-1".to_string());
+        managed_params.insert("remote_port".to_string(), "5432".to_string());
+        managed_params.insert(
+            "auth_profile_id".to_string(),
+            managed_auth_profile.id.to_string(),
+        );
+
+        let mut profile = ConnectionProfile::new("rpc profile", DbConfig::default_postgres());
+        profile.auth_profile_id = Some(fallback_auth_profile.id);
+        profile.access_kind = Some(AccessKind::Managed {
+            provider: "aws-ssm".to_string(),
+            params: managed_params,
+        });
+
+        let mut state = test_state_with_profiles_and_auth_profiles(
+            HashMap::new(),
+            vec![profile.clone()],
+            vec![fallback_auth_profile, managed_auth_profile.clone()],
+        );
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider {
+                provider_id: "custom-oidc".to_string(),
+            }));
+
+        let input = state
+            .build_pipeline_input_for_profile(profile, CancelToken::new())
+            .expect("managed access auth profile should be preserved");
+
+        let selected_auth_profile = input
+            .auth_profile
+            .expect("pipeline input should include the managed access auth profile");
+
+        assert_eq!(selected_auth_profile.id, managed_auth_profile.id);
+        assert_eq!(selected_auth_profile.provider_id, "custom-oidc");
     }
 
     #[test]

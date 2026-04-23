@@ -142,7 +142,37 @@ impl Workspace {
             .unwrap_or_else(|| "connection".to_string());
 
         self.login_modal.update(cx, |modal, cx| {
-            modal.open_manual("AWS SSO", profile_name, None, window, cx);
+            modal.open_manual("Auth Provider", profile_name, None, window, cx);
+        });
+    }
+
+    pub(super) fn open_auth_profiles_settings(&self, cx: &mut Context<Self>) {
+        let app_state = self.app_state.clone();
+        let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
+
+        let mut options = WindowOptions {
+            app_id: Some("dbflux".into()),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Settings".into()),
+                ..Default::default()
+            }),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            focus: true,
+            ..Default::default()
+        };
+        platform::apply_window_options(&mut options, 800.0, 600.0);
+
+        let _ = cx.open_window(options, |window, cx| {
+            let settings = cx.new(|cx| {
+                SettingsWindow::new_with_section(
+                    app_state.clone(),
+                    crate::ui::windows::settings::SettingsSectionId::AuthProfiles,
+                    window,
+                    cx,
+                )
+            });
+
+            cx.new(|cx| Root::new(settings, window, cx))
         });
     }
 

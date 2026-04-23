@@ -13,7 +13,10 @@
 
 use std::io;
 
-use dbflux_core::auth::{AuthProfile, AuthSession, AuthSessionState, ResolvedCredentials};
+use dbflux_core::auth::{
+    AuthProfile, AuthProviderCapabilities, AuthProviderLoginCapabilities, AuthSession,
+    AuthSessionState, ResolvedCredentials,
+};
 use dbflux_core::chrono::{self, Duration};
 use dbflux_core::{
     AuthFormDef, DbError, FormFieldDef, FormFieldKind, FormSection, FormTab, SelectOption,
@@ -21,9 +24,10 @@ use dbflux_core::{
 use dbflux_core::secrecy::SecretString;
 use dbflux_ipc::auth::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV;
 use dbflux_ipc::auth_provider_protocol::{
-    AuthProviderHelloResponse, AuthProviderRequestBody, AuthProviderRequestEnvelope,
-    AuthProviderResponseBody, AuthProviderResponseEnvelope, AuthProviderRpcErrorCode,
-    LoginRequest, ResolveCredentialsRequest, ValidateSessionRequest, parse_auth_profile,
+    AuthProviderHelloResponse, AuthProviderHelloResponseV1_1, AuthProviderRequestBody,
+    AuthProviderRequestEnvelope, AuthProviderResponseBody, AuthProviderResponseEnvelope,
+    AuthProviderRpcErrorCode, LoginRequest, ResolveCredentialsRequest, ValidateSessionRequest,
+    parse_auth_profile,
 };
 use dbflux_ipc::{
     AUTH_PROVIDER_RPC_API_CONTRACT, ProtocolVersion, RpcApiFamily,
@@ -162,9 +166,22 @@ fn handle_connection(mut stream: IpcStream) -> io::Result<()> {
 
                 negotiated_version = Some(selected_version);
 
-                let response = AuthProviderResponseEnvelope::ok(
-                    selected_version,
-                    request_id,
+                let body = if selected_version.minor >= 1 {
+                    AuthProviderResponseBody::HelloV1_1(AuthProviderHelloResponseV1_1 {
+                        server_name: "custom-auth-provider".to_string(),
+                        server_version: env!("CARGO_PKG_VERSION").to_string(),
+                        selected_version,
+                        provider_id: PROVIDER_ID.to_string(),
+                        display_name: PROVIDER_NAME.to_string(),
+                        form_definition: auth_form(),
+                        capabilities: AuthProviderCapabilities {
+                            login: AuthProviderLoginCapabilities {
+                                supported: true,
+                                verification_url_progress: true,
+                            },
+                        },
+                    })
+                } else {
                     AuthProviderResponseBody::Hello(AuthProviderHelloResponse {
                         server_name: "custom-auth-provider".to_string(),
                         server_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -172,8 +189,11 @@ fn handle_connection(mut stream: IpcStream) -> io::Result<()> {
                         provider_id: PROVIDER_ID.to_string(),
                         display_name: PROVIDER_NAME.to_string(),
                         form_definition: auth_form(),
-                    }),
-                );
+                    })
+                };
+
+                let response =
+                    AuthProviderResponseEnvelope::ok(selected_version, request_id, body);
 
                 framing::send_msg(&mut stream, &response)?;
             }

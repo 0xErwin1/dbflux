@@ -197,12 +197,12 @@ impl Render for PipelineProgress {
                         .child(Text::body(label).font_size(FontSizes::XS)),
                 )
             })
-            // SSO waiting message
+            // Login waiting message
             .when(is_waiting_sso, |el| {
                 el.child(
                     div()
                         .italic()
-                        .child(Text::caption("Waiting for SSO login in browser...")),
+                        .child(Text::caption("Waiting for login in browser...")),
                 )
             })
     }
@@ -215,7 +215,7 @@ fn completed_stage_label(state: &PipelineState) -> Option<String> {
             Some(format!("Authenticated ({})", provider_name))
         }
         PipelineState::WaitingForLogin { provider_name, .. } => {
-            Some(format!("SSO login completed ({})", provider_name))
+            Some(format!("Login completed ({})", provider_name))
         }
         PipelineState::ResolvingValues { total, .. } => {
             Some(format!("Resolved {} value(s)", total))
@@ -250,5 +250,28 @@ fn active_stage_label(state: &PipelineState) -> Option<String> {
         }
         PipelineState::FetchingSchema => Some("Fetching schema...".to_string()),
         PipelineState::Connected | PipelineState::Failed { .. } | PipelineState::Cancelled => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{active_stage_label, completed_stage_label};
+    use dbflux_core::PipelineState;
+
+    #[test]
+    fn waiting_for_login_labels_use_generic_wording() {
+        let state = PipelineState::WaitingForLogin {
+            provider_name: "Custom Auth".to_string(),
+            verification_url: None,
+        };
+
+        assert_eq!(
+            completed_stage_label(&state).as_deref(),
+            Some("Login completed (Custom Auth)")
+        );
+        assert_eq!(
+            active_stage_label(&state).as_deref(),
+            Some("Waiting for Custom Auth login...")
+        );
     }
 }

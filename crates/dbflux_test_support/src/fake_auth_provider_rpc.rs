@@ -1,11 +1,13 @@
+use std::collections::VecDeque;
 use std::io;
 use std::thread;
 
-use dbflux_core::auth::{AuthFormDef, AuthSessionState};
+use dbflux_core::auth::{AuthFormDef, AuthProviderCapabilities, AuthSessionState};
 use dbflux_ipc::auth_provider_protocol::{
-    AuthProviderHelloResponse, AuthProviderRequestBody, AuthProviderRequestEnvelope,
-    AuthProviderResponseBody, AuthProviderResponseEnvelope, AuthProviderRpcError,
-    AuthProviderRpcErrorCode, AuthSessionDto, ResolvedCredentialsDto, parse_auth_profile,
+    AuthProviderHelloResponse, AuthProviderHelloResponseV1_1, AuthProviderRequestBody,
+    AuthProviderRequestEnvelope, AuthProviderResponseBody, AuthProviderResponseEnvelope,
+    AuthProviderRpcError, AuthProviderRpcErrorCode, AuthSessionDto, ResolvedCredentialsDto,
+    parse_auth_profile,
 };
 use dbflux_ipc::{
     AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, ProtocolVersion,
@@ -26,9 +28,11 @@ pub struct FakeAuthProviderRpcConfig {
     pub provider_id: String,
     pub display_name: String,
     pub form_definition: AuthFormDef,
+    pub capabilities: AuthProviderCapabilities,
     pub supported_versions: Vec<ProtocolVersion>,
     pub expected_connections: usize,
     pub validate_session: FakeAuthRpcResult<AuthSessionState>,
+    pub validate_session_sequence: Vec<FakeAuthRpcResult<AuthSessionState>>,
     pub login_progress: Option<Option<String>>,
     pub login: FakeAuthRpcResult<AuthSessionDto>,
     pub resolve_credentials: FakeAuthRpcResult<ResolvedCredentialsDto>,
@@ -42,9 +46,11 @@ impl FakeAuthProviderRpcConfig {
             provider_id: provider_id.into(),
             display_name: "Fake RPC Auth Provider".to_string(),
             form_definition: AuthFormDef { tabs: vec![] },
+            capabilities: AuthProviderCapabilities::default(),
             supported_versions: auth_provider_rpc_supported_versions().to_vec(),
             expected_connections: 1,
             validate_session: FakeAuthRpcResult::Ok(AuthSessionState::LoginRequired),
+            validate_session_sequence: Vec::new(),
             login_progress: None,
             login: FakeAuthRpcResult::Err(AuthProviderRpcError {
                 code: AuthProviderRpcErrorCode::UnsupportedMethod,
@@ -98,6 +104,7 @@ fn run_server(
     config: FakeAuthProviderRpcConfig,
 ) -> io::Result<()> {
     let mut handled_connections = 0;
+    let mut validate_session_sequence = VecDeque::from(config.validate_session_sequence.clone());
 
     while handled_connections < config.expected_connections {
         let mut stream = listener.accept()?;
@@ -118,7 +125,7 @@ fn run_server(
 
         handled_connections += 1;
 
-        let response = handle_request(&config, request);
+        let response = handle_request(&config, &mut validate_session_sequence, request);
         match response {
             FakeResponse::Single(envelope) => framing::send_msg(&mut stream, &envelope)?,
             FakeResponse::Streaming(progress, terminal) => {
@@ -138,6 +145,7 @@ enum FakeResponse {
 
 fn handle_request(
     config: &FakeAuthProviderRpcConfig,
+    validate_session_sequence: &mut VecDeque<FakeAuthRpcResult<AuthSessionState>>,
     request: AuthProviderRequestEnvelope,
 ) -> FakeResponse {
     if request.protocol_version.major != AUTH_PROVIDER_RPC_API_CONTRACT.version.major {
@@ -182,9 +190,17 @@ fn handle_request(
                 ));
             };
 
-            FakeResponse::Single(AuthProviderResponseEnvelope::ok(
-                selected_version,
-                request.request_id,
+            let body = if selected_version.minor >= 1 {
+                AuthProviderResponseBody::HelloV1_1(AuthProviderHelloResponseV1_1 {
+                    server_name: "fake-auth-provider".to_string(),
+                    server_version: "0.0.0-test".to_string(),
+                    selected_version,
+                    provider_id: config.provider_id.clone(),
+                    display_name: config.display_name.clone(),
+                    form_definition: config.form_definition.clone(),
+                    capabilities: config.capabilities,
+                })
+            } else {
                 AuthProviderResponseBody::Hello(AuthProviderHelloResponse {
                     server_name: "fake-auth-provider".to_string(),
                     server_version: "0.0.0-test".to_string(),
@@ -192,19 +208,29 @@ fn handle_request(
                     provider_id: config.provider_id.clone(),
                     display_name: config.display_name.clone(),
                     form_definition: config.form_definition.clone(),
-                }),
+                })
+            };
+
+            FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                selected_version,
+                request.request_id,
+                body,
             ))
         }
         AuthProviderRequestBody::ValidateSession(validate) => {
             let _ = parse_auth_profile(&validate.profile_json);
 
-            match &config.validate_session {
+            let session_state = validate_session_sequence
+                .pop_front()
+                .unwrap_or_else(|| config.validate_session.clone());
+
+            match session_state {
                 FakeAuthRpcResult::Ok(state) => {
                     FakeResponse::Single(AuthProviderResponseEnvelope::ok(
                         request.protocol_version,
                         request.request_id,
                         AuthProviderResponseBody::SessionState {
-                            state: state.clone().into(),
+                            state: state.into(),
                         },
                     ))
                 }
@@ -212,7 +238,7 @@ fn handle_request(
                     FakeResponse::Single(AuthProviderResponseEnvelope::ok(
                         request.protocol_version,
                         request.request_id,
-                        AuthProviderResponseBody::Error(error.clone()),
+                        AuthProviderResponseBody::Error(error),
                     ))
                 }
             }
