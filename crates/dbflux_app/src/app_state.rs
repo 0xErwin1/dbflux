@@ -127,6 +127,26 @@ impl AppState {
         )
     }
 
+    pub fn new_with_storage_runtime(storage_runtime: StorageRuntime) -> Self {
+        let (built, storage_runtime, profiles, auth_profiles, proxies, ssh_tunnels) =
+            Self::build_default_drivers_with_runtime(storage_runtime);
+
+        Self::new_with_drivers_and_settings(
+            built.drivers,
+            built.external_driver_diagnostics,
+            built.general_settings,
+            built.driver_overrides,
+            built.driver_settings,
+            built.hook_definitions,
+            built.services,
+            storage_runtime,
+            profiles,
+            auth_profiles,
+            proxies,
+            ssh_tunnels,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new_with_drivers_and_settings(
         drivers: HashMap<String, Arc<dyn DbDriver>>,
@@ -455,6 +475,23 @@ impl AppState {
         Vec<ProxyProfile>,
         Vec<SshTunnelProfile>,
     ) {
+        let runtime = dbflux_storage::bootstrap::initialize()
+            .expect("failed to initialize internal storage — cannot continue");
+
+        Self::build_default_drivers_with_runtime(runtime)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn build_default_drivers_with_runtime(
+        runtime: dbflux_storage::bootstrap::StorageRuntime,
+    ) -> (
+        BuiltDrivers,
+        dbflux_storage::bootstrap::StorageRuntime,
+        Vec<ConnectionProfile>,
+        Vec<AuthProfile>,
+        Vec<ProxyProfile>,
+        Vec<SshTunnelProfile>,
+    ) {
         let mut drivers = Self::build_builtin_drivers();
         let mut external_driver_diagnostics = HashMap::new();
 
@@ -465,7 +502,7 @@ impl AppState {
             hook_definitions,
             services,
             runtime,
-        ) = Self::load_app_config_from_storage();
+        ) = Self::load_app_config_from_runtime(runtime);
 
         if !services.is_empty() {
             Self::launch_rpc_services(
@@ -496,7 +533,9 @@ impl AppState {
     }
 
     #[allow(clippy::type_complexity)]
-    fn load_app_config_from_storage() -> (
+    fn load_app_config_from_runtime(
+        runtime: dbflux_storage::bootstrap::StorageRuntime,
+    ) -> (
         GeneralSettings,
         HashMap<DriverKey, GlobalOverrides>,
         HashMap<DriverKey, FormValues>,
@@ -504,9 +543,6 @@ impl AppState {
         Vec<ServiceConfig>,
         dbflux_storage::bootstrap::StorageRuntime,
     ) {
-        let runtime = dbflux_storage::bootstrap::initialize()
-            .expect("failed to initialize internal storage — cannot continue");
-
         let loaded = crate::config_loader::load_config(&runtime);
 
         (
@@ -2770,7 +2806,8 @@ mod tests {
         profiles: Vec<ConnectionProfile>,
         auth_profiles: Vec<AuthProfile>,
     ) -> AppState {
-        let runtime = dbflux_storage::bootstrap::initialize().expect("storage runtime");
+        let runtime =
+            dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("storage runtime");
 
         AppState::new_with_drivers_and_settings(
             drivers,

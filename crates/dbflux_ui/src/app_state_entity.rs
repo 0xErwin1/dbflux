@@ -4,6 +4,7 @@
 //! and adds GPUI-specific state (like the settings window handle) and event types.
 
 use dbflux_app::AppState;
+use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use uuid::Uuid;
@@ -55,6 +56,14 @@ impl AppStateEntity {
     pub fn new() -> Self {
         Self {
             inner: AppState::new(),
+            settings_window: None,
+        }
+    }
+
+    /// Creates a new `AppStateEntity` with a caller-provided storage runtime.
+    pub fn new_with_storage_runtime(storage_runtime: StorageRuntime) -> Self {
+        Self {
+            inner: AppState::new_with_storage_runtime(storage_runtime),
             settings_window: None,
         }
     }

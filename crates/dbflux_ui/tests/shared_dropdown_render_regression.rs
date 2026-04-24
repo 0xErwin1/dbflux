@@ -1,4 +1,5 @@
 use dbflux_components::tokens::Heights;
+use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui::app_state_entity::AppStateEntity;
 use dbflux_ui::ui::document::{AuditDocument, KeyValueDocument};
 use dbflux_ui::ui::theme;
@@ -15,6 +16,15 @@ fn assert_pixels_close(actual: gpui::Pixels, expected: gpui::Pixels, message: &s
         actual >= expected - px(1.0) && actual <= expected + px(1.0),
         "{message}: expected {expected:?}, got {actual:?}"
     );
+}
+
+fn isolated_test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+    cx.update(|cx| {
+        cx.new(|_| {
+            let storage_runtime = StorageRuntime::in_memory().expect("isolated storage runtime");
+            AppStateEntity::new_with_storage_runtime(storage_runtime)
+        })
+    })
 }
 
 struct ProductionRefreshDropdownHarness {
@@ -52,7 +62,7 @@ impl Render for ProductionRefreshDropdownHarness {
 fn audit_and_key_value_refresh_dropdowns_share_compact_trigger_geometry(cx: &mut TestAppContext) {
     cx.update(theme::init);
 
-    let app_state = cx.update(|cx| cx.new(|_| AppStateEntity::new()));
+    let app_state = isolated_test_app_state(cx);
 
     let (_, window) = cx
         .add_window_view(|window, cx| ProductionRefreshDropdownHarness::new(app_state, window, cx));
@@ -84,7 +94,7 @@ fn audit_and_key_value_refresh_dropdowns_share_compact_trigger_geometry(cx: &mut
 fn audit_and_key_value_refresh_dropdowns_share_menu_render_bounds(cx: &mut TestAppContext) {
     cx.update(theme::init);
 
-    let app_state = cx.update(|cx| cx.new(|_| AppStateEntity::new()));
+    let app_state = isolated_test_app_state(cx);
 
     let (_, window) = cx
         .add_window_view(|window, cx| ProductionRefreshDropdownHarness::new(app_state, window, cx));

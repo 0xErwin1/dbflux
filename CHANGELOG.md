@@ -2,6 +2,23 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.5.0-dev.1] – 2026-04-24
+
+### Features
+
+* Activate external auth providers over RPC, including runtime registration, auth-provider protocol support, and MCP-side registry loading
+* Make RPC auth providers login-capable and document the auth-provider RPC example flow
+
+### Fixes
+
+* Complete the external driver bootstrap flow and enforce negotiated API version contracts during RPC startup
+* Preserve sidebar tree state on degraded storage loads and suppress false PostgreSQL `GRANT` diagnostics in the editor
+
+### Improvements
+
+* Formalize the shared RPC services foundation for driver and auth-provider service kinds
+* Add repo-specific workflow skills used for contributor automation
+
 ## [0.5.0-dev.0] – 2026-04-19
 
 ### Features
