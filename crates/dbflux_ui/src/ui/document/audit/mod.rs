@@ -1008,9 +1008,9 @@ impl AuditDocument {
     ) -> Entity<InputState> {
         let value = value.to_string();
         let rows = if editor_mode.is_some() {
-            Self::event_text_rows(&value, 4)
+            Self::event_code_rows(&value, 4)
         } else {
-            Self::event_text_rows(&value, 2)
+            Self::event_message_rows(&value, 2)
         };
 
         let input = cache
@@ -1028,8 +1028,7 @@ impl AuditDocument {
                             .soft_wrap(true)
                     } else {
                         InputState::new(window, cx)
-                            .multi_line(true)
-                            .rows(initial_rows)
+                            .auto_grow(initial_rows, usize::MAX)
                             .soft_wrap(true)
                     };
 
@@ -1062,6 +1061,14 @@ impl AuditDocument {
             .max(1);
 
         line_rows.max(wrap_rows).max(min_rows)
+    }
+
+    fn event_message_rows(value: &str, min_rows: usize) -> usize {
+        Self::event_text_rows(value, min_rows)
+    }
+
+    fn event_code_rows(value: &str, min_rows: usize) -> usize {
+        value.lines().count().max(min_rows).max(1)
     }
 
     fn event_text_height(rows: usize) -> Pixels {
@@ -2670,25 +2677,20 @@ impl AuditDocument {
             )
             .when_some(message, |root, value| {
                 let message_input = self.ensure_external_message_input(row_event_id, &value, window, cx);
-                let message_rows = Self::event_text_rows(&value, 2);
 
                 root.child(
                     div()
                         .flex_col()
                         .gap_1p5()
                         .child(Label::new("Message"))
-                        .child(
-                            div()
-                                .h(Self::event_text_height(message_rows))
-                                .child(SelectableText::new(&message_input).w_full().h_full()),
-                        ),
+                        .child(SelectableText::new(&message_input).w_full()),
                 )
             })
             .when_some(details_json, |root, value| {
                 let pretty_details = Self::pretty_json(&value);
                 let details_input =
                     self.ensure_external_details_input(row_event_id, &pretty_details, window, cx);
-                let details_rows = Self::event_text_rows(&pretty_details, 4);
+                let details_rows = Self::event_code_rows(&pretty_details, 4);
 
                 root.child(
                     div()
@@ -2700,8 +2702,11 @@ impl AuditDocument {
                                 .bg(theme.secondary)
                                 .p_2()
                                 .rounded(px(4.0))
-                                .h(Self::event_text_height(details_rows))
-                                .child(ReadonlyTextView::new(&details_input).w_full().h_full()),
+                                .child(
+                                    ReadonlyTextView::new(&details_input)
+                                        .w_full()
+                                        .h(Self::event_text_height(details_rows)),
+                                ),
                         ),
                 )
             })
@@ -3047,5 +3052,12 @@ mod tests {
         let long_line = "x".repeat(161);
 
         assert_eq!(AuditDocument::event_text_rows(&long_line, 2), 3);
+    }
+
+    #[test]
+    fn event_code_rows_is_more_conservative_for_pretty_json_blocks() {
+        let line = "a\nb\nc";
+
+        assert_eq!(AuditDocument::event_code_rows(line, 2), 3);
     }
 }

@@ -99,6 +99,8 @@ Navigate to **Workspace → Audit**. The unified audit view supports:
 - Filtering by actor, tool/action, date range, decision, category
 - Exporting filtered results to CSV or JSON
 
+The same `AuditDocument` UI shell is also reused for driver-backed external event streams when a driver declares them through generic core abstractions (`CollectionPresentation`, `CollectionChildInfo`, `EventStreamTarget`). The UI must not special-case concrete drivers to open or render those streams.
+
 ### Directly via SQLite
 
 The database is a standard SQLite file. Query it directly:

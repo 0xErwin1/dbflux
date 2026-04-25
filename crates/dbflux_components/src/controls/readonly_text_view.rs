@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, Entity, IntoElement, Window};
+use gpui::{App, DefiniteLength, Entity, IntoElement, Window};
 
 use crate::controls::{GpuiInput, InputState};
 
@@ -10,6 +10,7 @@ pub struct ReadonlyTextView {
     appearance: bool,
     w_full: bool,
     h_full: bool,
+    height: Option<DefiniteLength>,
 }
 
 impl ReadonlyTextView {
@@ -19,6 +20,7 @@ impl ReadonlyTextView {
             appearance: false,
             w_full: false,
             h_full: false,
+            height: None,
         }
     }
 
@@ -36,6 +38,11 @@ impl ReadonlyTextView {
         self.h_full = true;
         self
     }
+
+    pub fn h(mut self, height: impl Into<DefiniteLength>) -> Self {
+        self.height = Some(height.into());
+        self
+    }
 }
 
 impl RenderOnce for ReadonlyTextView {
@@ -50,6 +57,10 @@ impl RenderOnce for ReadonlyTextView {
 
         if self.h_full {
             input = input.h_full();
+        }
+
+        if let Some(height) = self.height {
+            input = input.h(height);
         }
 
         input
