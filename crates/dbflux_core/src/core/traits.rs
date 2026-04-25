@@ -4,13 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
-    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
-    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
-    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner,
-    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableBrowseRequest,
-    TableCountRequest, TableInfo, Value, ViewInfo,
+    CollectionRef, ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig,
+    DbError, DbKind, DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert,
+    DocumentUpdate, DriverCapabilities, DriverFormDef, DriverMetadata, EventPage, EventQuery,
+    ExplainRequest, FormValues, LanguageService, NoOpCodeGenerator, QueryHandle, QueryRequest,
+    QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect,
+    SqlGenerationRequest, SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo,
+    Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -87,6 +88,22 @@ pub enum SchemaObjectKind {
     View,
     Database,
     Collection,
+}
+
+/// Additional source controls requested by a driver for query execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceContextSpec {
+    pub targets_label: String,
+    pub targets_placeholder: String,
+    pub start_label: String,
+    pub end_label: String,
+}
+
+/// A driver-owned event stream target that can be opened in the audit document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventStreamTarget {
+    pub collection: CollectionRef,
+    pub child_id: Option<String>,
 }
 
 impl SchemaObjectKind {
@@ -815,6 +832,22 @@ pub trait Connection: Send + Sync {
         Err(DbError::NotSupported(
             "Collection counting not supported by this driver".to_string(),
         ))
+    }
+
+    /// Browse a driver-owned event stream source as canonical observability records.
+    fn browse_event_stream(
+        &self,
+        _target: &EventStreamTarget,
+        _query: &EventQuery,
+    ) -> Result<EventPage, DbError> {
+        Err(DbError::NotSupported(
+            "Event stream browsing not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Optional source-context controls exposed by this driver in query documents.
+    fn source_context_spec(&self) -> Option<SourceContextSpec> {
+        None
     }
 
     /// Explain a query execution plan for a table or custom query.

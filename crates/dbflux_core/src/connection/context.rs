@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExecutionSourceContext {
-    CloudWatchLogs {
-        log_groups: Vec<String>,
+    CollectionWindow {
+        targets: Vec<String>,
         start_ms: i64,
         end_ms: i64,
     },
@@ -127,9 +127,9 @@ impl ExecutionContext {
 mod tests {
     use super::*;
 
-    fn cloudwatch_source() -> ExecutionSourceContext {
-        ExecutionSourceContext::CloudWatchLogs {
-            log_groups: vec!["/aws/lambda/app".into(), "/aws/ecs/api".into()],
+    fn collection_window_source() -> ExecutionSourceContext {
+        ExecutionSourceContext::CollectionWindow {
+            targets: vec!["/aws/lambda/app".into(), "/aws/ecs/api".into()],
             start_ms: 1_710_000_000_000,
             end_ms: 1_710_000_300_000,
         }
@@ -178,7 +178,7 @@ db.orders.find({})
             database: Some("mydb".into()),
             schema: Some("public".into()),
             container: None,
-            source: Some(cloudwatch_source()),
+            source: Some(collection_window_source()),
         };
 
         let header = ctx.to_comment_header(QueryLanguage::Sql);
@@ -197,25 +197,25 @@ db.orders.find({})
     }
 
     #[test]
-    fn cloudwatch_source_roundtrips_through_serde() {
+    fn collection_window_source_roundtrips_through_serde() {
         let ctx = ExecutionContext {
             connection_id: Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
             database: Some("logs".into()),
             schema: None,
             container: None,
-            source: Some(cloudwatch_source()),
+            source: Some(collection_window_source()),
         };
 
         let json = serde_json::to_string(&ctx).unwrap();
         let restored: ExecutionContext = serde_json::from_str(&json).unwrap();
 
         match restored.source {
-            Some(ExecutionSourceContext::CloudWatchLogs {
-                log_groups,
+            Some(ExecutionSourceContext::CollectionWindow {
+                targets,
                 start_ms,
                 end_ms,
             }) => {
-                assert_eq!(log_groups, vec!["/aws/lambda/app", "/aws/ecs/api"]);
+                assert_eq!(targets, vec!["/aws/lambda/app", "/aws/ecs/api"]);
                 assert_eq!(start_ms, 1_710_000_000_000);
                 assert_eq!(end_ms, 1_710_000_300_000);
             }
@@ -226,7 +226,7 @@ db.orders.find({})
     #[test]
     fn source_only_context_is_not_empty() {
         let ctx = ExecutionContext {
-            source: Some(cloudwatch_source()),
+            source: Some(collection_window_source()),
             ..ExecutionContext::default()
         };
 

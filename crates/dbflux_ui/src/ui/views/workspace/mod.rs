@@ -445,15 +445,15 @@ impl Workspace {
                 } => {
                     this.open_collection_document(*profile_id, collection.clone(), window, cx);
                 }
-                SidebarEvent::OpenCloudWatchLogStream {
+                SidebarEvent::OpenCollectionChild {
                     profile_id,
-                    collection,
-                    log_stream,
+                    target,
+                    title,
                 } => {
-                    this.open_cloudwatch_log_stream_document(
+                    this.open_event_stream_document(
                         *profile_id,
-                        collection.clone(),
-                        log_stream.clone(),
+                        target.clone(),
+                        title.clone(),
                         window,
                         cx,
                     );

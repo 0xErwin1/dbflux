@@ -57,11 +57,11 @@ pub use connection::{
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
     ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,
-    DocumentConnection, ErrorLocation, FormattedError, KeyValueApi, KeyValueConnection,
-    NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter, RelationalConnection,
-    SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind, ShutdownCoordinator,
-    ShutdownPhase, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
-    Value, sanitize_uri,
+    DocumentConnection, ErrorLocation, EventStreamTarget, FormattedError, KeyValueApi,
+    KeyValueConnection, NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter,
+    RelationalConnection, SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy,
+    SchemaObjectKind, ShutdownCoordinator, ShutdownPhase, SourceContextSpec, TaskId, TaskKind,
+    TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value, sanitize_uri,
 };
 
 pub use data::{
@@ -106,17 +106,18 @@ pub use query::{
 
 pub use schema::node_id as schema_node_id;
 pub use schema::{
-    CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
-    ConstraintKind, ContainerInfo, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo,
-    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, GraphInfo,
-    GraphSchema, IndexBuilder, IndexData, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo,
-    KeyValueSchema, MeasurementInfo, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo,
-    ParseSchemaNodeIdError, PropertyInfo, RelationalSchema, RelationshipTypeInfo,
-    RetentionPolicyInfo, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
-    SchemaIndexInfo, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SearchIndexInfo,
-    SearchMappingInfo, SearchSchema, TableInfo, TimeSeriesFieldInfo, TimeSeriesSchema,
-    VectorCollectionInfo, VectorMetadataField, VectorMetric, VectorSchema, ViewInfo,
-    WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
+    CollectionChildInfo, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
+    ColumnFamilyInfo, ColumnInfo, ConstraintInfo, ConstraintKind, ContainerInfo, CustomTypeInfo,
+    CustomTypeKind, DataStructure, DatabaseInfo, DbSchemaInfo, DocumentSchema, FieldInfo,
+    ForeignKeyBuilder, ForeignKeyInfo, GraphInfo, GraphSchema, IndexBuilder, IndexData,
+    IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, MeasurementInfo,
+    MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, ParseSchemaNodeIdError,
+    PropertyInfo, RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo,
+    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo,
+    SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SearchIndexInfo, SearchMappingInfo,
+    SearchSchema, TableInfo, TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo,
+    VectorMetadataField, VectorMetric, VectorSchema, ViewInfo, WideColumnInfo,
+    WideColumnKeyspaceInfo, WideColumnSchema,
 };
 
 pub use sql::{

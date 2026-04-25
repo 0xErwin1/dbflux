@@ -19,11 +19,7 @@ fn context_slot_is_keyboard_focused(
     focus_mode == SqlQueryFocus::ContextBar && active_slot == slot
 }
 
-fn is_cloudwatch_driver_id(driver_id: Option<&str>) -> bool {
-    driver_id == Some("cloudwatch")
-}
-
-fn parse_cloudwatch_datetime_input(value: &str) -> Option<i64> {
+fn parse_source_datetime_input(value: &str) -> Option<i64> {
     let trimmed = value.trim();
 
     if trimmed.is_empty() {
@@ -116,21 +112,21 @@ impl CodeDocument {
         });
     }
 
-    fn current_driver_id(&self, cx: &App) -> Option<String> {
+    fn current_source_context_spec(&self, cx: &App) -> Option<dbflux_core::SourceContextSpec> {
         let connection_id = self.exec_ctx.connection_id.or(self.connection_id)?;
 
         self.app_state
             .read(cx)
             .connections()
             .get(&connection_id)
-            .map(|connected| connected.profile.driver_id())
+            .and_then(|connected| connected.connection.source_context_spec())
     }
 
-    pub(super) fn should_show_cloudwatch_source_controls(&self, cx: &App) -> bool {
-        is_cloudwatch_driver_id(self.current_driver_id(cx).as_deref())
+    pub(super) fn should_show_source_controls(&self, cx: &App) -> bool {
+        self.current_source_context_spec(cx).is_some()
     }
 
-    fn cloudwatch_log_group_items(&self, cx: &App) -> Vec<DropdownItem> {
+    fn source_target_items(&self, cx: &App) -> Vec<DropdownItem> {
         let Some(connection_id) = self.exec_ctx.connection_id.or(self.connection_id) else {
             return Vec::new();
         };
@@ -160,8 +156,8 @@ impl CodeDocument {
         items
     }
 
-    fn current_cloudwatch_log_groups(&self, cx: &App) -> Vec<String> {
-        self.cloudwatch_log_groups
+    fn current_source_targets(&self, cx: &App) -> Vec<String> {
+        self.source_targets
             .read(cx)
             .selected_values()
             .iter()
@@ -169,88 +165,87 @@ impl CodeDocument {
             .collect()
     }
 
-    pub(super) fn current_cloudwatch_source_context(
+    pub(super) fn current_source_context(
         &self,
         cx: &App,
     ) -> Result<ExecutionSourceContext, &'static str> {
-        let log_groups = self.current_cloudwatch_log_groups(cx);
-        let start_input = self.cloudwatch_start_input.read(cx).value().to_string();
-        let end_input = self.cloudwatch_end_input.read(cx).value().to_string();
+        let targets = self.current_source_targets(cx);
+        let start_input = self.source_start_input.read(cx).value().to_string();
+        let end_input = self.source_end_input.read(cx).value().to_string();
 
         if start_input.trim().is_empty()
             && end_input.trim().is_empty()
-            && let Some(source @ ExecutionSourceContext::CloudWatchLogs { .. }) =
-                self.exec_ctx.source.clone()
+            && let Some(source @ ExecutionSourceContext::CollectionWindow { .. }) = self.exec_ctx.source.clone()
         {
             return Ok(source);
         }
 
-        let start_ms = parse_cloudwatch_datetime_input(&start_input);
-        let end_ms = parse_cloudwatch_datetime_input(&end_input);
+        let start_ms = parse_source_datetime_input(&start_input);
+        let end_ms = parse_source_datetime_input(&end_input);
 
-        build_cloudwatch_source_context(&log_groups, start_ms, end_ms)
+        build_source_window_context(&targets, start_ms, end_ms)
     }
 
-    fn sync_cloudwatch_exec_context(&mut self, cx: &mut Context<Self>) {
-        if !self.should_show_cloudwatch_source_controls(cx) {
+    fn sync_source_exec_context(&mut self, cx: &mut Context<Self>) {
+        if !self.should_show_source_controls(cx) {
             self.exec_ctx.source = None;
             return;
         }
 
         let start_blank = self
-            .cloudwatch_start_input
+            .source_start_input
             .read(cx)
             .value()
             .trim()
             .is_empty();
-        let end_blank = self.cloudwatch_end_input.read(cx).value().trim().is_empty();
+        let end_blank = self.source_end_input.read(cx).value().trim().is_empty();
 
         if start_blank
             && end_blank
             && matches!(
                 self.exec_ctx.source,
-                Some(ExecutionSourceContext::CloudWatchLogs { .. })
+                Some(ExecutionSourceContext::CollectionWindow { .. })
             )
         {
             return;
         }
 
-        self.exec_ctx.source = self.current_cloudwatch_source_context(cx).ok();
+        self.exec_ctx.source = self.current_source_context(cx).ok();
     }
 
-    fn sync_cloudwatch_controls(&mut self, cx: &mut Context<Self>) {
-        let should_show = self.should_show_cloudwatch_source_controls(cx);
+    fn sync_source_controls(&mut self, cx: &mut Context<Self>) {
+        let should_show = self.should_show_source_controls(cx);
         let items = if should_show {
-            self.cloudwatch_log_group_items(cx)
+            self.source_target_items(cx)
         } else {
             Vec::new()
         };
 
         let selected_values = match self.exec_ctx.source.as_ref() {
-            Some(ExecutionSourceContext::CloudWatchLogs { log_groups, .. }) => log_groups.clone(),
+            Some(ExecutionSourceContext::CollectionWindow { targets, .. }) => targets.clone(),
             None => Vec::new(),
         };
 
-        self.cloudwatch_log_groups.update(cx, |multi_select, cx| {
+        self.source_targets.update(cx, |multi_select, cx| {
             multi_select.set_items(items, cx);
             multi_select.set_selected_values(&selected_values, cx);
         });
 
-        self.sync_cloudwatch_exec_context(cx);
+        self.sync_source_exec_context(cx);
     }
 
-    pub(super) fn on_cloudwatch_log_groups_changed(
+    pub(super) fn on_source_targets_changed(
         &mut self,
-        _selected_log_groups: Vec<String>,
+        _selected_targets: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        self.sync_cloudwatch_exec_context(cx);
+        self.sync_source_exec_context(cx);
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
 
-    pub(super) fn on_cloudwatch_time_range_changed(&mut self, cx: &mut Context<Self>) {
-        self.sync_cloudwatch_exec_context(cx);
+    pub(super) fn on_source_time_range_changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_source_exec_context(cx);
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
@@ -373,7 +368,7 @@ impl CodeDocument {
             });
         }
 
-        self.sync_cloudwatch_controls(cx);
+        self.sync_source_controls(cx);
         self.update_completion_provider(cx);
 
         if did_change {
@@ -720,7 +715,7 @@ impl CodeDocument {
     // === Visibility helpers for render ===
 
     pub(super) fn should_show_database_dropdown(&self, cx: &App) -> bool {
-        if self.should_show_cloudwatch_source_controls(cx) {
+        if self.should_show_source_controls(cx) {
             return false;
         }
 
@@ -742,7 +737,7 @@ impl CodeDocument {
     }
 
     pub(super) fn should_show_schema_dropdown(&self, cx: &App) -> bool {
-        if self.should_show_cloudwatch_source_controls(cx) {
+        if self.should_show_source_controls(cx) {
             return false;
         }
 
@@ -773,10 +768,10 @@ impl CodeDocument {
 
         let mut slots = vec![ContextBarSlot::Connection];
 
-        if self.should_show_cloudwatch_source_controls(cx) {
-            slots.push(ContextBarSlot::CloudWatchLogGroups);
-            slots.push(ContextBarSlot::CloudWatchStart);
-            slots.push(ContextBarSlot::CloudWatchEnd);
+        if self.should_show_source_controls(cx) {
+            slots.push(ContextBarSlot::SourceTargets);
+            slots.push(ContextBarSlot::SourceStart);
+            slots.push(ContextBarSlot::SourceEnd);
             return slots;
         }
 
@@ -795,9 +790,7 @@ impl CodeDocument {
             ContextBarSlot::Connection => Some(&self.connection_dropdown),
             ContextBarSlot::Database => Some(&self.database_dropdown),
             ContextBarSlot::Schema => Some(&self.schema_dropdown),
-            ContextBarSlot::CloudWatchLogGroups
-            | ContextBarSlot::CloudWatchStart
-            | ContextBarSlot::CloudWatchEnd => None,
+            ContextBarSlot::SourceTargets | ContextBarSlot::SourceStart | ContextBarSlot::SourceEnd => None,
         }
     }
 
@@ -903,16 +896,16 @@ impl CodeDocument {
 
             Command::Execute => {
                 match self.context_bar_slot {
-                    ContextBarSlot::CloudWatchLogGroups => {
-                        self.cloudwatch_log_groups
+                    ContextBarSlot::SourceTargets => {
+                        self.source_targets
                             .update(cx, |multi_select, cx| multi_select.toggle_open(cx));
                     }
-                    ContextBarSlot::CloudWatchStart => {
-                        self.cloudwatch_start_input
+                    ContextBarSlot::SourceStart => {
+                        self.source_start_input
                             .update(cx, |state, cx| state.focus(window, cx));
                     }
-                    ContextBarSlot::CloudWatchEnd => {
-                        self.cloudwatch_end_input
+                    ContextBarSlot::SourceEnd => {
+                        self.source_end_input
                             .update(cx, |state, cx| state.focus(window, cx));
                     }
                     _ => {
@@ -979,9 +972,10 @@ impl CodeDocument {
 
         let theme = cx.theme();
 
-        let show_cloudwatch = self.should_show_cloudwatch_source_controls(cx);
+        let show_source_controls = self.should_show_source_controls(cx);
         let show_db = self.should_show_database_dropdown(cx);
         let show_schema = self.should_show_schema_dropdown(cx);
+        let source_spec = self.current_source_context_spec(cx);
 
         div()
             .id("exec-context-bar")
@@ -1015,42 +1009,57 @@ impl CodeDocument {
                         cx,
                     )),
             )
-            .when(show_cloudwatch, |el| {
-                el.child(Text::caption("Log groups:"))
+            .when(show_source_controls, |el| {
+                el.child(Text::caption(
+                    source_spec
+                        .as_ref()
+                        .map(|spec| spec.targets_label.clone())
+                        .unwrap_or_else(|| "Sources".to_string()),
+                ))
                     .child(div().min_w(px(260.0)).child(focus_frame(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
-                            ContextBarSlot::CloudWatchLogGroups,
+                            ContextBarSlot::SourceTargets,
                         ),
                         Some(theme.ring),
-                        control_shell(self.cloudwatch_log_groups.clone(), cx),
+                        control_shell(self.source_targets.clone(), cx),
                         cx,
                     )))
-                    .child(Text::caption("Start:"))
+                    .child(Text::caption(
+                        source_spec
+                            .as_ref()
+                            .map(|spec| spec.start_label.clone())
+                            .unwrap_or_else(|| "Start".to_string()),
+                    ))
                     .child(div().min_w(px(180.0)).child(focus_frame(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
-                            ContextBarSlot::CloudWatchStart,
+                            ContextBarSlot::SourceStart,
                         ),
                         Some(theme.ring),
-                        control_shell(Input::new(&self.cloudwatch_start_input), cx),
+                        control_shell(Input::new(&self.source_start_input), cx),
                         cx,
                     )))
-                    .child(Text::caption("End:"))
+                    .child(Text::caption(
+                        source_spec
+                            .as_ref()
+                            .map(|spec| spec.end_label.clone())
+                            .unwrap_or_else(|| "End".to_string()),
+                    ))
                     .child(div().min_w(px(180.0)).child(focus_frame(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
-                            ContextBarSlot::CloudWatchEnd,
+                            ContextBarSlot::SourceEnd,
                         ),
                         Some(theme.ring),
-                        control_shell(Input::new(&self.cloudwatch_end_input), cx),
+                        control_shell(Input::new(&self.source_end_input), cx),
                         cx,
                     )))
             })
-            .when(!show_cloudwatch && show_db, |el| {
+            .when(!show_source_controls && show_db, |el| {
                 el.child(Text::caption("Database:")).child(
                     div()
                         .min_w(context_dropdown_min_width(1))
@@ -1066,7 +1075,7 @@ impl CodeDocument {
                         )),
                 )
             })
-            .when(!show_cloudwatch && show_schema, |el| {
+            .when(!show_source_controls && show_schema, |el| {
                 el.child(Text::caption("Schema:")).child(
                     div()
                         .min_w(context_dropdown_min_width(2))
@@ -1097,8 +1106,8 @@ impl CodeDocument {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextBarSlot, SqlQueryFocus, build_cloudwatch_source_context, context_dropdown_min_width,
-        context_slot_is_keyboard_focused, is_cloudwatch_driver_id, parse_cloudwatch_datetime_input,
+        ContextBarSlot, SqlQueryFocus, build_source_window_context, context_dropdown_min_width,
+        context_slot_is_keyboard_focused, parse_source_datetime_input,
     };
     use dbflux_core::ExecutionSourceContext;
     use gpui::px;
@@ -1134,48 +1143,41 @@ mod tests {
     }
 
     #[test]
-    fn cloudwatch_source_controls_are_driver_specific() {
-        assert!(is_cloudwatch_driver_id(Some("cloudwatch")));
-        assert!(!is_cloudwatch_driver_id(Some("postgres")));
-        assert!(!is_cloudwatch_driver_id(None));
+    fn source_datetime_inputs_parse_rfc3339_values() {
+        assert!(parse_source_datetime_input("2026-04-24T12:34:56Z").is_some());
+        assert!(parse_source_datetime_input("").is_none());
+        assert!(parse_source_datetime_input("not-a-date").is_none());
     }
 
     #[test]
-    fn cloudwatch_datetime_inputs_parse_rfc3339_values() {
-        assert!(parse_cloudwatch_datetime_input("2026-04-24T12:34:56Z").is_some());
-        assert!(parse_cloudwatch_datetime_input("").is_none());
-        assert!(parse_cloudwatch_datetime_input("not-a-date").is_none());
-    }
-
-    #[test]
-    fn valid_cloudwatch_source_context_requires_groups_and_ordered_bounds() {
+    fn valid_source_context_requires_targets_and_ordered_bounds() {
         let source =
-            build_cloudwatch_source_context(&["/aws/lambda/app".to_string()], Some(10), Some(20))
+            build_source_window_context(&["/aws/lambda/app".to_string()], Some(10), Some(20))
                 .expect("valid source context");
 
         match source {
-            ExecutionSourceContext::CloudWatchLogs {
-                log_groups,
+            ExecutionSourceContext::CollectionWindow {
+                targets,
                 start_ms,
                 end_ms,
             } => {
-                assert_eq!(log_groups, vec!["/aws/lambda/app"]);
+                assert_eq!(targets, vec!["/aws/lambda/app"]);
                 assert_eq!(start_ms, 10);
                 assert_eq!(end_ms, 20);
             }
         }
 
         assert_eq!(
-            build_cloudwatch_source_context(&[], Some(10), Some(20)).unwrap_err(),
-            "Select at least one log group"
+            build_source_window_context(&[], Some(10), Some(20)).unwrap_err(),
+            "Select at least one source"
         );
         assert_eq!(
-            build_cloudwatch_source_context(&["/aws/lambda/app".to_string()], None, Some(20))
+            build_source_window_context(&["/aws/lambda/app".to_string()], None, Some(20))
                 .unwrap_err(),
             "Start time is required"
         );
         assert_eq!(
-            build_cloudwatch_source_context(&["/aws/lambda/app".to_string()], Some(20), Some(10))
+            build_source_window_context(&["/aws/lambda/app".to_string()], Some(20), Some(10))
                 .unwrap_err(),
             "Start time must be earlier than end time"
         );

@@ -25,14 +25,6 @@ impl Sidebar {
             .collect()
     }
 
-    fn is_cloudwatch_profile(state: &AppState, profile_id: Uuid) -> bool {
-        state
-            .profiles()
-            .iter()
-            .find(|profile| profile.id == profile_id)
-            .is_some_and(|profile| profile.kind() == dbflux_core::DbKind::CloudWatchLogs)
-    }
-
     pub(crate) fn apply_tree_filter(items: Vec<TreeItem>, query: &str) -> Vec<TreeItem> {
         let query = query.to_ascii_lowercase();
 
@@ -274,7 +266,6 @@ impl Sidebar {
                                     &db.name,
                                     db_schema,
                                     &connected.table_details,
-                                    Self::is_cloudwatch_profile(state, profile_id),
                                 )
                             } else {
                                 Self::build_db_schema_content(
@@ -332,6 +323,8 @@ impl Sidebar {
                                     foreign_keys: None,
                                     constraints: None,
                                     sample_fields: collection.sample_fields.clone(),
+                                    presentation: collection.presentation,
+                                    child_items: collection.child_items.clone(),
                                 })
                                 .collect::<Vec<_>>();
 
@@ -347,7 +340,6 @@ impl Sidebar {
                                 &db.name,
                                 &db_schema,
                                 &connected.table_details,
-                                Self::is_cloudwatch_profile(state, profile_id),
                             )
                         } else {
                             Self::build_schema_children(
@@ -529,7 +521,6 @@ impl Sidebar {
         database_name: &str,
         db_schema: &dbflux_core::DbSchemaInfo,
         table_details: &HashMap<(String, String), TableInfo>,
-        is_cloudwatch_profile: bool,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
 
@@ -543,7 +534,6 @@ impl Sidebar {
                         database_name,
                         coll,
                         table_details,
-                        is_cloudwatch_profile,
                     )
                 })
                 .collect();
@@ -641,15 +631,12 @@ impl Sidebar {
         database_name: &str,
         collection: &dbflux_core::TableInfo,
         table_details: &HashMap<(String, String), TableInfo>,
-        is_cloudwatch_profile: bool,
     ) -> TreeItem {
         let coll_name = &collection.name;
         let cache_key = (database_name.to_string(), coll_name.clone());
         let effective = table_details.get(&cache_key).unwrap_or(collection);
-        let cloudwatch_stream_names = is_cloudwatch_profile
-            .then(|| Self::cloudwatch_stream_names(effective))
-            .flatten();
-        let details_loaded = effective.sample_fields.is_some();
+        let child_items = effective.child_items.clone().unwrap_or_default();
+        let details_loaded = effective.sample_fields.is_some() || !child_items.is_empty();
 
         let (field_children, field_count) = if let Some(fields) = effective.sample_fields.as_ref() {
             (
@@ -716,30 +703,23 @@ impl Sidebar {
             (Vec::new(), 0)
         };
 
-        let collection_children = if let Some(stream_names) = cloudwatch_stream_names {
-            stream_names
+        let collection_children = if !child_items.is_empty() {
+            child_items
                 .into_iter()
-                .map(|stream_name| {
+                .map(|child| {
                     TreeItem::new(
-                        SchemaNodeId::CloudWatchLogStream {
+                        SchemaNodeId::CollectionChild {
                             profile_id,
                             database: database_name.to_string(),
-                            log_group: coll_name.to_string(),
-                            name: stream_name.clone(),
+                            collection: coll_name.to_string(),
+                            child_id: child.id,
+                            name: child.label.clone(),
                         }
                         .to_string(),
-                        stream_name,
+                        child.label,
                     )
                 })
                 .collect()
-        } else if is_cloudwatch_profile {
-            vec![TreeItem::new(
-                format!(
-                    "cloudwatch-loading|{}|{}|{}",
-                    profile_id, database_name, coll_name
-                ),
-                "Loading...".to_string(),
-            )]
         } else {
             vec![
                 TreeItem::new(
@@ -778,18 +758,6 @@ impl Sidebar {
         )
         .expanded(false)
         .children(collection_children)
-    }
-
-    fn cloudwatch_stream_names(collection: &TableInfo) -> Option<Vec<String>> {
-        let fields = collection.sample_fields.as_ref()?;
-
-        let stream_names = fields
-            .iter()
-            .filter(|field| field.common_type == "cloudwatch_log_stream")
-            .map(|field| field.name.clone())
-            .collect::<Vec<_>>();
-
-        Some(stream_names)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1326,11 +1294,11 @@ impl Sidebar {
 #[cfg(test)]
 mod tests {
     use super::Sidebar;
-    use dbflux_core::{FieldInfo, TableInfo};
+    use dbflux_core::{CollectionChildInfo, CollectionPresentation, FieldInfo, TableInfo};
     use uuid::Uuid;
 
     #[test]
-    fn cloudwatch_collection_item_keeps_placeholder_child_before_streams_load() {
+    fn collection_item_builds_default_field_and_index_sections() {
         let item = Sidebar::build_collection_item(
             Uuid::new_v4(),
             "logs",
@@ -1342,18 +1310,20 @@ mod tests {
                 foreign_keys: None,
                 constraints: None,
                 sample_fields: None,
+                presentation: CollectionPresentation::DataGrid,
+                child_items: None,
             },
             &Default::default(),
-            true,
         );
 
         assert_eq!(item.label.as_ref(), "/aws/lambda/app");
-        assert_eq!(item.children.len(), 1);
-        assert_eq!(item.children[0].label.as_ref(), "Loading...");
+        assert_eq!(item.children.len(), 2);
+        assert!(item.children[0].label.as_ref().starts_with("Fields"));
+        assert!(item.children[1].label.as_ref().starts_with("Indexes"));
     }
 
     #[test]
-    fn cloudwatch_collection_item_uses_loaded_stream_names_when_present() {
+    fn collection_item_uses_driver_provided_child_items_when_present() {
         let item = Sidebar::build_collection_item(
             Uuid::new_v4(),
             "logs",
@@ -1366,13 +1336,18 @@ mod tests {
                 constraints: None,
                 sample_fields: Some(vec![FieldInfo {
                     name: "2026/04/25/[$LATEST]abc".to_string(),
-                    common_type: "cloudwatch_log_stream".to_string(),
+                    common_type: "text".to_string(),
                     occurrence_rate: None,
                     nested_fields: None,
                 }]),
+                presentation: CollectionPresentation::EventStream,
+                child_items: Some(vec![CollectionChildInfo {
+                    id: "stream-1".to_string(),
+                    label: "2026/04/25/[$LATEST]abc".to_string(),
+                    presentation: CollectionPresentation::EventStream,
+                }]),
             },
             &Default::default(),
-            true,
         );
 
         assert_eq!(item.children.len(), 1);

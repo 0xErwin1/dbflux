@@ -279,14 +279,14 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn file_headers_remain_relational_only_when_cloudwatch_source_exists() {
+    fn file_headers_remain_relational_only_when_source_window_exists() {
         let exec_ctx = ExecutionContext {
             connection_id: Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
             database: Some("logs".into()),
             schema: None,
             container: None,
-            source: Some(ExecutionSourceContext::CloudWatchLogs {
-                log_groups: vec!["/aws/lambda/app".into()],
+            source: Some(ExecutionSourceContext::CollectionWindow {
+                targets: vec!["/aws/lambda/app".into()],
                 start_ms: 10,
                 end_ms: 20,
             }),

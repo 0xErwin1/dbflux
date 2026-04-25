@@ -87,18 +87,18 @@ enum ContextBarSlot {
     Connection,
     Database,
     Schema,
-    CloudWatchLogGroups,
-    CloudWatchStart,
-    CloudWatchEnd,
+    SourceTargets,
+    SourceStart,
+    SourceEnd,
 }
 
-fn build_cloudwatch_source_context(
-    log_groups: &[String],
+fn build_source_window_context(
+    targets: &[String],
     start_ms: Option<i64>,
     end_ms: Option<i64>,
 ) -> Result<ExecutionSourceContext, &'static str> {
-    if log_groups.is_empty() {
-        return Err("Select at least one log group");
+    if targets.is_empty() {
+        return Err("Select at least one source");
     }
 
     let Some(start_ms) = start_ms else {
@@ -113,28 +113,28 @@ fn build_cloudwatch_source_context(
         return Err("Start time must be earlier than end time");
     }
 
-    Ok(ExecutionSourceContext::CloudWatchLogs {
-        log_groups: log_groups.to_vec(),
+    Ok(ExecutionSourceContext::CollectionWindow {
+        targets: targets.to_vec(),
         start_ms,
         end_ms,
     })
 }
 
-fn format_cloudwatch_datetime_input(timestamp_ms: i64) -> String {
+fn format_source_datetime_input(timestamp_ms: i64) -> String {
     dbflux_core::chrono::DateTime::from_timestamp_millis(timestamp_ms)
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
         .unwrap_or_default()
 }
 
-fn cloudwatch_input_values_from_source(
+fn source_input_values_from_context(
     source: &ExecutionSourceContext,
 ) -> Option<(String, String)> {
     match source {
-        ExecutionSourceContext::CloudWatchLogs {
+        ExecutionSourceContext::CollectionWindow {
             start_ms, end_ms, ..
         } => Some((
-            format_cloudwatch_datetime_input(*start_ms),
-            format_cloudwatch_datetime_input(*end_ms),
+            format_source_datetime_input(*start_ms),
+            format_source_datetime_input(*end_ms),
         )),
     }
 }
@@ -176,10 +176,10 @@ pub struct CodeDocument {
     connection_dropdown: Entity<Dropdown>,
     database_dropdown: Entity<Dropdown>,
     schema_dropdown: Entity<Dropdown>,
-    cloudwatch_log_groups: Entity<MultiSelect>,
-    cloudwatch_start_input: Entity<InputState>,
-    cloudwatch_end_input: Entity<InputState>,
-    pending_cloudwatch_input_values: Option<(String, String)>,
+    source_targets: Entity<MultiSelect>,
+    source_start_input: Entity<InputState>,
+    source_end_input: Entity<InputState>,
+    pending_source_input_values: Option<(String, String)>,
     _context_subscriptions: Vec<Subscription>,
 
     // Execution
@@ -437,40 +437,40 @@ impl CodeDocument {
             Self::create_database_dropdown(&app_state, &exec_ctx, window, cx);
         let (schema_dropdown, schema_sub) =
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
-        let cloudwatch_log_groups =
-            cx.new(|_cx| MultiSelect::new("ctx-cloudwatch-log-groups").placeholder("Log groups"));
-        let cloudwatch_start_input =
+        let source_targets =
+            cx.new(|_cx| MultiSelect::new("ctx-source-targets").placeholder("Sources"));
+        let source_start_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
-        let cloudwatch_end_input =
+        let source_end_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T01:00:00Z"));
-        let cloudwatch_log_groups_sub = cx.subscribe(
-            &cloudwatch_log_groups,
+        let source_targets_sub = cx.subscribe(
+            &source_targets,
             |this, entity, _event: &MultiSelectChanged, cx| {
-                let selected_log_groups = entity
+                let selected_targets = entity
                     .read(cx)
                     .selected_values()
                     .iter()
                     .map(|value| value.to_string())
                     .collect::<Vec<_>>();
 
-                this.on_cloudwatch_log_groups_changed(selected_log_groups, cx);
+                this.on_source_targets_changed(selected_targets, cx);
             },
         );
-        let cloudwatch_start_sub = cx.subscribe_in(
-            &cloudwatch_start_input,
+        let source_start_sub = cx.subscribe_in(
+            &source_start_input,
             window,
             |this, _input, event: &InputEvent, _window, cx| {
                 if matches!(event, InputEvent::Change) {
-                    this.on_cloudwatch_time_range_changed(cx);
+                    this.on_source_time_range_changed(cx);
                 }
             },
         );
-        let cloudwatch_end_sub = cx.subscribe_in(
-            &cloudwatch_end_input,
+        let source_end_sub = cx.subscribe_in(
+            &source_end_input,
             window,
             |this, _input, event: &InputEvent, _window, cx| {
                 if matches!(event, InputEvent::Change) {
-                    this.on_cloudwatch_time_range_changed(cx);
+                    this.on_source_time_range_changed(cx);
                 }
             },
         );
@@ -498,17 +498,17 @@ impl CodeDocument {
             connection_dropdown,
             database_dropdown,
             schema_dropdown,
-            cloudwatch_log_groups,
-            cloudwatch_start_input,
-            cloudwatch_end_input,
-            pending_cloudwatch_input_values: None,
+            source_targets,
+            source_start_input,
+            source_end_input,
+            pending_source_input_values: None,
             _context_subscriptions: vec![
                 conn_sub,
                 db_sub,
                 schema_sub,
-                cloudwatch_log_groups_sub,
-                cloudwatch_start_sub,
-                cloudwatch_end_sub,
+                source_targets_sub,
+                source_start_sub,
+                source_end_sub,
                 app_state_sub,
             ],
             execution_history: Vec::new(),
@@ -632,10 +632,10 @@ impl CodeDocument {
 
     /// Set the execution context (e.g. parsed from file header).
     pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
-        self.pending_cloudwatch_input_values = ctx
+        self.pending_source_input_values = ctx
             .source
             .as_ref()
-            .and_then(cloudwatch_input_values_from_source);
+            .and_then(source_input_values_from_context);
         self.connection_id = ctx.connection_id;
         self.exec_ctx = ctx;
         self.sync_context_dropdowns(cx);
@@ -1084,17 +1084,17 @@ impl CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::cloudwatch_input_values_from_source;
+    use super::source_input_values_from_context;
     use dbflux_core::ExecutionSourceContext;
 
     #[test]
-    fn cloudwatch_input_values_restore_start_and_end_strings() {
-        let values = cloudwatch_input_values_from_source(&ExecutionSourceContext::CloudWatchLogs {
-            log_groups: vec!["/aws/lambda/app".to_string()],
+    fn source_input_values_restore_start_and_end_strings() {
+        let values = source_input_values_from_context(&ExecutionSourceContext::CollectionWindow {
+            targets: vec!["/aws/lambda/app".to_string()],
             start_ms: 1_704_067_200_000,
             end_ms: 1_704_070_800_000,
         })
-        .expect("cloudwatch input values");
+        .expect("source input values");
 
         assert_eq!(values.0, "2024-01-01T00:00:00Z");
         assert_eq!(values.1, "2024-01-01T01:00:00Z");

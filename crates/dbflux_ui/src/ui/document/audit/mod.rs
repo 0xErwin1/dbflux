@@ -16,10 +16,12 @@ use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
 use crate::ui::components::toast::{PendingToast, flush_pending_toast};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::controls::{
+    GpuiInput as Input, InputEvent, InputState, ReadonlyTextView, SelectableText,
+};
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_core::{
-    CollectionBrowseRequest, CollectionRef, Pagination, RefreshPolicy, Value,
+    CollectionRef, EventQuery, EventRecord, EventStreamTarget, Pagination, RefreshPolicy,
     observability::{EventCategory, EventOutcome, EventSeverity},
 };
 use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter};
@@ -102,14 +104,9 @@ enum AuditDocumentSource {
     Internal {
         adapter: AuditSourceAdapter,
     },
-    CloudWatchLogGroup {
+    ExternalEventStream {
         profile_id: Uuid,
-        collection: CollectionRef,
-    },
-    CloudWatchLogStream {
-        profile_id: Uuid,
-        collection: CollectionRef,
-        log_stream: String,
+        target: EventStreamTarget,
     },
 }
 
@@ -125,7 +122,7 @@ enum ToolbarSlot {
     Clear,
 }
 
-struct CloudWatchLoadResult {
+struct LoadedEventPage {
     events: Vec<AuditEventDto>,
     total_events: u64,
 }
@@ -138,8 +135,8 @@ pub struct AuditDocument {
     events: Vec<AuditEventDto>,
     total_events: u64,
     expanded_event_ids: HashSet<i64>,
-    cloudwatch_message_inputs: HashMap<i64, Entity<InputState>>,
-    cloudwatch_details_inputs: HashMap<i64, Entity<InputState>>,
+    external_message_inputs: HashMap<i64, Entity<InputState>>,
+    external_details_inputs: HashMap<i64, Entity<InputState>>,
     pagination: Pagination,
     status_message: Option<String>,
     is_loading: bool,
@@ -201,47 +198,22 @@ impl AuditDocument {
         )
     }
 
-    pub fn new_for_cloudwatch_log_group(
+    pub fn new_for_event_stream(
         profile_id: Uuid,
-        collection: CollectionRef,
+        target: EventStreamTarget,
+        title: String,
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let title = collection.name.clone();
-
         Self::new_with_source(
             app_state,
-            AuditDocumentSource::CloudWatchLogGroup {
+            AuditDocumentSource::ExternalEventStream {
                 profile_id,
-                collection,
+                target,
             },
             title,
-            "Filter pattern...",
-            window,
-            cx,
-        )
-    }
-
-    pub fn new_for_cloudwatch_log_stream(
-        profile_id: Uuid,
-        collection: CollectionRef,
-        log_stream: String,
-        app_state: Entity<AppStateEntity>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let title = format!("{} · {}", collection.name, log_stream);
-
-        Self::new_with_source(
-            app_state,
-            AuditDocumentSource::CloudWatchLogStream {
-                profile_id,
-                collection,
-                log_stream,
-            },
-            title,
-            "Filter pattern...",
+            "Filter events...",
             window,
             cx,
         )
@@ -261,7 +233,7 @@ impl AuditDocument {
 
         let initial_time_range = Self::initial_time_range(&source);
         let time_range_placeholder =
-            if matches!(source, AuditDocumentSource::CloudWatchLogStream { .. }) {
+            if matches!(source, AuditDocumentSource::ExternalEventStream { .. }) {
                 "All time"
             } else {
                 "Last 24 h"
@@ -455,8 +427,8 @@ impl AuditDocument {
             events: Vec::new(),
             total_events: 0,
             expanded_event_ids: HashSet::new(),
-            cloudwatch_message_inputs: HashMap::new(),
-            cloudwatch_details_inputs: HashMap::new(),
+            external_message_inputs: HashMap::new(),
+            external_details_inputs: HashMap::new(),
             pagination: Pagination::Offset {
                 limit: DEFAULT_PAGE_SIZE,
                 offset: 0,
@@ -514,44 +486,22 @@ impl AuditDocument {
         doc
     }
 
-    pub fn is_cloudwatch_log_group(&self, profile_id: Uuid, collection: &CollectionRef) -> bool {
-        match &self.source {
-            AuditDocumentSource::CloudWatchLogGroup {
-                profile_id: doc_profile_id,
-                collection: doc_collection,
-            } => *doc_profile_id == profile_id && doc_collection == collection,
-            AuditDocumentSource::Internal { .. } => false,
-            AuditDocumentSource::CloudWatchLogStream { .. } => false,
-        }
-    }
-
-    pub fn is_cloudwatch_log_stream(
+    pub fn matches_event_stream(
         &self,
         profile_id: Uuid,
-        collection: &CollectionRef,
-        log_stream: &str,
+        target: &EventStreamTarget,
     ) -> bool {
         match &self.source {
-            AuditDocumentSource::CloudWatchLogStream {
+            AuditDocumentSource::ExternalEventStream {
                 profile_id: doc_profile_id,
-                collection: doc_collection,
-                log_stream: doc_log_stream,
-            } => {
-                *doc_profile_id == profile_id
-                    && doc_collection == collection
-                    && doc_log_stream == log_stream
-            }
-            AuditDocumentSource::Internal { .. }
-            | AuditDocumentSource::CloudWatchLogGroup { .. } => false,
+                target: doc_target,
+            } => *doc_profile_id == profile_id && doc_target == target,
+            AuditDocumentSource::Internal { .. } => false,
         }
     }
 
-    fn is_cloudwatch_source(&self) -> bool {
-        matches!(
-            self.source,
-            AuditDocumentSource::CloudWatchLogGroup { .. }
-                | AuditDocumentSource::CloudWatchLogStream { .. }
-        )
+    fn is_external_event_stream(&self) -> bool {
+        matches!(self.source, AuditDocumentSource::ExternalEventStream { .. })
     }
 
     fn toolbar_index(&self, slot: ToolbarSlot) -> Option<usize> {
@@ -564,14 +514,11 @@ impl AuditDocument {
             (AuditDocumentSource::Internal { .. }, ToolbarSlot::Refresh) => Some(5),
             (AuditDocumentSource::Internal { .. }, ToolbarSlot::RefreshPolicy) => Some(6),
             (AuditDocumentSource::Internal { .. }, ToolbarSlot::Clear) => Some(7),
-            (AuditDocumentSource::CloudWatchLogGroup { .. }, ToolbarSlot::Refresh)
-            | (AuditDocumentSource::CloudWatchLogStream { .. }, ToolbarSlot::Refresh) => Some(2),
-            (AuditDocumentSource::CloudWatchLogGroup { .. }, ToolbarSlot::RefreshPolicy)
-            | (AuditDocumentSource::CloudWatchLogStream { .. }, ToolbarSlot::RefreshPolicy) => {
+            (AuditDocumentSource::ExternalEventStream { .. }, ToolbarSlot::Refresh) => Some(2),
+            (AuditDocumentSource::ExternalEventStream { .. }, ToolbarSlot::RefreshPolicy) => {
                 Some(3)
             }
-            (AuditDocumentSource::CloudWatchLogGroup { .. }, ToolbarSlot::Clear)
-            | (AuditDocumentSource::CloudWatchLogStream { .. }, ToolbarSlot::Clear) => Some(4),
+            (AuditDocumentSource::ExternalEventStream { .. }, ToolbarSlot::Clear) => Some(4),
             _ => None,
         }
     }
@@ -650,16 +597,15 @@ impl AuditDocument {
 
     fn initial_time_range(source: &AuditDocumentSource) -> Option<usize> {
         match source {
-            AuditDocumentSource::CloudWatchLogStream { .. } => None,
-            AuditDocumentSource::Internal { .. }
-            | AuditDocumentSource::CloudWatchLogGroup { .. } => Some(2),
+            AuditDocumentSource::ExternalEventStream { .. } => None,
+            AuditDocumentSource::Internal { .. } => Some(2),
         }
     }
 
     fn default_filters_for_source(source: &AuditDocumentSource) -> AuditFilters {
         let mut filters = AuditFilters::default();
 
-        if !matches!(source, AuditDocumentSource::CloudWatchLogStream { .. }) {
+        if !matches!(source, AuditDocumentSource::ExternalEventStream { .. }) {
             let (start_ms, end_ms) = TimeRange::Last24h.to_filter_values();
             filters.start_ms = start_ms;
             filters.end_ms = end_ms;
@@ -669,188 +615,83 @@ impl AuditDocument {
     }
 
     fn source_loading_label(&self) -> &'static str {
-        if self.is_cloudwatch_source() {
-            "Loading log events..."
+        if self.is_external_event_stream() {
+            "Loading events..."
         } else {
             "Loading audit events..."
         }
     }
 
     fn source_error_heading(&self) -> &'static str {
-        if self.is_cloudwatch_source() {
-            "Failed to load log events"
+        if self.is_external_event_stream() {
+            "Failed to load events"
         } else {
             "Failed to load audit events"
         }
     }
 
     fn source_empty_label(&self) -> &'static str {
-        if self.is_cloudwatch_source() {
-            "No log events match the current filters."
+        if self.is_external_event_stream() {
+            "No events match the current filters."
         } else {
             "No audit events match the current filters."
         }
     }
 
     fn source_row_label(&self) -> &'static str {
-        if self.is_cloudwatch_source() {
+        if self.is_external_event_stream() {
             "events"
         } else {
             "rows"
         }
     }
 
-    fn cloudwatch_browse_request(
-        collection: CollectionRef,
-        filter_pattern: Option<String>,
-        start_ms: Option<i64>,
-        end_ms: Option<i64>,
-        pagination: Pagination,
-    ) -> CollectionBrowseRequest {
-        let mut request = CollectionBrowseRequest::new(collection).with_pagination(pagination);
-
-        let mut filter = serde_json::Map::new();
-
-        if let Some(pattern) = filter_pattern.filter(|value| !value.trim().is_empty()) {
-            filter.insert("filter_pattern".to_string(), JsonValue::String(pattern));
-        }
-
-        if let Some(start_ms) = start_ms {
-            filter.insert("start_ms".to_string(), json!(start_ms));
-        }
-
-        if let Some(end_ms) = end_ms {
-            filter.insert("end_ms".to_string(), json!(end_ms));
-        }
-
-        if !filter.is_empty() {
-            request = request.with_filter(JsonValue::Object(filter));
-        }
-
-        request
-    }
-
-    fn cloudwatch_stream_browse_request(
-        collection: CollectionRef,
-        log_stream: String,
-        filter_pattern: Option<String>,
-        start_ms: Option<i64>,
-        end_ms: Option<i64>,
-        pagination: Pagination,
-    ) -> CollectionBrowseRequest {
-        let mut request = CollectionBrowseRequest::new(collection).with_pagination(pagination);
-
-        let mut filter = serde_json::Map::new();
-
-        if let Some(pattern) = filter_pattern.filter(|value| !value.trim().is_empty()) {
-            filter.insert("filter_pattern".to_string(), JsonValue::String(pattern));
-        }
-
-        if let Some(start_ms) = start_ms {
-            filter.insert("start_ms".to_string(), json!(start_ms));
-        }
-
-        if let Some(end_ms) = end_ms {
-            filter.insert("end_ms".to_string(), json!(end_ms));
-        }
-
-        filter.insert("log_stream_names".to_string(), json!([log_stream]));
-        filter.insert("most_recent".to_string(), JsonValue::Bool(true));
-
-        request = request.with_filter(JsonValue::Object(filter));
-        request
-    }
-
-    fn cloudwatch_result_to_page(
-        result: dbflux_core::QueryResult,
-        collection: CollectionRef,
-        pagination_offset: u64,
-    ) -> CloudWatchLoadResult {
-        let has_next_page = result.next_page_token.is_some();
-        let events = result
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| {
-                Self::cloudwatch_row_to_event(row, &collection, pagination_offset, index)
-            })
+    fn external_page_to_loaded(page: dbflux_core::EventPage) -> LoadedEventPage {
+        let events = page
+            .events
+            .into_iter()
+            .map(Self::audit_event_from_record)
             .collect::<Vec<_>>();
-        let total_events = pagination_offset + events.len() as u64 + u64::from(has_next_page);
+        let total_events = page
+            .total
+            .map(|value| value as u64)
+            .unwrap_or_else(|| page.offset as u64 + events.len() as u64 + u64::from(page.has_more));
 
-        CloudWatchLoadResult {
+        LoadedEventPage {
             events,
             total_events,
         }
     }
 
-    fn cloudwatch_row_to_event(
-        row: &[Value],
-        collection: &CollectionRef,
-        pagination_offset: u64,
-        row_index: usize,
-    ) -> AuditEventDto {
-        let timestamp_ms = Self::int_cell(row, 0).unwrap_or_default();
-        let ingestion_time_ms = Self::int_cell(row, 1);
-        let log_stream_name = Self::text_cell(row, 2);
-        let message = Self::text_cell(row, 3);
-        let event_id = Self::text_cell(row, 4);
-        let message_details = Self::cloudwatch_message_details(message.as_deref());
-
-        let details_json = json!({
-            "log_group": collection.name,
-            "timestamp_ms": timestamp_ms,
-            "ingestion_time_ms": ingestion_time_ms,
-            "log_stream_name": log_stream_name,
-            "message": message_details,
-            "event_id": event_id,
-        })
-        .to_string();
-
+    fn audit_event_from_record(record: EventRecord) -> AuditEventDto {
         AuditEventDto {
-            id: (pagination_offset + row_index as u64 + 1) as i64,
-            actor_id: String::new(),
-            tool_id: "cloudwatch_log_event".to_string(),
+            id: record.id.unwrap_or_default(),
+            actor_id: record.actor_id.unwrap_or_default(),
+            tool_id: record.action.clone(),
             decision: String::new(),
             reason: None,
             profile_id: None,
             classification: None,
-            duration_ms: None,
-            created_at: timestamp_ms.to_string(),
-            created_at_epoch_ms: timestamp_ms,
-            level: None,
-            category: None,
-            action: log_stream_name,
-            outcome: None,
-            actor_type: None,
-            source_id: None,
-            summary: message,
-            connection_id: Some(collection.name.clone()),
-            database_name: Some(collection.database.clone()),
-            driver_id: Some("cloudwatch".to_string()),
-            object_type: Some("log_event".to_string()),
-            object_id: event_id,
-            details_json: Some(details_json),
-            error_code: None,
-            error_message: ingestion_time_ms.map(|value| value.to_string()),
-            session_id: None,
-            correlation_id: None,
-        }
-    }
-
-    fn int_cell(row: &[Value], index: usize) -> Option<i64> {
-        match row.get(index) {
-            Some(Value::Int(value)) => Some(*value),
-            Some(Value::Text(value)) => value.parse().ok(),
-            _ => None,
-        }
-    }
-
-    fn text_cell(row: &[Value], index: usize) -> Option<String> {
-        match row.get(index) {
-            Some(Value::Text(value)) if !value.is_empty() => Some(value.clone()),
-            Some(Value::Int(value)) => Some(value.to_string()),
-            Some(Value::Null) | None => None,
-            Some(value) => Some(value.to_string()),
+            duration_ms: record.duration_ms,
+            created_at: record.ts_ms.to_string(),
+            created_at_epoch_ms: record.ts_ms,
+            level: Some(record.level.as_str().to_string()),
+            category: Some(record.category.as_str().to_string()),
+            action: Some(record.action),
+            outcome: Some(record.outcome.as_str().to_string()),
+            actor_type: Some(record.actor_type.as_str().to_string()),
+            source_id: Some(record.source_id.as_str().to_string()),
+            summary: Some(record.summary),
+            connection_id: record.connection_id,
+            database_name: record.database_name,
+            driver_id: record.driver_id,
+            object_type: record.object_type,
+            object_id: record.object_id,
+            details_json: record.details_json,
+            error_code: record.error_code,
+            error_message: record.error_message,
+            session_id: record.session_id,
+            correlation_id: record.correlation_id,
         }
     }
 
@@ -985,16 +826,13 @@ impl AuditDocument {
                     let events = adapter.query_filter(&page_filter)?;
                     let total = adapter.count_filter(&count_filter)?;
 
-                    Ok::<_, String>(CloudWatchLoadResult {
+                    Ok::<_, String>(LoadedEventPage {
                         events,
                         total_events: total,
                     })
                 })
             }
-            AuditDocumentSource::CloudWatchLogGroup {
-                profile_id,
-                collection,
-            } => {
+            AuditDocumentSource::ExternalEventStream { profile_id, target } => {
                 let Some(connection) = self
                     .app_state
                     .read(cx)
@@ -1006,77 +844,27 @@ impl AuditDocument {
                     self.total_events = 0;
                     self.expanded_event_ids.clear();
                     self.is_loading = false;
-                    self.status_message =
-                        Some("Connection not found for this log group".to_string());
+                    self.status_message = Some("Connection not found for this event source".to_string());
                     cx.notify();
                     return;
                 };
 
-                let browse_request = Self::cloudwatch_browse_request(
-                    collection.clone(),
-                    self.filters.free_text.clone(),
-                    self.filters.start_ms,
-                    self.filters.end_ms,
-                    self.pagination.clone(),
-                );
-                let collection_for_task = collection.clone();
-                let pagination_offset = self.pagination.offset();
-
-                cx.background_executor().spawn(async move {
-                    let result = connection
-                        .browse_collection(&browse_request)
-                        .map_err(|error| format!("cloudwatch browse failed: {error}"))?;
-
-                    Ok::<_, String>(Self::cloudwatch_result_to_page(
-                        result,
-                        collection_for_task,
-                        pagination_offset,
-                    ))
-                })
-            }
-            AuditDocumentSource::CloudWatchLogStream {
-                profile_id,
-                collection,
-                log_stream,
-            } => {
-                let Some(connection) = self
-                    .app_state
-                    .read(cx)
-                    .connections()
-                    .get(profile_id)
-                    .map(|connected| connected.connection.clone())
-                else {
-                    self.events.clear();
-                    self.total_events = 0;
-                    self.expanded_event_ids.clear();
-                    self.is_loading = false;
-                    self.status_message =
-                        Some("Connection not found for this log stream".to_string());
-                    cx.notify();
-                    return;
+                let target = target.clone();
+                let query = EventQuery {
+                    from_ts_ms: self.filters.start_ms,
+                    to_ts_ms: self.filters.end_ms,
+                    free_text: self.filters.free_text.clone(),
+                    limit: Some(self.pagination_limit()),
+                    offset: Some(self.pagination_offset()),
+                    ..EventQuery::default()
                 };
 
-                let browse_request = Self::cloudwatch_stream_browse_request(
-                    collection.clone(),
-                    log_stream.clone(),
-                    self.filters.free_text.clone(),
-                    self.filters.start_ms,
-                    self.filters.end_ms,
-                    self.pagination.clone(),
-                );
-                let collection_for_task = collection.clone();
-                let pagination_offset = self.pagination.offset();
-
                 cx.background_executor().spawn(async move {
-                    let result = connection
-                        .browse_collection(&browse_request)
-                        .map_err(|error| format!("cloudwatch stream browse failed: {error}"))?;
+                    let page = connection
+                        .browse_event_stream(&target, &query)
+                        .map_err(|error| format!("external event stream browse failed: {error}"))?;
 
-                    Ok::<_, String>(Self::cloudwatch_result_to_page(
-                        result,
-                        collection_for_task,
-                        pagination_offset,
-                    ))
+                    Ok::<_, String>(Self::external_page_to_loaded(page))
                 })
             }
         };
@@ -1098,7 +886,7 @@ impl AuditDocument {
                         doc.status_message = None;
                         doc.expanded_event_ids
                             .retain(|event_id| visible_ids.contains(event_id));
-                        doc.retain_cloudwatch_inline_inputs(&visible_ids);
+                        doc.retain_external_inline_inputs(&visible_ids);
 
                         cx.notify();
                     })
@@ -1114,7 +902,7 @@ impl AuditDocument {
                         doc.events.clear();
                         doc.total_events = 0;
                         doc.expanded_event_ids.clear();
-                        doc.clear_cloudwatch_inline_inputs();
+                        doc.clear_external_inline_inputs();
                         doc.is_loading = false;
                         doc.status_message = Some(format!("Error loading events: {}", error));
 
@@ -1162,29 +950,29 @@ impl AuditDocument {
         cx.notify();
     }
 
-    fn retain_cloudwatch_inline_inputs(&mut self, visible_ids: &HashSet<i64>) {
-        Self::retain_cloudwatch_input_cache(&mut self.cloudwatch_message_inputs, visible_ids);
-        Self::retain_cloudwatch_input_cache(&mut self.cloudwatch_details_inputs, visible_ids);
+    fn retain_external_inline_inputs(&mut self, visible_ids: &HashSet<i64>) {
+        Self::retain_event_input_cache(&mut self.external_message_inputs, visible_ids);
+        Self::retain_event_input_cache(&mut self.external_details_inputs, visible_ids);
     }
 
-    fn retain_cloudwatch_input_cache<T>(cache: &mut HashMap<i64, T>, visible_ids: &HashSet<i64>) {
+    fn retain_event_input_cache<T>(cache: &mut HashMap<i64, T>, visible_ids: &HashSet<i64>) {
         cache.retain(|event_id, _| visible_ids.contains(event_id));
     }
 
-    fn clear_cloudwatch_inline_inputs(&mut self) {
-        self.cloudwatch_message_inputs.clear();
-        self.cloudwatch_details_inputs.clear();
+    fn clear_external_inline_inputs(&mut self) {
+        self.external_message_inputs.clear();
+        self.external_details_inputs.clear();
     }
 
-    fn ensure_cloudwatch_message_input(
+    fn ensure_external_message_input(
         &mut self,
         event_id: i64,
         message: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
-        Self::ensure_cloudwatch_text_input(
-            &mut self.cloudwatch_message_inputs,
+        Self::ensure_event_text_input(
+            &mut self.external_message_inputs,
             event_id,
             message,
             None,
@@ -1193,15 +981,15 @@ impl AuditDocument {
         )
     }
 
-    fn ensure_cloudwatch_details_input(
+    fn ensure_external_details_input(
         &mut self,
         event_id: i64,
         details_json: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
-        Self::ensure_cloudwatch_text_input(
-            &mut self.cloudwatch_details_inputs,
+        Self::ensure_event_text_input(
+            &mut self.external_details_inputs,
             event_id,
             details_json,
             Some("json"),
@@ -1210,7 +998,7 @@ impl AuditDocument {
         )
     }
 
-    fn ensure_cloudwatch_text_input(
+    fn ensure_event_text_input(
         cache: &mut HashMap<i64, Entity<InputState>>,
         event_id: i64,
         value: &str,
@@ -1220,9 +1008,9 @@ impl AuditDocument {
     ) -> Entity<InputState> {
         let value = value.to_string();
         let rows = if editor_mode.is_some() {
-            Self::cloudwatch_text_rows(&value, 4)
+            Self::event_text_rows(&value, 4)
         } else {
-            Self::cloudwatch_text_rows(&value, 2)
+            Self::event_text_rows(&value, 2)
         };
 
         let input = cache
@@ -1258,19 +1046,26 @@ impl AuditDocument {
         input
     }
 
-    fn cloudwatch_text_rows(value: &str, min_rows: usize) -> usize {
+    fn event_text_rows(value: &str, min_rows: usize) -> usize {
+        const ESTIMATED_CHARS_PER_ROW: usize = 80;
+
         let line_rows = value.lines().count().max(1);
         let wrap_rows = value
             .lines()
-            .map(|line| (line.chars().count() / 120).saturating_add(1))
+            .map(|line| {
+                let char_count = line.chars().count();
+                char_count
+                    .div_ceil(ESTIMATED_CHARS_PER_ROW)
+                    .max(1)
+            })
             .sum::<usize>()
             .max(1);
 
         line_rows.max(wrap_rows).max(min_rows)
     }
 
-    fn cloudwatch_text_height(rows: usize) -> Pixels {
-        px((rows as f32 * 22.0) + 16.0)
+    fn event_text_height(rows: usize) -> Pixels {
+        px((rows as f32 * 24.0) + 20.0)
     }
 
     fn go_to_prev_page(&mut self, cx: &mut Context<Self>) {
@@ -1505,12 +1300,6 @@ impl AuditDocument {
         } else {
             json.to_string()
         }
-    }
-
-    fn cloudwatch_message_details(message: Option<&str>) -> serde_json::Value {
-        message
-            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
-            .unwrap_or_else(|| json!(message))
     }
 
     fn filter_by_correlation(&mut self, correlation_id: String, cx: &mut Context<Self>) {
@@ -2443,7 +2232,7 @@ impl AuditDocument {
                 time_control.into_any_element(),
             ];
 
-            if !self.is_cloudwatch_source() {
+            if !self.is_external_event_stream() {
                 items.extend([
                     level_control.into_any_element(),
                     category_control.into_any_element(),
@@ -2549,8 +2338,8 @@ impl AuditDocument {
         };
         let connection_driver =
             Self::format_connection_driver(&event.connection_id, &event.driver_id);
-        let log_stream = event.action.clone();
-        let cloudwatch_event_id = event.object_id.clone();
+        let event_action = event.action.clone();
+        let external_event_id = event.object_id.clone();
 
         // Background priority: selected (keyboard cursor) > expanded > default.
         // Use theme.list_active for the selected row — same token as key_value and sidebar.
@@ -2607,8 +2396,8 @@ impl AuditDocument {
                         .muted(),
                     )
                     .child(Text::code(timestamp))
-                    .when(self.is_cloudwatch_source(), |row| {
-                        row.when_some(log_stream.clone(), |row, value| {
+                    .when(self.is_external_event_stream(), |row| {
+                        row.when_some(event_action.clone(), |row, value| {
                             row.child(
                                 div()
                                     .px_1p5()
@@ -2624,7 +2413,7 @@ impl AuditDocument {
                             )
                         })
                     })
-                    .when(!self.is_cloudwatch_source(), |row| {
+                    .when(!self.is_external_event_stream(), |row| {
                         let level = event.level.as_deref();
                         let level_display: AnyElement = match level {
                             Some(l) => div()
@@ -2650,7 +2439,7 @@ impl AuditDocument {
                     })
                     .child(div().text_sm().flex_1().truncate().child(summary_display))
                     .when_some(
-                        cloudwatch_event_id.filter(|_| self.is_cloudwatch_source()),
+                        external_event_id.filter(|_| self.is_external_event_stream()),
                         |row, value| row.child(Text::caption(value)),
                     )
                     .when_some(
@@ -2687,8 +2476,8 @@ impl AuditDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.is_cloudwatch_source() {
-            return self.render_cloudwatch_inline_detail(event, window, cx);
+        if self.is_external_event_stream() {
+            return self.render_external_inline_detail(event, window, cx);
         }
 
         let theme = cx.theme().clone();
@@ -2832,7 +2621,7 @@ impl AuditDocument {
             .into_any_element()
     }
 
-    fn render_cloudwatch_inline_detail(
+    fn render_external_inline_detail(
         &mut self,
         event: AuditEventDto,
         window: &mut Window,
@@ -2841,10 +2630,10 @@ impl AuditDocument {
         let theme = cx.theme().clone();
         let row_event_id = event.id;
         let timestamp = Self::format_timestamp_ms(event.created_at_epoch_ms);
-        let log_group = event.connection_id.clone();
-        let log_stream = event.action.clone();
-        let log_event_id = event.object_id.clone();
-        let ingestion_time = event
+        let source_name = event.connection_id.clone();
+        let source_partition = event.action.clone();
+        let event_id = event.object_id.clone();
+        let secondary_timestamp = event
             .error_message
             .as_deref()
             .and_then(|value| value.parse::<i64>().ok())
@@ -2868,21 +2657,20 @@ impl AuditDocument {
                     .children(vec![
                         self.render_detail_field("Time", Some(timestamp), &theme)
                             .into_any_element(),
-                        self.render_detail_field("Log Group", log_group, &theme)
+                        self.render_detail_field("Source", source_name, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Log Stream", log_stream, &theme)
+                        self.render_detail_field("Partition", source_partition, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Event ID", log_event_id, &theme)
+                        self.render_detail_field("Event ID", event_id, &theme)
                             .into_any_element(),
                     ])
-                    .when_some(ingestion_time, |row, value| {
-                        row.child(self.render_detail_field("Ingestion Time", Some(value), &theme))
+                    .when_some(secondary_timestamp, |row, value| {
+                        row.child(self.render_detail_field("Secondary Time", Some(value), &theme))
                     }),
             )
             .when_some(message, |root, value| {
-                let message_input =
-                    self.ensure_cloudwatch_message_input(row_event_id, &value, window, cx);
-                let message_rows = Self::cloudwatch_text_rows(&value, 2);
+                let message_input = self.ensure_external_message_input(row_event_id, &value, window, cx);
+                let message_rows = Self::event_text_rows(&value, 2);
 
                 root.child(
                     div()
@@ -2890,20 +2678,17 @@ impl AuditDocument {
                         .gap_1p5()
                         .child(Label::new("Message"))
                         .child(
-                            div().h(Self::cloudwatch_text_height(message_rows)).child(
-                                Input::new(&message_input)
-                                    .appearance(false)
-                                    .w_full()
-                                    .h_full(),
-                            ),
+                            div()
+                                .h(Self::event_text_height(message_rows))
+                                .child(SelectableText::new(&message_input).w_full().h_full()),
                         ),
                 )
             })
             .when_some(details_json, |root, value| {
                 let pretty_details = Self::pretty_json(&value);
                 let details_input =
-                    self.ensure_cloudwatch_details_input(row_event_id, &pretty_details, window, cx);
-                let details_rows = Self::cloudwatch_text_rows(&pretty_details, 4);
+                    self.ensure_external_details_input(row_event_id, &pretty_details, window, cx);
+                let details_rows = Self::event_text_rows(&pretty_details, 4);
 
                 root.child(
                     div()
@@ -2915,13 +2700,8 @@ impl AuditDocument {
                                 .bg(theme.secondary)
                                 .p_2()
                                 .rounded(px(4.0))
-                                .h(Self::cloudwatch_text_height(details_rows))
-                                .child(
-                                    Input::new(&details_input)
-                                        .appearance(false)
-                                        .w_full()
-                                        .h_full(),
-                                ),
+                                .h(Self::event_text_height(details_rows))
+                                .child(ReadonlyTextView::new(&details_input).w_full().h_full()),
                         ),
                 )
             })
@@ -3119,7 +2899,7 @@ impl AuditDocument {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .when(self.total_events > 0 && !self.is_cloudwatch_source(), |d| {
+            .when(self.total_events > 0 && !self.is_external_event_stream(), |d| {
                 d.child(self.render_export_button(&theme, cx))
             })
             .when_some(
@@ -3204,8 +2984,9 @@ mod tests {
     use super::AuditDocument;
     use std::collections::{HashMap, HashSet};
 
-    use dbflux_core::{CollectionRef, Pagination, Value, observability::EventCategory};
-    use serde_json::json;
+    use dbflux_core::{
+        EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+    };
 
     #[test]
     fn category_index_maps_none_to_all() {
@@ -3218,127 +2999,53 @@ mod tests {
     }
 
     #[test]
-    fn cloudwatch_browse_request_uses_filter_pattern_and_range() {
-        let request = AuditDocument::cloudwatch_browse_request(
-            CollectionRef::new("logs", "/aws/lambda/app"),
-            Some("ERROR".to_string()),
-            Some(10),
-            Some(20),
-            Pagination::Offset {
-                limit: 100,
-                offset: 0,
-            },
-        );
+    fn audit_event_from_record_preserves_event_stream_fields() {
+        let event = AuditDocument::audit_event_from_record(EventRecord {
+            id: Some(7),
+            ts_ms: 1000,
+            level: EventSeverity::Info,
+            category: EventCategory::System,
+            action: "partition-a".to_string(),
+            outcome: EventOutcome::Success,
+            actor_type: EventActorType::System,
+            actor_id: None,
+            source_id: EventSourceId::System,
+            connection_id: Some("source-a".to_string()),
+            database_name: Some("logs".to_string()),
+            driver_id: Some("cloudwatch".to_string()),
+            object_type: Some("event_stream".to_string()),
+            object_id: Some("event-123".to_string()),
+            summary: "hello".to_string(),
+            details_json: Some("{\"message\":\"hello\"}".to_string()),
+            error_code: None,
+            error_message: Some("2000".to_string()),
+            duration_ms: None,
+            session_id: None,
+            correlation_id: None,
+        });
 
-        assert_eq!(
-            request.filter,
-            Some(json!({
-                "filter_pattern": "ERROR",
-                "start_ms": 10,
-                "end_ms": 20,
-            }))
-        );
-    }
-
-    #[test]
-    fn cloudwatch_row_maps_into_audit_style_event() {
-        let event = AuditDocument::cloudwatch_row_to_event(
-            &[
-                Value::Int(1000),
-                Value::Int(2000),
-                Value::Text("2026/04/25/[$LATEST]abc".to_string()),
-                Value::Text("hello from cloudwatch".to_string()),
-                Value::Text("event-123".to_string()),
-            ],
-            &CollectionRef::new("logs", "/aws/lambda/app"),
-            200,
-            3,
-        );
-
-        assert_eq!(event.id, 204);
+        assert_eq!(event.id, 7);
         assert_eq!(event.created_at_epoch_ms, 1000);
-        assert_eq!(event.action.as_deref(), Some("2026/04/25/[$LATEST]abc"));
-        assert_eq!(event.summary.as_deref(), Some("hello from cloudwatch"));
+        assert_eq!(event.action.as_deref(), Some("partition-a"));
+        assert_eq!(event.summary.as_deref(), Some("hello"));
         assert_eq!(event.object_id.as_deref(), Some("event-123"));
-        assert_eq!(event.connection_id.as_deref(), Some("/aws/lambda/app"));
-        assert_eq!(event.driver_id.as_deref(), Some("cloudwatch"));
+        assert_eq!(event.connection_id.as_deref(), Some("source-a"));
     }
 
     #[test]
-    fn cloudwatch_row_embeds_valid_json_message_as_pretty_printable_details() {
-        let event = AuditDocument::cloudwatch_row_to_event(
-            &[
-                Value::Int(1000),
-                Value::Int(2000),
-                Value::Text("2026/04/25/[$LATEST]abc".to_string()),
-                Value::Text("{\"level\":\"info\",\"nested\":{\"ok\":true}}".to_string()),
-                Value::Text("event-123".to_string()),
-            ],
-            &CollectionRef::new("logs", "/aws/lambda/app"),
-            0,
-            0,
-        );
-
-        let details =
-            serde_json::from_str::<serde_json::Value>(event.details_json.as_deref().unwrap())
-                .unwrap();
-
-        assert_eq!(details["message"]["level"], json!("info"));
-        assert_eq!(details["message"]["nested"]["ok"], json!(true));
-    }
-
-    #[test]
-    fn cloudwatch_row_keeps_plain_text_message_as_string_in_details() {
-        let event = AuditDocument::cloudwatch_row_to_event(
-            &[
-                Value::Int(1000),
-                Value::Int(2000),
-                Value::Text("2026/04/25/[$LATEST]abc".to_string()),
-                Value::Text("plain text message".to_string()),
-                Value::Text("event-123".to_string()),
-            ],
-            &CollectionRef::new("logs", "/aws/lambda/app"),
-            0,
-            0,
-        );
-
-        let details =
-            serde_json::from_str::<serde_json::Value>(event.details_json.as_deref().unwrap())
-                .unwrap();
-
-        assert_eq!(details["message"], json!("plain text message"));
-    }
-
-    #[test]
-    fn cloudwatch_stream_browse_request_targets_exact_stream_and_latest_page() {
-        let request = AuditDocument::cloudwatch_stream_browse_request(
-            CollectionRef::new("logs", "/aws/lambda/app"),
-            "2026/04/25/[$LATEST]abc".to_string(),
-            None,
-            None,
-            None,
-            Pagination::Offset {
-                limit: 100,
-                offset: 0,
-            },
-        );
-
-        assert_eq!(
-            request.filter,
-            Some(json!({
-                "log_stream_names": ["2026/04/25/[$LATEST]abc"],
-                "most_recent": true,
-            }))
-        );
-    }
-
-    #[test]
-    fn retain_cloudwatch_input_cache_drops_non_visible_entries() {
+    fn retain_event_input_cache_drops_non_visible_entries() {
         let mut cache = HashMap::from([(1_i64, "message"), (2_i64, "details"), (3_i64, "extra")]);
         let visible_ids = HashSet::from([2_i64, 3_i64]);
 
-        AuditDocument::retain_cloudwatch_input_cache(&mut cache, &visible_ids);
+        AuditDocument::retain_event_input_cache(&mut cache, &visible_ids);
 
         assert_eq!(cache, HashMap::from([(2_i64, "details"), (3_i64, "extra")]));
+    }
+
+    #[test]
+    fn event_text_rows_adds_wrap_height_for_long_lines() {
+        let long_line = "x".repeat(161);
+
+        assert_eq!(AuditDocument::event_text_rows(&long_line, 2), 3);
     }
 }

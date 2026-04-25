@@ -7,11 +7,13 @@ use aws_sdk_cloudwatchlogs::Client;
 use aws_sdk_cloudwatchlogs::config::Builder as CloudWatchConfigBuilder;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    CLOUDWATCH_FORM, CollectionBrowseRequest, CollectionCountRequest, CollectionInfo, ColumnMeta,
-    Connection, ConnectionProfile, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError,
-    DbKind, DocumentSchema, DriverCapabilities, DriverFormDef, DriverMetadata,
+    CLOUDWATCH_FORM, CollectionBrowseRequest, CollectionChildInfo, CollectionCountRequest,
+    CollectionInfo, CollectionPresentation, ColumnMeta, Connection, ConnectionProfile,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DocumentSchema,
+    DriverCapabilities, DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage,
+    EventQuery, EventRecord, EventSeverity, EventSourceId, EventStreamTarget,
     ExecutionSourceContext, FieldInfo, FormValues, Icon, QueryLanguage, QueryRequest, QueryResult,
-    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, TableInfo, Value,
+    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, TableInfo, Value,
 };
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -185,8 +187,8 @@ impl Connection for CloudWatchConnection {
                 DbError::query_failed("CloudWatch execution requires structured source context")
             })?;
 
-        let ExecutionSourceContext::CloudWatchLogs {
-            log_groups,
+        let ExecutionSourceContext::CollectionWindow {
+            targets: log_groups,
             start_ms,
             end_ms,
         } = source;
@@ -475,19 +477,55 @@ impl Connection for CloudWatchConnection {
         ))
     }
 
+    fn browse_event_stream(
+        &self,
+        target: &EventStreamTarget,
+        query: &EventQuery,
+    ) -> Result<EventPage, DbError> {
+        let request = Self::event_stream_request(target, query);
+        let result = self.browse_collection(&request)?;
+
+        Ok(Self::event_query_result_to_page(
+            &target.collection,
+            target.child_id.as_deref(),
+            query,
+            result,
+        ))
+    }
+
+    fn source_context_spec(&self) -> Option<SourceContextSpec> {
+        Some(SourceContextSpec {
+            targets_label: "Log groups".to_string(),
+            targets_placeholder: "Log groups".to_string(),
+            start_label: "Start".to_string(),
+            end_label: "End".to_string(),
+        })
+    }
+
     fn table_details(
         &self,
         _database: &str,
         _schema: Option<&str>,
         table: &str,
     ) -> Result<TableInfo, DbError> {
-        let stream_fields = fetch_log_streams(&self.client, table)?
-            .into_iter()
+        let stream_names = fetch_log_streams(&self.client, table)?;
+        let stream_fields = stream_names
+            .iter()
+            .cloned()
             .map(|stream_name| FieldInfo {
                 name: stream_name,
-                common_type: "cloudwatch_log_stream".to_string(),
+                common_type: "text".to_string(),
                 occurrence_rate: None,
                 nested_fields: None,
+            })
+            .collect();
+
+        let child_items = stream_names
+            .into_iter()
+            .map(|stream_name| CollectionChildInfo {
+                id: stream_name.clone(),
+                label: stream_name,
+                presentation: CollectionPresentation::EventStream,
             })
             .collect();
 
@@ -499,6 +537,8 @@ impl Connection for CloudWatchConnection {
             foreign_keys: None,
             constraints: None,
             sample_fields: Some(stream_fields),
+            presentation: CollectionPresentation::EventStream,
+            child_items: Some(child_items),
         })
     }
 
@@ -524,6 +564,127 @@ impl Connection for CloudWatchConnection {
 }
 
 impl CloudWatchConnection {
+    fn event_stream_request(
+        target: &EventStreamTarget,
+        query: &EventQuery,
+    ) -> CollectionBrowseRequest {
+        let mut filter = serde_json::Map::new();
+
+        if let Some(pattern) = query.free_text.as_ref().filter(|value| !value.is_empty()) {
+            filter.insert("filter_pattern".to_string(), serde_json::Value::String(pattern.clone()));
+        }
+
+        if let Some(start_ms) = query.from_ts_ms {
+            filter.insert("start_ms".to_string(), serde_json::Value::from(start_ms));
+        }
+
+        if let Some(end_ms) = query.to_ts_ms {
+            filter.insert("end_ms".to_string(), serde_json::Value::from(end_ms));
+        }
+
+        if let Some(child_id) = target.child_id.as_ref() {
+            filter.insert(
+                "log_stream_names".to_string(),
+                serde_json::Value::Array(vec![serde_json::Value::String(child_id.clone())]),
+            );
+            filter.insert("most_recent".to_string(), serde_json::Value::Bool(true));
+        }
+
+        CollectionBrowseRequest {
+            collection: target.collection.clone(),
+            filter: (!filter.is_empty()).then_some(serde_json::Value::Object(filter)),
+            semantic_filter: None,
+            pagination: dbflux_core::Pagination::Offset {
+                limit: query.limit.unwrap_or(100) as u32,
+                offset: query.offset.unwrap_or(0) as u64,
+            },
+        }
+    }
+
+    fn event_query_result_to_page(
+        collection: &dbflux_core::CollectionRef,
+        child_id: Option<&str>,
+        query: &EventQuery,
+        result: QueryResult,
+    ) -> EventPage {
+        let offset = query.offset.unwrap_or(0);
+        let limit = query.limit.unwrap_or(100);
+        let records = result
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| Self::row_to_event_record(row, collection, child_id, offset, index))
+            .collect();
+
+        EventPage::new(records, None, result.next_page_token.is_some(), offset, limit)
+    }
+
+    fn row_to_event_record(
+        row: &[Value],
+        collection: &dbflux_core::CollectionRef,
+        child_id: Option<&str>,
+        pagination_offset: usize,
+        index: usize,
+    ) -> EventRecord {
+        let timestamp_ms = match row.first() {
+            Some(Value::Int(value)) => *value,
+            Some(Value::Text(value)) => value.parse().unwrap_or_default(),
+            _ => 0,
+        };
+        let ingestion_time_ms = match row.get(1) {
+            Some(Value::Int(value)) => Some(*value),
+            Some(Value::Text(value)) => value.parse().ok(),
+            _ => None,
+        };
+        let stream_name = row
+            .get(2)
+            .and_then(|value| match value {
+                Value::Text(text) if !text.is_empty() => Some(text.clone()),
+                Value::Int(value) => Some(value.to_string()),
+                _ => None,
+            })
+            .or_else(|| child_id.map(ToOwned::to_owned));
+        let message = row
+            .get(3)
+            .and_then(|value| match value {
+                Value::Text(text) => Some(text.clone()),
+                Value::Int(value) => Some(value.to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let event_id = row
+            .get(4)
+            .and_then(|value| match value {
+                Value::Text(text) if !text.is_empty() => Some(text.clone()),
+                Value::Int(value) => Some(value.to_string()),
+                _ => None,
+            });
+
+        EventRecord {
+            id: Some((pagination_offset + index + 1) as i64),
+            ts_ms: timestamp_ms,
+            level: EventSeverity::Info,
+            category: EventCategory::System,
+            action: stream_name.clone().unwrap_or_else(|| collection.name.clone()),
+            outcome: dbflux_core::EventOutcome::Success,
+            actor_type: EventActorType::System,
+            actor_id: None,
+            source_id: EventSourceId::System,
+            connection_id: Some(collection.name.clone()),
+            database_name: Some(collection.database.clone()),
+            driver_id: Some(CLOUDWATCH_METADATA.id.clone()),
+            object_type: Some("event_stream".to_string()),
+            object_id: event_id,
+            summary: message.clone(),
+            details_json: Some(build_message_details(Some(message.as_str())).to_string()),
+            error_code: None,
+            error_message: ingestion_time_ms.map(|value| value.to_string()),
+            duration_ms: None,
+            session_id: None,
+            correlation_id: None,
+        }
+    }
+
     fn fetch_recent_stream_events(
         &self,
         log_group_name: &str,
@@ -790,6 +951,8 @@ fn fetch_log_groups(client: &Client) -> Result<Vec<CollectionInfo>, DbError> {
                     indexes: None,
                     validator: None,
                     is_capped: false,
+                    presentation: CollectionPresentation::EventStream,
+                    child_items: None,
                 });
             }
         }
@@ -816,6 +979,12 @@ fn current_time_ms() -> Result<i64, DbError> {
 fn runtime() -> Result<tokio::runtime::Runtime, DbError> {
     tokio::runtime::Runtime::new()
         .map_err(|error| DbError::connection_failed(format!("Tokio runtime setup failed: {error}")))
+}
+
+fn build_message_details(message: Option<&str>) -> serde_json::Value {
+    message
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .unwrap_or_else(|| serde_json::json!(message))
 }
 
 fn string_field(

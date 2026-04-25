@@ -24,10 +24,10 @@ use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
     CollectionIndexInfo, CollectionRef, ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind,
     CreateIndexRequest, CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
-    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, IndexData, IndexDirection,
-    QueryLanguage, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef,
-    TaskId, TypeDefinition, ViewInfo,
+    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, EventStreamTarget, IndexData,
+    IndexDirection, QueryLanguage, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot,
+    TableInfo, TableRef, TaskId, TypeDefinition, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -57,10 +57,10 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         collection: CollectionRef,
     },
-    OpenCloudWatchLogStream {
+    OpenCollectionChild {
         profile_id: Uuid,
-        collection: CollectionRef,
-        log_stream: String,
+        target: EventStreamTarget,
+        title: String,
     },
     OpenKeyValueDatabase {
         profile_id: Uuid,
@@ -848,8 +848,8 @@ impl Sidebar {
             SchemaNodeId::Collection { .. } => {
                 self.browse_collection(item_id, cx);
             }
-            SchemaNodeId::CloudWatchLogStream { .. } => {
-                self.browse_cloudwatch_log_stream(item_id, cx);
+            SchemaNodeId::CollectionChild { .. } => {
+                self.browse_collection_child(item_id, cx);
             }
             SchemaNodeId::Profile { profile_id } => {
                 let is_connected = self
@@ -1031,18 +1031,24 @@ impl Sidebar {
         }
     }
 
-    fn browse_cloudwatch_log_stream(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        if let Some(SchemaNodeId::CloudWatchLogStream {
+    fn browse_collection_child(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if let Some(SchemaNodeId::CollectionChild {
             profile_id,
             database,
-            log_group,
+            collection,
+            child_id,
             name,
         }) = parse_node_id(item_id)
         {
-            cx.emit(SidebarEvent::OpenCloudWatchLogStream {
+            let target = EventStreamTarget {
+                collection: CollectionRef::new(database, collection),
+                child_id: Some(child_id),
+            };
+
+            cx.emit(SidebarEvent::OpenCollectionChild {
                 profile_id,
-                collection: CollectionRef::new(database, log_group),
-                log_stream: name,
+                target,
+                title: name,
             });
         }
     }
@@ -1083,7 +1089,7 @@ mod tests {
         Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
     }
 
-    fn cloudwatch_collection_item(profile_id: Uuid, name: &str) -> TreeItem {
+    fn event_stream_collection_item(profile_id: Uuid, name: &str) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::Collection {
                 profile_id,
@@ -1095,7 +1101,7 @@ mod tests {
         )
     }
 
-    fn cloudwatch_profile_tree(profile_id: Uuid) -> TreeItem {
+    fn event_stream_profile_tree(profile_id: Uuid) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::Profile { profile_id }.to_string(),
             "cloudwatch".to_string(),
@@ -1122,8 +1128,8 @@ mod tests {
                 )
                 .expanded(true)
                 .children(vec![
-                    cloudwatch_collection_item(profile_id, "/aws/lambda/app"),
-                    cloudwatch_collection_item(profile_id, "/aws/ecs/api"),
+                    event_stream_collection_item(profile_id, "/aws/lambda/app"),
+                    event_stream_collection_item(profile_id, "/aws/ecs/api"),
                 ]),
             ]),
         ])
@@ -1143,11 +1149,12 @@ mod tests {
     }
 
     #[test]
-    fn cloudwatch_log_stream_id_roundtrip() {
-        let id = SchemaNodeId::CloudWatchLogStream {
+    fn collection_child_id_roundtrip() {
+        let id = SchemaNodeId::CollectionChild {
             profile_id: test_uuid(),
             database: "logs".into(),
-            log_group: "/aws/lambda/app".into(),
+            collection: "/aws/lambda/app".into(),
+            child_id: "stream-1".into(),
             name: "2026/04/25/[$LATEST]abc".into(),
         };
         let s = id.to_string();
@@ -1425,7 +1432,7 @@ mod tests {
         let profile_id = Uuid::new_v4();
 
         let filtered =
-            Sidebar::apply_tree_filter(vec![cloudwatch_profile_tree(profile_id)], "lambda");
+            Sidebar::apply_tree_filter(vec![event_stream_profile_tree(profile_id)], "lambda");
 
         let profile = &filtered[0];
         let database = &profile.children[0];

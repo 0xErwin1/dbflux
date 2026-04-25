@@ -224,8 +224,8 @@ impl CodeDocument {
             }
         }
 
-        if self.should_show_cloudwatch_source_controls(cx) {
-            match self.current_cloudwatch_source_context(cx) {
+        if self.should_show_source_controls(cx) {
+            match self.current_source_context(cx) {
                 Ok(source) => {
                     self.exec_ctx.source = Some(source);
                 }
@@ -1285,19 +1285,19 @@ impl CodeDocument {
 #[cfg(test)]
 mod tests {
     use super::query_request_for_execution;
-    use crate::ui::document::code::build_cloudwatch_source_context;
+    use crate::ui::document::code::build_source_window_context;
     use dbflux_core::{ExecutionContext, ExecutionSourceContext};
     use uuid::Uuid;
 
     #[test]
-    fn cloudwatch_execution_request_uses_latest_editor_context() {
+    fn source_window_execution_request_uses_latest_editor_context() {
         let exec_ctx = ExecutionContext {
             connection_id: Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
             database: Some("logs".into()),
             schema: None,
             container: None,
             source: Some(
-                build_cloudwatch_source_context(
+                build_source_window_context(
                     &["/aws/lambda/app".to_string(), "/aws/ecs/api".to_string()],
                     Some(10),
                     Some(20),
@@ -1312,12 +1312,12 @@ mod tests {
         assert_eq!(request.database.as_deref(), Some("logs"));
 
         match request.execution_context.and_then(|ctx| ctx.source) {
-            Some(ExecutionSourceContext::CloudWatchLogs {
-                log_groups,
+            Some(ExecutionSourceContext::CollectionWindow {
+                targets,
                 start_ms,
                 end_ms,
             }) => {
-                assert_eq!(log_groups, vec!["/aws/lambda/app", "/aws/ecs/api"]);
+                assert_eq!(targets, vec!["/aws/lambda/app", "/aws/ecs/api"]);
                 assert_eq!(start_ms, 10);
                 assert_eq!(end_ms, 20);
             }
@@ -1326,31 +1326,31 @@ mod tests {
     }
 
     #[test]
-    fn cloudwatch_execution_blocks_when_log_groups_are_missing() {
+    fn source_window_execution_blocks_when_targets_are_missing() {
         assert_eq!(
-            build_cloudwatch_source_context(&[], Some(10), Some(20)).unwrap_err(),
-            "Select at least one log group"
+            build_source_window_context(&[], Some(10), Some(20)).unwrap_err(),
+            "Select at least one source"
         );
     }
 
     #[test]
-    fn cloudwatch_execution_blocks_when_bounds_are_missing() {
+    fn source_window_execution_blocks_when_bounds_are_missing() {
         assert_eq!(
-            build_cloudwatch_source_context(&["/aws/lambda/app".to_string()], None, Some(20))
+            build_source_window_context(&["/aws/lambda/app".to_string()], None, Some(20))
                 .unwrap_err(),
             "Start time is required"
         );
         assert_eq!(
-            build_cloudwatch_source_context(&["/aws/lambda/app".to_string()], Some(10), None)
+            build_source_window_context(&["/aws/lambda/app".to_string()], Some(10), None)
                 .unwrap_err(),
             "End time is required"
         );
     }
 
     #[test]
-    fn cloudwatch_execution_blocks_when_range_is_inverted() {
+    fn source_window_execution_blocks_when_range_is_inverted() {
         assert_eq!(
-            build_cloudwatch_source_context(&["/aws/lambda/app".to_string()], Some(20), Some(10))
+            build_source_window_context(&["/aws/lambda/app".to_string()], Some(20), Some(10))
                 .unwrap_err(),
             "Start time must be earlier than end time"
         );

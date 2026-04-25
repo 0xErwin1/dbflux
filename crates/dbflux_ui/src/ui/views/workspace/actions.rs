@@ -29,12 +29,33 @@ fn decide_open_document(
     OpenDocumentDecision::OpenNew
 }
 
-fn collection_document_presentation_for_driver(
-    driver_id: Option<&str>,
+fn collection_document_presentation_for_connection(
+    connected: &crate::app::ConnectedProfile,
+    collection: &dbflux_core::CollectionRef,
 ) -> CollectionDocumentPresentation {
-    match driver_id {
-        Some("cloudwatch") => CollectionDocumentPresentation::AuditLike,
-        _ => CollectionDocumentPresentation::DataGrid,
+    let schema = connected
+        .schema_for_target_database(collection.database.as_str())
+        .or(connected.schema.as_ref());
+
+    let presentation = schema
+        .and_then(|schema| {
+            schema
+                .collections()
+                .iter()
+                .find(|entry| {
+                    entry.name == collection.name
+                        && entry.database.as_deref().unwrap_or(collection.database.as_str())
+                            == collection.database.as_str()
+                })
+                .map(|entry| entry.presentation)
+        })
+        .unwrap_or(dbflux_core::CollectionPresentation::DataGrid);
+
+    match presentation {
+        dbflux_core::CollectionPresentation::DataGrid => CollectionDocumentPresentation::DataGrid,
+        dbflux_core::CollectionPresentation::EventStream => {
+            CollectionDocumentPresentation::AuditLike
+        }
     }
 }
 
@@ -430,11 +451,7 @@ impl Workspace {
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|connected| {
-                collection_document_presentation_for_driver(Some(
-                    connected.connection.metadata().id.as_str(),
-                ))
-            })
+            .map(|connected| collection_document_presentation_for_connection(connected, &collection))
             .unwrap_or(CollectionDocumentPresentation::DataGrid);
 
         let existing_id = if has_connection {
@@ -449,7 +466,13 @@ impl Workspace {
                     }
                     CollectionDocumentPresentation::AuditLike => {
                         matches!(doc, DocumentHandle::Audit { entity, .. }
-                                if entity.read(cx).is_cloudwatch_log_group(profile_id, &collection))
+                                if entity.read(cx).matches_event_stream(
+                                    profile_id,
+                                    &dbflux_core::EventStreamTarget {
+                                        collection: collection.clone(),
+                                        child_id: None,
+                                    },
+                                ))
                     }
                 })
                 .map(|doc| doc.id())
@@ -491,9 +514,13 @@ impl Workspace {
             }
             CollectionDocumentPresentation::AuditLike => {
                 let doc = cx.new(|cx| {
-                    crate::ui::document::AuditDocument::new_for_cloudwatch_log_group(
+                    crate::ui::document::AuditDocument::new_for_event_stream(
                         profile_id,
-                        collection.clone(),
+                        dbflux_core::EventStreamTarget {
+                            collection: collection.clone(),
+                            child_id: None,
+                        },
+                        collection.name.clone(),
                         self.app_state.clone(),
                         window,
                         cx,
@@ -514,11 +541,11 @@ impl Workspace {
         );
     }
 
-    pub(super) fn open_cloudwatch_log_stream_document(
+    pub(super) fn open_event_stream_document(
         &mut self,
         profile_id: uuid::Uuid,
-        collection: dbflux_core::CollectionRef,
-        log_stream: String,
+        target: dbflux_core::EventStreamTarget,
+        title: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -537,9 +564,7 @@ impl Workspace {
                 .iter()
                 .find(|doc| {
                     matches!(doc, DocumentHandle::Audit { entity, .. }
-                        if entity
-                            .read(cx)
-                            .is_cloudwatch_log_stream(profile_id, &collection, &log_stream))
+                        if entity.read(cx).matches_event_stream(profile_id, &target))
                 })
                 .map(|doc| doc.id())
         } else {
@@ -548,7 +573,7 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                cx.toast_error("No active connection for this log stream", window);
+                cx.toast_error("No active connection for this event source", window);
                 return;
             }
             OpenDocumentDecision::FocusExisting(id) => {
@@ -561,10 +586,10 @@ impl Workspace {
         }
 
         let doc = cx.new(|cx| {
-            crate::ui::document::AuditDocument::new_for_cloudwatch_log_stream(
+            crate::ui::document::AuditDocument::new_for_event_stream(
                 profile_id,
-                collection.clone(),
-                log_stream.clone(),
+                target.clone(),
+                title.clone(),
                 self.app_state.clone(),
                 window,
                 cx,
@@ -1344,8 +1369,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::{
-        CollectionDocumentPresentation, OpenDocumentDecision,
-        collection_document_presentation_for_driver, decide_open_document,
+        OpenDocumentDecision, decide_open_document,
     };
     use crate::ui::document::DocumentId;
     use uuid::Uuid;
@@ -1367,18 +1391,6 @@ mod tests {
     fn decide_open_document_opens_new_when_connected_and_no_existing_tab() {
         let decision = decide_open_document(true, None);
         assert_eq!(decision, OpenDocumentDecision::OpenNew);
-    }
-
-    #[test]
-    fn collection_presentation_routes_cloudwatch_to_audit_like_view() {
-        assert_eq!(
-            collection_document_presentation_for_driver(Some("cloudwatch")),
-            CollectionDocumentPresentation::AuditLike,
-        );
-        assert_eq!(
-            collection_document_presentation_for_driver(Some("mongodb")),
-            CollectionDocumentPresentation::DataGrid,
-        );
     }
 
     // --- strip_annotation_header ---
@@ -1668,6 +1680,8 @@ mod tests {
                     foreign_keys: None,
                     constraints: None,
                     sample_fields: None,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 },
                 TableInfo {
                     name: "orders".to_string(),
@@ -1677,6 +1691,8 @@ mod tests {
                     foreign_keys: None,
                     constraints: None,
                     sample_fields: None,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 },
             ],
             views: vec![ViewInfo {
@@ -1726,6 +1742,8 @@ mod tests {
                     foreign_keys: None,
                     constraints: None,
                     sample_fields: None,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 }],
                 views: vec![],
                 custom_types: None,
@@ -1768,6 +1786,8 @@ mod tests {
                     indexes: None,
                     validator: None,
                     is_capped: false,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 },
                 CollectionInfo {
                     name: "orders".to_string(),
@@ -1778,6 +1798,8 @@ mod tests {
                     indexes: None,
                     validator: None,
                     is_capped: false,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 },
             ],
             ..Default::default()

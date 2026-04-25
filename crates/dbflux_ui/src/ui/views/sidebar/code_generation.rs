@@ -185,6 +185,8 @@ impl Sidebar {
             foreign_keys: None,
             constraints: None,
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         };
 
         if let Some(gen_type) = SqlGenerationType::from_generator_id(generator_id) {
