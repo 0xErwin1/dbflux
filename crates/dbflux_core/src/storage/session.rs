@@ -250,6 +250,7 @@ mod tests {
                         database: Some("mydb".into()),
                         schema: Some("public".into()),
                         container: None,
+                        source: None,
                     },
                 },
             ],

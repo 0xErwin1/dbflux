@@ -1,4 +1,4 @@
-use crate::Value;
+use crate::{ExecutionContext, Value};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
@@ -67,6 +67,10 @@ pub struct QueryRequest {
     /// if the connection's current database differs. Ignored by PostgreSQL
     /// and SQLite (which use connection-level database selection).
     pub database: Option<String>,
+
+    /// Full per-document execution context for drivers that need more than
+    /// the compatibility `database` field.
+    pub execution_context: Option<ExecutionContext>,
 }
 
 impl QueryRequest {
@@ -89,6 +93,11 @@ impl QueryRequest {
 
     pub fn with_database(mut self, database: Option<String>) -> Self {
         self.database = database;
+        self
+    }
+
+    pub fn with_execution_context(mut self, execution_context: Option<ExecutionContext>) -> Self {
+        self.execution_context = execution_context;
         self
     }
 }

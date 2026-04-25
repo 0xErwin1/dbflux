@@ -1,11 +1,11 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig, DbDriver, DbError,
-    DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    FormValues, Icon, MONGODB_FORM, MYSQL_FORM, MutationCapabilities, POSTGRES_FORM,
-    QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM,
-    SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
-    TransactionCapabilities,
+    CLOUDWATCH_FORM, Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig,
+    DbDriver, DbError, DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits,
+    DriverMetadata, FormValues, Icon, MONGODB_FORM, MYSQL_FORM, MutationCapabilities,
+    POSTGRES_FORM, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    REDIS_FORM, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService,
+    SyntaxInfo, TransactionCapabilities,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_driver_redis::RedisLanguageService;
@@ -209,6 +209,11 @@ impl DbDriver for FakeDriver {
                 endpoint: get_optional_string(values, "endpoint"),
                 table: get_optional_string(values, "table"),
             },
+            DbKind::CloudWatchLogs => DbConfig::CloudWatchLogs {
+                region: get_string(values, "region", "us-east-1"),
+                profile: get_optional_string(values, "profile"),
+                endpoint: get_optional_string(values, "endpoint"),
+            },
         };
 
         Ok(config)
@@ -287,6 +292,15 @@ impl DbDriver for FakeDriver {
                 values.insert("profile".to_string(), profile.clone().unwrap_or_default());
                 values.insert("endpoint".to_string(), endpoint.clone().unwrap_or_default());
                 values.insert("table".to_string(), table.clone().unwrap_or_default());
+            }
+            DbConfig::CloudWatchLogs {
+                region,
+                profile,
+                endpoint,
+            } => {
+                values.insert("region".to_string(), region.clone());
+                values.insert("profile".to_string(), profile.clone().unwrap_or_default());
+                values.insert("endpoint".to_string(), endpoint.clone().unwrap_or_default());
             }
             DbConfig::External { values: vals, .. } => {
                 values.extend(vals.clone());
@@ -430,7 +444,7 @@ impl Connection for FakeConnection {
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
             }
-            DbKind::DynamoDB => SchemaLoadingStrategy::SingleDatabase,
+            DbKind::DynamoDB | DbKind::CloudWatchLogs => SchemaLoadingStrategy::SingleDatabase,
         }
     }
 
@@ -454,6 +468,7 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::MongoDB { database, .. } => database.clone(),
         DbConfig::Redis { database, .. } => database.map(|value| value.to_string()),
         DbConfig::DynamoDB { table, .. } => table.clone(),
+        DbConfig::CloudWatchLogs { .. } => None,
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
@@ -467,6 +482,7 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::MongoDB => &FAKE_MONGODB_METADATA,
         DbKind::Redis => &FAKE_REDIS_METADATA,
         DbKind::DynamoDB => &FAKE_DYNAMODB_METADATA,
+        DbKind::CloudWatchLogs => &FAKE_CLOUDWATCH_METADATA,
     }
 }
 
@@ -478,6 +494,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::MongoDB => &MONGODB_FORM,
         DbKind::Redis => &REDIS_FORM,
         DbKind::DynamoDB => &DYNAMODB_FORM,
+        DbKind::CloudWatchLogs => &CLOUDWATCH_FORM,
     }
 }
 
@@ -825,6 +842,33 @@ static FAKE_DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Drive
     classification_override: None,
 });
 
+static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-cloudwatch".into(),
+    display_name: "Fake CloudWatch Logs".into(),
+    description: "Deterministic fake driver for tests".into(),
+    category: DatabaseCategory::Document,
+    query_language: QueryLanguage::Sql,
+    capabilities: DriverCapabilities::AUTHENTICATION,
+    default_port: None,
+    uri_scheme: "cloudwatch".into(),
+    icon: Icon::Dynamodb,
+    syntax: None,
+    query: None,
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
+    limits: None,
+    classification_override: None,
+});
+
 #[cfg(test)]
 mod tests {
     use super::{FakeDriver, FakeQueryOutcome};
@@ -961,6 +1005,10 @@ mod tests {
             (DbKind::MongoDB, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::Redis, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::DynamoDB, SchemaLoadingStrategy::SingleDatabase),
+            (
+                DbKind::CloudWatchLogs,
+                SchemaLoadingStrategy::SingleDatabase,
+            ),
         ];
 
         for (kind, expected_strategy) in cases {
@@ -986,6 +1034,7 @@ mod tests {
                 DbKind::MongoDB => DbConfig::default_mongodb(),
                 DbKind::Redis => DbConfig::default_redis(),
                 DbKind::DynamoDB => DbConfig::default_dynamodb(),
+                DbKind::CloudWatchLogs => DbConfig::default_cloudwatch_logs(),
             };
 
             let profile = ConnectionProfile::new("fake", config);

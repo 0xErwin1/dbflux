@@ -620,6 +620,13 @@ impl Render for CodeDocument {
 
         self.process_pending_auto_refresh(window, cx);
 
+        if let Some((start_value, end_value)) = self.pending_cloudwatch_input_values.take() {
+            self.cloudwatch_start_input
+                .update(cx, |state, cx| state.set_value(&start_value, window, cx));
+            self.cloudwatch_end_input
+                .update(cx, |state, cx| state.set_value(&end_value, window, cx));
+        }
+
         if let Some(error) = self.pending_error.take() {
             cx.toast_error(error, window);
         }

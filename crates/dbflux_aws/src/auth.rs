@@ -533,8 +533,78 @@ fn non_expiring_login(
     }
 }
 
+fn aws_profile_name_fallback_allowed(profile: &AuthProfile) -> bool {
+    matches!(
+        profile.provider_id.as_str(),
+        "aws-sso" | "aws-shared-credentials"
+    )
+}
+
+fn effective_aws_profile_name(profile: &AuthProfile) -> Option<&str> {
+    if let Some(profile_name) = profile
+        .fields
+        .get("profile_name")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(profile_name);
+    }
+
+    if aws_profile_name_fallback_allowed(profile) {
+        let fallback = profile.name.trim();
+        if !fallback.is_empty() {
+            return Some(fallback);
+        }
+    }
+
+    None
+}
+
+fn sso_profile_config_from_auth_profile(profile: &AuthProfile) -> Option<SsoProfileConfig> {
+    if profile.provider_id != "aws-sso" {
+        return None;
+    }
+
+    let profile_name = effective_aws_profile_name(profile)?.to_string();
+    let region = profile.fields.get("region")?.trim().to_string();
+    let sso_start_url = profile.fields.get("sso_start_url")?.trim().to_string();
+    let sso_account_id = profile.fields.get("sso_account_id")?.trim().to_string();
+    let sso_role_name = profile.fields.get("sso_role_name")?.trim().to_string();
+
+    if region.is_empty()
+        || sso_start_url.is_empty()
+        || sso_account_id.is_empty()
+        || sso_role_name.is_empty()
+    {
+        return None;
+    }
+
+    Some(SsoProfileConfig {
+        profile_name,
+        region,
+        sso_start_url,
+        sso_account_id,
+        sso_role_name,
+    })
+}
+
+fn ensure_sso_profile_configured_from_auth_profile(profile: &AuthProfile) {
+    let Some(config) = sso_profile_config_from_auth_profile(profile) else {
+        return;
+    };
+
+    if let Err(err) = ensure_aws_profile_configured(&config) {
+        log::warn!(
+            "Failed to sync AWS SSO profile '{}' into ~/.aws/config: {}",
+            config.profile_name,
+            err
+        );
+    }
+}
+
 fn profile_name_and_region(profile: &AuthProfile) -> (Option<&str>, &str) {
-    let profile_name = profile.fields.get("profile_name").map(String::as_str);
+    let profile_name = effective_aws_profile_name(profile);
     let region = profile
         .fields
         .get("region")
@@ -683,11 +753,9 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     }
 
     async fn validate_session(&self, profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
-        let profile_name = profile
-            .fields
-            .get("profile_name")
-            .map(String::as_str)
-            .unwrap_or("");
+        ensure_sso_profile_configured_from_auth_profile(profile);
+
+        let profile_name = effective_aws_profile_name(profile).unwrap_or("");
         let sso_start_url = profile
             .fields
             .get("sso_start_url")
@@ -710,10 +778,8 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         profile: &AuthProfile,
         url_callback: UrlCallback,
     ) -> Result<AuthSession, DbError> {
-        let profile_name = profile
-            .fields
-            .get("profile_name")
-            .cloned()
+        let profile_name = effective_aws_profile_name(profile)
+            .map(ToOwned::to_owned)
             .unwrap_or_default();
         let region = profile.fields.get("region").cloned().unwrap_or_default();
         let sso_start_url = profile
@@ -1068,12 +1134,22 @@ pub(crate) fn validate_sso_session(sso_start_url: &str) -> Result<AuthSessionSta
 /// is safe to call from async contexts without an active Tokio reactor
 /// (e.g. the GPUI background executor).
 async fn resolve_aws_credentials(profile: &AuthProfile) -> Result<ResolvedCredentials, DbError> {
-    let profile_name = profile.fields.get("profile_name").cloned();
+    ensure_sso_profile_configured_from_auth_profile(profile);
+
+    let profile_name = effective_aws_profile_name(profile).map(ToOwned::to_owned);
     let region = profile
         .fields
         .get("region")
         .cloned()
         .unwrap_or_else(|| "us-east-1".to_string());
+
+    log::debug!(
+        "Resolving AWS credentials for auth profile '{}' (provider={}, aws_profile={}, region={})",
+        profile.name,
+        profile.provider_id,
+        profile_name.as_deref().unwrap_or("<default>"),
+        region
+    );
 
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
 
@@ -1104,6 +1180,12 @@ fn resolve_aws_credentials_blocking(
     profile_name: Option<String>,
     region: String,
 ) -> Result<ResolvedCredentials, DbError> {
+    let aws_profile_label = profile_name
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("<default>")
+        .to_string();
+
     // The AWS SDK internally spawns tasks and uses timers that require a
     // multi-threaded Tokio runtime with a reactor. `new_current_thread` is
     // insufficient here — use `new_multi_thread` with a small thread pool.
@@ -1131,16 +1213,23 @@ fn resolve_aws_credentials_blocking(
         let creds = sdk_config
             .credentials_provider()
             .ok_or_else(|| {
-                DbError::ValueResolutionFailed(
-                    "No credentials provider found in AWS SDK config".to_string(),
-                )
+                DbError::ValueResolutionFailed(format!(
+                    "No credentials provider found in AWS SDK config (aws_profile={}, region={})",
+                    aws_profile_label, region
+                ))
             })?
             .provide_credentials()
             .await
             .map_err(|err| {
-                DbError::ValueResolutionFailed(format!(
-                    "Failed to resolve AWS credentials: {}",
+                log::warn!(
+                    "AWS credential resolution failed (aws_profile={}, region={}): {}",
+                    aws_profile_label,
+                    region,
                     err
+                );
+                DbError::ValueResolutionFailed(format!(
+                    "Failed to resolve AWS credentials (aws_profile={}, region={}): {}",
+                    aws_profile_label, region, err
                 ))
             })?;
 
@@ -1519,6 +1608,70 @@ mod tests {
             state,
             AuthSessionState::Valid { expires_at: None }
         ));
+    }
+
+    #[test]
+    fn shared_credentials_profile_name_falls_back_to_auth_profile_name() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
+        let profile = AuthProfile::new("team-sso", "aws-shared-credentials", fields);
+
+        let (profile_name, region) = profile_name_and_region(&profile);
+
+        assert_eq!(profile_name, Some("team-sso"));
+        assert_eq!(region, "us-east-1");
+    }
+
+    #[test]
+    fn sso_profile_config_can_be_derived_from_auth_profile_fields() {
+        let profile = AuthProfile::new(
+            "Aws houlak",
+            "aws-sso",
+            [
+                ("profile_name".to_string(), "houlak".to_string()),
+                ("region".to_string(), "us-east-1".to_string()),
+                (
+                    "sso_start_url".to_string(),
+                    "https://houlak.awsapps.com/start".to_string(),
+                ),
+                ("sso_account_id".to_string(), "868178926296".to_string()),
+                (
+                    "sso_role_name".to_string(),
+                    "AdministratorAccess".to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let config = sso_profile_config_from_auth_profile(&profile).expect("sso profile config");
+
+        assert_eq!(config.profile_name, "houlak");
+        assert_eq!(config.region, "us-east-1");
+        assert_eq!(config.sso_account_id, "868178926296");
+        assert_eq!(config.sso_role_name, "AdministratorAccess");
+    }
+
+    #[test]
+    fn static_credentials_do_not_fall_back_to_auth_profile_name() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert(
+            "access_key_id".to_string(),
+            "AKIAIOSFODNN7EXAMPLE".to_string(),
+        );
+        fields.insert(
+            "secret_access_key".to_string(),
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
+        );
+        fields.insert("region".to_string(), "us-east-1".to_string());
+
+        let profile = AuthProfile::new("static-creds", "aws-static-credentials", fields);
+
+        let (profile_name, region) = profile_name_and_region(&profile);
+
+        assert_eq!(profile_name, None);
+        assert_eq!(region, "us-east-1");
     }
 
     #[test]

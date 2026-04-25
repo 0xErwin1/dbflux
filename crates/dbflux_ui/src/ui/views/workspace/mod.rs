@@ -445,6 +445,19 @@ impl Workspace {
                 } => {
                     this.open_collection_document(*profile_id, collection.clone(), window, cx);
                 }
+                SidebarEvent::OpenCloudWatchLogStream {
+                    profile_id,
+                    collection,
+                    log_stream,
+                } => {
+                    this.open_cloudwatch_log_stream_document(
+                        *profile_id,
+                        collection.clone(),
+                        log_stream.clone(),
+                        window,
+                        cx,
+                    );
+                }
                 SidebarEvent::OpenKeyValueDatabase {
                     profile_id,
                     database,

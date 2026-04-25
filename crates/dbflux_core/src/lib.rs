@@ -39,18 +39,19 @@ pub use connection::{
     ConnectionResolutionError, ConnectionTree, ConnectionTreeManager, ConnectionTreeNode,
     ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig, DbKind,
     DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender, ExecutionContext,
-    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
-    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
-    FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
-    FetchTableDetailsResult, HookContext, HookExecution, HookExecutionContext, HookExecutionMode,
-    HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
-    Identifiable, ItemManager, LuaCapabilities, OutputEvent, OutputReceiver, OutputSender,
-    OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
-    ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
-    ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
-    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode,
-    SwitchDatabaseParams, SwitchDatabaseResult, TreeLoadResult, TreeStore,
-    detached_process_channel, execute_streaming_process, host_matches_no_proxy, output_channel,
+    ExecutionSourceContext, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
+    FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
+    FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
+    FetchTableDetailsParams, FetchTableDetailsResult, HookContext, HookExecution,
+    HookExecutionContext, HookExecutionMode, HookExecutor, HookFailureMode, HookKind, HookPhase,
+    HookPhaseOutcome, HookResult, HookRunner, Identifiable, ItemManager, LuaCapabilities,
+    OutputEvent, OutputReceiver, OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation,
+    PrepareConnectError, ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth,
+    ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
+    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager,
+    SshTunnelProfile, SslMode, SwitchDatabaseParams, SwitchDatabaseResult, TreeLoadResult,
+    TreeStore, detached_process_channel, execute_streaming_process, host_matches_no_proxy,
+    output_channel,
 };
 
 pub use core::{
@@ -76,13 +77,13 @@ pub use data::{
 };
 
 pub use driver::{
-    DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification, FormFieldDef,
-    FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel, MONGODB_FORM,
-    MYSQL_FORM, MutationCapabilities, OperationClassifier, POSTGRES_FORM, PaginationStyle,
-    QueryCapabilities, QueryLanguage, REDIS_FORM, SQLITE_FORM, SelectOption, SyntaxInfo,
-    TransactionCapabilities, WhereOperator, field_file_path, field_password, field_use_uri,
-    ssh_tab,
+    CLOUDWATCH_FORM, DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel,
+    MONGODB_FORM, MYSQL_FORM, MutationCapabilities, OperationClassifier, POSTGRES_FORM,
+    PaginationStyle, QueryCapabilities, QueryLanguage, REDIS_FORM, SQLITE_FORM, SelectOption,
+    SyntaxInfo, TransactionCapabilities, WhereOperator, field_file_path, field_password,
+    field_use_uri, ssh_tab,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};

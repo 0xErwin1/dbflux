@@ -57,6 +57,11 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         collection: CollectionRef,
     },
+    OpenCloudWatchLogStream {
+        profile_id: Uuid,
+        collection: CollectionRef,
+        log_stream: String,
+    },
     OpenKeyValueDatabase {
         profile_id: Uuid,
         database: String,
@@ -532,6 +537,8 @@ fn compute_gutter_map(items: &[TreeItem]) -> HashMap<String, GutterInfo> {
 pub struct Sidebar {
     app_state: Entity<AppStateEntity>,
     tree_state: Entity<TreeState>,
+    connections_search_input: Entity<InputState>,
+    connections_search_query: String,
     active_tab: SidebarTab,
     scripts_tree_state: Entity<TreeState>,
     scripts_search_input: Entity<InputState>,
@@ -617,6 +624,8 @@ impl Sidebar {
         let visible_entry_count = Self::count_visible_entries(&items);
         let gutter_metadata = compute_gutter_map(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
+        let connections_search_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("Filter connections and schema..."));
 
         let scripts_items = Self::build_initial_scripts_tree(app_state.read(cx));
         let scripts_gutter_metadata = compute_gutter_map(&scripts_items);
@@ -645,6 +654,18 @@ impl Sidebar {
                     this.cancel_rename(cx);
                 }
                 _ => {}
+            },
+        );
+
+        let connections_search_entity = connections_search_input.clone();
+        let connections_search_subscription = cx.subscribe_in(
+            &connections_search_entity,
+            window,
+            |this, input_state, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.connections_search_query = input_state.read(cx).value().to_string();
+                    this.refresh_tree(cx);
+                }
             },
         );
 
@@ -692,6 +713,8 @@ impl Sidebar {
         Self {
             app_state,
             tree_state,
+            connections_search_input,
+            connections_search_query: String::new(),
             active_tab: SidebarTab::Connections,
             scripts_tree_state,
             scripts_search_input,
@@ -709,6 +732,7 @@ impl Sidebar {
             _subscriptions: vec![
                 app_state_subscription,
                 rename_subscription,
+                connections_search_subscription,
                 scripts_search_subscription,
                 tree_expansion_subscription,
             ],
@@ -743,6 +767,15 @@ impl Sidebar {
 
     pub fn active_tab(&self) -> SidebarTab {
         self.active_tab
+    }
+
+    pub fn search_input_is_focused(&self, window: &Window, cx: &App) -> bool {
+        let input = match self.active_tab {
+            SidebarTab::Connections => &self.connections_search_input,
+            SidebarTab::Scripts => &self.scripts_search_input,
+        };
+
+        input.read(cx).focus_handle(cx).is_focused(window)
     }
 
     pub fn set_active_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
@@ -814,6 +847,9 @@ impl Sidebar {
             }
             SchemaNodeId::Collection { .. } => {
                 self.browse_collection(item_id, cx);
+            }
+            SchemaNodeId::CloudWatchLogStream { .. } => {
+                self.browse_cloudwatch_log_stream(item_id, cx);
             }
             SchemaNodeId::Profile { profile_id } => {
                 let is_connected = self
@@ -995,6 +1031,22 @@ impl Sidebar {
         }
     }
 
+    fn browse_cloudwatch_log_stream(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if let Some(SchemaNodeId::CloudWatchLogStream {
+            profile_id,
+            database,
+            log_group,
+            name,
+        }) = parse_node_id(item_id)
+        {
+            cx.emit(SidebarEvent::OpenCloudWatchLogStream {
+                profile_id,
+                collection: CollectionRef::new(database, log_group),
+                log_stream: name,
+            });
+        }
+    }
+
     fn toggle_item_expansion(&mut self, item_id: &str, cx: &mut Context<Self>) {
         let items = self.build_tree_items_with_overrides(cx);
         let currently_expanded = Self::find_item_expanded(&items, item_id).unwrap_or(false);
@@ -1016,6 +1068,7 @@ impl Sidebar {
 
 #[cfg(test)]
 mod tests {
+    use super::Sidebar;
     use super::{ContextMenuAction, ContextMenuItem, ItemIdParts, NODE_KIND_NONE, parse_node_kind};
     use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
     use crate::ui::views::sidebar::operations::{
@@ -1023,10 +1076,57 @@ mod tests {
     };
     use dbflux_core::PrepareConnectError;
     use dbflux_core::{SchemaNodeId, SchemaNodeKind};
+    use gpui_component::tree::TreeItem;
     use uuid::Uuid;
 
     fn test_uuid() -> Uuid {
         Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+    }
+
+    fn cloudwatch_collection_item(profile_id: Uuid, name: &str) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::Collection {
+                profile_id,
+                database: "logs".into(),
+                name: name.into(),
+            }
+            .to_string(),
+            name.to_string(),
+        )
+    }
+
+    fn cloudwatch_profile_tree(profile_id: Uuid) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::Profile { profile_id }.to_string(),
+            "cloudwatch".to_string(),
+        )
+        .expanded(true)
+        .children(vec![
+            TreeItem::new(
+                SchemaNodeId::Database {
+                    profile_id,
+                    name: "logs".into(),
+                }
+                .to_string(),
+                "logs".to_string(),
+            )
+            .expanded(true)
+            .children(vec![
+                TreeItem::new(
+                    SchemaNodeId::CollectionsFolder {
+                        profile_id,
+                        database: "logs".into(),
+                    }
+                    .to_string(),
+                    "Collections (2)".to_string(),
+                )
+                .expanded(true)
+                .children(vec![
+                    cloudwatch_collection_item(profile_id, "/aws/lambda/app"),
+                    cloudwatch_collection_item(profile_id, "/aws/ecs/api"),
+                ]),
+            ]),
+        ])
     }
 
     #[test]
@@ -1036,6 +1136,19 @@ mod tests {
             database: None,
             schema: "public".into(),
             name: "users".into(),
+        };
+        let s = id.to_string();
+        let parsed: SchemaNodeId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn cloudwatch_log_stream_id_roundtrip() {
+        let id = SchemaNodeId::CloudWatchLogStream {
+            profile_id: test_uuid(),
+            database: "logs".into(),
+            log_group: "/aws/lambda/app".into(),
+            name: "2026/04/25/[$LATEST]abc".into(),
         };
         let s = id.to_string();
         let parsed: SchemaNodeId = s.parse().unwrap();
@@ -1305,5 +1418,128 @@ mod tests {
 
         assert!(toast.is_error);
         assert_eq!(toast.message, "No driver registered for 'sqlite'");
+    }
+
+    #[test]
+    fn sidebar_tree_filter_keeps_matching_ancestors_visible() {
+        let profile_id = Uuid::new_v4();
+
+        let filtered =
+            Sidebar::apply_tree_filter(vec![cloudwatch_profile_tree(profile_id)], "lambda");
+
+        let profile = &filtered[0];
+        let database = &profile.children[0];
+        let collections = &database.children[0];
+
+        assert_eq!(profile.label.as_ref(), "cloudwatch");
+        assert_eq!(database.label.as_ref(), "logs");
+        assert_eq!(collections.label.as_ref(), "Collections (2)");
+        assert_eq!(collections.children.len(), 1);
+        assert_eq!(collections.children[0].label.as_ref(), "/aws/lambda/app");
+    }
+
+    #[test]
+    fn sidebar_tree_filter_matches_non_cloudwatch_nodes() {
+        let postgres_profile_id = Uuid::new_v4();
+        let items = vec![
+            TreeItem::new(
+                SchemaNodeId::Profile {
+                    profile_id: postgres_profile_id,
+                }
+                .to_string(),
+                "postgres".to_string(),
+            )
+            .expanded(true)
+            .children(vec![
+                TreeItem::new(
+                    SchemaNodeId::Database {
+                        profile_id: postgres_profile_id,
+                        name: "app".to_string(),
+                    }
+                    .to_string(),
+                    "app".to_string(),
+                )
+                .expanded(true)
+                .children(vec![TreeItem::new(
+                    SchemaNodeId::TablesFolder {
+                        profile_id: postgres_profile_id,
+                        schema: "public".to_string(),
+                    }
+                    .to_string(),
+                    "Tables (1)".to_string(),
+                )]),
+            ]),
+        ];
+
+        let filtered = Sidebar::apply_tree_filter(items, "postgres");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].label.as_ref(), "postgres");
+    }
+
+    #[test]
+    fn sidebar_tree_filter_matches_loaded_descendants_and_preserves_path() {
+        let postgres_profile_id = Uuid::new_v4();
+        let items = vec![
+            TreeItem::new(
+                SchemaNodeId::Profile {
+                    profile_id: postgres_profile_id,
+                }
+                .to_string(),
+                "postgres".to_string(),
+            )
+            .expanded(true)
+            .children(vec![
+                TreeItem::new(
+                    SchemaNodeId::Database {
+                        profile_id: postgres_profile_id,
+                        name: "app".to_string(),
+                    }
+                    .to_string(),
+                    "app".to_string(),
+                )
+                .expanded(false)
+                .children(vec![
+                    TreeItem::new(
+                        SchemaNodeId::TablesFolder {
+                            profile_id: postgres_profile_id,
+                            schema: "public".to_string(),
+                        }
+                        .to_string(),
+                        "Tables (1)".to_string(),
+                    )
+                    .expanded(false)
+                    .children(vec![TreeItem::new(
+                        SchemaNodeId::Table {
+                            profile_id: postgres_profile_id,
+                            database: Some("app".to_string()),
+                            schema: "public".to_string(),
+                            name: "users".to_string(),
+                        }
+                        .to_string(),
+                        "users".to_string(),
+                    )]),
+                ]),
+            ]),
+        ];
+
+        let filtered = Sidebar::apply_tree_filter(items, "users");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].label.as_ref(), "postgres");
+        assert_eq!(filtered[0].children[0].label.as_ref(), "app");
+        assert_eq!(
+            filtered[0].children[0].children[0].label.as_ref(),
+            "Tables (1)"
+        );
+        assert_eq!(
+            filtered[0].children[0].children[0].children[0]
+                .label
+                .as_ref(),
+            "users"
+        );
+        assert!(filtered[0].is_expanded());
+        assert!(filtered[0].children[0].is_expanded());
+        assert!(filtered[0].children[0].children[0].is_expanded());
     }
 }

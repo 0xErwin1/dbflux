@@ -627,6 +627,7 @@ impl DbFluxServer {
             offset: None,
             statement_timeout: None,
             database: None,
+            execution_context: None,
         };
 
         let result = Self::execute_connection_blocking(conn.clone(), move |connection| {

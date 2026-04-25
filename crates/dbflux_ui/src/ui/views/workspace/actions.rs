@@ -8,6 +8,12 @@ enum OpenDocumentDecision {
     OpenNew,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollectionDocumentPresentation {
+    DataGrid,
+    AuditLike,
+}
+
 fn decide_open_document(
     has_connection: bool,
     existing_id: Option<crate::ui::document::DocumentId>,
@@ -21,6 +27,15 @@ fn decide_open_document(
     }
 
     OpenDocumentDecision::OpenNew
+}
+
+fn collection_document_presentation_for_driver(
+    driver_id: Option<&str>,
+) -> CollectionDocumentPresentation {
+    match driver_id {
+        Some("cloudwatch") => CollectionDocumentPresentation::AuditLike,
+        _ => CollectionDocumentPresentation::DataGrid,
+    }
 }
 
 impl Workspace {
@@ -410,13 +425,32 @@ impl Workspace {
             .connections()
             .contains_key(&profile_id);
 
+        let presentation = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| {
+                collection_document_presentation_for_driver(Some(
+                    connected.connection.metadata().id.as_str(),
+                ))
+            })
+            .unwrap_or(CollectionDocumentPresentation::DataGrid);
+
         let existing_id = if has_connection {
             self.tab_manager
                 .read(cx)
                 .documents()
                 .iter()
-                .find(|doc| {
-                    doc.is_collection(&collection, cx) && doc.connection_id(cx) == Some(profile_id)
+                .find(|doc| match presentation {
+                    CollectionDocumentPresentation::DataGrid => {
+                        doc.is_collection(&collection, cx)
+                            && doc.connection_id(cx) == Some(profile_id)
+                    }
+                    CollectionDocumentPresentation::AuditLike => {
+                        matches!(doc, DocumentHandle::Audit { entity, .. }
+                                if entity.read(cx).is_cloudwatch_log_group(profile_id, &collection))
+                    }
                 })
                 .map(|doc| doc.id())
         } else {
@@ -442,17 +476,32 @@ impl Workspace {
             OpenDocumentDecision::OpenNew => {}
         }
 
-        // Create a DataDocument for the collection
-        let doc = cx.new(|cx| {
-            DataDocument::new_for_collection(
-                profile_id,
-                collection.clone(),
-                self.app_state.clone(),
-                window,
-                cx,
-            )
-        });
-        let handle = DocumentHandle::data(doc, cx);
+        let handle = match presentation {
+            CollectionDocumentPresentation::DataGrid => {
+                let doc = cx.new(|cx| {
+                    DataDocument::new_for_collection(
+                        profile_id,
+                        collection.clone(),
+                        self.app_state.clone(),
+                        window,
+                        cx,
+                    )
+                });
+                DocumentHandle::data(doc, cx)
+            }
+            CollectionDocumentPresentation::AuditLike => {
+                let doc = cx.new(|cx| {
+                    crate::ui::document::AuditDocument::new_for_cloudwatch_log_group(
+                        profile_id,
+                        collection.clone(),
+                        self.app_state.clone(),
+                        window,
+                        cx,
+                    )
+                });
+                DocumentHandle::audit(doc, cx)
+            }
+        };
 
         self.tab_manager.update(cx, |mgr, cx| {
             mgr.open(handle, cx);
@@ -463,6 +512,68 @@ impl Workspace {
             collection.database,
             collection.name
         );
+    }
+
+    pub(super) fn open_cloudwatch_log_stream_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        collection: dbflux_core::CollectionRef,
+        log_stream: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::components::toast::ToastExt;
+
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager
+                .read(cx)
+                .documents()
+                .iter()
+                .find(|doc| {
+                    matches!(doc, DocumentHandle::Audit { entity, .. }
+                        if entity
+                            .read(cx)
+                            .is_cloudwatch_log_stream(profile_id, &collection, &log_stream))
+                })
+                .map(|doc| doc.id())
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                cx.toast_error("No active connection for this log stream", window);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::AuditDocument::new_for_cloudwatch_log_stream(
+                profile_id,
+                collection.clone(),
+                log_stream.clone(),
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(DocumentHandle::audit(doc, cx), cx);
+        });
     }
 
     pub(super) fn open_key_value_document(
@@ -1232,7 +1343,10 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpenDocumentDecision, decide_open_document};
+    use super::{
+        CollectionDocumentPresentation, OpenDocumentDecision,
+        collection_document_presentation_for_driver, decide_open_document,
+    };
     use crate::ui::document::DocumentId;
     use uuid::Uuid;
 
@@ -1253,6 +1367,18 @@ mod tests {
     fn decide_open_document_opens_new_when_connected_and_no_existing_tab() {
         let decision = decide_open_document(true, None);
         assert_eq!(decision, OpenDocumentDecision::OpenNew);
+    }
+
+    #[test]
+    fn collection_presentation_routes_cloudwatch_to_audit_like_view() {
+        assert_eq!(
+            collection_document_presentation_for_driver(Some("cloudwatch")),
+            CollectionDocumentPresentation::AuditLike,
+        );
+        assert_eq!(
+            collection_document_presentation_for_driver(Some("mongodb")),
+            CollectionDocumentPresentation::DataGrid,
+        );
     }
 
     // --- strip_annotation_header ---

@@ -156,7 +156,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let has_entries = self.visible_entry_count > 0;
-        let _theme = cx.theme();
+        let theme = cx.theme();
         let sidebar_for_root_drop = sidebar_entity.clone();
         let sidebar_for_clear_drop = sidebar_entity.clone();
 
@@ -165,6 +165,19 @@ impl Sidebar {
             .flex()
             .flex_col()
             .overflow_hidden()
+            .child(
+                div()
+                    .px(Spacing::SM)
+                    .py(Spacing::XS)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        Input::new(&self.connections_search_input)
+                            .xsmall()
+                            .appearance(false)
+                            .cleanable(true),
+                    ),
+            )
             .when(has_entries, |el| {
                 el.child(
                     div()

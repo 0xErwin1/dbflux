@@ -212,12 +212,14 @@ pub async fn run_pipeline(
     state_tx: &StateSender,
 ) -> Result<PipelineOutput, PipelineError> {
     let cancel = &input.cancel;
+    let needs_auth_credentials = !input.profile.value_refs.is_empty();
 
     // --- Stage 1: Authentication ---
 
     let (auth_session, resolved_credentials) = run_auth_stage(
         input.auth_provider.as_deref(),
         input.auth_profile.as_ref(),
+        needs_auth_credentials,
         cancel,
         state_tx,
     )
@@ -227,6 +229,7 @@ pub async fn run_pipeline(
 
     if let Some(provider) = input.auth_provider.as_deref()
         && let Some(profile) = input.auth_profile.as_ref()
+        && needs_auth_credentials
     {
         provider
             .register_value_providers(profile, auth_session.as_ref(), &mut input.resolver)
@@ -297,6 +300,7 @@ pub async fn run_pipeline(
 async fn run_auth_stage(
     provider: Option<&dyn DynAuthProvider>,
     auth_profile: Option<&AuthProfile>,
+    require_resolved_credentials: bool,
     cancel: &CancelToken,
     state_tx: &StateSender,
 ) -> Result<(Option<AuthSession>, Option<ResolvedCredentials>), PipelineError> {
@@ -368,12 +372,21 @@ async fn run_auth_stage(
         }
     };
 
+    let mut session = session;
+    if !require_resolved_credentials {
+        log::debug!(
+            "[pipeline] skipping credential resolution for provider '{}' because the profile has no value refs",
+            provider_name
+        );
+
+        return Ok((Some(session), None));
+    }
+
     let resolved_credentials = provider
         .resolve_credentials(profile)
         .await
         .map_err(PipelineError::auth)?;
 
-    let mut session = session;
     if session.data.is_none() {
         session.data = resolved_credentials.provider_data.clone();
     }
@@ -412,6 +425,7 @@ mod tests {
     struct MockAuthProvider {
         should_require_login: bool,
         login_delay_ms: u64,
+        resolve_should_fail: bool,
     }
 
     impl crate::auth::AuthProvider for MockAuthProvider {
@@ -451,6 +465,12 @@ mod tests {
             &self,
             _profile: &AuthProfile,
         ) -> Result<ResolvedCredentials, DbError> {
+            if self.resolve_should_fail {
+                return Err(DbError::ValueResolutionFailed(
+                    "mock credential resolution failed".to_string(),
+                ));
+            }
+
             Ok(ResolvedCredentials::default())
         }
     }
@@ -586,6 +606,7 @@ mod tests {
             auth_provider: Some(Box::new(MockAuthProvider {
                 should_require_login: false,
                 login_delay_ms: 0,
+                resolve_should_fail: false,
             })),
             auth_profile: Some(auth_profile),
             resolver: test_resolver(),
@@ -650,6 +671,7 @@ mod tests {
             auth_provider: Some(Box::new(MockAuthProvider {
                 should_require_login: true,
                 login_delay_ms: 0,
+                resolve_should_fail: false,
             })),
             auth_profile: Some(auth_profile),
             resolver: test_resolver(),
@@ -681,6 +703,7 @@ mod tests {
             auth_provider: Some(Box::new(MockAuthProvider {
                 should_require_login: true,
                 login_delay_ms: 100,
+                resolve_should_fail: false,
             })),
             auth_profile: Some(auth_profile),
             resolver: test_resolver(),
@@ -732,5 +755,37 @@ mod tests {
 
         assert_eq!(error.stage, "access");
         assert!(error.source.to_string().contains("access open failed"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_with_auth_and_no_value_refs_skips_credential_resolution() {
+        let profile =
+            ConnectionProfile::new("test-cloudwatch", DbConfig::default_cloudwatch_logs());
+        let auth_profile = test_auth_profile();
+        let (state_tx, _state_rx) = pipeline_state_channel();
+
+        let input = PipelineInput {
+            profile,
+            auth_provider: Some(Box::new(MockAuthProvider {
+                should_require_login: false,
+                login_delay_ms: 0,
+                resolve_should_fail: true,
+            })),
+            auth_profile: Some(auth_profile),
+            resolver: test_resolver(),
+            access_manager: Arc::new(MockAccessManager),
+            cancel: CancelToken::new(),
+        };
+
+        let output = run_pipeline(input, &state_tx)
+            .await
+            .expect("pipeline should succeed without credential resolution");
+
+        assert!(output.auth_session.is_some());
+        assert!(output.resolved_password.is_none());
+        assert!(matches!(
+            output.resolved_profile.config,
+            DbConfig::CloudWatchLogs { .. }
+        ));
     }
 }

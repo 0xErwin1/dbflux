@@ -11,12 +11,28 @@ fn context_dropdown_min_width(index: usize) -> Pixels {
     }
 }
 
-fn context_dropdown_is_keyboard_focused(
+fn context_slot_is_keyboard_focused(
     focus_mode: SqlQueryFocus,
-    context_bar_index: usize,
-    dropdown_index: usize,
+    active_slot: ContextBarSlot,
+    slot: ContextBarSlot,
 ) -> bool {
-    focus_mode == SqlQueryFocus::ContextBar && context_bar_index == dropdown_index
+    focus_mode == SqlQueryFocus::ContextBar && active_slot == slot
+}
+
+fn is_cloudwatch_driver_id(driver_id: Option<&str>) -> bool {
+    driver_id == Some("cloudwatch")
+}
+
+fn parse_cloudwatch_datetime_input(value: &str) -> Option<i64> {
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    dbflux_core::chrono::DateTime::parse_from_rfc3339(trimmed)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
 }
 
 impl CodeDocument {
@@ -98,6 +114,145 @@ impl CodeDocument {
         self.input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = Some(completion_provider);
         });
+    }
+
+    fn current_driver_id(&self, cx: &App) -> Option<String> {
+        let connection_id = self.exec_ctx.connection_id.or(self.connection_id)?;
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&connection_id)
+            .map(|connected| connected.profile.driver_id())
+    }
+
+    pub(super) fn should_show_cloudwatch_source_controls(&self, cx: &App) -> bool {
+        is_cloudwatch_driver_id(self.current_driver_id(cx).as_deref())
+    }
+
+    fn cloudwatch_log_group_items(&self, cx: &App) -> Vec<DropdownItem> {
+        let Some(connection_id) = self.exec_ctx.connection_id.or(self.connection_id) else {
+            return Vec::new();
+        };
+
+        let Some(connected) = self.app_state.read(cx).connections().get(&connection_id) else {
+            return Vec::new();
+        };
+
+        let schema = self
+            .exec_ctx
+            .database
+            .as_deref()
+            .and_then(|database| connected.schema_for_target_database(database))
+            .or(connected.schema.as_ref());
+
+        let Some(schema) = schema else {
+            return Vec::new();
+        };
+
+        let mut items = schema
+            .collections()
+            .iter()
+            .map(|collection| DropdownItem::with_value(&collection.name, &collection.name))
+            .collect::<Vec<_>>();
+
+        items.sort_by(|left, right| left.label.as_ref().cmp(right.label.as_ref()));
+        items
+    }
+
+    fn current_cloudwatch_log_groups(&self, cx: &App) -> Vec<String> {
+        self.cloudwatch_log_groups
+            .read(cx)
+            .selected_values()
+            .iter()
+            .map(|value| value.to_string())
+            .collect()
+    }
+
+    pub(super) fn current_cloudwatch_source_context(
+        &self,
+        cx: &App,
+    ) -> Result<ExecutionSourceContext, &'static str> {
+        let log_groups = self.current_cloudwatch_log_groups(cx);
+        let start_input = self.cloudwatch_start_input.read(cx).value().to_string();
+        let end_input = self.cloudwatch_end_input.read(cx).value().to_string();
+
+        if start_input.trim().is_empty()
+            && end_input.trim().is_empty()
+            && let Some(source @ ExecutionSourceContext::CloudWatchLogs { .. }) =
+                self.exec_ctx.source.clone()
+        {
+            return Ok(source);
+        }
+
+        let start_ms = parse_cloudwatch_datetime_input(&start_input);
+        let end_ms = parse_cloudwatch_datetime_input(&end_input);
+
+        build_cloudwatch_source_context(&log_groups, start_ms, end_ms)
+    }
+
+    fn sync_cloudwatch_exec_context(&mut self, cx: &mut Context<Self>) {
+        if !self.should_show_cloudwatch_source_controls(cx) {
+            self.exec_ctx.source = None;
+            return;
+        }
+
+        let start_blank = self
+            .cloudwatch_start_input
+            .read(cx)
+            .value()
+            .trim()
+            .is_empty();
+        let end_blank = self.cloudwatch_end_input.read(cx).value().trim().is_empty();
+
+        if start_blank
+            && end_blank
+            && matches!(
+                self.exec_ctx.source,
+                Some(ExecutionSourceContext::CloudWatchLogs { .. })
+            )
+        {
+            return;
+        }
+
+        self.exec_ctx.source = self.current_cloudwatch_source_context(cx).ok();
+    }
+
+    fn sync_cloudwatch_controls(&mut self, cx: &mut Context<Self>) {
+        let should_show = self.should_show_cloudwatch_source_controls(cx);
+        let items = if should_show {
+            self.cloudwatch_log_group_items(cx)
+        } else {
+            Vec::new()
+        };
+
+        let selected_values = match self.exec_ctx.source.as_ref() {
+            Some(ExecutionSourceContext::CloudWatchLogs { log_groups, .. }) => log_groups.clone(),
+            None => Vec::new(),
+        };
+
+        self.cloudwatch_log_groups.update(cx, |multi_select, cx| {
+            multi_select.set_items(items, cx);
+            multi_select.set_selected_values(&selected_values, cx);
+        });
+
+        self.sync_cloudwatch_exec_context(cx);
+    }
+
+    pub(super) fn on_cloudwatch_log_groups_changed(
+        &mut self,
+        _selected_log_groups: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_cloudwatch_exec_context(cx);
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
+    pub(super) fn on_cloudwatch_time_range_changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_cloudwatch_exec_context(cx);
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
     }
 
     pub(super) fn sync_context_dropdowns(&mut self, cx: &mut Context<Self>) {
@@ -218,6 +373,7 @@ impl CodeDocument {
             });
         }
 
+        self.sync_cloudwatch_controls(cx);
         self.update_completion_provider(cx);
 
         if did_change {
@@ -564,6 +720,10 @@ impl CodeDocument {
     // === Visibility helpers for render ===
 
     pub(super) fn should_show_database_dropdown(&self, cx: &App) -> bool {
+        if self.should_show_cloudwatch_source_controls(cx) {
+            return false;
+        }
+
         let Some(conn_id) = self.exec_ctx.connection_id else {
             return false;
         };
@@ -582,6 +742,10 @@ impl CodeDocument {
     }
 
     pub(super) fn should_show_schema_dropdown(&self, cx: &App) -> bool {
+        if self.should_show_cloudwatch_source_controls(cx) {
+            return false;
+        }
+
         let Some(conn_id) = self.exec_ctx.connection_id else {
             return false;
         };
@@ -601,55 +765,66 @@ impl CodeDocument {
 
     // === Context bar keyboard navigation ===
 
-    /// Returns the list of visible dropdown indices:
-    /// 0 = Connection (always), 1 = Database (if visible), 2 = Schema (if visible).
-    fn visible_dropdown_indices(&self, cx: &App) -> Vec<usize> {
+    /// Returns the visible context-bar slots for the current document.
+    fn visible_context_bar_slots(&self, cx: &App) -> Vec<ContextBarSlot> {
         if !self.query_language.supports_connection_context() {
             return Vec::new();
         }
 
-        let mut indices = vec![0]; // Connection is always visible
+        let mut slots = vec![ContextBarSlot::Connection];
+
+        if self.should_show_cloudwatch_source_controls(cx) {
+            slots.push(ContextBarSlot::CloudWatchLogGroups);
+            slots.push(ContextBarSlot::CloudWatchStart);
+            slots.push(ContextBarSlot::CloudWatchEnd);
+            return slots;
+        }
+
         if self.should_show_database_dropdown(cx) {
-            indices.push(1);
+            slots.push(ContextBarSlot::Database);
         }
         if self.should_show_schema_dropdown(cx) {
-            indices.push(2);
+            slots.push(ContextBarSlot::Schema);
         }
-        indices
+
+        slots
     }
 
-    fn dropdown_for_index(&self, index: usize) -> &Entity<Dropdown> {
-        match index {
-            0 => &self.connection_dropdown,
-            1 => &self.database_dropdown,
-            _ => &self.schema_dropdown,
+    fn dropdown_for_slot(&self, slot: ContextBarSlot) -> Option<&Entity<Dropdown>> {
+        match slot {
+            ContextBarSlot::Connection => Some(&self.connection_dropdown),
+            ContextBarSlot::Database => Some(&self.database_dropdown),
+            ContextBarSlot::Schema => Some(&self.schema_dropdown),
+            ContextBarSlot::CloudWatchLogGroups
+            | ContextBarSlot::CloudWatchStart
+            | ContextBarSlot::CloudWatchEnd => None,
         }
     }
 
     pub(super) fn enter_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.visible_dropdown_indices(cx);
+        let visible = self.visible_context_bar_slots(cx);
         if visible.is_empty() {
             return;
         }
 
         self.focus_mode = SqlQueryFocus::ContextBar;
-        self.context_bar_index = visible[0];
+        self.context_bar_slot = visible[0];
         self.focus_handle.focus(window);
         self.update_context_bar_focus_rings(cx);
         cx.notify();
     }
 
-    /// Clamp `context_bar_index` to a visible dropdown after connection changes.
+    /// Clamp `context_bar_slot` to a visible control after connection changes.
     fn revalidate_context_bar_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.visible_dropdown_indices(cx);
+        let visible = self.visible_context_bar_slots(cx);
 
         if visible.is_empty() {
             self.exit_context_bar(window, cx);
             return;
         }
 
-        if !visible.contains(&self.context_bar_index) {
-            self.context_bar_index = visible[0];
+        if !visible.contains(&self.context_bar_slot) {
+            self.context_bar_slot = visible[0];
         }
 
         self.update_context_bar_focus_rings(cx);
@@ -669,15 +844,16 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let visible = self.visible_dropdown_indices(cx);
+        let visible = self.visible_context_bar_slots(cx);
         if visible.is_empty() {
             self.exit_context_bar(window, cx);
             return true;
         }
 
         // If a dropdown is open, route j/k/Enter/Escape to it
-        let current_dropdown = self.dropdown_for_index(self.context_bar_index).clone();
-        if current_dropdown.read(cx).is_open() {
+        if let Some(current_dropdown) = self.dropdown_for_slot(self.context_bar_slot).cloned()
+            && current_dropdown.read(cx).is_open()
+        {
             match cmd {
                 Command::SelectNext => {
                     current_dropdown.update(cx, |dd, cx| dd.select_next_item(cx));
@@ -701,20 +877,24 @@ impl CodeDocument {
 
         match cmd {
             Command::FocusRight => {
-                if let Some(pos) = visible.iter().position(|&i| i == self.context_bar_index)
+                if let Some(pos) = visible
+                    .iter()
+                    .position(|&slot| slot == self.context_bar_slot)
                     && pos + 1 < visible.len()
                 {
-                    self.context_bar_index = visible[pos + 1];
+                    self.context_bar_slot = visible[pos + 1];
                     self.update_context_bar_focus_rings(cx);
                     cx.notify();
                 }
                 true
             }
             Command::FocusLeft => {
-                if let Some(pos) = visible.iter().position(|&i| i == self.context_bar_index)
+                if let Some(pos) = visible
+                    .iter()
+                    .position(|&slot| slot == self.context_bar_slot)
                     && pos > 0
                 {
-                    self.context_bar_index = visible[pos - 1];
+                    self.context_bar_slot = visible[pos - 1];
                     self.update_context_bar_focus_rings(cx);
                     cx.notify();
                 }
@@ -722,7 +902,27 @@ impl CodeDocument {
             }
 
             Command::Execute => {
-                current_dropdown.update(cx, |dd, cx| dd.toggle_open(cx));
+                match self.context_bar_slot {
+                    ContextBarSlot::CloudWatchLogGroups => {
+                        self.cloudwatch_log_groups
+                            .update(cx, |multi_select, cx| multi_select.toggle_open(cx));
+                    }
+                    ContextBarSlot::CloudWatchStart => {
+                        self.cloudwatch_start_input
+                            .update(cx, |state, cx| state.focus(window, cx));
+                    }
+                    ContextBarSlot::CloudWatchEnd => {
+                        self.cloudwatch_end_input
+                            .update(cx, |state, cx| state.focus(window, cx));
+                    }
+                    _ => {
+                        if let Some(current_dropdown) =
+                            self.dropdown_for_slot(self.context_bar_slot).cloned()
+                        {
+                            current_dropdown.update(cx, |dd, cx| dd.toggle_open(cx));
+                        }
+                    }
+                }
                 true
             }
 
@@ -742,21 +942,31 @@ impl CodeDocument {
         let theme = cx.theme();
         let active_color = theme.ring;
 
-        for idx in [0, 1, 2] {
-            let dropdown = self.dropdown_for_index(idx);
-            let color = if idx == self.context_bar_index {
-                Some(active_color)
-            } else {
-                None
-            };
-            dropdown.update(cx, |dd, cx| dd.set_focus_ring(color, cx));
+        for slot in [
+            ContextBarSlot::Connection,
+            ContextBarSlot::Database,
+            ContextBarSlot::Schema,
+        ] {
+            if let Some(dropdown) = self.dropdown_for_slot(slot) {
+                let color = if slot == self.context_bar_slot {
+                    Some(active_color)
+                } else {
+                    None
+                };
+                dropdown.update(cx, |dd, cx| dd.set_focus_ring(color, cx));
+            }
         }
     }
 
     fn clear_context_bar_focus_rings(&self, cx: &mut Context<Self>) {
-        for idx in [0, 1, 2] {
-            let dropdown = self.dropdown_for_index(idx);
-            dropdown.update(cx, |dd, cx| dd.set_focus_ring(None, cx));
+        for slot in [
+            ContextBarSlot::Connection,
+            ContextBarSlot::Database,
+            ContextBarSlot::Schema,
+        ] {
+            if let Some(dropdown) = self.dropdown_for_slot(slot) {
+                dropdown.update(cx, |dd, cx| dd.set_focus_ring(None, cx));
+            }
         }
     }
 
@@ -769,6 +979,7 @@ impl CodeDocument {
 
         let theme = cx.theme();
 
+        let show_cloudwatch = self.should_show_cloudwatch_source_controls(cx);
         let show_db = self.should_show_database_dropdown(cx);
         let show_schema = self.should_show_schema_dropdown(cx);
 
@@ -794,25 +1005,60 @@ impl CodeDocument {
                 div()
                     .min_w(context_dropdown_min_width(0))
                     .child(focus_frame(
-                        context_dropdown_is_keyboard_focused(
+                        context_slot_is_keyboard_focused(
                             self.focus_mode,
-                            self.context_bar_index,
-                            0,
+                            self.context_bar_slot,
+                            ContextBarSlot::Connection,
                         ),
                         Some(theme.ring),
                         control_shell(self.connection_dropdown.clone(), cx),
                         cx,
                     )),
             )
-            .when(show_db, |el| {
+            .when(show_cloudwatch, |el| {
+                el.child(Text::caption("Log groups:"))
+                    .child(div().min_w(px(260.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::CloudWatchLogGroups,
+                        ),
+                        Some(theme.ring),
+                        control_shell(self.cloudwatch_log_groups.clone(), cx),
+                        cx,
+                    )))
+                    .child(Text::caption("Start:"))
+                    .child(div().min_w(px(180.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::CloudWatchStart,
+                        ),
+                        Some(theme.ring),
+                        control_shell(Input::new(&self.cloudwatch_start_input), cx),
+                        cx,
+                    )))
+                    .child(Text::caption("End:"))
+                    .child(div().min_w(px(180.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::CloudWatchEnd,
+                        ),
+                        Some(theme.ring),
+                        control_shell(Input::new(&self.cloudwatch_end_input), cx),
+                        cx,
+                    )))
+            })
+            .when(!show_cloudwatch && show_db, |el| {
                 el.child(Text::caption("Database:")).child(
                     div()
                         .min_w(context_dropdown_min_width(1))
                         .child(focus_frame(
-                            context_dropdown_is_keyboard_focused(
+                            context_slot_is_keyboard_focused(
                                 self.focus_mode,
-                                self.context_bar_index,
-                                1,
+                                self.context_bar_slot,
+                                ContextBarSlot::Database,
                             ),
                             Some(theme.ring),
                             control_shell(self.database_dropdown.clone(), cx),
@@ -820,15 +1066,15 @@ impl CodeDocument {
                         )),
                 )
             })
-            .when(show_schema, |el| {
+            .when(!show_cloudwatch && show_schema, |el| {
                 el.child(Text::caption("Schema:")).child(
                     div()
                         .min_w(context_dropdown_min_width(2))
                         .child(focus_frame(
-                            context_dropdown_is_keyboard_focused(
+                            context_slot_is_keyboard_focused(
                                 self.focus_mode,
-                                self.context_bar_index,
-                                2,
+                                self.context_bar_slot,
+                                ContextBarSlot::Schema,
                             ),
                             Some(theme.ring),
                             control_shell(self.schema_dropdown.clone(), cx),
@@ -850,7 +1096,11 @@ impl CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::{SqlQueryFocus, context_dropdown_is_keyboard_focused, context_dropdown_min_width};
+    use super::{
+        ContextBarSlot, SqlQueryFocus, build_cloudwatch_source_context, context_dropdown_min_width,
+        context_slot_is_keyboard_focused, is_cloudwatch_driver_id, parse_cloudwatch_datetime_input,
+    };
+    use dbflux_core::ExecutionSourceContext;
     use gpui::px;
 
     #[test]
@@ -866,20 +1116,68 @@ mod tests {
 
     #[test]
     fn only_active_context_bar_dropdown_reports_keyboard_focus() {
-        assert!(context_dropdown_is_keyboard_focused(
+        assert!(context_slot_is_keyboard_focused(
             SqlQueryFocus::ContextBar,
-            1,
-            1,
+            ContextBarSlot::Database,
+            ContextBarSlot::Database,
         ));
-        assert!(!context_dropdown_is_keyboard_focused(
+        assert!(!context_slot_is_keyboard_focused(
             SqlQueryFocus::ContextBar,
-            1,
-            0,
+            ContextBarSlot::Database,
+            ContextBarSlot::Connection,
         ));
-        assert!(!context_dropdown_is_keyboard_focused(
+        assert!(!context_slot_is_keyboard_focused(
             SqlQueryFocus::Editor,
-            1,
-            1,
+            ContextBarSlot::Database,
+            ContextBarSlot::Database,
         ));
+    }
+
+    #[test]
+    fn cloudwatch_source_controls_are_driver_specific() {
+        assert!(is_cloudwatch_driver_id(Some("cloudwatch")));
+        assert!(!is_cloudwatch_driver_id(Some("postgres")));
+        assert!(!is_cloudwatch_driver_id(None));
+    }
+
+    #[test]
+    fn cloudwatch_datetime_inputs_parse_rfc3339_values() {
+        assert!(parse_cloudwatch_datetime_input("2026-04-24T12:34:56Z").is_some());
+        assert!(parse_cloudwatch_datetime_input("").is_none());
+        assert!(parse_cloudwatch_datetime_input("not-a-date").is_none());
+    }
+
+    #[test]
+    fn valid_cloudwatch_source_context_requires_groups_and_ordered_bounds() {
+        let source =
+            build_cloudwatch_source_context(&["/aws/lambda/app".to_string()], Some(10), Some(20))
+                .expect("valid source context");
+
+        match source {
+            ExecutionSourceContext::CloudWatchLogs {
+                log_groups,
+                start_ms,
+                end_ms,
+            } => {
+                assert_eq!(log_groups, vec!["/aws/lambda/app"]);
+                assert_eq!(start_ms, 10);
+                assert_eq!(end_ms, 20);
+            }
+        }
+
+        assert_eq!(
+            build_cloudwatch_source_context(&[], Some(10), Some(20)).unwrap_err(),
+            "Select at least one log group"
+        );
+        assert_eq!(
+            build_cloudwatch_source_context(&["/aws/lambda/app".to_string()], None, Some(20))
+                .unwrap_err(),
+            "Start time is required"
+        );
+        assert_eq!(
+            build_cloudwatch_source_context(&["/aws/lambda/app".to_string()], Some(20), Some(10))
+                .unwrap_err(),
+            "Start time must be earlier than end time"
+        );
     }
 }

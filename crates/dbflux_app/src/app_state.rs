@@ -48,6 +48,9 @@ use dbflux_driver_redis::RedisDriver;
 #[cfg(feature = "dynamodb")]
 use dbflux_driver_dynamodb::DynamoDriver;
 
+#[cfg(feature = "cloudwatch")]
+use dbflux_driver_cloudwatch::CloudWatchDriver;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -804,6 +807,11 @@ impl AppState {
         #[cfg(feature = "dynamodb")]
         {
             drivers.insert("dynamodb".to_string(), Arc::new(DynamoDriver::new()));
+        }
+
+        #[cfg(feature = "cloudwatch")]
+        {
+            drivers.insert("cloudwatch".to_string(), Arc::new(CloudWatchDriver::new()));
         }
 
         drivers
@@ -2823,6 +2831,17 @@ mod tests {
             Vec::new(),
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn build_builtin_drivers_registers_cloudwatch_driver() {
+        let drivers = AppState::build_builtin_drivers();
+
+        assert!(drivers.contains_key("cloudwatch"));
+
+        let driver = drivers.get("cloudwatch").expect("cloudwatch driver");
+        assert_eq!(driver.metadata().id, "cloudwatch");
+        assert_eq!(driver.display_name(), "CloudWatch Logs");
     }
 
     #[test]

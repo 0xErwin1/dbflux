@@ -504,6 +504,31 @@ pub static DYNAMODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
     }],
 });
 
+pub static CLOUDWATCH_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![FormSection {
+            title: "AWS".into(),
+            fields: vec![
+                field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
+                field(
+                    "profile",
+                    "Profile",
+                    FormFieldKind::Text,
+                    "optional AWS profile",
+                ),
+                field(
+                    "endpoint",
+                    "Endpoint Override",
+                    FormFieldKind::Text,
+                    "http://localhost:4566",
+                ),
+            ],
+        }],
+    }],
+});
+
 // ---------------------------------------------------------------------------
 // Impl blocks
 // ---------------------------------------------------------------------------
@@ -535,5 +560,25 @@ impl DriverFormDef {
             .flat_map(|t| t.sections.iter())
             .flat_map(|s| s.fields.iter())
             .find(|f| f.id == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CLOUDWATCH_FORM;
+
+    #[test]
+    fn cloudwatch_form_exposes_aws_region_profile_and_endpoint_fields() {
+        let main_tab = CLOUDWATCH_FORM.main_tab().expect("main tab");
+
+        assert!(
+            main_tab
+                .sections
+                .iter()
+                .flat_map(|section| section.fields.iter())
+                .any(|field| field.id == "region" && field.required)
+        );
+        assert!(CLOUDWATCH_FORM.field("profile").is_some());
+        assert!(CLOUDWATCH_FORM.field("endpoint").is_some());
     }
 }

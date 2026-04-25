@@ -1,7 +1,39 @@
 use super::*;
 
+fn sidebar_tree_command_is_blocked_by_search_focus(cmd: Command) -> bool {
+    matches!(
+        cmd,
+        Command::SelectNext
+            | Command::SelectPrev
+            | Command::SelectFirst
+            | Command::SelectLast
+            | Command::Execute
+            | Command::ExpandCollapse
+            | Command::ColumnLeft
+            | Command::ColumnRight
+            | Command::Cancel
+            | Command::Rename
+            | Command::Delete
+            | Command::CreateFolder
+            | Command::SidebarNextTab
+            | Command::OpenItemMenu
+            | Command::ExtendSelectNext
+            | Command::ExtendSelectPrev
+            | Command::ToggleSelection
+            | Command::MoveSelectedUp
+            | Command::MoveSelectedDown
+    )
+}
+
 impl CommandDispatcher for Workspace {
     fn dispatch(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.focus_target == FocusTarget::Sidebar
+            && self.sidebar.read(cx).search_input_is_focused(window, cx)
+            && sidebar_tree_command_is_blocked_by_search_focus(cmd)
+        {
+            return false;
+        }
+
         // When context menu is open, only allow menu-related commands
         if self.focus_target == FocusTarget::Sidebar
             && self.sidebar.read(cx).has_context_menu_open()
@@ -723,5 +755,40 @@ impl CommandDispatcher for Workspace {
                 true
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidebar_tree_command_is_blocked_by_search_focus;
+    use crate::keymap::Command;
+
+    #[test]
+    fn sidebar_search_focus_blocks_tree_navigation_commands() {
+        assert!(sidebar_tree_command_is_blocked_by_search_focus(
+            Command::SelectNext
+        ));
+        assert!(sidebar_tree_command_is_blocked_by_search_focus(
+            Command::Execute
+        ));
+        assert!(sidebar_tree_command_is_blocked_by_search_focus(
+            Command::Delete
+        ));
+        assert!(sidebar_tree_command_is_blocked_by_search_focus(
+            Command::MoveSelectedDown
+        ));
+    }
+
+    #[test]
+    fn sidebar_search_focus_leaves_unrelated_commands_available() {
+        assert!(!sidebar_tree_command_is_blocked_by_search_focus(
+            Command::RunQuery
+        ));
+        assert!(!sidebar_tree_command_is_blocked_by_search_focus(
+            Command::ToggleSidebar
+        ));
+        assert!(!sidebar_tree_command_is_blocked_by_search_focus(
+            Command::OpenSettings
+        ));
     }
 }

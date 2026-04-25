@@ -2,13 +2,24 @@ use crate::QueryLanguage;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionSourceContext {
+    CloudWatchLogs {
+        log_groups: Vec<String>,
+        start_ms: i64,
+        end_ms: i64,
+    },
+}
+
 /// Per-document execution context (connection, database, schema).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionContext {
     pub connection_id: Option<Uuid>,
     pub database: Option<String>,
     pub schema: Option<String>,
     pub container: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ExecutionSourceContext>,
 }
 
 /// Prefix used for metadata annotations in file headers.
@@ -108,12 +119,21 @@ impl ExecutionContext {
             && self.database.is_none()
             && self.schema.is_none()
             && self.container.is_none()
+            && self.source.is_none()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cloudwatch_source() -> ExecutionSourceContext {
+        ExecutionSourceContext::CloudWatchLogs {
+            log_groups: vec!["/aws/lambda/app".into(), "/aws/ecs/api".into()],
+            start_ms: 1_710_000_000_000,
+            end_ms: 1_710_000_300_000,
+        }
+    }
 
     #[test]
     fn parse_sql_annotations() {
@@ -158,6 +178,7 @@ db.orders.find({})
             database: Some("mydb".into()),
             schema: Some("public".into()),
             container: None,
+            source: Some(cloudwatch_source()),
         };
 
         let header = ctx.to_comment_header(QueryLanguage::Sql);
@@ -166,12 +187,50 @@ db.orders.find({})
         assert_eq!(parsed.connection_id, ctx.connection_id);
         assert_eq!(parsed.database, ctx.database);
         assert_eq!(parsed.schema, ctx.schema);
+        assert!(parsed.source.is_none());
     }
 
     #[test]
     fn empty_context_produces_no_header() {
         let ctx = ExecutionContext::default();
         assert!(ctx.to_comment_header(QueryLanguage::Sql).is_empty());
+    }
+
+    #[test]
+    fn cloudwatch_source_roundtrips_through_serde() {
+        let ctx = ExecutionContext {
+            connection_id: Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
+            database: Some("logs".into()),
+            schema: None,
+            container: None,
+            source: Some(cloudwatch_source()),
+        };
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        let restored: ExecutionContext = serde_json::from_str(&json).unwrap();
+
+        match restored.source {
+            Some(ExecutionSourceContext::CloudWatchLogs {
+                log_groups,
+                start_ms,
+                end_ms,
+            }) => {
+                assert_eq!(log_groups, vec!["/aws/lambda/app", "/aws/ecs/api"]);
+                assert_eq!(start_ms, 1_710_000_000_000);
+                assert_eq!(end_ms, 1_710_000_300_000);
+            }
+            other => panic!("unexpected source context: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn source_only_context_is_not_empty() {
+        let ctx = ExecutionContext {
+            source: Some(cloudwatch_source()),
+            ..ExecutionContext::default()
+        };
+
+        assert!(!ctx.is_empty());
     }
 
     #[test]

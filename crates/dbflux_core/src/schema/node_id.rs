@@ -94,6 +94,12 @@ pub enum SchemaNodeId {
         database: String,
         name: String,
     },
+    CloudWatchLogStream {
+        profile_id: Uuid,
+        database: String,
+        log_group: String,
+        name: String,
+    },
     CustomType {
         profile_id: Uuid,
         schema: String,
@@ -229,6 +235,7 @@ pub enum SchemaNodeKind {
     Table,
     View,
     Collection,
+    CloudWatchLogStream,
     CustomType,
     ColumnsFolder,
     IndexesFolder,
@@ -274,6 +281,7 @@ impl SchemaNodeId {
             Self::Table { .. } => SchemaNodeKind::Table,
             Self::View { .. } => SchemaNodeKind::View,
             Self::Collection { .. } => SchemaNodeKind::Collection,
+            Self::CloudWatchLogStream { .. } => SchemaNodeKind::CloudWatchLogStream,
             Self::CustomType { .. } => SchemaNodeKind::CustomType,
             Self::ColumnsFolder { .. } => SchemaNodeKind::ColumnsFolder,
             Self::IndexesFolder { .. } => SchemaNodeKind::IndexesFolder,
@@ -319,6 +327,7 @@ impl SchemaNodeId {
             | Self::Table { profile_id, .. }
             | Self::View { profile_id, .. }
             | Self::Collection { profile_id, .. }
+            | Self::CloudWatchLogStream { profile_id, .. }
             | Self::CustomType { profile_id, .. }
             | Self::ColumnsFolder { profile_id, .. }
             | Self::IndexesFolder { profile_id, .. }
@@ -361,6 +370,7 @@ const P_COLLECTIONS_FOLDER: &str = "CF2";
 const P_TABLE: &str = "T";
 const P_VIEW: &str = "V";
 const P_COLLECTION: &str = "C";
+const P_CLOUDWATCH_LOG_STREAM: &str = "CLS";
 const P_CUSTOM_TYPE: &str = "Y";
 const P_COLUMNS_FOLDER: &str = "CLF";
 const P_INDEXES_FOLDER: &str = "IXF";
@@ -506,6 +516,18 @@ impl fmt::Display for SchemaNodeId {
                 name,
             } => {
                 write!(f, "{}|{}|{}|{}", P_COLLECTION, profile_id, database, name)
+            }
+            Self::CloudWatchLogStream {
+                profile_id,
+                database,
+                log_group,
+                name,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}|{}",
+                    P_CLOUDWATCH_LOG_STREAM, profile_id, database, log_group, name
+                )
             }
             Self::CustomType {
                 profile_id,
@@ -891,6 +913,20 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_CLOUDWATCH_LOG_STREAM => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                let log_group = parts.get(3).ok_or_else(err)?.to_string();
+                let name = parts.get(4).ok_or_else(err)?.to_string();
+                Ok(Self::CloudWatchLogStream {
+                    profile_id,
+                    database,
+                    log_group,
+                    name,
+                })
+            }
+
             P_CUSTOM_TYPE => {
                 let profile_id =
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
@@ -1142,6 +1178,7 @@ impl SchemaNodeKind {
                 | Self::Table
                 | Self::View
                 | Self::Collection
+                | Self::CloudWatchLogStream
                 | Self::ConnectionFolder
                 | Self::Schema
                 | Self::TablesFolder
@@ -1186,7 +1223,11 @@ impl SchemaNodeKind {
     pub fn shows_pointer_cursor(&self) -> bool {
         matches!(
             self,
-            Self::Profile | Self::Database | Self::ConnectionFolder | Self::ScriptFile
+            Self::Profile
+                | Self::Database
+                | Self::ConnectionFolder
+                | Self::CloudWatchLogStream
+                | Self::ScriptFile
         )
     }
 }
@@ -1291,6 +1332,12 @@ mod tests {
             profile_id: uuid,
             database: "mydb".into(),
             name: "orders".into(),
+        });
+        roundtrip(SchemaNodeId::CloudWatchLogStream {
+            profile_id: uuid,
+            database: "logs".into(),
+            log_group: "/aws/lambda/app".into(),
+            name: "2026/04/25/[$LATEST]abc".into(),
         });
         roundtrip(SchemaNodeId::CustomType {
             profile_id: uuid,

@@ -6,29 +6,20 @@ mod source_adapter;
 pub use filters::{AuditFilters, TimeRange};
 pub use source_adapter::AuditSourceAdapter;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::filter_bar::{FilterBarItem, FilterBarMode, FilterBarState};
 use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
-// FilterBar item indices — used both when building the state and in dispatch_command.
-const FILTER_BAR_IDX_SEARCH: usize = 0;
-const FILTER_BAR_IDX_TIME: usize = 1;
-const FILTER_BAR_IDX_LEVEL: usize = 2;
-const FILTER_BAR_IDX_CATEGORY: usize = 3;
-const FILTER_BAR_IDX_OUTCOME: usize = 4;
-const FILTER_BAR_IDX_REFRESH: usize = 5;
-const FILTER_BAR_IDX_REFRESH_POLICY: usize = 6;
-const FILTER_BAR_IDX_CLEAR: usize = 7;
 use crate::ui::components::toast::{PendingToast, flush_pending_toast};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_core::{
-    Pagination, RefreshPolicy,
+    CollectionBrowseRequest, CollectionRef, Pagination, RefreshPolicy, Value,
     observability::{EventCategory, EventOutcome, EventSeverity},
 };
 use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter};
@@ -38,6 +29,8 @@ use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::scroll::ScrollableElement;
+use serde_json::{Value as JsonValue, json};
+use uuid::Uuid;
 
 use super::chrome::{compact_top_bar, workspace_footer_bar};
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
@@ -104,13 +97,49 @@ pub enum AuditDocumentEvent {
 
 const DEFAULT_PAGE_SIZE: u32 = 100;
 
+#[derive(Clone)]
+enum AuditDocumentSource {
+    Internal {
+        adapter: AuditSourceAdapter,
+    },
+    CloudWatchLogGroup {
+        profile_id: Uuid,
+        collection: CollectionRef,
+    },
+    CloudWatchLogStream {
+        profile_id: Uuid,
+        collection: CollectionRef,
+        log_stream: String,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ToolbarSlot {
+    Search,
+    Time,
+    Level,
+    Category,
+    Outcome,
+    Refresh,
+    RefreshPolicy,
+    Clear,
+}
+
+struct CloudWatchLoadResult {
+    events: Vec<AuditEventDto>,
+    total_events: u64,
+}
+
 /// Audit event viewer document.
 pub struct AuditDocument {
-    adapter: AuditSourceAdapter,
+    app_state: Entity<AppStateEntity>,
+    source: AuditDocumentSource,
     filters: AuditFilters,
     events: Vec<AuditEventDto>,
     total_events: u64,
     expanded_event_ids: HashSet<i64>,
+    cloudwatch_message_inputs: HashMap<i64, Entity<InputState>>,
+    cloudwatch_details_inputs: HashMap<i64, Entity<InputState>>,
     pagination: Pagination,
     status_message: Option<String>,
     is_loading: bool,
@@ -158,15 +187,91 @@ impl AuditDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let audit_repo = app_state.read(cx).storage_runtime().audit();
+
+        Self::new_with_source(
+            app_state,
+            AuditDocumentSource::Internal {
+                adapter: AuditSourceAdapter::new(audit_repo),
+            },
+            "Audit".to_string(),
+            "Search events...",
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_for_cloudwatch_log_group(
+        profile_id: Uuid,
+        collection: CollectionRef,
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let title = collection.name.clone();
+
+        Self::new_with_source(
+            app_state,
+            AuditDocumentSource::CloudWatchLogGroup {
+                profile_id,
+                collection,
+            },
+            title,
+            "Filter pattern...",
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_for_cloudwatch_log_stream(
+        profile_id: Uuid,
+        collection: CollectionRef,
+        log_stream: String,
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let title = format!("{} · {}", collection.name, log_stream);
+
+        Self::new_with_source(
+            app_state,
+            AuditDocumentSource::CloudWatchLogStream {
+                profile_id,
+                collection,
+                log_stream,
+            },
+            title,
+            "Filter pattern...",
+            window,
+            cx,
+        )
+    }
+
+    fn new_with_source(
+        app_state: Entity<AppStateEntity>,
+        source: AuditDocumentSource,
+        title: String,
+        search_placeholder: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus_handle = cx.focus_handle();
 
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search events..."));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder));
+
+        let initial_time_range = Self::initial_time_range(&source);
+        let time_range_placeholder =
+            if matches!(source, AuditDocumentSource::CloudWatchLogStream { .. }) {
+                "All time"
+            } else {
+                "Last 24 h"
+            };
 
         let dropdown_time_range = cx.new(|_cx| {
             Dropdown::new("audit-time-range")
-                .placeholder("Last 24 h")
+                .placeholder(time_range_placeholder)
                 .items(Self::time_range_items())
-                .selected_index(Some(2))
+                .selected_index(initial_time_range)
         });
 
         let multi_select_level = cx.new(|cx| {
@@ -189,9 +294,6 @@ impl AuditDocument {
             ms.set_items(items, cx);
             ms
         });
-
-        let audit_repo = app_state.read(cx).storage_runtime().audit();
-        let adapter = AuditSourceAdapter::new(audit_repo);
 
         let search_sub = cx.subscribe(&search_input, |this, _, event: &InputEvent, cx| {
             match event {
@@ -323,25 +425,38 @@ impl AuditDocument {
             },
         );
 
-        // All navigable items in order: Search, Time, Level, Category, Outcome, Refresh, Clear.
-        // Indices must match the FILTER_BAR_IDX_* constants above.
-        let filter_bar = FilterBarState::new(vec![
+        let mut toolbar_items = vec![
             FilterBarItem::input("Search:", search_input.clone()),
             FilterBarItem::dropdown("Time:", dropdown_time_range.clone()),
-            FilterBarItem::button("Level"),
-            FilterBarItem::button("Category"),
-            FilterBarItem::button("Outcome"),
+        ];
+
+        if matches!(source, AuditDocumentSource::Internal { .. }) {
+            toolbar_items.extend([
+                FilterBarItem::button("Level"),
+                FilterBarItem::button("Category"),
+                FilterBarItem::button("Outcome"),
+            ]);
+        }
+
+        toolbar_items.extend([
             FilterBarItem::button_with_icon("Refresh", AppIcon::RefreshCcw),
             FilterBarItem::dropdown("Auto-refresh:", refresh_dropdown.clone()),
             FilterBarItem::button("Clear"),
         ]);
 
+        let filter_bar = FilterBarState::new(toolbar_items);
+
+        let filters = Self::default_filters_for_source(&source);
+
         Self {
-            adapter,
-            filters: Self::default_filters(),
+            app_state,
+            source,
+            filters,
             events: Vec::new(),
             total_events: 0,
             expanded_event_ids: HashSet::new(),
+            cloudwatch_message_inputs: HashMap::new(),
+            cloudwatch_details_inputs: HashMap::new(),
             pagination: Pagination::Offset {
                 limit: DEFAULT_PAGE_SIZE,
                 offset: 0,
@@ -349,7 +464,7 @@ impl AuditDocument {
             status_message: None,
             is_loading: false,
             id: DocumentId::new(),
-            title: "Audit".to_string(),
+            title,
             pending_initial_load: true,
             pending_toast: None,
             export_menu_open: false,
@@ -397,6 +512,73 @@ impl AuditDocument {
         doc.pending_initial_load = false;
 
         doc
+    }
+
+    pub fn is_cloudwatch_log_group(&self, profile_id: Uuid, collection: &CollectionRef) -> bool {
+        match &self.source {
+            AuditDocumentSource::CloudWatchLogGroup {
+                profile_id: doc_profile_id,
+                collection: doc_collection,
+            } => *doc_profile_id == profile_id && doc_collection == collection,
+            AuditDocumentSource::Internal { .. } => false,
+            AuditDocumentSource::CloudWatchLogStream { .. } => false,
+        }
+    }
+
+    pub fn is_cloudwatch_log_stream(
+        &self,
+        profile_id: Uuid,
+        collection: &CollectionRef,
+        log_stream: &str,
+    ) -> bool {
+        match &self.source {
+            AuditDocumentSource::CloudWatchLogStream {
+                profile_id: doc_profile_id,
+                collection: doc_collection,
+                log_stream: doc_log_stream,
+            } => {
+                *doc_profile_id == profile_id
+                    && doc_collection == collection
+                    && doc_log_stream == log_stream
+            }
+            AuditDocumentSource::Internal { .. }
+            | AuditDocumentSource::CloudWatchLogGroup { .. } => false,
+        }
+    }
+
+    fn is_cloudwatch_source(&self) -> bool {
+        matches!(
+            self.source,
+            AuditDocumentSource::CloudWatchLogGroup { .. }
+                | AuditDocumentSource::CloudWatchLogStream { .. }
+        )
+    }
+
+    fn toolbar_index(&self, slot: ToolbarSlot) -> Option<usize> {
+        match (&self.source, slot) {
+            (_, ToolbarSlot::Search) => Some(0),
+            (_, ToolbarSlot::Time) => Some(1),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Level) => Some(2),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Category) => Some(3),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Outcome) => Some(4),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Refresh) => Some(5),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::RefreshPolicy) => Some(6),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Clear) => Some(7),
+            (AuditDocumentSource::CloudWatchLogGroup { .. }, ToolbarSlot::Refresh)
+            | (AuditDocumentSource::CloudWatchLogStream { .. }, ToolbarSlot::Refresh) => Some(2),
+            (AuditDocumentSource::CloudWatchLogGroup { .. }, ToolbarSlot::RefreshPolicy)
+            | (AuditDocumentSource::CloudWatchLogStream { .. }, ToolbarSlot::RefreshPolicy) => {
+                Some(3)
+            }
+            (AuditDocumentSource::CloudWatchLogGroup { .. }, ToolbarSlot::Clear)
+            | (AuditDocumentSource::CloudWatchLogStream { .. }, ToolbarSlot::Clear) => Some(4),
+            _ => None,
+        }
+    }
+
+    fn slot_has_ring(&self, slot: ToolbarSlot) -> bool {
+        self.filter_bar.mode() == FilterBarMode::Navigating
+            && self.toolbar_index(slot) == Some(self.filter_bar.focused_index())
     }
 
     pub fn set_category_filter(&mut self, category: Option<EventCategory>, cx: &mut Context<Self>) {
@@ -466,12 +648,210 @@ impl AuditDocument {
         }));
     }
 
-    fn default_filters() -> AuditFilters {
+    fn initial_time_range(source: &AuditDocumentSource) -> Option<usize> {
+        match source {
+            AuditDocumentSource::CloudWatchLogStream { .. } => None,
+            AuditDocumentSource::Internal { .. }
+            | AuditDocumentSource::CloudWatchLogGroup { .. } => Some(2),
+        }
+    }
+
+    fn default_filters_for_source(source: &AuditDocumentSource) -> AuditFilters {
         let mut filters = AuditFilters::default();
-        let (start_ms, end_ms) = TimeRange::Last24h.to_filter_values();
-        filters.start_ms = start_ms;
-        filters.end_ms = end_ms;
+
+        if !matches!(source, AuditDocumentSource::CloudWatchLogStream { .. }) {
+            let (start_ms, end_ms) = TimeRange::Last24h.to_filter_values();
+            filters.start_ms = start_ms;
+            filters.end_ms = end_ms;
+        }
+
         filters
+    }
+
+    fn source_loading_label(&self) -> &'static str {
+        if self.is_cloudwatch_source() {
+            "Loading log events..."
+        } else {
+            "Loading audit events..."
+        }
+    }
+
+    fn source_error_heading(&self) -> &'static str {
+        if self.is_cloudwatch_source() {
+            "Failed to load log events"
+        } else {
+            "Failed to load audit events"
+        }
+    }
+
+    fn source_empty_label(&self) -> &'static str {
+        if self.is_cloudwatch_source() {
+            "No log events match the current filters."
+        } else {
+            "No audit events match the current filters."
+        }
+    }
+
+    fn source_row_label(&self) -> &'static str {
+        if self.is_cloudwatch_source() {
+            "events"
+        } else {
+            "rows"
+        }
+    }
+
+    fn cloudwatch_browse_request(
+        collection: CollectionRef,
+        filter_pattern: Option<String>,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+        pagination: Pagination,
+    ) -> CollectionBrowseRequest {
+        let mut request = CollectionBrowseRequest::new(collection).with_pagination(pagination);
+
+        let mut filter = serde_json::Map::new();
+
+        if let Some(pattern) = filter_pattern.filter(|value| !value.trim().is_empty()) {
+            filter.insert("filter_pattern".to_string(), JsonValue::String(pattern));
+        }
+
+        if let Some(start_ms) = start_ms {
+            filter.insert("start_ms".to_string(), json!(start_ms));
+        }
+
+        if let Some(end_ms) = end_ms {
+            filter.insert("end_ms".to_string(), json!(end_ms));
+        }
+
+        if !filter.is_empty() {
+            request = request.with_filter(JsonValue::Object(filter));
+        }
+
+        request
+    }
+
+    fn cloudwatch_stream_browse_request(
+        collection: CollectionRef,
+        log_stream: String,
+        filter_pattern: Option<String>,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+        pagination: Pagination,
+    ) -> CollectionBrowseRequest {
+        let mut request = CollectionBrowseRequest::new(collection).with_pagination(pagination);
+
+        let mut filter = serde_json::Map::new();
+
+        if let Some(pattern) = filter_pattern.filter(|value| !value.trim().is_empty()) {
+            filter.insert("filter_pattern".to_string(), JsonValue::String(pattern));
+        }
+
+        if let Some(start_ms) = start_ms {
+            filter.insert("start_ms".to_string(), json!(start_ms));
+        }
+
+        if let Some(end_ms) = end_ms {
+            filter.insert("end_ms".to_string(), json!(end_ms));
+        }
+
+        filter.insert("log_stream_names".to_string(), json!([log_stream]));
+        filter.insert("most_recent".to_string(), JsonValue::Bool(true));
+
+        request = request.with_filter(JsonValue::Object(filter));
+        request
+    }
+
+    fn cloudwatch_result_to_page(
+        result: dbflux_core::QueryResult,
+        collection: CollectionRef,
+        pagination_offset: u64,
+    ) -> CloudWatchLoadResult {
+        let has_next_page = result.next_page_token.is_some();
+        let events = result
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                Self::cloudwatch_row_to_event(row, &collection, pagination_offset, index)
+            })
+            .collect::<Vec<_>>();
+        let total_events = pagination_offset + events.len() as u64 + u64::from(has_next_page);
+
+        CloudWatchLoadResult {
+            events,
+            total_events,
+        }
+    }
+
+    fn cloudwatch_row_to_event(
+        row: &[Value],
+        collection: &CollectionRef,
+        pagination_offset: u64,
+        row_index: usize,
+    ) -> AuditEventDto {
+        let timestamp_ms = Self::int_cell(row, 0).unwrap_or_default();
+        let ingestion_time_ms = Self::int_cell(row, 1);
+        let log_stream_name = Self::text_cell(row, 2);
+        let message = Self::text_cell(row, 3);
+        let event_id = Self::text_cell(row, 4);
+        let message_details = Self::cloudwatch_message_details(message.as_deref());
+
+        let details_json = json!({
+            "log_group": collection.name,
+            "timestamp_ms": timestamp_ms,
+            "ingestion_time_ms": ingestion_time_ms,
+            "log_stream_name": log_stream_name,
+            "message": message_details,
+            "event_id": event_id,
+        })
+        .to_string();
+
+        AuditEventDto {
+            id: (pagination_offset + row_index as u64 + 1) as i64,
+            actor_id: String::new(),
+            tool_id: "cloudwatch_log_event".to_string(),
+            decision: String::new(),
+            reason: None,
+            profile_id: None,
+            classification: None,
+            duration_ms: None,
+            created_at: timestamp_ms.to_string(),
+            created_at_epoch_ms: timestamp_ms,
+            level: None,
+            category: None,
+            action: log_stream_name,
+            outcome: None,
+            actor_type: None,
+            source_id: None,
+            summary: message,
+            connection_id: Some(collection.name.clone()),
+            database_name: Some(collection.database.clone()),
+            driver_id: Some("cloudwatch".to_string()),
+            object_type: Some("log_event".to_string()),
+            object_id: event_id,
+            details_json: Some(details_json),
+            error_code: None,
+            error_message: ingestion_time_ms.map(|value| value.to_string()),
+            session_id: None,
+            correlation_id: None,
+        }
+    }
+
+    fn int_cell(row: &[Value], index: usize) -> Option<i64> {
+        match row.get(index) {
+            Some(Value::Int(value)) => Some(*value),
+            Some(Value::Text(value)) => value.parse().ok(),
+            _ => None,
+        }
+    }
+
+    fn text_cell(row: &[Value], index: usize) -> Option<String> {
+        match row.get(index) {
+            Some(Value::Text(value)) if !value.is_empty() => Some(value.clone()),
+            Some(Value::Int(value)) => Some(value.to_string()),
+            Some(Value::Null) | None => None,
+            Some(value) => Some(value.to_string()),
+        }
     }
 
     fn active_filter(&self, limit: Option<usize>, offset: Option<usize>) -> AuditQueryFilter {
@@ -588,7 +968,7 @@ impl AuditDocument {
         let request_id = self.load_request_id;
         self.is_loading = true;
         self.export_menu_open = false;
-        self.status_message = Some("Loading audit events...".to_string());
+        self.status_message = Some(self.source_loading_label().to_string());
         cx.notify();
 
         let page_filter = self.active_filter(
@@ -596,16 +976,113 @@ impl AuditDocument {
             Some(self.pagination_offset()),
         );
         let count_filter = self.active_filter(None, None);
-        let adapter = self.adapter.clone();
 
-        let task = cx.background_executor().spawn(async move {
-            let events = adapter.query_filter(&page_filter)?;
-            let total = adapter.count_filter(&count_filter)?;
-            Ok::<_, String>((events, total))
-        });
+        let task = match &self.source {
+            AuditDocumentSource::Internal { adapter } => {
+                let adapter = adapter.clone();
+
+                cx.background_executor().spawn(async move {
+                    let events = adapter.query_filter(&page_filter)?;
+                    let total = adapter.count_filter(&count_filter)?;
+
+                    Ok::<_, String>(CloudWatchLoadResult {
+                        events,
+                        total_events: total,
+                    })
+                })
+            }
+            AuditDocumentSource::CloudWatchLogGroup {
+                profile_id,
+                collection,
+            } => {
+                let Some(connection) = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(profile_id)
+                    .map(|connected| connected.connection.clone())
+                else {
+                    self.events.clear();
+                    self.total_events = 0;
+                    self.expanded_event_ids.clear();
+                    self.is_loading = false;
+                    self.status_message =
+                        Some("Connection not found for this log group".to_string());
+                    cx.notify();
+                    return;
+                };
+
+                let browse_request = Self::cloudwatch_browse_request(
+                    collection.clone(),
+                    self.filters.free_text.clone(),
+                    self.filters.start_ms,
+                    self.filters.end_ms,
+                    self.pagination.clone(),
+                );
+                let collection_for_task = collection.clone();
+                let pagination_offset = self.pagination.offset();
+
+                cx.background_executor().spawn(async move {
+                    let result = connection
+                        .browse_collection(&browse_request)
+                        .map_err(|error| format!("cloudwatch browse failed: {error}"))?;
+
+                    Ok::<_, String>(Self::cloudwatch_result_to_page(
+                        result,
+                        collection_for_task,
+                        pagination_offset,
+                    ))
+                })
+            }
+            AuditDocumentSource::CloudWatchLogStream {
+                profile_id,
+                collection,
+                log_stream,
+            } => {
+                let Some(connection) = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(profile_id)
+                    .map(|connected| connected.connection.clone())
+                else {
+                    self.events.clear();
+                    self.total_events = 0;
+                    self.expanded_event_ids.clear();
+                    self.is_loading = false;
+                    self.status_message =
+                        Some("Connection not found for this log stream".to_string());
+                    cx.notify();
+                    return;
+                };
+
+                let browse_request = Self::cloudwatch_stream_browse_request(
+                    collection.clone(),
+                    log_stream.clone(),
+                    self.filters.free_text.clone(),
+                    self.filters.start_ms,
+                    self.filters.end_ms,
+                    self.pagination.clone(),
+                );
+                let collection_for_task = collection.clone();
+                let pagination_offset = self.pagination.offset();
+
+                cx.background_executor().spawn(async move {
+                    let result = connection
+                        .browse_collection(&browse_request)
+                        .map_err(|error| format!("cloudwatch stream browse failed: {error}"))?;
+
+                    Ok::<_, String>(Self::cloudwatch_result_to_page(
+                        result,
+                        collection_for_task,
+                        pagination_offset,
+                    ))
+                })
+            }
+        };
 
         cx.spawn(async move |this, cx| match task.await {
-            Ok((events, total_events)) => {
+            Ok(page) => {
                 let _ = cx.update(|cx| {
                     this.update(cx, |doc, cx| {
                         if doc.load_request_id != request_id {
@@ -613,14 +1090,15 @@ impl AuditDocument {
                         }
 
                         let visible_ids: HashSet<i64> =
-                            events.iter().map(|event| event.id).collect();
+                            page.events.iter().map(|event| event.id).collect();
 
-                        doc.events = events;
-                        doc.total_events = total_events;
+                        doc.events = page.events;
+                        doc.total_events = page.total_events;
                         doc.is_loading = false;
                         doc.status_message = None;
                         doc.expanded_event_ids
                             .retain(|event_id| visible_ids.contains(event_id));
+                        doc.retain_cloudwatch_inline_inputs(&visible_ids);
 
                         cx.notify();
                     })
@@ -636,6 +1114,7 @@ impl AuditDocument {
                         doc.events.clear();
                         doc.total_events = 0;
                         doc.expanded_event_ids.clear();
+                        doc.clear_cloudwatch_inline_inputs();
                         doc.is_loading = false;
                         doc.status_message = Some(format!("Error loading events: {}", error));
 
@@ -655,7 +1134,7 @@ impl AuditDocument {
     }
 
     pub fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.filters = Self::default_filters();
+        self.filters = Self::default_filters_for_source(&self.source);
         self.reset_pagination();
         self.export_menu_open = false;
 
@@ -681,6 +1160,117 @@ impl AuditDocument {
         }
 
         cx.notify();
+    }
+
+    fn retain_cloudwatch_inline_inputs(&mut self, visible_ids: &HashSet<i64>) {
+        Self::retain_cloudwatch_input_cache(&mut self.cloudwatch_message_inputs, visible_ids);
+        Self::retain_cloudwatch_input_cache(&mut self.cloudwatch_details_inputs, visible_ids);
+    }
+
+    fn retain_cloudwatch_input_cache<T>(cache: &mut HashMap<i64, T>, visible_ids: &HashSet<i64>) {
+        cache.retain(|event_id, _| visible_ids.contains(event_id));
+    }
+
+    fn clear_cloudwatch_inline_inputs(&mut self) {
+        self.cloudwatch_message_inputs.clear();
+        self.cloudwatch_details_inputs.clear();
+    }
+
+    fn ensure_cloudwatch_message_input(
+        &mut self,
+        event_id: i64,
+        message: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        Self::ensure_cloudwatch_text_input(
+            &mut self.cloudwatch_message_inputs,
+            event_id,
+            message,
+            None,
+            window,
+            cx,
+        )
+    }
+
+    fn ensure_cloudwatch_details_input(
+        &mut self,
+        event_id: i64,
+        details_json: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        Self::ensure_cloudwatch_text_input(
+            &mut self.cloudwatch_details_inputs,
+            event_id,
+            details_json,
+            Some("json"),
+            window,
+            cx,
+        )
+    }
+
+    fn ensure_cloudwatch_text_input(
+        cache: &mut HashMap<i64, Entity<InputState>>,
+        event_id: i64,
+        value: &str,
+        editor_mode: Option<&'static str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        let value = value.to_string();
+        let rows = if editor_mode.is_some() {
+            Self::cloudwatch_text_rows(&value, 4)
+        } else {
+            Self::cloudwatch_text_rows(&value, 2)
+        };
+
+        let input = cache
+            .entry(event_id)
+            .or_insert_with(|| {
+                let initial_value = value.clone();
+                let initial_rows = rows;
+
+                cx.new(|cx| {
+                    let mut state = if let Some(editor_mode) = editor_mode {
+                        InputState::new(window, cx)
+                            .code_editor(editor_mode)
+                            .line_number(false)
+                            .rows(initial_rows)
+                            .soft_wrap(true)
+                    } else {
+                        InputState::new(window, cx)
+                            .multi_line(true)
+                            .rows(initial_rows)
+                            .soft_wrap(true)
+                    };
+
+                    state.set_value(&initial_value, window, cx);
+                    state
+                })
+            })
+            .clone();
+
+        if input.read(cx).value().to_string() != value {
+            input.update(cx, |state, cx| state.set_value(value, window, cx));
+        }
+
+        input
+    }
+
+    fn cloudwatch_text_rows(value: &str, min_rows: usize) -> usize {
+        let line_rows = value.lines().count().max(1);
+        let wrap_rows = value
+            .lines()
+            .map(|line| (line.chars().count() / 120).saturating_add(1))
+            .sum::<usize>()
+            .max(1);
+
+        line_rows.max(wrap_rows).max(min_rows)
+    }
+
+    fn cloudwatch_text_height(rows: usize) -> Pixels {
+        px((rows as f32 * 22.0) + 16.0)
     }
 
     fn go_to_prev_page(&mut self, cx: &mut Context<Self>) {
@@ -917,6 +1507,12 @@ impl AuditDocument {
         }
     }
 
+    fn cloudwatch_message_details(message: Option<&str>) -> serde_json::Value {
+        message
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+            .unwrap_or_else(|| json!(message))
+    }
+
     fn filter_by_correlation(&mut self, correlation_id: String, cx: &mut Context<Self>) {
         self.filters.correlation_id = Some(correlation_id);
         self.reset_pagination();
@@ -932,30 +1528,25 @@ impl AuditDocument {
     /// Execute the button action for the currently focused FilterBar item.
     /// Only called when `activate_input` returned `false` (Button variant).
     fn execute_filter_bar_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.filter_bar.focused_index() {
-            FILTER_BAR_IDX_REFRESH => {
-                self.refresh(cx);
-                self.filter_bar.deactivate();
-                self.focus_handle.focus(window);
-            }
-            FILTER_BAR_IDX_CLEAR => {
-                self.clear_filters(window, cx);
-                self.filter_bar.deactivate();
-                self.focus_handle.focus(window);
-            }
-            FILTER_BAR_IDX_LEVEL => {
-                self.multi_select_level
-                    .update(cx, |ms, cx| ms.toggle_open(cx));
-            }
-            FILTER_BAR_IDX_CATEGORY => {
-                self.multi_select_category
-                    .update(cx, |ms, cx| ms.toggle_open(cx));
-            }
-            FILTER_BAR_IDX_OUTCOME => {
-                self.multi_select_outcome
-                    .update(cx, |ms, cx| ms.toggle_open(cx));
-            }
-            _ => {}
+        let focused_index = self.filter_bar.focused_index();
+
+        if self.toolbar_index(ToolbarSlot::Refresh) == Some(focused_index) {
+            self.refresh(cx);
+            self.filter_bar.deactivate();
+            self.focus_handle.focus(window);
+        } else if self.toolbar_index(ToolbarSlot::Clear) == Some(focused_index) {
+            self.clear_filters(window, cx);
+            self.filter_bar.deactivate();
+            self.focus_handle.focus(window);
+        } else if self.toolbar_index(ToolbarSlot::Level) == Some(focused_index) {
+            self.multi_select_level
+                .update(cx, |ms, cx| ms.toggle_open(cx));
+        } else if self.toolbar_index(ToolbarSlot::Category) == Some(focused_index) {
+            self.multi_select_category
+                .update(cx, |ms, cx| ms.toggle_open(cx));
+        } else if self.toolbar_index(ToolbarSlot::Outcome) == Some(focused_index) {
+            self.multi_select_outcome
+                .update(cx, |ms, cx| ms.toggle_open(cx));
         }
     }
 
@@ -1510,7 +2101,16 @@ impl AuditDocument {
     }
 
     fn do_export(&mut self, format: String, cx: &mut Context<Self>) {
-        let adapter = self.adapter.clone();
+        let AuditDocumentSource::Internal { adapter } = &self.source else {
+            self.pending_toast = Some(PendingToast {
+                message: "Export is only available for the built-in audit viewer".to_string(),
+                is_error: true,
+            });
+            cx.notify();
+            return;
+        };
+
+        let adapter = adapter.clone();
         let filter = self.active_filter(None, None);
         let format_for_task = format.clone();
 
@@ -1712,19 +2312,13 @@ impl AuditDocument {
     fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
 
-        // Compute which item (if any) has the keyboard focus ring.
-        let navigating = self.filter_bar.mode() == FilterBarMode::Navigating;
-        let focused_idx = self.filter_bar.focused_index();
-
-        let ring = |idx: usize| navigating && focused_idx == idx;
-
         // Search input.
         let search_control = div()
             .flex()
             .items_center()
             .w(px(220.0))
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_SEARCH), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Search), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(
@@ -1736,28 +2330,28 @@ impl AuditDocument {
         // Dropdown wrappers — ring goes around the whole labeled control.
         let time_control = div()
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_TIME), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Time), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(self.dropdown_time_range.clone());
 
         let level_control = div()
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_LEVEL), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Level), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(self.multi_select_level.clone());
 
         let category_control = div()
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_CATEGORY), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Category), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(self.multi_select_category.clone());
 
         let outcome_control = div()
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_OUTCOME), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Outcome), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(self.multi_select_outcome.clone());
@@ -1783,7 +2377,7 @@ impl AuditDocument {
             .rounded(Radii::SM)
             .bg(theme.background)
             .border_1()
-            .border_color(if ring(FILTER_BAR_IDX_REFRESH) {
+            .border_color(if self.slot_has_ring(ToolbarSlot::Refresh) {
                 theme.ring
             } else {
                 theme.input
@@ -1814,7 +2408,7 @@ impl AuditDocument {
                     .w(px(28.0))
                     .h_full()
                     .rounded_r(Radii::SM)
-                    .when(ring(FILTER_BAR_IDX_REFRESH_POLICY), |d| {
+                    .when(self.slot_has_ring(ToolbarSlot::RefreshPolicy), |d| {
                         d.border_1().border_color(theme.ring)
                     })
                     .child(self.refresh_dropdown.clone()),
@@ -1829,7 +2423,7 @@ impl AuditDocument {
             .px(Spacing::SM)
             .rounded(Radii::SM)
             .border_1()
-            .border_color(if ring(FILTER_BAR_IDX_CLEAR) {
+            .border_color(if self.slot_has_ring(ToolbarSlot::Clear) {
                 theme.ring
             } else {
                 gpui::transparent_black()
@@ -1843,28 +2437,37 @@ impl AuditDocument {
 
         let _ = window;
 
-        compact_top_bar(
-            &theme,
-            vec![
+        compact_top_bar(&theme, {
+            let mut items = vec![
                 search_control.into_any_element(),
                 time_control.into_any_element(),
-                level_control.into_any_element(),
-                category_control.into_any_element(),
-                outcome_control.into_any_element(),
+            ];
+
+            if !self.is_cloudwatch_source() {
+                items.extend([
+                    level_control.into_any_element(),
+                    category_control.into_any_element(),
+                    outcome_control.into_any_element(),
+                ]);
+            }
+
+            items.extend([
                 div().flex_1().into_any_element(),
                 refresh_btn.into_any_element(),
                 clear_btn.into_any_element(),
-            ],
-        )
+            ]);
+
+            items
+        })
     }
 
-    fn render_event_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_event_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.events.is_empty() && self.is_loading {
             return div()
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .child(Text::muted("Loading audit events..."))
+                .child(Text::muted(self.source_loading_label()))
                 .into_any_element();
         }
 
@@ -1879,7 +2482,7 @@ impl AuditDocument {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(Text::heading("Failed to load audit events").danger())
+                .child(Text::heading(self.source_error_heading()).danger())
                 .child(Text::muted(self.status_message.clone().unwrap_or_default()))
                 .child(
                     Button::new("audit-retry")
@@ -1899,14 +2502,16 @@ impl AuditDocument {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(Text::muted("No audit events match the current filters."))
+                .child(Text::muted(self.source_empty_label()))
                 .into_any_element();
         }
 
-        let mut rows = Vec::with_capacity(self.events.len());
-        for (row_index, event) in self.events.iter().cloned().enumerate() {
+        let events = self.events.clone();
+        let mut rows = Vec::with_capacity(events.len());
+
+        for (row_index, event) in events.into_iter().enumerate() {
             rows.push(
-                self.render_event_row(row_index, event, cx)
+                self.render_event_row(row_index, event, window, cx)
                     .into_any_element(),
             );
         }
@@ -1922,12 +2527,13 @@ impl AuditDocument {
     }
 
     fn render_event_row(
-        &self,
+        &mut self,
         row_index: usize,
         event: AuditEventDto,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let event_id = event.id;
         let is_expanded = self.expanded_event_ids.contains(&event_id);
         // Only highlight the selected row when this document has GPUI focus.
@@ -1935,31 +2541,16 @@ impl AuditDocument {
         // user isn't confused by three simultaneous focus indicators.
         let is_selected = self.has_focus && self.selected_row == Some(row_index);
         let timestamp = Self::format_timestamp_ms(event.created_at_epoch_ms);
-        let level = event.level.as_deref();
-        let level_display: AnyElement = match level {
-            Some(l) => div()
-                .px_1p5()
-                .py_px()
-                .rounded(px(3.0))
-                .bg(Self::level_bg_color(Some(l), theme))
-                .flex_shrink_0()
-                .child(
-                    Text::label_sm(l.to_uppercase())
-                        .font_size(FontSizes::XS)
-                        .color(Self::level_color(Some(l), theme)),
-                )
-                .into_any_element(),
-            None => Self::null_display(theme).flex_shrink_0().into_any_element(),
-        };
         let summary = event.summary.clone().unwrap_or_default();
         let summary_display: AnyElement = if summary.is_empty() {
-            Self::null_display(theme).into_any_element()
+            Self::null_display(&theme).into_any_element()
         } else {
             Text::body(summary).into_any_element()
         };
-        let category = Self::short_category_label(event.category.as_deref());
         let connection_driver =
             Self::format_connection_driver(&event.connection_id, &event.driver_id);
+        let log_stream = event.action.clone();
+        let cloudwatch_event_id = event.object_id.clone();
 
         // Background priority: selected (keyboard cursor) > expanded > default.
         // Use theme.list_active for the selected row — same token as key_value and sidebar.
@@ -2016,16 +2607,59 @@ impl AuditDocument {
                         .muted(),
                     )
                     .child(Text::code(timestamp))
-                    .child(level_display)
-                    .child(Text::caption(category.to_string()))
+                    .when(self.is_cloudwatch_source(), |row| {
+                        row.when_some(log_stream.clone(), |row, value| {
+                            row.child(
+                                div()
+                                    .px_1p5()
+                                    .py_px()
+                                    .rounded(px(3.0))
+                                    .bg(theme.primary.opacity(0.15))
+                                    .max_w(px(240.0))
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .child(Text::label_sm(value).font_size(FontSizes::XS)),
+                                    ),
+                            )
+                        })
+                    })
+                    .when(!self.is_cloudwatch_source(), |row| {
+                        let level = event.level.as_deref();
+                        let level_display: AnyElement = match level {
+                            Some(l) => div()
+                                .px_1p5()
+                                .py_px()
+                                .rounded(px(3.0))
+                                .bg(Self::level_bg_color(Some(l), &theme))
+                                .flex_shrink_0()
+                                .child(
+                                    Text::label_sm(l.to_uppercase())
+                                        .font_size(FontSizes::XS)
+                                        .color(Self::level_color(Some(l), &theme)),
+                                )
+                                .into_any_element(),
+                            None => Self::null_display(&theme)
+                                .flex_shrink_0()
+                                .into_any_element(),
+                        };
+                        let category = Self::short_category_label(event.category.as_deref());
+
+                        row.child(level_display)
+                            .child(Text::caption(category.to_string()))
+                    })
                     .child(div().text_sm().flex_1().truncate().child(summary_display))
+                    .when_some(
+                        cloudwatch_event_id.filter(|_| self.is_cloudwatch_source()),
+                        |row, value| row.child(Text::caption(value)),
+                    )
                     .when_some(
                         connection_driver.filter(|value| !value.is_empty()),
                         |row, value| row.child(Text::caption(value)),
                     ),
             )
             .when(is_expanded, |root| {
-                root.child(self.render_inline_detail(event, cx))
+                root.child(self.render_inline_detail(event, window, cx))
             })
     }
 
@@ -2048,11 +2682,16 @@ impl AuditDocument {
     }
 
     fn render_inline_detail(
-        &self,
+        &mut self,
         event: AuditEventDto,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
+    ) -> AnyElement {
+        if self.is_cloudwatch_source() {
+            return self.render_cloudwatch_inline_detail(event, window, cx);
+        }
+
+        let theme = cx.theme().clone();
         let timestamp = Self::format_timestamp_ms(event.created_at_epoch_ms);
         let level = event.level.clone();
         let category = match Self::short_category_label(event.category.as_deref()) {
@@ -2106,26 +2745,30 @@ impl AuditDocument {
                     .flex_wrap()
                     .gap_4()
                     .children(vec![
-                        self.render_detail_field("Time", Some(timestamp), theme)
+                        self.render_detail_field("Time", Some(timestamp), &theme)
                             .into_any_element(),
-                        self.render_detail_field("Level", level, theme)
+                        self.render_detail_field("Level", level, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Category", category, theme)
+                        self.render_detail_field("Category", category, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Outcome", outcome, theme)
+                        self.render_detail_field("Outcome", outcome, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Actor", Some(actor), theme)
+                        self.render_detail_field("Actor", Some(actor), &theme)
                             .into_any_element(),
-                        self.render_detail_field("Action", action, theme)
+                        self.render_detail_field("Action", action, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Source", source, theme)
+                        self.render_detail_field("Source", source, &theme)
                             .into_any_element(),
                     ])
                     .when_some(connection_driver, |row, value| {
-                        row.child(self.render_detail_field("Connection/Driver", Some(value), theme))
+                        row.child(self.render_detail_field(
+                            "Connection/Driver",
+                            Some(value),
+                            &theme,
+                        ))
                     })
                     .when_some(duration, |row, value| {
-                        row.child(self.render_detail_field("Duration", Some(value), theme))
+                        row.child(self.render_detail_field("Duration", Some(value), &theme))
                     }),
             )
             .when_some(summary, |root, value| {
@@ -2186,6 +2829,103 @@ impl AuditDocument {
                         ),
                 )
             })
+            .into_any_element()
+    }
+
+    fn render_cloudwatch_inline_detail(
+        &mut self,
+        event: AuditEventDto,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+        let row_event_id = event.id;
+        let timestamp = Self::format_timestamp_ms(event.created_at_epoch_ms);
+        let log_group = event.connection_id.clone();
+        let log_stream = event.action.clone();
+        let log_event_id = event.object_id.clone();
+        let ingestion_time = event
+            .error_message
+            .as_deref()
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(Self::format_timestamp_ms);
+        let message = event.summary.clone().filter(|value| !value.is_empty());
+        let details_json = event.details_json.clone().filter(|value| !value.is_empty());
+
+        div()
+            .px_4()
+            .pb_3()
+            .pt_1()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .bg(theme.secondary.opacity(0.35))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_4()
+                    .children(vec![
+                        self.render_detail_field("Time", Some(timestamp), &theme)
+                            .into_any_element(),
+                        self.render_detail_field("Log Group", log_group, &theme)
+                            .into_any_element(),
+                        self.render_detail_field("Log Stream", log_stream, &theme)
+                            .into_any_element(),
+                        self.render_detail_field("Event ID", log_event_id, &theme)
+                            .into_any_element(),
+                    ])
+                    .when_some(ingestion_time, |row, value| {
+                        row.child(self.render_detail_field("Ingestion Time", Some(value), &theme))
+                    }),
+            )
+            .when_some(message, |root, value| {
+                let message_input =
+                    self.ensure_cloudwatch_message_input(row_event_id, &value, window, cx);
+                let message_rows = Self::cloudwatch_text_rows(&value, 2);
+
+                root.child(
+                    div()
+                        .flex_col()
+                        .gap_1p5()
+                        .child(Label::new("Message"))
+                        .child(
+                            div().h(Self::cloudwatch_text_height(message_rows)).child(
+                                Input::new(&message_input)
+                                    .appearance(false)
+                                    .w_full()
+                                    .h_full(),
+                            ),
+                        ),
+                )
+            })
+            .when_some(details_json, |root, value| {
+                let pretty_details = Self::pretty_json(&value);
+                let details_input =
+                    self.ensure_cloudwatch_details_input(row_event_id, &pretty_details, window, cx);
+                let details_rows = Self::cloudwatch_text_rows(&pretty_details, 4);
+
+                root.child(
+                    div()
+                        .flex_col()
+                        .gap_1p5()
+                        .child(Label::new("Details"))
+                        .child(
+                            div()
+                                .bg(theme.secondary)
+                                .p_2()
+                                .rounded(px(4.0))
+                                .h(Self::cloudwatch_text_height(details_rows))
+                                .child(
+                                    Input::new(&details_input)
+                                        .appearance(false)
+                                        .w_full()
+                                        .h_full(),
+                                ),
+                        ),
+                )
+            })
+            .into_any_element()
     }
 
     fn render_export_button(
@@ -2277,9 +3017,15 @@ impl AuditDocument {
         // Left: row count with icon — same as DataGridPanel.
         let left = {
             let row_count_label = if let Some((start, end)) = self.current_page_range() {
-                format!("{}-{} of {} rows", start, end, self.total_events)
+                format!(
+                    "{}-{} of {} {}",
+                    start,
+                    end,
+                    self.total_events,
+                    self.source_row_label()
+                )
             } else {
-                format!("{} rows", self.total_events)
+                format!("{} {}", self.total_events, self.source_row_label())
             };
 
             div()
@@ -2373,7 +3119,7 @@ impl AuditDocument {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .when(self.total_events > 0, |d| {
+            .when(self.total_events > 0 && !self.is_cloudwatch_source(), |d| {
                 d.child(self.render_export_button(&theme, cx))
             })
             .when_some(
@@ -2446,7 +3192,7 @@ impl Render for AuditDocument {
                     .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .child(self.render_event_list(cx))
+                    .child(self.render_event_list(window, cx))
                     .children(context_menu),
             )
             .child(self.render_status_bar(cx))
@@ -2456,7 +3202,10 @@ impl Render for AuditDocument {
 #[cfg(test)]
 mod tests {
     use super::AuditDocument;
-    use dbflux_core::observability::EventCategory;
+    use std::collections::{HashMap, HashSet};
+
+    use dbflux_core::{CollectionRef, Pagination, Value, observability::EventCategory};
+    use serde_json::json;
 
     #[test]
     fn category_index_maps_none_to_all() {
@@ -2466,5 +3215,130 @@ mod tests {
     #[test]
     fn category_index_maps_mcp_to_mcp_dropdown_entry() {
         assert_eq!(AuditDocument::category_index(Some(EventCategory::Mcp)), 7);
+    }
+
+    #[test]
+    fn cloudwatch_browse_request_uses_filter_pattern_and_range() {
+        let request = AuditDocument::cloudwatch_browse_request(
+            CollectionRef::new("logs", "/aws/lambda/app"),
+            Some("ERROR".to_string()),
+            Some(10),
+            Some(20),
+            Pagination::Offset {
+                limit: 100,
+                offset: 0,
+            },
+        );
+
+        assert_eq!(
+            request.filter,
+            Some(json!({
+                "filter_pattern": "ERROR",
+                "start_ms": 10,
+                "end_ms": 20,
+            }))
+        );
+    }
+
+    #[test]
+    fn cloudwatch_row_maps_into_audit_style_event() {
+        let event = AuditDocument::cloudwatch_row_to_event(
+            &[
+                Value::Int(1000),
+                Value::Int(2000),
+                Value::Text("2026/04/25/[$LATEST]abc".to_string()),
+                Value::Text("hello from cloudwatch".to_string()),
+                Value::Text("event-123".to_string()),
+            ],
+            &CollectionRef::new("logs", "/aws/lambda/app"),
+            200,
+            3,
+        );
+
+        assert_eq!(event.id, 204);
+        assert_eq!(event.created_at_epoch_ms, 1000);
+        assert_eq!(event.action.as_deref(), Some("2026/04/25/[$LATEST]abc"));
+        assert_eq!(event.summary.as_deref(), Some("hello from cloudwatch"));
+        assert_eq!(event.object_id.as_deref(), Some("event-123"));
+        assert_eq!(event.connection_id.as_deref(), Some("/aws/lambda/app"));
+        assert_eq!(event.driver_id.as_deref(), Some("cloudwatch"));
+    }
+
+    #[test]
+    fn cloudwatch_row_embeds_valid_json_message_as_pretty_printable_details() {
+        let event = AuditDocument::cloudwatch_row_to_event(
+            &[
+                Value::Int(1000),
+                Value::Int(2000),
+                Value::Text("2026/04/25/[$LATEST]abc".to_string()),
+                Value::Text("{\"level\":\"info\",\"nested\":{\"ok\":true}}".to_string()),
+                Value::Text("event-123".to_string()),
+            ],
+            &CollectionRef::new("logs", "/aws/lambda/app"),
+            0,
+            0,
+        );
+
+        let details =
+            serde_json::from_str::<serde_json::Value>(event.details_json.as_deref().unwrap())
+                .unwrap();
+
+        assert_eq!(details["message"]["level"], json!("info"));
+        assert_eq!(details["message"]["nested"]["ok"], json!(true));
+    }
+
+    #[test]
+    fn cloudwatch_row_keeps_plain_text_message_as_string_in_details() {
+        let event = AuditDocument::cloudwatch_row_to_event(
+            &[
+                Value::Int(1000),
+                Value::Int(2000),
+                Value::Text("2026/04/25/[$LATEST]abc".to_string()),
+                Value::Text("plain text message".to_string()),
+                Value::Text("event-123".to_string()),
+            ],
+            &CollectionRef::new("logs", "/aws/lambda/app"),
+            0,
+            0,
+        );
+
+        let details =
+            serde_json::from_str::<serde_json::Value>(event.details_json.as_deref().unwrap())
+                .unwrap();
+
+        assert_eq!(details["message"], json!("plain text message"));
+    }
+
+    #[test]
+    fn cloudwatch_stream_browse_request_targets_exact_stream_and_latest_page() {
+        let request = AuditDocument::cloudwatch_stream_browse_request(
+            CollectionRef::new("logs", "/aws/lambda/app"),
+            "2026/04/25/[$LATEST]abc".to_string(),
+            None,
+            None,
+            None,
+            Pagination::Offset {
+                limit: 100,
+                offset: 0,
+            },
+        );
+
+        assert_eq!(
+            request.filter,
+            Some(json!({
+                "log_stream_names": ["2026/04/25/[$LATEST]abc"],
+                "most_recent": true,
+            }))
+        );
+    }
+
+    #[test]
+    fn retain_cloudwatch_input_cache_drops_non_visible_entries() {
+        let mut cache = HashMap::from([(1_i64, "message"), (2_i64, "details"), (3_i64, "extra")]);
+        let visible_ids = HashSet::from([2_i64, 3_i64]);
+
+        AuditDocument::retain_cloudwatch_input_cache(&mut cache, &visible_ids);
+
+        assert_eq!(cache, HashMap::from([(2_i64, "details"), (3_i64, "extra")]));
     }
 }

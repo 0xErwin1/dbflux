@@ -331,7 +331,10 @@ impl ConnectionManagerWindow {
                 *tunnel = ssh_tunnel;
                 *profile_id = ssh_tunnel_profile_id;
             }
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {}
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => {}
         }
 
         Some(config)
