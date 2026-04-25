@@ -724,11 +724,10 @@ impl AuthProfilesSection {
             cx.emit(AppStateChanged);
         });
 
-        if !is_edit
-            && let Some(provider) = self
-                .app_state
-                .read(cx)
-                .auth_provider_by_id(&profile.provider_id)
+        if let Some(provider) = self
+            .app_state
+            .read(cx)
+            .auth_provider_by_id(&profile.provider_id)
         {
             provider.after_profile_saved(&profile);
         }
