@@ -806,6 +806,10 @@ pub struct CollectionChildInfo {
     pub id: String,
     pub label: String,
 
+    /// Optional driver-provided event timestamp used for generic child pickers.
+    #[serde(default)]
+    pub last_event_ts_ms: Option<i64>,
+
     #[serde(default)]
     pub presentation: CollectionPresentation,
 }

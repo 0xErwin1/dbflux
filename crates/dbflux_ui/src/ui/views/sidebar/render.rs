@@ -174,7 +174,6 @@ impl Sidebar {
                     .child(
                         Input::new(&self.connections_search_input)
                             .xsmall()
-                            .appearance(false)
                             .cleanable(true),
                     ),
             )
@@ -275,12 +274,7 @@ impl Sidebar {
                     .py(Spacing::XS)
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(
-                        Input::new(&search_input)
-                            .xsmall()
-                            .appearance(false)
-                            .cleanable(true),
-                    ),
+                    .child(Input::new(&search_input).xsmall().cleanable(true)),
             )
             // Tree or empty state
             .when(has_entries || has_search, |el| {
@@ -360,6 +354,10 @@ impl Render for Sidebar {
 
         if let Some(item_id) = self.pending_rename_item.take() {
             self.start_rename(&item_id, window, cx);
+        }
+
+        if let Some(item_id) = self.pending_child_picker_item.take() {
+            self.open_child_picker_modal(&item_id, window, cx);
         }
 
         let theme = cx.theme();

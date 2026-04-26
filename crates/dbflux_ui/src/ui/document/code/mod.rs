@@ -126,9 +126,7 @@ fn format_source_datetime_input(timestamp_ms: i64) -> String {
         .unwrap_or_default()
 }
 
-fn source_input_values_from_context(
-    source: &ExecutionSourceContext,
-) -> Option<(String, String)> {
+fn source_input_values_from_context(source: &ExecutionSourceContext) -> Option<(String, String)> {
     match source {
         ExecutionSourceContext::CollectionWindow {
             start_ms, end_ms, ..

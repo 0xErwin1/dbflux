@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui::AsyncUpdateResultExt;
+use dbflux_core::TaskKind;
 
 impl Sidebar {
     pub(super) fn find_table_for_item<'a>(
@@ -112,6 +113,7 @@ impl Sidebar {
     fn spawn_fetch_with_result<R, F, G>(
         &mut self,
         pending_action: PendingAction,
+        task_id: Option<TaskId>,
         task: Task<Result<R, String>>,
         error_log_prefix: &'static str,
         error_toast_prefix: &'static str,
@@ -139,6 +141,12 @@ impl Sidebar {
                     Ok(res) => {
                         on_success(&app_state, res, cx);
 
+                        if let Some(task_id) = task_id {
+                            app_state.update(cx, |state, _| {
+                                state.complete_task(task_id);
+                            });
+                        }
+
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.loading_items.remove(&item_id);
                             sidebar.complete_pending_action(&item_id, cx);
@@ -146,6 +154,13 @@ impl Sidebar {
                     }
                     Err(e) => {
                         log::error!("{}: {}", error_log_prefix, e);
+
+                        if let Some(task_id) = task_id {
+                            let details = format!("{}: {}", error_toast_prefix, e);
+                            app_state.update(cx, |state, _| {
+                                state.fail_task_with_details(task_id, e.clone(), details);
+                            });
+                        }
 
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.loading_items.remove(&item_id);
@@ -200,6 +215,14 @@ impl Sidebar {
 
         let profile_id = parts.profile_id;
         let db_name = cache_db.clone();
+        let load_task_id = self.app_state.update(cx, |state, _| {
+            let (task_id, _) = state.start_task_for_profile(
+                TaskKind::LoadSchema,
+                format!("Loading event streams: {}", parts.object_name),
+                Some(parts.profile_id),
+            );
+            task_id
+        });
 
         let task = cx
             .background_executor()
@@ -207,6 +230,7 @@ impl Sidebar {
 
         self.spawn_fetch_with_result(
             pending_action,
+            Some(load_task_id),
             task,
             "Failed to fetch table details",
             "Failed to load table schema",
@@ -255,6 +279,7 @@ impl Sidebar {
 
         self.spawn_fetch_with_result(
             pending_action,
+            None,
             task,
             "Failed to fetch schema types",
             "Failed to load data types",
@@ -298,6 +323,7 @@ impl Sidebar {
 
         self.spawn_fetch_with_result(
             pending_action,
+            None,
             task,
             "Failed to fetch schema indexes",
             "Failed to load indexes",
@@ -341,6 +367,7 @@ impl Sidebar {
 
         self.spawn_fetch_with_result(
             pending_action,
+            None,
             task,
             "Failed to fetch schema foreign keys",
             "Failed to load foreign keys",
@@ -381,6 +408,9 @@ impl Sidebar {
             | PendingAction::ExpandSchemaForeignKeysFolder { item_id }
             | PendingAction::ExpandCollection { item_id } => {
                 self.expand_schema_folder(&item_id, cx);
+            }
+            PendingAction::OpenChildPicker { item_id } => {
+                self.pending_child_picker_item = Some(item_id);
             }
         }
     }

@@ -33,6 +33,8 @@ use dbflux_components::controls::InputState;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
+use gpui_component::date_picker::DatePickerState;
 
 // ── Item kinds ────────────────────────────────────────────────────────────────
 
@@ -47,6 +49,10 @@ pub enum FilterBarItem {
     Dropdown {
         label: SharedString,
         dropdown: Entity<Dropdown>,
+    },
+    DatePicker {
+        label: SharedString,
+        date_picker: Entity<DatePickerState>,
     },
     /// An action button. Activated with Enter → the document handles it externally.
     /// `activate_input` returns `false` for buttons so the caller can dispatch the action.
@@ -68,6 +74,16 @@ impl FilterBarItem {
         Self::Dropdown {
             label: label.into(),
             dropdown,
+        }
+    }
+
+    pub fn date_picker(
+        label: impl Into<SharedString>,
+        date_picker: Entity<DatePickerState>,
+    ) -> Self {
+        Self::DatePicker {
+            label: label.into(),
+            date_picker,
         }
     }
 
@@ -156,6 +172,18 @@ impl FilterBarState {
         self.items.len()
     }
 
+    pub fn set_items(&mut self, items: Vec<FilterBarItem>) {
+        self.items = items;
+
+        if self.items.is_empty() {
+            self.focused_index = 0;
+            self.mode = FilterBarMode::Inactive;
+            return;
+        }
+
+        self.focused_index = self.focused_index.min(self.items.len().saturating_sub(1));
+    }
+
     // ── Activation ────────────────────────────────────────────────────────
 
     /// Enter toolbar navigation mode with the ring on `index` (clamped).
@@ -234,6 +262,14 @@ impl FilterBarState {
                 let dropdown = dropdown.clone();
                 dropdown.update(cx, |d, cx| {
                     d.open(cx);
+                });
+                true
+            }
+            FilterBarItem::DatePicker { date_picker, .. } => {
+                self.mode = FilterBarMode::Editing;
+                let date_picker = date_picker.clone();
+                date_picker.update(cx, |state, cx| {
+                    state.focus_handle(cx).focus(window);
                 });
                 true
             }
@@ -371,6 +407,20 @@ fn render_item(
                     .rounded(Radii::SM)
                     .when(ring_active, |d| d.border_1().border_color(theme.ring))
                     .child(dropdown.clone()),
+            )
+            .into_any_element(),
+
+        FilterBarItem::DatePicker { label, date_picker } => div()
+            .flex()
+            .items_center()
+            .gap(Spacing::XS)
+            .child(Text::caption(label.clone()))
+            .child(
+                div()
+                    .min_w(px(220.0))
+                    .rounded(Radii::SM)
+                    .when(ring_active, |d| d.border_1().border_color(theme.ring))
+                    .child(gpui_component::date_picker::DatePicker::new(date_picker).small()),
             )
             .into_any_element(),
 

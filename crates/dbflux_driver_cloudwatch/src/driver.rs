@@ -508,24 +508,14 @@ impl Connection for CloudWatchConnection {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<TableInfo, DbError> {
-        let stream_names = fetch_log_streams(&self.client, table)?;
-        let stream_fields = stream_names
+        let stream_items = fetch_log_streams(&self.client, table)?;
+        let stream_fields = stream_items
             .iter()
-            .cloned()
-            .map(|stream_name| FieldInfo {
-                name: stream_name,
+            .map(|stream| FieldInfo {
+                name: stream.label.clone(),
                 common_type: "text".to_string(),
                 occurrence_rate: None,
                 nested_fields: None,
-            })
-            .collect();
-
-        let child_items = stream_names
-            .into_iter()
-            .map(|stream_name| CollectionChildInfo {
-                id: stream_name.clone(),
-                label: stream_name,
-                presentation: CollectionPresentation::EventStream,
             })
             .collect();
 
@@ -538,7 +528,7 @@ impl Connection for CloudWatchConnection {
             constraints: None,
             sample_fields: Some(stream_fields),
             presentation: CollectionPresentation::EventStream,
-            child_items: Some(child_items),
+            child_items: Some(stream_items),
         })
     }
 
@@ -569,16 +559,30 @@ impl CloudWatchConnection {
         query: &EventQuery,
     ) -> CollectionBrowseRequest {
         let mut filter = serde_json::Map::new();
+        let mut from_ts_ms = query.from_ts_ms;
+        let mut to_ts_ms = query.to_ts_ms;
 
-        if let Some(pattern) = query.free_text.as_ref().filter(|value| !value.is_empty()) {
-            filter.insert("filter_pattern".to_string(), serde_json::Value::String(pattern.clone()));
+        if target.child_id.is_some()
+            && from_ts_ms.is_none()
+            && to_ts_ms.is_none()
+            && let Ok(default_end) = current_time_ms()
+        {
+            to_ts_ms = Some(default_end);
+            from_ts_ms = Some(default_end.saturating_sub(DEFAULT_BROWSE_WINDOW_MS));
         }
 
-        if let Some(start_ms) = query.from_ts_ms {
+        if let Some(pattern) = query.free_text.as_ref().filter(|value| !value.is_empty()) {
+            filter.insert(
+                "filter_pattern".to_string(),
+                serde_json::Value::String(pattern.clone()),
+            );
+        }
+
+        if let Some(start_ms) = from_ts_ms {
             filter.insert("start_ms".to_string(), serde_json::Value::from(start_ms));
         }
 
-        if let Some(end_ms) = query.to_ts_ms {
+        if let Some(end_ms) = to_ts_ms {
             filter.insert("end_ms".to_string(), serde_json::Value::from(end_ms));
         }
 
@@ -616,7 +620,13 @@ impl CloudWatchConnection {
             .map(|(index, row)| Self::row_to_event_record(row, collection, child_id, offset, index))
             .collect();
 
-        EventPage::new(records, None, result.next_page_token.is_some(), offset, limit)
+        EventPage::new(
+            records,
+            None,
+            result.next_page_token.is_some(),
+            offset,
+            limit,
+        )
     }
 
     fn row_to_event_record(
@@ -652,20 +662,20 @@ impl CloudWatchConnection {
                 _ => None,
             })
             .unwrap_or_default();
-        let event_id = row
-            .get(4)
-            .and_then(|value| match value {
-                Value::Text(text) if !text.is_empty() => Some(text.clone()),
-                Value::Int(value) => Some(value.to_string()),
-                _ => None,
-            });
+        let event_id = row.get(4).and_then(|value| match value {
+            Value::Text(text) if !text.is_empty() => Some(text.clone()),
+            Value::Int(value) => Some(value.to_string()),
+            _ => None,
+        });
 
         EventRecord {
             id: Some((pagination_offset + index + 1) as i64),
             ts_ms: timestamp_ms,
             level: EventSeverity::Info,
             category: EventCategory::System,
-            action: stream_name.clone().unwrap_or_else(|| collection.name.clone()),
+            action: stream_name
+                .clone()
+                .unwrap_or_else(|| collection.name.clone()),
             outcome: dbflux_core::EventOutcome::Success,
             actor_type: EventActorType::System,
             actor_id: None,
@@ -1064,14 +1074,19 @@ fn bool_field(
     })
 }
 
-fn fetch_log_streams(client: &Client, log_group_name: &str) -> Result<Vec<String>, DbError> {
+fn fetch_log_streams(
+    client: &Client,
+    log_group_name: &str,
+) -> Result<Vec<CollectionChildInfo>, DbError> {
     let mut next_token: Option<String> = None;
-    let mut stream_names = Vec::new();
+    let mut streams = Vec::new();
 
     loop {
         let mut operation = client
             .describe_log_streams()
             .log_group_name(log_group_name)
+            .order_by(aws_sdk_cloudwatchlogs::types::OrderBy::LastEventTime)
+            .descending(true)
             .limit(50);
 
         if let Some(token) = next_token.clone() {
@@ -1084,7 +1099,12 @@ fn fetch_log_streams(client: &Client, log_group_name: &str) -> Result<Vec<String
 
         for stream in output.log_streams() {
             if let Some(stream_name) = stream.log_stream_name() {
-                stream_names.push(stream_name.to_string());
+                streams.push(CollectionChildInfo {
+                    id: stream_name.to_string(),
+                    label: stream_name.to_string(),
+                    last_event_ts_ms: stream.last_event_timestamp(),
+                    presentation: CollectionPresentation::EventStream,
+                });
             }
         }
 
@@ -1094,8 +1114,14 @@ fn fetch_log_streams(client: &Client, log_group_name: &str) -> Result<Vec<String
         }
     }
 
-    stream_names.sort();
-    Ok(stream_names)
+    streams.sort_by(|left, right| {
+        right
+            .last_event_ts_ms
+            .cmp(&left.last_event_ts_ms)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+
+    Ok(streams)
 }
 
 #[cfg(test)]

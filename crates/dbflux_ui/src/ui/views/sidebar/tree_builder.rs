@@ -39,20 +39,28 @@ impl Sidebar {
         let item_label = item.label.clone();
         let item_expanded = item.is_expanded();
         let item_matches = item_label.to_string().to_ascii_lowercase().contains(query);
+        let original_children = item.children;
 
-        let children: Vec<TreeItem> = item
-            .children
+        if item_matches {
+            return Some(
+                TreeItem::new(item_id, item_label)
+                    .expanded(item_expanded)
+                    .children(original_children),
+            );
+        }
+
+        let children: Vec<TreeItem> = original_children
             .into_iter()
             .filter_map(|child| Self::filter_tree_item(child, query))
             .collect();
 
-        if !item_matches && children.is_empty() {
+        if children.is_empty() {
             return None;
         }
 
         Some(
             TreeItem::new(item_id, item_label)
-                .expanded(item_expanded || !children.is_empty())
+                .expanded(true)
                 .children(children),
         )
     }
@@ -529,12 +537,7 @@ impl Sidebar {
                 .tables
                 .iter()
                 .map(|coll| {
-                    Self::build_collection_item(
-                        profile_id,
-                        database_name,
-                        coll,
-                        table_details,
-                    )
+                    Self::build_collection_item(profile_id, database_name, coll, table_details)
                 })
                 .collect();
 
@@ -635,8 +638,9 @@ impl Sidebar {
         let coll_name = &collection.name;
         let cache_key = (database_name.to_string(), coll_name.clone());
         let effective = table_details.get(&cache_key).unwrap_or(collection);
-        let child_items = effective.child_items.clone().unwrap_or_default();
-        let details_loaded = effective.sample_fields.is_some() || !child_items.is_empty();
+        let child_items = effective.child_items.clone();
+        let details_loaded = effective.sample_fields.is_some()
+            || child_items.as_ref().is_some_and(|items| !items.is_empty());
 
         let (field_children, field_count) = if let Some(fields) = effective.sample_fields.as_ref() {
             (
@@ -703,23 +707,30 @@ impl Sidebar {
             (Vec::new(), 0)
         };
 
-        let collection_children = if !child_items.is_empty() {
-            child_items
-                .into_iter()
-                .map(|child| {
-                    TreeItem::new(
-                        SchemaNodeId::CollectionChild {
-                            profile_id,
-                            database: database_name.to_string(),
-                            collection: coll_name.to_string(),
-                            child_id: child.id,
-                            name: child.label.clone(),
-                        }
-                        .to_string(),
-                        child.label,
-                    )
-                })
-                .collect()
+        let collection_children = if effective.presentation == CollectionPresentation::EventStream {
+            match child_items {
+                Some(items) if !items.is_empty() => items
+                    .into_iter()
+                    .map(|child| {
+                        TreeItem::new(
+                            SchemaNodeId::CollectionChild {
+                                profile_id,
+                                database: database_name.to_string(),
+                                collection: coll_name.to_string(),
+                                child_id: child.id,
+                                name: child.label.clone(),
+                            }
+                            .to_string(),
+                            child.label,
+                        )
+                    })
+                    .collect(),
+                Some(_) => vec![TreeItem::new(
+                    format!("collection-empty-streams:{profile_id}:{database_name}:{coll_name}"),
+                    "No event streams".to_string(),
+                )],
+                None => Vec::new(),
+            }
         } else {
             vec![
                 TreeItem::new(
@@ -1344,6 +1355,7 @@ mod tests {
                 child_items: Some(vec![CollectionChildInfo {
                     id: "stream-1".to_string(),
                     label: "2026/04/25/[$LATEST]abc".to_string(),
+                    last_event_ts_ms: Some(1_776_777_600_000),
                     presentation: CollectionPresentation::EventStream,
                 }]),
             },

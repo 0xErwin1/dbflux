@@ -44,7 +44,10 @@ fn collection_document_presentation_for_connection(
                 .iter()
                 .find(|entry| {
                     entry.name == collection.name
-                        && entry.database.as_deref().unwrap_or(collection.database.as_str())
+                        && entry
+                            .database
+                            .as_deref()
+                            .unwrap_or(collection.database.as_str())
                             == collection.database.as_str()
                 })
                 .map(|entry| entry.presentation)
@@ -451,7 +454,9 @@ impl Workspace {
             .read(cx)
             .connections()
             .get(&profile_id)
-            .map(|connected| collection_document_presentation_for_connection(connected, &collection))
+            .map(|connected| {
+                collection_document_presentation_for_connection(connected, &collection)
+            })
             .unwrap_or(CollectionDocumentPresentation::DataGrid);
 
         let existing_id = if has_connection {
@@ -466,13 +471,13 @@ impl Workspace {
                     }
                     CollectionDocumentPresentation::AuditLike => {
                         matches!(doc, DocumentHandle::Audit { entity, .. }
-                                if entity.read(cx).matches_event_stream(
-                                    profile_id,
-                                    &dbflux_core::EventStreamTarget {
-                                        collection: collection.clone(),
-                                        child_id: None,
-                                    },
-                                ))
+                        if entity.read(cx).matches_event_stream(
+                            profile_id,
+                            &dbflux_core::EventStreamTarget {
+                                collection: collection.clone(),
+                                child_id: None,
+                            },
+                        ))
                     }
                 })
                 .map(|doc| doc.id())
@@ -1368,9 +1373,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        OpenDocumentDecision, decide_open_document,
-    };
+    use super::{OpenDocumentDecision, decide_open_document};
     use crate::ui::document::DocumentId;
     use uuid::Uuid;
 

@@ -22,12 +22,13 @@ use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
-    CollectionIndexInfo, CollectionRef, ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind,
-    CreateIndexRequest, CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
-    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, EventStreamTarget, IndexData,
-    IndexDirection, QueryLanguage, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot,
-    TableInfo, TableRef, TaskId, TypeDefinition, ViewInfo,
+    CollectionChildInfo, CollectionIndexInfo, CollectionPresentation, CollectionRef,
+    ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
+    CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DropForeignKeyRequest,
+    DropIndexRequest, DropTypeRequest, EventStreamTarget, IndexData, IndexDirection, QueryLanguage,
+    ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef, TaskId, TypeDefinition,
+    ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -189,6 +190,7 @@ impl ContextMenuItem {
 #[derive(Clone)]
 pub enum ContextMenuAction {
     Open,
+    OpenChildPicker,
     ViewSchema,
     GenerateCode(String),
     Connect,
@@ -260,6 +262,7 @@ impl ContextMenuAction {
     fn icon(&self) -> Option<AppIcon> {
         match self {
             Self::Open => Some(AppIcon::Eye),
+            Self::OpenChildPicker => Some(AppIcon::ScrollText),
             Self::ViewSchema => Some(AppIcon::Table),
             Self::GenerateCode(_) => Some(AppIcon::Code),
             Self::Connect => Some(AppIcon::Plug),
@@ -469,6 +472,9 @@ enum PendingAction {
     ExpandCollection {
         item_id: String,
     },
+    OpenChildPicker {
+        item_id: String,
+    },
 }
 
 impl PendingAction {
@@ -479,9 +485,31 @@ impl PendingAction {
             | Self::ExpandTypesFolder { item_id }
             | Self::ExpandSchemaIndexesFolder { item_id }
             | Self::ExpandSchemaForeignKeysFolder { item_id }
-            | Self::ExpandCollection { item_id } => item_id,
+            | Self::ExpandCollection { item_id }
+            | Self::OpenChildPicker { item_id } => item_id,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildPickerSortColumn {
+    Name,
+    LastEvent,
+}
+
+struct ChildPickerState {
+    profile_id: Uuid,
+    database: String,
+    collection: String,
+    title: String,
+    focus_handle: FocusHandle,
+    children: Vec<CollectionChildInfo>,
+    filter_input: Entity<InputState>,
+    filter_query: String,
+    page: usize,
+    page_size: usize,
+    sort_column: ChildPickerSortColumn,
+    sort_descending: bool,
 }
 
 /// Result of checking whether table details are available.
@@ -588,6 +616,8 @@ pub struct Sidebar {
     delete_confirm_modal: Option<DeleteConfirmState>,
     /// Whether the add menu dropdown is open
     add_menu_open: bool,
+    child_picker: Option<ChildPickerState>,
+    pending_child_picker_item: Option<String>,
     scripts_drop_target: Option<DropTarget>,
     gutter_metadata: HashMap<String, GutterInfo>,
     scripts_gutter_metadata: HashMap<String, GutterInfo>,
@@ -752,6 +782,8 @@ impl Sidebar {
             pending_delete_item: None,
             delete_confirm_modal: None,
             add_menu_open: false,
+            child_picker: None,
+            pending_child_picker_item: None,
             scripts_drop_target: None,
             gutter_metadata,
             scripts_gutter_metadata,

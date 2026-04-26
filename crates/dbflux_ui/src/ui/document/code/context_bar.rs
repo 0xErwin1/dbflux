@@ -175,7 +175,8 @@ impl CodeDocument {
 
         if start_input.trim().is_empty()
             && end_input.trim().is_empty()
-            && let Some(source @ ExecutionSourceContext::CollectionWindow { .. }) = self.exec_ctx.source.clone()
+            && let Some(source @ ExecutionSourceContext::CollectionWindow { .. }) =
+                self.exec_ctx.source.clone()
         {
             return Ok(source);
         }
@@ -192,12 +193,7 @@ impl CodeDocument {
             return;
         }
 
-        let start_blank = self
-            .source_start_input
-            .read(cx)
-            .value()
-            .trim()
-            .is_empty();
+        let start_blank = self.source_start_input.read(cx).value().trim().is_empty();
         let end_blank = self.source_end_input.read(cx).value().trim().is_empty();
 
         if start_blank
@@ -790,7 +786,9 @@ impl CodeDocument {
             ContextBarSlot::Connection => Some(&self.connection_dropdown),
             ContextBarSlot::Database => Some(&self.database_dropdown),
             ContextBarSlot::Schema => Some(&self.schema_dropdown),
-            ContextBarSlot::SourceTargets | ContextBarSlot::SourceStart | ContextBarSlot::SourceEnd => None,
+            ContextBarSlot::SourceTargets
+            | ContextBarSlot::SourceStart
+            | ContextBarSlot::SourceEnd => None,
         }
     }
 
@@ -1016,48 +1014,48 @@ impl CodeDocument {
                         .map(|spec| spec.targets_label.clone())
                         .unwrap_or_else(|| "Sources".to_string()),
                 ))
-                    .child(div().min_w(px(260.0)).child(focus_frame(
-                        context_slot_is_keyboard_focused(
-                            self.focus_mode,
-                            self.context_bar_slot,
-                            ContextBarSlot::SourceTargets,
-                        ),
-                        Some(theme.ring),
-                        control_shell(self.source_targets.clone(), cx),
-                        cx,
-                    )))
-                    .child(Text::caption(
-                        source_spec
-                            .as_ref()
-                            .map(|spec| spec.start_label.clone())
-                            .unwrap_or_else(|| "Start".to_string()),
-                    ))
-                    .child(div().min_w(px(180.0)).child(focus_frame(
-                        context_slot_is_keyboard_focused(
-                            self.focus_mode,
-                            self.context_bar_slot,
-                            ContextBarSlot::SourceStart,
-                        ),
-                        Some(theme.ring),
-                        control_shell(Input::new(&self.source_start_input), cx),
-                        cx,
-                    )))
-                    .child(Text::caption(
-                        source_spec
-                            .as_ref()
-                            .map(|spec| spec.end_label.clone())
-                            .unwrap_or_else(|| "End".to_string()),
-                    ))
-                    .child(div().min_w(px(180.0)).child(focus_frame(
-                        context_slot_is_keyboard_focused(
-                            self.focus_mode,
-                            self.context_bar_slot,
-                            ContextBarSlot::SourceEnd,
-                        ),
-                        Some(theme.ring),
-                        control_shell(Input::new(&self.source_end_input), cx),
-                        cx,
-                    )))
+                .child(div().min_w(px(260.0)).child(focus_frame(
+                    context_slot_is_keyboard_focused(
+                        self.focus_mode,
+                        self.context_bar_slot,
+                        ContextBarSlot::SourceTargets,
+                    ),
+                    Some(theme.ring),
+                    control_shell(self.source_targets.clone(), cx),
+                    cx,
+                )))
+                .child(Text::caption(
+                    source_spec
+                        .as_ref()
+                        .map(|spec| spec.start_label.clone())
+                        .unwrap_or_else(|| "Start".to_string()),
+                ))
+                .child(div().min_w(px(180.0)).child(focus_frame(
+                    context_slot_is_keyboard_focused(
+                        self.focus_mode,
+                        self.context_bar_slot,
+                        ContextBarSlot::SourceStart,
+                    ),
+                    Some(theme.ring),
+                    control_shell(Input::new(&self.source_start_input), cx),
+                    cx,
+                )))
+                .child(Text::caption(
+                    source_spec
+                        .as_ref()
+                        .map(|spec| spec.end_label.clone())
+                        .unwrap_or_else(|| "End".to_string()),
+                ))
+                .child(div().min_w(px(180.0)).child(focus_frame(
+                    context_slot_is_keyboard_focused(
+                        self.focus_mode,
+                        self.context_bar_slot,
+                        ContextBarSlot::SourceEnd,
+                    ),
+                    Some(theme.ring),
+                    control_shell(Input::new(&self.source_end_input), cx),
+                    cx,
+                )))
             })
             .when(!show_source_controls && show_db, |el| {
                 el.child(Text::caption("Database:")).child(
