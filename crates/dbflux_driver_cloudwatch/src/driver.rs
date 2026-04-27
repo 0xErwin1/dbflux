@@ -13,7 +13,8 @@ use dbflux_core::{
     DriverCapabilities, DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage,
     EventQuery, EventRecord, EventSeverity, EventSourceId, EventStreamTarget,
     ExecutionSourceContext, FieldInfo, FormValues, Icon, QueryLanguage, QueryRequest, QueryResult,
-    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, TableInfo, Value,
+    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode,
+    TableInfo, ValidationResult, Value,
 };
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -39,6 +40,11 @@ const CLOUDWATCH_DEFAULT_DATABASE: &str = "logs";
 const DEFAULT_BROWSE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 const MAX_QUERY_WAIT_ATTEMPTS: usize = 120;
 const QUERY_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const CLOUDWATCH_QUERY_MODE_CWLI: &str = "cwli";
+const CLOUDWATCH_QUERY_MODE_PPL: &str = "ppl";
+const CLOUDWATCH_QUERY_MODE_SQL: &str = "sql";
+
+static CLOUDWATCH_LANGUAGE_SERVICE: CloudWatchLanguageService = CloudWatchLanguageService;
 
 pub struct CloudWatchDriver;
 
@@ -63,6 +69,8 @@ struct CloudWatchConnection {
     client: Client,
     config: CloudWatchProfileConfig,
 }
+
+struct CloudWatchLanguageService;
 
 impl CloudWatchDriver {
     pub fn new() -> Self {
@@ -191,9 +199,14 @@ impl Connection for CloudWatchConnection {
             targets: log_groups,
             start_ms,
             end_ms,
+            query_mode,
         } = source;
 
-        if log_groups.is_empty() {
+        let query_mode = query_mode
+            .as_deref()
+            .unwrap_or(CLOUDWATCH_QUERY_MODE_CWLI);
+
+        if query_mode != CLOUDWATCH_QUERY_MODE_SQL && log_groups.is_empty() {
             return Err(DbError::query_failed(
                 "Select at least one CloudWatch log group before running a query".to_string(),
             ));
@@ -203,14 +216,18 @@ impl Connection for CloudWatchConnection {
         let start_seconds = start_ms.div_euclid(1000);
         let end_seconds = end_ms.div_euclid(1000);
 
-        let start_request = self
+        let mut start_request = self
             .client
             .start_query()
             .query_string(req.sql.clone())
             .start_time(start_seconds)
             .end_time(end_seconds)
             .limit(query_limit as i32)
-            .set_log_group_names(Some(log_groups.clone()));
+            .query_language(cloudwatch_sdk_query_language(query_mode));
+
+        if query_mode != CLOUDWATCH_QUERY_MODE_SQL {
+            start_request = start_request.set_log_group_names(Some(log_groups.clone()));
+        }
 
         let start_output = runtime()?.block_on(start_request.send()).map_err(|error| {
             DbError::query_failed(format!("CloudWatch StartQuery failed: {error}"))
@@ -499,7 +516,14 @@ impl Connection for CloudWatchConnection {
             targets_placeholder: "Log groups".to_string(),
             start_label: "Start".to_string(),
             end_label: "End".to_string(),
+            query_mode_label: Some("Syntax".to_string()),
+            query_modes: cloudwatch_query_modes(),
+            default_query_mode: Some(CLOUDWATCH_QUERY_MODE_CWLI.to_string()),
         })
+    }
+
+    fn language_service(&self) -> &dyn dbflux_core::LanguageService {
+        &CLOUDWATCH_LANGUAGE_SERVICE
     }
 
     fn table_details(
@@ -832,6 +856,46 @@ impl CloudWatchConnection {
         ];
 
         Ok(QueryResult::table(columns, rows, None, started.elapsed()))
+    }
+}
+
+impl dbflux_core::LanguageService for CloudWatchLanguageService {
+    fn validate(&self, _query: &str) -> ValidationResult {
+        ValidationResult::Valid
+    }
+
+    fn detect_dangerous(&self, _query: &str) -> Option<dbflux_core::DangerousQueryKind> {
+        None
+    }
+}
+
+fn cloudwatch_query_modes() -> Vec<SourceQueryMode> {
+    vec![
+        SourceQueryMode {
+            value: CLOUDWATCH_QUERY_MODE_CWLI.to_string(),
+            label: "Logs Insights QL".to_string(),
+            query_language: QueryLanguage::CloudWatchLogsInsightsQl,
+        },
+        SourceQueryMode {
+            value: CLOUDWATCH_QUERY_MODE_PPL.to_string(),
+            label: "OpenSearch PPL".to_string(),
+            query_language: QueryLanguage::OpenSearchPpl,
+        },
+        SourceQueryMode {
+            value: CLOUDWATCH_QUERY_MODE_SQL.to_string(),
+            label: "OpenSearch SQL".to_string(),
+            query_language: QueryLanguage::OpenSearchSql,
+        },
+    ]
+}
+
+fn cloudwatch_sdk_query_language(
+    query_mode: &str,
+) -> aws_sdk_cloudwatchlogs::types::QueryLanguage {
+    match query_mode {
+        CLOUDWATCH_QUERY_MODE_PPL => aws_sdk_cloudwatchlogs::types::QueryLanguage::Ppl,
+        CLOUDWATCH_QUERY_MODE_SQL => aws_sdk_cloudwatchlogs::types::QueryLanguage::Sql,
+        _ => aws_sdk_cloudwatchlogs::types::QueryLanguage::Cwli,
     }
 }
 

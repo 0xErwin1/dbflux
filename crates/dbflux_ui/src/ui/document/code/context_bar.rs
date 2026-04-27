@@ -100,9 +100,11 @@ impl CodeDocument {
             .connection_id
             .filter(|id| self.app_state.read(cx).connections().contains_key(id));
 
+        let query_language = self.effective_query_language(cx);
+
         let completion_provider: Rc<dyn CompletionProvider> =
             Rc::new(QueryCompletionProvider::new(
-                self.query_language.clone(),
+                query_language,
                 self.app_state.clone(),
                 connection_id,
             ));
@@ -120,6 +122,31 @@ impl CodeDocument {
             .connections()
             .get(&connection_id)
             .and_then(|connected| connected.connection.source_context_spec())
+    }
+
+    fn current_source_query_mode_value(&self, cx: &App) -> Option<String> {
+        let spec = self.current_source_context_spec(cx)?;
+
+        self.source_query_mode_dropdown
+            .read(cx)
+            .selected_value()
+            .map(|value| value.to_string())
+            .or(spec.default_query_mode)
+            .or_else(|| spec.query_modes.first().map(|mode| mode.value.clone()))
+    }
+
+    fn effective_query_language(&self, cx: &App) -> QueryLanguage {
+        let Some(spec) = self.current_source_context_spec(cx) else {
+            return self.query_language.clone();
+        };
+
+        let selected_mode = self.current_source_query_mode_value(cx);
+
+        spec.query_modes
+            .into_iter()
+            .find(|mode| Some(mode.value.as_str()) == selected_mode.as_deref())
+            .map(|mode| mode.query_language)
+            .unwrap_or_else(|| self.query_language.clone())
     }
 
     pub(super) fn should_show_source_controls(&self, cx: &App) -> bool {
@@ -169,6 +196,7 @@ impl CodeDocument {
         &self,
         cx: &App,
     ) -> Result<ExecutionSourceContext, &'static str> {
+        let query_mode = self.current_source_query_mode_value(cx);
         let targets = self.current_source_targets(cx);
         let start_input = self.source_start_input.read(cx).value().to_string();
         let end_input = self.source_end_input.read(cx).value().to_string();
@@ -184,7 +212,7 @@ impl CodeDocument {
         let start_ms = parse_source_datetime_input(&start_input);
         let end_ms = parse_source_datetime_input(&end_input);
 
-        build_source_window_context(&targets, start_ms, end_ms)
+        build_source_window_context(query_mode, &targets, start_ms, end_ms)
     }
 
     fn sync_source_exec_context(&mut self, cx: &mut Context<Self>) {
@@ -217,6 +245,35 @@ impl CodeDocument {
             Vec::new()
         };
 
+        let source_spec = self.current_source_context_spec(cx);
+        let query_mode_items = source_spec
+            .as_ref()
+            .map(|spec| {
+                spec.query_modes
+                    .iter()
+                    .map(|mode| DropdownItem::with_value(&mode.label, &mode.value))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let selected_query_mode = match self.exec_ctx.source.as_ref() {
+            Some(ExecutionSourceContext::CollectionWindow { query_mode, .. }) => query_mode
+                .clone()
+                .or_else(|| source_spec.as_ref().and_then(|spec| spec.default_query_mode.clone())),
+            None => source_spec.as_ref().and_then(|spec| spec.default_query_mode.clone()),
+        };
+
+        let selected_query_mode_index = selected_query_mode.as_ref().and_then(|selected| {
+            query_mode_items
+                .iter()
+                .position(|item| item.value.as_ref() == selected)
+        });
+
+        self.source_query_mode_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(query_mode_items, cx);
+            dropdown.set_selected_index(selected_query_mode_index, cx);
+        });
+
         let selected_values = match self.exec_ctx.source.as_ref() {
             Some(ExecutionSourceContext::CollectionWindow { targets, .. }) => targets.clone(),
             None => Vec::new(),
@@ -228,6 +285,18 @@ impl CodeDocument {
         });
 
         self.sync_source_exec_context(cx);
+    }
+
+    pub(super) fn on_source_query_mode_changed(
+        &mut self,
+        _item: &DropdownItem,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_source_exec_context(cx);
+        self.update_completion_provider(cx);
+        self.schedule_diagnostic_refresh(cx);
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
     }
 
     pub(super) fn on_source_targets_changed(
@@ -765,6 +834,12 @@ impl CodeDocument {
         let mut slots = vec![ContextBarSlot::Connection];
 
         if self.should_show_source_controls(cx) {
+            if self
+                .current_source_context_spec(cx)
+                .is_some_and(|spec| !spec.query_modes.is_empty())
+            {
+                slots.push(ContextBarSlot::SourceQueryMode);
+            }
             slots.push(ContextBarSlot::SourceTargets);
             slots.push(ContextBarSlot::SourceStart);
             slots.push(ContextBarSlot::SourceEnd);
@@ -786,6 +861,7 @@ impl CodeDocument {
             ContextBarSlot::Connection => Some(&self.connection_dropdown),
             ContextBarSlot::Database => Some(&self.database_dropdown),
             ContextBarSlot::Schema => Some(&self.schema_dropdown),
+            ContextBarSlot::SourceQueryMode => Some(&self.source_query_mode_dropdown),
             ContextBarSlot::SourceTargets
             | ContextBarSlot::SourceStart
             | ContextBarSlot::SourceEnd => None,
@@ -894,6 +970,10 @@ impl CodeDocument {
 
             Command::Execute => {
                 match self.context_bar_slot {
+                    ContextBarSlot::SourceQueryMode => {
+                        self.source_query_mode_dropdown
+                            .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                    }
                     ContextBarSlot::SourceTargets => {
                         self.source_targets
                             .update(cx, |multi_select, cx| multi_select.toggle_open(cx));
@@ -937,6 +1017,7 @@ impl CodeDocument {
             ContextBarSlot::Connection,
             ContextBarSlot::Database,
             ContextBarSlot::Schema,
+            ContextBarSlot::SourceQueryMode,
         ] {
             if let Some(dropdown) = self.dropdown_for_slot(slot) {
                 let color = if slot == self.context_bar_slot {
@@ -954,6 +1035,7 @@ impl CodeDocument {
             ContextBarSlot::Connection,
             ContextBarSlot::Database,
             ContextBarSlot::Schema,
+            ContextBarSlot::SourceQueryMode,
         ] {
             if let Some(dropdown) = self.dropdown_for_slot(slot) {
                 dropdown.update(cx, |dd, cx| dd.set_focus_ring(None, cx));
@@ -1008,9 +1090,27 @@ impl CodeDocument {
                     )),
             )
             .when(show_source_controls, |el| {
-                el.child(Text::caption(
+                let source_spec = source_spec.as_ref();
+
+                el.when(source_spec.is_some_and(|spec| !spec.query_modes.is_empty()), |el| {
+                    el.child(Text::caption(
+                        source_spec
+                            .and_then(|spec| spec.query_mode_label.clone())
+                            .unwrap_or_else(|| "Syntax".to_string()),
+                    ))
+                    .child(div().min_w(px(180.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::SourceQueryMode,
+                        ),
+                        Some(theme.ring),
+                        control_shell(self.source_query_mode_dropdown.clone(), cx),
+                        cx,
+                    )))
+                })
+                .child(Text::caption(
                     source_spec
-                        .as_ref()
                         .map(|spec| spec.targets_label.clone())
                         .unwrap_or_else(|| "Sources".to_string()),
                 ))
@@ -1026,7 +1126,6 @@ impl CodeDocument {
                 )))
                 .child(Text::caption(
                     source_spec
-                        .as_ref()
                         .map(|spec| spec.start_label.clone())
                         .unwrap_or_else(|| "Start".to_string()),
                 ))
@@ -1042,7 +1141,6 @@ impl CodeDocument {
                 )))
                 .child(Text::caption(
                     source_spec
-                        .as_ref()
                         .map(|spec| spec.end_label.clone())
                         .unwrap_or_else(|| "End".to_string()),
                 ))
@@ -1149,35 +1247,64 @@ mod tests {
 
     #[test]
     fn valid_source_context_requires_targets_and_ordered_bounds() {
-        let source =
-            build_source_window_context(&["/aws/lambda/app".to_string()], Some(10), Some(20))
-                .expect("valid source context");
+        let source = build_source_window_context(
+            Some("cwli".to_string()),
+            &["/aws/lambda/app".to_string()],
+            Some(10),
+            Some(20),
+        )
+        .expect("valid source context");
 
         match source {
             ExecutionSourceContext::CollectionWindow {
                 targets,
                 start_ms,
                 end_ms,
+                query_mode,
             } => {
                 assert_eq!(targets, vec!["/aws/lambda/app"]);
                 assert_eq!(start_ms, 10);
                 assert_eq!(end_ms, 20);
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
             }
         }
 
         assert_eq!(
-            build_source_window_context(&[], Some(10), Some(20)).unwrap_err(),
+            build_source_window_context(Some("cwli".to_string()), &[], Some(10), Some(20))
+                .unwrap_err(),
             "Select at least one source"
         );
         assert_eq!(
-            build_source_window_context(&["/aws/lambda/app".to_string()], None, Some(20))
-                .unwrap_err(),
+            build_source_window_context(
+                Some("cwli".to_string()),
+                &["/aws/lambda/app".to_string()],
+                None,
+                Some(20),
+            )
+            .unwrap_err(),
             "Start time is required"
         );
         assert_eq!(
-            build_source_window_context(&["/aws/lambda/app".to_string()], Some(20), Some(10))
-                .unwrap_err(),
+            build_source_window_context(
+                Some("cwli".to_string()),
+                &["/aws/lambda/app".to_string()],
+                Some(20),
+                Some(10),
+            )
+            .unwrap_err(),
             "Start time must be earlier than end time"
         );
+    }
+
+    #[test]
+    fn sql_source_context_allows_empty_targets() {
+        let source = build_source_window_context(Some("sql".to_string()), &[], Some(10), Some(20))
+            .expect("sql source context without explicit targets");
+
+        match source {
+            ExecutionSourceContext::CollectionWindow { targets, .. } => {
+                assert!(targets.is_empty());
+            }
+        }
     }
 }

@@ -169,6 +169,9 @@ pub fn classify_query_for_language(
 ) -> ExecutionClassification {
     match query_language {
         QueryLanguage::Sql => classify_sql_execution(query),
+        QueryLanguage::CloudWatchLogsInsightsQl
+        | QueryLanguage::OpenSearchPpl
+        | QueryLanguage::OpenSearchSql => ExecutionClassification::Read,
         QueryLanguage::MongoQuery => classify_mongo_query(query),
         QueryLanguage::RedisCommands => classify_redis_query(query),
         _ => ExecutionClassification::Write,

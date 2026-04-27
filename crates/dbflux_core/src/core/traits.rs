@@ -7,8 +7,8 @@ use crate::{
     CollectionRef, ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError,
     DbKind, DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
     DriverCapabilities, DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest,
-    FormValues, LanguageService, NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult,
-    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    FormValues, LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest,
+    QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
     SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect, SqlGenerationRequest,
     SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
     config::DriverKey,
@@ -91,11 +91,22 @@ pub enum SchemaObjectKind {
 
 /// Additional source controls requested by a driver for query execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceQueryMode {
+    pub value: String,
+    pub label: String,
+    pub query_language: QueryLanguage,
+}
+
+/// Additional source controls requested by a driver for query execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceContextSpec {
     pub targets_label: String,
     pub targets_placeholder: String,
     pub start_label: String,
     pub end_label: String,
+    pub query_mode_label: Option<String>,
+    pub query_modes: Vec<SourceQueryMode>,
+    pub default_query_mode: Option<String>,
 }
 
 /// A driver-owned event stream target that can be opened in the audit document.

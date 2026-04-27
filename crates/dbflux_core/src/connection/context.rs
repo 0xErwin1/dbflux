@@ -8,6 +8,8 @@ pub enum ExecutionSourceContext {
         targets: Vec<String>,
         start_ms: i64,
         end_ms: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query_mode: Option<String>,
     },
 }
 
@@ -132,6 +134,7 @@ mod tests {
             targets: vec!["/aws/lambda/app".into(), "/aws/ecs/api".into()],
             start_ms: 1_710_000_000_000,
             end_ms: 1_710_000_300_000,
+            query_mode: Some("cwli".into()),
         }
     }
 
@@ -214,10 +217,12 @@ db.orders.find({})
                 targets,
                 start_ms,
                 end_ms,
+                query_mode,
             }) => {
                 assert_eq!(targets, vec!["/aws/lambda/app", "/aws/ecs/api"]);
                 assert_eq!(start_ms, 1_710_000_000_000);
                 assert_eq!(end_ms, 1_710_000_300_000);
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
             }
             other => panic!("unexpected source context: {other:?}"),
         }

@@ -622,7 +622,12 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::FocusSearch => {
-                if self.focus_target == FocusTarget::Document {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.focus_active_search(window, cx);
+                    });
+                    true
+                } else if self.focus_target == FocusTarget::Document {
                     if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
                         doc.dispatch_command(Command::FocusSearch, window, cx);
                     }

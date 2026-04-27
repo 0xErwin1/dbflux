@@ -87,17 +87,22 @@ enum ContextBarSlot {
     Connection,
     Database,
     Schema,
+    SourceQueryMode,
     SourceTargets,
     SourceStart,
     SourceEnd,
 }
 
 fn build_source_window_context(
+    query_mode: Option<String>,
     targets: &[String],
     start_ms: Option<i64>,
     end_ms: Option<i64>,
 ) -> Result<ExecutionSourceContext, &'static str> {
-    if targets.is_empty() {
+    let query_mode = query_mode.filter(|value| !value.trim().is_empty());
+    let requires_targets = query_mode.as_deref() != Some("sql");
+
+    if requires_targets && targets.is_empty() {
         return Err("Select at least one source");
     }
 
@@ -117,6 +122,7 @@ fn build_source_window_context(
         targets: targets.to_vec(),
         start_ms,
         end_ms,
+        query_mode,
     })
 }
 
@@ -174,6 +180,7 @@ pub struct CodeDocument {
     connection_dropdown: Entity<Dropdown>,
     database_dropdown: Entity<Dropdown>,
     schema_dropdown: Entity<Dropdown>,
+    source_query_mode_dropdown: Entity<Dropdown>,
     source_targets: Entity<MultiSelect>,
     source_start_input: Entity<InputState>,
     source_end_input: Entity<InputState>,
@@ -435,12 +442,24 @@ impl CodeDocument {
             Self::create_database_dropdown(&app_state, &exec_ctx, window, cx);
         let (schema_dropdown, schema_sub) =
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
+        let source_query_mode_dropdown = cx.new(|_cx| {
+            Dropdown::new("ctx-source-query-mode")
+                .placeholder("Syntax")
+                .toolbar_style(true)
+        });
         let source_targets =
             cx.new(|_cx| MultiSelect::new("ctx-source-targets").placeholder("Sources"));
         let source_start_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
         let source_end_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T01:00:00Z"));
+        let source_query_mode_sub = cx.subscribe_in(
+            &source_query_mode_dropdown,
+            window,
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                this.on_source_query_mode_changed(&event.item, cx);
+            },
+        );
         let source_targets_sub = cx.subscribe(
             &source_targets,
             |this, entity, _event: &MultiSelectChanged, cx| {
@@ -478,7 +497,7 @@ impl CodeDocument {
 
         let refresh_policy = default_refresh;
 
-        Self {
+        let mut document = Self {
             id: doc_id,
             title: "Query 1".to_string(),
             state: DocumentState::Clean,
@@ -496,6 +515,7 @@ impl CodeDocument {
             connection_dropdown,
             database_dropdown,
             schema_dropdown,
+            source_query_mode_dropdown,
             source_targets,
             source_start_input,
             source_end_input,
@@ -504,6 +524,7 @@ impl CodeDocument {
                 conn_sub,
                 db_sub,
                 schema_sub,
+                source_query_mode_sub,
                 source_targets_sub,
                 source_start_sub,
                 source_end_sub,
@@ -544,7 +565,10 @@ impl CodeDocument {
             show_saved_label: false,
             _saved_label_timer: None,
             pending_error: None,
-        }
+        };
+
+        document.sync_context_dropdowns(cx);
+        document
     }
 
     pub fn can_auto_refresh(&self, cx: &App) -> bool {
@@ -1091,6 +1115,7 @@ mod tests {
             targets: vec!["/aws/lambda/app".to_string()],
             start_ms: 1_704_067_200_000,
             end_ms: 1_704_070_800_000,
+            query_mode: Some("cwli".to_string()),
         })
         .expect("source input values");
 

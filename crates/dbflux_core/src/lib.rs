@@ -60,8 +60,9 @@ pub use core::{
     DocumentConnection, ErrorLocation, EventStreamTarget, FormattedError, KeyValueApi,
     KeyValueConnection, NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter,
     RelationalConnection, SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy,
-    SchemaObjectKind, ShutdownCoordinator, ShutdownPhase, SourceContextSpec, TaskId, TaskKind,
-    TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value, sanitize_uri,
+    SchemaObjectKind, ShutdownCoordinator, ShutdownPhase, SourceContextSpec, SourceQueryMode,
+    TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value,
+    sanitize_uri,
 };
 
 pub use data::{

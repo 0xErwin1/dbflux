@@ -289,6 +289,7 @@ mod tests {
                 targets: vec!["/aws/lambda/app".into()],
                 start_ms: 10,
                 end_ms: 20,
+                query_mode: Some("cwli".into()),
             }),
         };
 

@@ -573,6 +573,7 @@ pub struct Sidebar {
     scripts_search_query: String,
     pending_toast: Option<PendingToast>,
     connections_focused: bool,
+    search_input_focused: bool,
     visible_entry_count: usize,
     /// User overrides for expansion state (item_id -> is_expanded)
     expansion_overrides: HashMap<String, bool>,
@@ -692,9 +693,20 @@ impl Sidebar {
             &connections_search_entity,
             window,
             |this, input_state, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.connections_search_query = input_state.read(cx).value().to_string();
-                    this.refresh_tree(cx);
+                match event {
+                    InputEvent::Change => {
+                        this.connections_search_query = input_state.read(cx).value().to_string();
+                        this.refresh_tree(cx);
+                    }
+                    InputEvent::Focus => {
+                        this.search_input_focused = true;
+                        cx.notify();
+                    }
+                    InputEvent::Blur => {
+                        this.search_input_focused = false;
+                        cx.notify();
+                    }
+                    InputEvent::PressEnter { .. } => {}
                 }
             },
         );
@@ -704,9 +716,20 @@ impl Sidebar {
             &scripts_search_entity,
             window,
             |this, input_state, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.scripts_search_query = input_state.read(cx).value().to_string();
-                    this.refresh_scripts_tree(cx);
+                match event {
+                    InputEvent::Change => {
+                        this.scripts_search_query = input_state.read(cx).value().to_string();
+                        this.refresh_scripts_tree(cx);
+                    }
+                    InputEvent::Focus => {
+                        this.search_input_focused = true;
+                        cx.notify();
+                    }
+                    InputEvent::Blur => {
+                        this.search_input_focused = false;
+                        cx.notify();
+                    }
+                    InputEvent::PressEnter { .. } => {}
                 }
             },
         );
@@ -751,6 +774,7 @@ impl Sidebar {
             scripts_search_query: String::new(),
             pending_toast: None,
             connections_focused: false,
+            search_input_focused: false,
             visible_entry_count,
             expansion_overrides: HashMap::new(),
             context_menu: None,
@@ -808,6 +832,25 @@ impl Sidebar {
         };
 
         input.read(cx).focus_handle(cx).is_focused(window)
+    }
+
+    pub fn search_input_has_focus_state(&self) -> bool {
+        self.search_input_focused
+    }
+
+    pub fn focus_active_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.active_tab {
+            SidebarTab::Connections => {
+                self.connections_search_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
+            SidebarTab::Scripts => {
+                self.scripts_search_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
+        }
+
+        cx.notify();
     }
 
     pub fn set_active_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {

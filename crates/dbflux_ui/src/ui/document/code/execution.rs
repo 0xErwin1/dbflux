@@ -1298,6 +1298,7 @@ mod tests {
             container: None,
             source: Some(
                 build_source_window_context(
+                    Some("cwli".to_string()),
                     &["/aws/lambda/app".to_string(), "/aws/ecs/api".to_string()],
                     Some(10),
                     Some(20),
@@ -1316,10 +1317,12 @@ mod tests {
                 targets,
                 start_ms,
                 end_ms,
+                query_mode,
             }) => {
                 assert_eq!(targets, vec!["/aws/lambda/app", "/aws/ecs/api"]);
                 assert_eq!(start_ms, 10);
                 assert_eq!(end_ms, 20);
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
             }
             other => panic!("unexpected execution source: {other:?}"),
         }
@@ -1328,7 +1331,8 @@ mod tests {
     #[test]
     fn source_window_execution_blocks_when_targets_are_missing() {
         assert_eq!(
-            build_source_window_context(&[], Some(10), Some(20)).unwrap_err(),
+            build_source_window_context(Some("cwli".to_string()), &[], Some(10), Some(20))
+                .unwrap_err(),
             "Select at least one source"
         );
     }
@@ -1336,13 +1340,23 @@ mod tests {
     #[test]
     fn source_window_execution_blocks_when_bounds_are_missing() {
         assert_eq!(
-            build_source_window_context(&["/aws/lambda/app".to_string()], None, Some(20))
-                .unwrap_err(),
+            build_source_window_context(
+                Some("cwli".to_string()),
+                &["/aws/lambda/app".to_string()],
+                None,
+                Some(20),
+            )
+            .unwrap_err(),
             "Start time is required"
         );
         assert_eq!(
-            build_source_window_context(&["/aws/lambda/app".to_string()], Some(10), None)
-                .unwrap_err(),
+            build_source_window_context(
+                Some("cwli".to_string()),
+                &["/aws/lambda/app".to_string()],
+                Some(10),
+                None,
+            )
+            .unwrap_err(),
             "End time is required"
         );
     }
@@ -1350,8 +1364,13 @@ mod tests {
     #[test]
     fn source_window_execution_blocks_when_range_is_inverted() {
         assert_eq!(
-            build_source_window_context(&["/aws/lambda/app".to_string()], Some(20), Some(10))
-                .unwrap_err(),
+            build_source_window_context(
+                Some("cwli".to_string()),
+                &["/aws/lambda/app".to_string()],
+                Some(20),
+                Some(10),
+            )
+            .unwrap_err(),
             "Start time must be earlier than end time"
         );
     }

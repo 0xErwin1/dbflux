@@ -593,6 +593,9 @@ impl DbFluxServer {
         // Only SQL/MongoDB/Redis queries are supported for execution
         match language {
             QueryLanguage::Sql
+            | QueryLanguage::CloudWatchLogsInsightsQl
+            | QueryLanguage::OpenSearchPpl
+            | QueryLanguage::OpenSearchSql
             | QueryLanguage::MongoQuery
             | QueryLanguage::RedisCommands
             | QueryLanguage::Cql

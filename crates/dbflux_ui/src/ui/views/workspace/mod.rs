@@ -904,6 +904,12 @@ impl Workspace {
             return ContextId::TextInput;
         }
 
+        if self.focus_target == FocusTarget::Sidebar
+            && self.sidebar.read(cx).search_input_has_focus_state()
+        {
+            return ContextId::TextInput;
+        }
+
         // When focused on document area, delegate context to the active document
         if self.focus_target == FocusTarget::Document
             && let Some(doc) = self.tab_manager.read(cx).active_document()
@@ -927,6 +933,10 @@ impl Workspace {
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_connections_focused(target == FocusTarget::Sidebar, cx);
         });
+
+        if target == FocusTarget::Sidebar {
+            self.focus_handle.focus(window);
+        }
 
         if target == FocusTarget::Document
             && let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
