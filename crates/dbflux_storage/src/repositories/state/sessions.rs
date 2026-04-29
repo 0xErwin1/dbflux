@@ -1318,10 +1318,11 @@ mod tests {
                         database: Some("logs".into()),
                         schema: None,
                         container: None,
-                        source: Some(dbflux_core::ExecutionSourceContext::CloudWatchLogs {
-                            log_groups: vec!["/aws/lambda/app".into()],
+                        source: Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                            targets: vec!["/aws/lambda/app".into()],
                             start_ms: 10,
                             end_ms: 20,
+                            query_mode: Some("cwli".into()),
                         }),
                     },
                     scratch_path: Some(PathBuf::from("/tmp/cloudwatch-1.sql")),
@@ -1340,10 +1341,11 @@ mod tests {
                         database: Some("logs".into()),
                         schema: None,
                         container: None,
-                        source: Some(dbflux_core::ExecutionSourceContext::CloudWatchLogs {
-                            log_groups: vec!["/aws/ecs/api".into(), "/aws/batch/job".into()],
+                        source: Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                            targets: vec!["/aws/ecs/api".into(), "/aws/batch/job".into()],
                             start_ms: 30,
                             end_ms: 40,
+                            query_mode: Some("cwli".into()),
                         }),
                     },
                     scratch_path: Some(PathBuf::from("/tmp/cloudwatch-2.sql")),
@@ -1381,28 +1383,32 @@ mod tests {
             .collect::<Vec<_>>();
 
         match &restored_contexts[0].source {
-            Some(dbflux_core::ExecutionSourceContext::CloudWatchLogs {
-                log_groups,
+            Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                targets,
                 start_ms,
                 end_ms,
+                query_mode,
             }) => {
-                assert_eq!(log_groups, &vec!["/aws/lambda/app".to_string()]);
+                assert_eq!(targets, &vec!["/aws/lambda/app".to_string()]);
                 assert_eq!((*start_ms, *end_ms), (10, 20));
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
             }
             other => panic!("unexpected first source: {other:?}"),
         }
 
         match &restored_contexts[1].source {
-            Some(dbflux_core::ExecutionSourceContext::CloudWatchLogs {
-                log_groups,
+            Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                targets,
                 start_ms,
                 end_ms,
+                query_mode,
             }) => {
                 assert_eq!(
-                    log_groups,
+                    targets,
                     &vec!["/aws/ecs/api".to_string(), "/aws/batch/job".to_string()]
                 );
                 assert_eq!((*start_ms, *end_ms), (30, 40));
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
             }
             other => panic!("unexpected second source: {other:?}"),
         }
@@ -1441,10 +1447,11 @@ mod tests {
             database: Some("logs".into()),
             schema: None,
             container: None,
-            source: Some(dbflux_core::ExecutionSourceContext::CloudWatchLogs {
-                log_groups: vec!["/aws/json/preferred".into()],
+            source: Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                targets: vec!["/aws/json/preferred".into()],
                 start_ms: 111,
                 end_ms: 222,
+                query_mode: Some("cwli".into()),
             }),
         })
         .expect("serialize exec ctx");
@@ -1493,13 +1500,15 @@ mod tests {
         assert!(restored_ctx.container.is_none());
 
         match restored_ctx.source {
-            Some(dbflux_core::ExecutionSourceContext::CloudWatchLogs {
-                log_groups,
+            Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                targets,
                 start_ms,
                 end_ms,
+                query_mode,
             }) => {
-                assert_eq!(log_groups, vec!["/aws/json/preferred".to_string()]);
+                assert_eq!(targets, vec!["/aws/json/preferred".to_string()]);
                 assert_eq!((start_ms, end_ms), (111, 222));
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
             }
             other => panic!("unexpected restored source: {other:?}"),
         }

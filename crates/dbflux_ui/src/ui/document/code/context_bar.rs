@@ -102,12 +102,9 @@ impl CodeDocument {
 
         let query_language = self.effective_query_language(cx);
 
-        let completion_provider: Rc<dyn CompletionProvider> =
-            Rc::new(QueryCompletionProvider::new(
-                query_language,
-                self.app_state.clone(),
-                connection_id,
-            ));
+        let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
+            QueryCompletionProvider::new(query_language, self.app_state.clone(), connection_id),
+        );
 
         self.input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = Some(completion_provider);
@@ -257,10 +254,16 @@ impl CodeDocument {
             .unwrap_or_default();
 
         let selected_query_mode = match self.exec_ctx.source.as_ref() {
-            Some(ExecutionSourceContext::CollectionWindow { query_mode, .. }) => query_mode
-                .clone()
-                .or_else(|| source_spec.as_ref().and_then(|spec| spec.default_query_mode.clone())),
-            None => source_spec.as_ref().and_then(|spec| spec.default_query_mode.clone()),
+            Some(ExecutionSourceContext::CollectionWindow { query_mode, .. }) => {
+                query_mode.clone().or_else(|| {
+                    source_spec
+                        .as_ref()
+                        .and_then(|spec| spec.default_query_mode.clone())
+                })
+            }
+            None => source_spec
+                .as_ref()
+                .and_then(|spec| spec.default_query_mode.clone()),
         };
 
         let selected_query_mode_index = selected_query_mode.as_ref().and_then(|selected| {
@@ -1092,23 +1095,26 @@ impl CodeDocument {
             .when(show_source_controls, |el| {
                 let source_spec = source_spec.as_ref();
 
-                el.when(source_spec.is_some_and(|spec| !spec.query_modes.is_empty()), |el| {
-                    el.child(Text::caption(
-                        source_spec
-                            .and_then(|spec| spec.query_mode_label.clone())
-                            .unwrap_or_else(|| "Syntax".to_string()),
-                    ))
-                    .child(div().min_w(px(180.0)).child(focus_frame(
-                        context_slot_is_keyboard_focused(
-                            self.focus_mode,
-                            self.context_bar_slot,
-                            ContextBarSlot::SourceQueryMode,
-                        ),
-                        Some(theme.ring),
-                        control_shell(self.source_query_mode_dropdown.clone(), cx),
-                        cx,
-                    )))
-                })
+                el.when(
+                    source_spec.is_some_and(|spec| !spec.query_modes.is_empty()),
+                    |el| {
+                        el.child(Text::caption(
+                            source_spec
+                                .and_then(|spec| spec.query_mode_label.clone())
+                                .unwrap_or_else(|| "Syntax".to_string()),
+                        ))
+                        .child(div().min_w(px(180.0)).child(focus_frame(
+                            context_slot_is_keyboard_focused(
+                                self.focus_mode,
+                                self.context_bar_slot,
+                                ContextBarSlot::SourceQueryMode,
+                            ),
+                            Some(theme.ring),
+                            control_shell(self.source_query_mode_dropdown.clone(), cx),
+                            cx,
+                        )))
+                    },
+                )
                 .child(Text::caption(
                     source_spec
                         .map(|spec| spec.targets_label.clone())

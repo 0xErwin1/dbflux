@@ -692,22 +692,20 @@ impl Sidebar {
         let connections_search_subscription = cx.subscribe_in(
             &connections_search_entity,
             window,
-            |this, input_state, event: &InputEvent, _, cx| {
-                match event {
-                    InputEvent::Change => {
-                        this.connections_search_query = input_state.read(cx).value().to_string();
-                        this.refresh_tree(cx);
-                    }
-                    InputEvent::Focus => {
-                        this.search_input_focused = true;
-                        cx.notify();
-                    }
-                    InputEvent::Blur => {
-                        this.search_input_focused = false;
-                        cx.notify();
-                    }
-                    InputEvent::PressEnter { .. } => {}
+            |this, input_state, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    this.connections_search_query = input_state.read(cx).value().to_string();
+                    this.refresh_tree(cx);
                 }
+                InputEvent::Focus => {
+                    this.search_input_focused = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.search_input_focused = false;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {}
             },
         );
 
@@ -715,22 +713,20 @@ impl Sidebar {
         let scripts_search_subscription = cx.subscribe_in(
             &scripts_search_entity,
             window,
-            |this, input_state, event: &InputEvent, _, cx| {
-                match event {
-                    InputEvent::Change => {
-                        this.scripts_search_query = input_state.read(cx).value().to_string();
-                        this.refresh_scripts_tree(cx);
-                    }
-                    InputEvent::Focus => {
-                        this.search_input_focused = true;
-                        cx.notify();
-                    }
-                    InputEvent::Blur => {
-                        this.search_input_focused = false;
-                        cx.notify();
-                    }
-                    InputEvent::PressEnter { .. } => {}
+            |this, input_state, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    this.scripts_search_query = input_state.read(cx).value().to_string();
+                    this.refresh_scripts_tree(cx);
                 }
+                InputEvent::Focus => {
+                    this.search_input_focused = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.search_input_focused = false;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {}
             },
         );
 

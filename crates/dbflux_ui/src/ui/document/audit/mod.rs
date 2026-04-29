@@ -1347,7 +1347,7 @@ impl AuditDocument {
             })
             .clone();
 
-        if input.read(cx).value().to_string() != value {
+        if input.read(cx).value() != value {
             input.update(cx, |state, cx| state.set_value(value, window, cx));
         }
 

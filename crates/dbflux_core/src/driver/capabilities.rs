@@ -705,8 +705,12 @@ impl QueryLanguage {
     pub fn placeholder(&self) -> &'static str {
         match self {
             QueryLanguage::Sql => "-- Enter SQL here...",
-            QueryLanguage::CloudWatchLogsInsightsQl => "fields @timestamp, @message | sort @timestamp desc | limit 100",
-            QueryLanguage::OpenSearchPpl => "source = logGroups(logGroupIdentifier: ['LogGroup']) | fields @timestamp, @message | head 100",
+            QueryLanguage::CloudWatchLogsInsightsQl => {
+                "fields @timestamp, @message | sort @timestamp desc | limit 100"
+            }
+            QueryLanguage::OpenSearchPpl => {
+                "source = logGroups(logGroupIdentifier: ['LogGroup']) | fields @timestamp, @message | head 100"
+            }
             QueryLanguage::OpenSearchSql => {
                 "SELECT `@timestamp`, `@message` FROM `logGroups(logGroupIdentifier: ['LogGroup'])` LIMIT 100"
             }

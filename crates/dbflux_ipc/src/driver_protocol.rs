@@ -617,10 +617,11 @@ mod tests {
                 database: Some("analytics".into()),
                 schema: Some("public".into()),
                 container: None,
-                source: Some(ExecutionSourceContext::CloudWatchLogs {
-                    log_groups: vec!["/aws/lambda/app".into(), "/aws/ecs/api".into()],
+                source: Some(ExecutionSourceContext::CollectionWindow {
+                    targets: vec!["/aws/lambda/app".into(), "/aws/ecs/api".into()],
                     start_ms: 1_710_000_000_000,
                     end_ms: 1_710_000_300_000,
+                    query_mode: Some("cwli".into()),
                 }),
             }),
         };
@@ -634,16 +635,18 @@ mod tests {
         match restored.execution_context {
             Some(ExecutionContext {
                 source:
-                    Some(ExecutionSourceContext::CloudWatchLogs {
-                        log_groups,
+                    Some(ExecutionSourceContext::CollectionWindow {
+                        targets,
                         start_ms,
                         end_ms,
+                        query_mode,
                     }),
                 ..
             }) => {
-                assert_eq!(log_groups, vec!["/aws/lambda/app", "/aws/ecs/api"]);
+                assert_eq!(targets, vec!["/aws/lambda/app", "/aws/ecs/api"]);
                 assert_eq!(start_ms, 1_710_000_000_000);
                 assert_eq!(end_ms, 1_710_000_300_000);
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
             }
             other => panic!("unexpected execution context: {other:?}"),
         }

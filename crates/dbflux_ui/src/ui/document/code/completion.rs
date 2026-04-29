@@ -36,8 +36,8 @@ impl QueryCompletionProvider {
                 "pattern", "diff", "anomaly", "unnest", "unmask", "SOURCE",
             ],
             dbflux_core::QueryLanguage::OpenSearchPpl => &[
-                "source", "where", "fields", "stats", "sort", "head", "eval", "parse",
-                "dedup", "top", "rare", "join", "flatten", "fillnull", "rename",
+                "source", "where", "fields", "stats", "sort", "head", "eval", "parse", "dedup",
+                "top", "rare", "join", "flatten", "fillnull", "rename",
             ],
             dbflux_core::QueryLanguage::MongoQuery => &[
                 "db",

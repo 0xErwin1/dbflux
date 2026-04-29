@@ -202,9 +202,7 @@ impl Connection for CloudWatchConnection {
             query_mode,
         } = source;
 
-        let query_mode = query_mode
-            .as_deref()
-            .unwrap_or(CLOUDWATCH_QUERY_MODE_CWLI);
+        let query_mode = query_mode.as_deref().unwrap_or(CLOUDWATCH_QUERY_MODE_CWLI);
 
         if query_mode != CLOUDWATCH_QUERY_MODE_SQL && log_groups.is_empty() {
             return Err(DbError::query_failed(
@@ -889,9 +887,7 @@ fn cloudwatch_query_modes() -> Vec<SourceQueryMode> {
     ]
 }
 
-fn cloudwatch_sdk_query_language(
-    query_mode: &str,
-) -> aws_sdk_cloudwatchlogs::types::QueryLanguage {
+fn cloudwatch_sdk_query_language(query_mode: &str) -> aws_sdk_cloudwatchlogs::types::QueryLanguage {
     match query_mode {
         CLOUDWATCH_QUERY_MODE_PPL => aws_sdk_cloudwatchlogs::types::QueryLanguage::Ppl,
         CLOUDWATCH_QUERY_MODE_SQL => aws_sdk_cloudwatchlogs::types::QueryLanguage::Sql,
