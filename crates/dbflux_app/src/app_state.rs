@@ -2537,6 +2537,10 @@ impl AppState {
         ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
     }
 
+    pub fn profile_uses_connect_pipeline(&self, profile: &ConnectionProfile) -> bool {
+        profile.uses_pipeline() || self.infer_auth_profile_for_connection(profile).is_some()
+    }
+
     pub fn prepare_pipeline_input(
         &self,
         profile_id: Uuid,
@@ -2577,7 +2581,7 @@ impl AppState {
             })
             .or(profile.auth_profile_id);
 
-        let auth_profile = selected_auth_profile_id.and_then(|auth_id| {
+        let selected_auth_profile = selected_auth_profile_id.and_then(|auth_id| {
             self.facade
                 .auth_profiles
                 .items
@@ -2585,6 +2589,9 @@ impl AppState {
                 .find(|p| p.id == auth_id && p.enabled)
                 .cloned()
         });
+
+        let auth_profile =
+            selected_auth_profile.or_else(|| self.infer_auth_profile_for_connection(&profile));
 
         let uses_managed_access = matches!(
             profile.access_kind,
@@ -2700,6 +2707,49 @@ impl AppState {
             cancel,
         })
     }
+
+    fn infer_auth_profile_for_connection(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Option<AuthProfile> {
+        let aws_profile_name = profile.external_auth_profile_name()?.trim();
+
+        if aws_profile_name.is_empty() {
+            return None;
+        }
+
+        if let Some(profile) = self.facade.auth_profiles.items.iter().find(|auth_profile| {
+            auth_profile.enabled
+                && auth_profile
+                    .fields
+                    .get("profile_name")
+                    .is_some_and(|name| name == aws_profile_name)
+                && self
+                    .auth_provider_registry
+                    .get(&auth_profile.provider_id)
+                    .is_some_and(|provider| provider.capabilities().login.supported)
+        }) {
+            return Some(profile.clone());
+        }
+
+        self.auth_provider_registry
+            .providers()
+            .filter(|provider| provider.capabilities().login.supported)
+            .flat_map(|provider| provider.detect_importable_profiles())
+            .find(|candidate| {
+                candidate
+                    .fields
+                    .get("profile_name")
+                    .is_some_and(|name| name == aws_profile_name)
+            })
+            .map(|candidate| {
+                AuthProfile::new(
+                    candidate.display_name,
+                    candidate.provider_id,
+                    candidate.fields,
+                )
+            })
+    }
 }
 
 impl Default for AppState {
@@ -2714,7 +2764,7 @@ mod tests {
     use dbflux_core::access::AccessKind;
     use dbflux_core::auth::{
         AuthFormDef, AuthProfile, AuthSession, AuthSessionState, DynAuthProvider,
-        ResolvedCredentials, UrlCallback,
+        ImportableProfile, ResolvedCredentials, UrlCallback,
     };
     use dbflux_core::{
         ConnectionProfile, DatabaseCategory, DbConfig, DbError, DbKind, DriverFormDef,
@@ -2755,6 +2805,26 @@ mod tests {
 
     struct TestAuthProvider {
         provider_id: String,
+        importable_profile_name: Option<String>,
+    }
+
+    impl TestAuthProvider {
+        fn new(provider_id: impl Into<String>) -> Self {
+            Self {
+                provider_id: provider_id.into(),
+                importable_profile_name: None,
+            }
+        }
+
+        fn with_importable_profile(
+            provider_id: impl Into<String>,
+            profile_name: impl Into<String>,
+        ) -> Self {
+            Self {
+                provider_id: provider_id.into(),
+                importable_profile_name: Some(profile_name.into()),
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -2770,6 +2840,18 @@ mod tests {
         fn form_def(&self) -> &AuthFormDef {
             static FORM: std::sync::OnceLock<AuthFormDef> = std::sync::OnceLock::new();
             FORM.get_or_init(|| AuthFormDef { tabs: vec![] })
+        }
+
+        fn capabilities(&self) -> &dbflux_core::auth::AuthProviderCapabilities {
+            static CAPABILITIES: dbflux_core::auth::AuthProviderCapabilities =
+                dbflux_core::auth::AuthProviderCapabilities {
+                    login: dbflux_core::auth::AuthProviderLoginCapabilities {
+                        supported: true,
+                        verification_url_progress: true,
+                    },
+                };
+
+            &CAPABILITIES
         }
 
         async fn validate_session(
@@ -2799,6 +2881,21 @@ mod tests {
             _profile: &dbflux_core::AuthProfile,
         ) -> Result<ResolvedCredentials, DbError> {
             Ok(ResolvedCredentials::default())
+        }
+
+        fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
+            let Some(profile_name) = self.importable_profile_name.as_ref() else {
+                return Vec::new();
+            };
+
+            let mut fields = HashMap::new();
+            fields.insert("profile_name".to_string(), profile_name.clone());
+
+            vec![ImportableProfile {
+                display_name: profile_name.clone(),
+                provider_id: self.provider_id.clone(),
+                fields,
+            }]
         }
     }
 
@@ -3001,9 +3098,7 @@ mod tests {
                 assert_eq!(socket_id, "svc-socket");
                 assert_eq!(launch.program, "dbflux-driver-host");
 
-                Ok(Arc::new(TestAuthProvider {
-                    provider_id: "rpc-auth".to_string(),
-                }) as Arc<dyn DynAuthProvider>)
+                Ok(Arc::new(TestAuthProvider::new("rpc-auth")) as Arc<dyn DynAuthProvider>)
             },
         );
 
@@ -3014,18 +3109,12 @@ mod tests {
     #[test]
     fn launch_rpc_auth_providers_preserves_existing_provider_on_duplicate() {
         let mut registry = AuthProviderRegistry::new();
-        registry.register(Arc::new(TestAuthProvider {
-            provider_id: "aws-sso".to_string(),
-        }));
+        registry.register(Arc::new(TestAuthProvider::new("aws-sso")));
 
         AppState::launch_rpc_auth_providers_with(
             &mut registry,
             vec![test_service(RpcServiceKind::AuthProvider)],
-            |_, _| {
-                Ok(Arc::new(TestAuthProvider {
-                    provider_id: "aws-sso".to_string(),
-                }) as Arc<dyn DynAuthProvider>)
-            },
+            |_, _| Ok(Arc::new(TestAuthProvider::new("aws-sso")) as Arc<dyn DynAuthProvider>),
         );
 
         let providers: Vec<String> = registry
@@ -3050,9 +3139,7 @@ mod tests {
         );
         state
             .auth_provider_registry
-            .register(Arc::new(TestAuthProvider {
-                provider_id: "custom-oidc".to_string(),
-            }));
+            .register(Arc::new(TestAuthProvider::new("custom-oidc")));
 
         let input = state
             .build_pipeline_input_for_profile(profile, CancelToken::new())
@@ -3094,9 +3181,7 @@ mod tests {
         );
         state
             .auth_provider_registry
-            .register(Arc::new(TestAuthProvider {
-                provider_id: "custom-oidc".to_string(),
-            }));
+            .register(Arc::new(TestAuthProvider::new("custom-oidc")));
 
         let input = state
             .build_pipeline_input_for_profile(profile, CancelToken::new())
@@ -3108,6 +3193,100 @@ mod tests {
 
         assert_eq!(selected_auth_profile.id, managed_auth_profile.id);
         assert_eq!(selected_auth_profile.provider_id, "custom-oidc");
+    }
+
+    #[test]
+    fn profile_uses_connect_pipeline_for_importable_aws_sso_profile() {
+        let profile = ConnectionProfile::new(
+            "cloudwatch",
+            DbConfig::CloudWatchLogs {
+                region: "us-east-1".to_string(),
+                profile: Some("PREX-DEV-UY".to_string()),
+                endpoint: None,
+            },
+        );
+
+        let mut state = test_state_with_profiles(HashMap::new(), vec![profile.clone()]);
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider::with_importable_profile(
+                "aws-sso",
+                "PREX-DEV-UY",
+            )));
+
+        assert!(state.profile_uses_connect_pipeline(&profile));
+    }
+
+    #[test]
+    fn build_pipeline_input_infers_importable_aws_sso_profile() {
+        let profile = ConnectionProfile::new(
+            "cloudwatch",
+            DbConfig::CloudWatchLogs {
+                region: "us-east-1".to_string(),
+                profile: Some("PREX-DEV-UY".to_string()),
+                endpoint: None,
+            },
+        );
+
+        let mut state = test_state_with_profiles(HashMap::new(), vec![profile.clone()]);
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider::with_importable_profile(
+                "aws-sso",
+                "PREX-DEV-UY",
+            )));
+
+        let input = state
+            .build_pipeline_input_for_profile(profile, CancelToken::new())
+            .expect("importable AWS SSO profile should build pipeline input");
+
+        let auth_profile = input
+            .auth_profile
+            .expect("pipeline input should include inferred auth profile");
+
+        assert_eq!(auth_profile.name, "PREX-DEV-UY");
+        assert_eq!(auth_profile.provider_id, "aws-sso");
+        assert_eq!(
+            auth_profile.fields.get("profile_name").map(String::as_str),
+            Some("PREX-DEV-UY")
+        );
+        assert!(input.auth_provider.is_some());
+    }
+
+    #[test]
+    fn build_pipeline_input_infers_importable_aws_sso_profile_when_selected_id_is_stale() {
+        let mut profile = ConnectionProfile::new(
+            "cloudwatch",
+            DbConfig::CloudWatchLogs {
+                region: "us-east-1".to_string(),
+                profile: Some("PREX-DEV-UY".to_string()),
+                endpoint: None,
+            },
+        );
+        profile.auth_profile_id = Some(Uuid::new_v4());
+
+        let mut state = test_state_with_profiles(HashMap::new(), vec![profile.clone()]);
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider::with_importable_profile(
+                "aws-sso",
+                "PREX-DEV-UY",
+            )));
+
+        let input = state
+            .build_pipeline_input_for_profile(profile, CancelToken::new())
+            .expect("stale auth profile id should fall back to importable AWS SSO profile");
+
+        let auth_profile = input
+            .auth_profile
+            .expect("pipeline input should include inferred auth profile");
+
+        assert_eq!(auth_profile.provider_id, "aws-sso");
+        assert_eq!(
+            auth_profile.fields.get("profile_name").map(String::as_str),
+            Some("PREX-DEV-UY")
+        );
+        assert!(input.auth_provider.is_some());
     }
 
     #[test]

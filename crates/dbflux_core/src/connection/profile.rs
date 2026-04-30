@@ -867,6 +867,24 @@ impl ConnectionProfile {
         self.auth_profile_id.is_some() || !self.value_refs.is_empty() || self.access_kind.is_some()
     }
 
+    /// Returns an external auth profile name embedded in the driver config.
+    ///
+    /// This lets app-layer connection orchestration route profiles through the
+    /// generic auth pipeline without matching on concrete driver names.
+    pub fn external_auth_profile_name(&self) -> Option<&str> {
+        match &self.config {
+            DbConfig::CloudWatchLogs {
+                profile: Some(profile),
+                ..
+            }
+            | DbConfig::DynamoDB {
+                profile: Some(profile),
+                ..
+            } => Some(profile.as_str()),
+            _ => None,
+        }
+    }
+
     /// Derives an AccessKind from legacy fields (proxy_profile_id, ssh_tunnel_profile_id)
     /// for backward compatibility.
     pub fn legacy_access_kind(&self) -> AccessKind {
