@@ -758,7 +758,18 @@ impl Sidebar {
             item_id: item_id.to_string(),
         };
 
-        match self.ensure_table_details(item_id, pending, cx) {
+        let status = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Collection {
+                profile_id,
+                database,
+                name,
+            }) if self.collection_is_event_stream(item_id, cx) => {
+                self.ensure_collection_children(profile_id, &database, &name, pending, cx)
+            }
+            _ => self.ensure_table_details(item_id, pending, cx),
+        };
+
+        match status {
             TableDetailsStatus::Ready => {
                 self.pending_child_picker_item = Some(item_id.to_string());
             }

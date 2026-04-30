@@ -3,15 +3,15 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
-    CollectionRef, ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError,
-    DbKind, DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest,
-    FormValues, LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest,
-    QueryResult, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect,
-    SqlGenerationRequest, SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo,
-    Value, ViewInfo,
+    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionChildrenPage,
+    CollectionChildrenRequest, CollectionCountRequest, CollectionRef, ConnectionProfile,
+    CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind, DbSchemaInfo,
+    DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
+    DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest, FormValues,
+    LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect, SqlGenerationRequest,
+    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -833,6 +833,16 @@ pub trait Connection: Send + Sync {
     ) -> Result<QueryResult, DbError> {
         Err(DbError::NotSupported(
             "Collection browsing not supported by this driver".to_string(),
+        ))
+    }
+
+    /// List driver-owned child sources under a collection/container.
+    fn collection_children(
+        &self,
+        _request: &CollectionChildrenRequest,
+    ) -> Result<CollectionChildrenPage, DbError> {
+        Err(DbError::NotSupported(
+            "Collection child listing not supported by this driver".to_string(),
         ))
     }
 

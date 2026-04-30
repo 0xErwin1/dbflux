@@ -5,7 +5,8 @@ pub(crate) mod types;
 pub use builder::{ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder};
 pub use node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use types::{
-    CollectionChildInfo, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
+    CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,
+    CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
     ColumnFamilyInfo, ColumnInfo, ConstraintInfo, ConstraintKind, ContainerInfo, CustomTypeInfo,
     CustomTypeKind, DataStructure, DatabaseInfo, DbSchemaInfo, DocumentSchema, FieldInfo,
     ForeignKeyInfo, GraphInfo, GraphSchema, IndexData, IndexDirection, IndexInfo, KeyInfo,

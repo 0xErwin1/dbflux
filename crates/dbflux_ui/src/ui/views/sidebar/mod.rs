@@ -922,6 +922,28 @@ impl Sidebar {
             SchemaNodeId::CollectionChild { .. } => {
                 self.browse_collection_child(item_id, cx);
             }
+            SchemaNodeId::CollectionChildrenMore {
+                profile_id,
+                database,
+                collection,
+            } => {
+                let pending = PendingAction::ExpandCollection {
+                    item_id: SchemaNodeId::Collection {
+                        profile_id,
+                        database: database.clone(),
+                        name: collection.clone(),
+                    }
+                    .to_string(),
+                };
+
+                self.spawn_fetch_collection_children(
+                    profile_id,
+                    &database,
+                    &collection,
+                    pending,
+                    cx,
+                );
+            }
             SchemaNodeId::Profile { profile_id } => {
                 let is_connected = self
                     .app_state
@@ -1024,6 +1046,12 @@ impl Sidebar {
         self.set_selection_anchor(item_id);
 
         let node_kind = parse_node_kind(item_id);
+
+        if node_kind == SchemaNodeKind::CollectionChildrenMore && click_count == 1 {
+            self.execute_item(item_id, cx);
+            cx.notify();
+            return;
+        }
 
         if click_count == 2 {
             let is_key_value_db = matches!(

@@ -2,6 +2,8 @@ use super::*;
 use crate::ui::AsyncUpdateResultExt;
 use dbflux_core::TaskKind;
 
+const COLLECTION_CHILDREN_PAGE_SIZE: u32 = 50;
+
 impl Sidebar {
     pub(super) fn find_table_for_item<'a>(
         parts: &ItemIdParts,
@@ -107,6 +109,123 @@ impl Sidebar {
         } else {
             TableDetailsStatus::NotFound
         }
+    }
+
+    pub(super) fn ensure_collection_children(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) -> TableDetailsStatus {
+        let item_id = pending_action.item_id().to_string();
+
+        if self.loading_items.contains(&item_id) {
+            return TableDetailsStatus::Loading;
+        }
+
+        let has_any_page = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .is_some_and(|connection| {
+                connection
+                    .collection_children
+                    .contains_key(&(database.to_string(), collection.to_string()))
+            });
+
+        if has_any_page {
+            return TableDetailsStatus::Ready;
+        }
+
+        if self.spawn_fetch_collection_children(
+            profile_id,
+            database,
+            collection,
+            pending_action,
+            cx,
+        ) {
+            TableDetailsStatus::Loading
+        } else {
+            TableDetailsStatus::NotFound
+        }
+    }
+
+    pub(super) fn spawn_fetch_collection_children(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.loading_items.contains(pending_action.item_id()) {
+            return true;
+        }
+
+        let params = match self.app_state.read(cx).prepare_fetch_collection_children(
+            profile_id,
+            database,
+            collection,
+            COLLECTION_CHILDREN_PAGE_SIZE,
+        ) {
+            Ok(params) => params,
+            Err(error) => {
+                if error != "Collection children already fully cached" {
+                    log::warn!("Cannot fetch collection children: {}", error);
+                    self.pending_toast = Some(PendingToast {
+                        message: format!("Cannot load collection children: {}", error),
+                        is_error: true,
+                    });
+                    cx.notify();
+                }
+
+                return false;
+            }
+        };
+
+        let database_name = database.to_string();
+        let task_description = format!("Loading event streams: {}", collection);
+        let load_task_id = self.app_state.update(cx, |state, _| {
+            let (task_id, _) = state.start_task_for_profile(
+                TaskKind::LoadSchema,
+                task_description,
+                Some(profile_id),
+            );
+            task_id
+        });
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
+
+        self.spawn_fetch_with_result(
+            pending_action,
+            Some(load_task_id),
+            task,
+            "Failed to fetch collection children",
+            "Failed to load collection children",
+            |app_state, res, cx| {
+                app_state.update(cx, |state, cx| {
+                    state.set_collection_children_page(
+                        res.profile_id,
+                        res.database,
+                        res.collection,
+                        res.page,
+                    );
+                    cx.emit(AppStateChanged);
+                });
+            },
+            move |app_state, cx| {
+                app_state.update(cx, |state, state_cx| {
+                    state.finish_pending_operation(profile_id, Some(&database_name));
+                    state_cx.emit(AppStateChanged);
+                });
+            },
+            cx,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

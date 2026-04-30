@@ -39,19 +39,19 @@ pub use connection::{
     ConnectionResolutionError, ConnectionTree, ConnectionTreeManager, ConnectionTreeNode,
     ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig, DbKind,
     DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender, ExecutionContext,
-    ExecutionSourceContext, FetchDatabaseSchemaParams, FetchDatabaseSchemaResult,
-    FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult, FetchSchemaIndexesParams,
-    FetchSchemaIndexesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
-    FetchTableDetailsParams, FetchTableDetailsResult, HookContext, HookExecution,
-    HookExecutionContext, HookExecutionMode, HookExecutor, HookFailureMode, HookKind, HookPhase,
-    HookPhaseOutcome, HookResult, HookRunner, Identifiable, ItemManager, LuaCapabilities,
-    OutputEvent, OutputReceiver, OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation,
-    PrepareConnectError, ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth,
-    ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
-    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager,
-    SshTunnelProfile, SslMode, SwitchDatabaseParams, SwitchDatabaseResult, TreeLoadResult,
-    TreeStore, detached_process_channel, execute_streaming_process, host_matches_no_proxy,
-    output_channel,
+    ExecutionSourceContext, FetchCollectionChildrenParams, FetchCollectionChildrenResult,
+    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
+    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
+    FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
+    FetchTableDetailsResult, HookContext, HookExecution, HookExecutionContext, HookExecutionMode,
+    HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
+    Identifiable, ItemManager, LuaCapabilities, OutputEvent, OutputReceiver, OutputSender,
+    OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
+    ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
+    ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
+    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode,
+    SwitchDatabaseParams, SwitchDatabaseResult, TreeLoadResult, TreeStore,
+    detached_process_channel, execute_streaming_process, host_matches_no_proxy, output_channel,
 };
 
 pub use core::{
@@ -107,7 +107,8 @@ pub use query::{
 
 pub use schema::node_id as schema_node_id;
 pub use schema::{
-    CollectionChildInfo, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
+    CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,
+    CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
     ColumnFamilyInfo, ColumnInfo, ConstraintInfo, ConstraintKind, ContainerInfo, CustomTypeInfo,
     CustomTypeKind, DataStructure, DatabaseInfo, DbSchemaInfo, DocumentSchema, FieldInfo,
     ForeignKeyBuilder, ForeignKeyInfo, GraphInfo, GraphSchema, IndexBuilder, IndexData,

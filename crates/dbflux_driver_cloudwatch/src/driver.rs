@@ -7,14 +7,14 @@ use aws_sdk_cloudwatchlogs::Client;
 use aws_sdk_cloudwatchlogs::config::Builder as CloudWatchConfigBuilder;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    CLOUDWATCH_FORM, CollectionBrowseRequest, CollectionChildInfo, CollectionCountRequest,
-    CollectionInfo, CollectionPresentation, ColumnMeta, Connection, ConnectionProfile,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DocumentSchema,
-    DriverCapabilities, DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage,
-    EventQuery, EventRecord, EventSeverity, EventSourceId, EventStreamTarget,
-    ExecutionSourceContext, FieldInfo, FormValues, Icon, QueryLanguage, QueryRequest, QueryResult,
-    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode,
-    TableInfo, ValidationResult, Value,
+    CLOUDWATCH_FORM, CollectionBrowseRequest, CollectionChildInfo, CollectionChildrenPage,
+    CollectionChildrenRequest, CollectionCountRequest, CollectionInfo, CollectionPresentation,
+    ColumnMeta, Connection, ConnectionProfile, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
+    DbError, DbKind, DocumentSchema, DriverCapabilities, DriverFormDef, DriverMetadata,
+    EventActorType, EventCategory, EventPage, EventQuery, EventRecord, EventSeverity,
+    EventSourceId, EventStreamTarget, ExecutionSourceContext, FormValues, Icon, QueryLanguage,
+    QueryRequest, QueryResult, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot,
+    SourceContextSpec, SourceQueryMode, TableInfo, ValidationResult, Value,
 };
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -530,17 +530,6 @@ impl Connection for CloudWatchConnection {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<TableInfo, DbError> {
-        let stream_items = fetch_log_streams(&self.client, table)?;
-        let stream_fields = stream_items
-            .iter()
-            .map(|stream| FieldInfo {
-                name: stream.label.clone(),
-                common_type: "text".to_string(),
-                occurrence_rate: None,
-                nested_fields: None,
-            })
-            .collect();
-
         Ok(TableInfo {
             name: table.to_string(),
             schema: Some(CLOUDWATCH_DEFAULT_DATABASE.to_string()),
@@ -548,10 +537,22 @@ impl Connection for CloudWatchConnection {
             indexes: None,
             foreign_keys: None,
             constraints: None,
-            sample_fields: Some(stream_fields),
+            sample_fields: None,
             presentation: CollectionPresentation::EventStream,
-            child_items: Some(stream_items),
+            child_items: None,
         })
+    }
+
+    fn collection_children(
+        &self,
+        request: &CollectionChildrenRequest,
+    ) -> Result<CollectionChildrenPage, DbError> {
+        fetch_log_stream_page(
+            &self.client,
+            &request.collection.name,
+            request.limit,
+            request.page_token.as_deref(),
+        )
     }
 
     fn kind(&self) -> DbKind {
@@ -1134,54 +1135,45 @@ fn bool_field(
     })
 }
 
-fn fetch_log_streams(
+fn fetch_log_stream_page(
     client: &Client,
     log_group_name: &str,
-) -> Result<Vec<CollectionChildInfo>, DbError> {
-    let mut next_token: Option<String> = None;
+    limit: u32,
+    page_token: Option<&str>,
+) -> Result<CollectionChildrenPage, DbError> {
     let mut streams = Vec::new();
+    let limit = limit.clamp(1, 50) as i32;
 
-    loop {
-        let mut operation = client
-            .describe_log_streams()
-            .log_group_name(log_group_name)
-            .order_by(aws_sdk_cloudwatchlogs::types::OrderBy::LastEventTime)
-            .descending(true)
-            .limit(50);
+    let mut operation = client
+        .describe_log_streams()
+        .log_group_name(log_group_name)
+        .order_by(aws_sdk_cloudwatchlogs::types::OrderBy::LastEventTime)
+        .descending(true)
+        .limit(limit);
 
-        if let Some(token) = next_token.clone() {
-            operation = operation.next_token(token);
-        }
+    if let Some(token) = page_token {
+        operation = operation.next_token(token.to_string());
+    }
 
-        let output = runtime()?.block_on(operation.send()).map_err(|error| {
-            DbError::query_failed(format!("CloudWatch DescribeLogStreams failed: {error}"))
-        })?;
+    let output = runtime()?.block_on(operation.send()).map_err(|error| {
+        DbError::query_failed(format!("CloudWatch DescribeLogStreams failed: {error}"))
+    })?;
 
-        for stream in output.log_streams() {
-            if let Some(stream_name) = stream.log_stream_name() {
-                streams.push(CollectionChildInfo {
-                    id: stream_name.to_string(),
-                    label: stream_name.to_string(),
-                    last_event_ts_ms: stream.last_event_timestamp(),
-                    presentation: CollectionPresentation::EventStream,
-                });
-            }
-        }
-
-        next_token = output.next_token().map(ToOwned::to_owned);
-        if next_token.is_none() {
-            break;
+    for stream in output.log_streams() {
+        if let Some(stream_name) = stream.log_stream_name() {
+            streams.push(CollectionChildInfo {
+                id: stream_name.to_string(),
+                label: stream_name.to_string(),
+                last_event_ts_ms: stream.last_event_timestamp(),
+                presentation: CollectionPresentation::EventStream,
+            });
         }
     }
 
-    streams.sort_by(|left, right| {
-        right
-            .last_event_ts_ms
-            .cmp(&left.last_event_ts_ms)
-            .then_with(|| left.label.cmp(&right.label))
-    });
-
-    Ok(streams)
+    Ok(CollectionChildrenPage {
+        items: streams,
+        next_page_token: output.next_token().map(ToOwned::to_owned),
+    })
 }
 
 #[cfg(test)]

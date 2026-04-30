@@ -814,6 +814,34 @@ pub struct CollectionChildInfo {
     pub presentation: CollectionPresentation,
 }
 
+/// Request for a page of driver-owned child sources under a collection/container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionChildrenRequest {
+    pub collection: crate::CollectionRef,
+    pub limit: u32,
+
+    #[serde(default)]
+    pub page_token: Option<String>,
+}
+
+/// One page of driver-owned child sources under a collection/container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionChildrenPage {
+    pub items: Vec<CollectionChildInfo>,
+
+    #[serde(default)]
+    pub next_page_token: Option<String>,
+}
+
+/// Cached collection child list plus continuation token.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionChildrenCache {
+    pub items: Vec<CollectionChildInfo>,
+
+    #[serde(default)]
+    pub next_page_token: Option<String>,
+}
+
 /// Field info discovered from document sampling.
 ///
 /// Unlike SQL columns, document fields are dynamic. This represents

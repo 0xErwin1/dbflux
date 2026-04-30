@@ -263,13 +263,27 @@ impl Sidebar {
         );
 
         self._subscriptions.push(filter_subscription);
+        let children = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|connection| {
+                connection
+                    .collection_children
+                    .get(&(database.clone(), name.clone()))
+                    .map(|cache| cache.items.clone())
+            })
+            .or(collection.child_items)
+            .unwrap_or_default();
+
         self.child_picker = Some(ChildPickerState {
             profile_id,
             database,
             collection: name.clone(),
             title: format!("Event streams: {}", name),
             focus_handle: cx.focus_handle(),
-            children: collection.child_items.unwrap_or_default(),
+            children,
             filter_input,
             filter_query: String::new(),
             page: 0,

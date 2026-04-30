@@ -274,6 +274,7 @@ impl Sidebar {
                                     &db.name,
                                     db_schema,
                                     &connected.table_details,
+                                    &connected.collection_children,
                                 )
                             } else {
                                 Self::build_db_schema_content(
@@ -348,6 +349,7 @@ impl Sidebar {
                                 &db.name,
                                 &db_schema,
                                 &connected.table_details,
+                                &connected.collection_children,
                             )
                         } else {
                             Self::build_schema_children(
@@ -529,6 +531,7 @@ impl Sidebar {
         database_name: &str,
         db_schema: &dbflux_core::DbSchemaInfo,
         table_details: &HashMap<(String, String), TableInfo>,
+        collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
 
@@ -537,7 +540,13 @@ impl Sidebar {
                 .tables
                 .iter()
                 .map(|coll| {
-                    Self::build_collection_item(profile_id, database_name, coll, table_details)
+                    Self::build_collection_item(
+                        profile_id,
+                        database_name,
+                        coll,
+                        table_details,
+                        collection_children_cache,
+                    )
                 })
                 .collect();
 
@@ -634,11 +643,18 @@ impl Sidebar {
         database_name: &str,
         collection: &dbflux_core::TableInfo,
         table_details: &HashMap<(String, String), TableInfo>,
+        collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
     ) -> TreeItem {
         let coll_name = &collection.name;
         let cache_key = (database_name.to_string(), coll_name.clone());
         let effective = table_details.get(&cache_key).unwrap_or(collection);
-        let child_items = effective.child_items.clone();
+        let paged_children = collection_children_cache.get(&cache_key);
+        let child_items = paged_children
+            .map(|cache| cache.items.clone())
+            .or_else(|| effective.child_items.clone());
+        let has_more_children = paged_children
+            .and_then(|cache| cache.next_page_token.as_ref())
+            .is_some();
         let details_loaded = effective.sample_fields.is_some()
             || child_items.as_ref().is_some_and(|items| !items.is_empty());
 
@@ -709,22 +725,47 @@ impl Sidebar {
 
         let collection_children = if effective.presentation == CollectionPresentation::EventStream {
             match child_items {
-                Some(items) if !items.is_empty() => items
-                    .into_iter()
-                    .map(|child| {
-                        TreeItem::new(
-                            SchemaNodeId::CollectionChild {
+                Some(items) if !items.is_empty() => {
+                    let mut children: Vec<TreeItem> = items
+                        .into_iter()
+                        .map(|child| {
+                            TreeItem::new(
+                                SchemaNodeId::CollectionChild {
+                                    profile_id,
+                                    database: database_name.to_string(),
+                                    collection: coll_name.to_string(),
+                                    child_id: child.id,
+                                    name: child.label.clone(),
+                                }
+                                .to_string(),
+                                child.label,
+                            )
+                        })
+                        .collect();
+
+                    if has_more_children {
+                        children.push(TreeItem::new(
+                            SchemaNodeId::CollectionChildrenMore {
                                 profile_id,
                                 database: database_name.to_string(),
                                 collection: coll_name.to_string(),
-                                child_id: child.id,
-                                name: child.label.clone(),
                             }
                             .to_string(),
-                            child.label,
-                        )
-                    })
-                    .collect(),
+                            "Load more streams...".to_string(),
+                        ));
+                    }
+
+                    children
+                }
+                Some(_) if has_more_children => vec![TreeItem::new(
+                    SchemaNodeId::CollectionChildrenMore {
+                        profile_id,
+                        database: database_name.to_string(),
+                        collection: coll_name.to_string(),
+                    }
+                    .to_string(),
+                    "Load more streams...".to_string(),
+                )],
                 Some(_) => vec![TreeItem::new(
                     format!("collection-empty-streams:{profile_id}:{database_name}:{coll_name}"),
                     "No event streams".to_string(),
@@ -1305,7 +1346,11 @@ impl Sidebar {
 #[cfg(test)]
 mod tests {
     use super::Sidebar;
-    use dbflux_core::{CollectionChildInfo, CollectionPresentation, FieldInfo, TableInfo};
+    use dbflux_core::{
+        CollectionChildInfo, CollectionChildrenCache, CollectionPresentation, FieldInfo,
+        SchemaNodeId, TableInfo,
+    };
+    use std::collections::HashMap;
     use uuid::Uuid;
 
     #[test]
@@ -1324,6 +1369,7 @@ mod tests {
                 presentation: CollectionPresentation::DataGrid,
                 child_items: None,
             },
+            &Default::default(),
             &Default::default(),
         );
 
@@ -1360,10 +1406,60 @@ mod tests {
                 }]),
             },
             &Default::default(),
+            &Default::default(),
         );
 
         assert_eq!(item.children.len(), 1);
         assert_eq!(item.children[0].label.as_ref(), "2026/04/25/[$LATEST]abc");
+    }
+
+    #[test]
+    fn collection_item_adds_load_more_when_child_page_has_next_token() {
+        let profile_id = Uuid::new_v4();
+        let collection = "/aws/lambda/app".to_string();
+        let mut child_cache = HashMap::new();
+        child_cache.insert(
+            ("logs".to_string(), collection.clone()),
+            CollectionChildrenCache {
+                items: vec![CollectionChildInfo {
+                    id: "stream-1".to_string(),
+                    label: "stream-1".to_string(),
+                    last_event_ts_ms: Some(1),
+                    presentation: CollectionPresentation::EventStream,
+                }],
+                next_page_token: Some("next".to_string()),
+            },
+        );
+
+        let item = Sidebar::build_collection_item(
+            profile_id,
+            "logs",
+            &TableInfo {
+                name: collection.clone(),
+                schema: None,
+                columns: None,
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: CollectionPresentation::EventStream,
+                child_items: None,
+            },
+            &Default::default(),
+            &child_cache,
+        );
+
+        assert_eq!(item.children.len(), 2);
+        assert_eq!(item.children[1].label.as_ref(), "Load more streams...");
+        assert_eq!(
+            item.children[1].id.as_ref(),
+            SchemaNodeId::CollectionChildrenMore {
+                profile_id,
+                database: "logs".to_string(),
+                collection,
+            }
+            .to_string()
+        );
     }
 }
 

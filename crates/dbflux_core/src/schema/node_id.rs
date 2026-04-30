@@ -101,6 +101,11 @@ pub enum SchemaNodeId {
         child_id: String,
         name: String,
     },
+    CollectionChildrenMore {
+        profile_id: Uuid,
+        database: String,
+        collection: String,
+    },
     CustomType {
         profile_id: Uuid,
         schema: String,
@@ -237,6 +242,7 @@ pub enum SchemaNodeKind {
     View,
     Collection,
     CollectionChild,
+    CollectionChildrenMore,
     CustomType,
     ColumnsFolder,
     IndexesFolder,
@@ -283,6 +289,7 @@ impl SchemaNodeId {
             Self::View { .. } => SchemaNodeKind::View,
             Self::Collection { .. } => SchemaNodeKind::Collection,
             Self::CollectionChild { .. } => SchemaNodeKind::CollectionChild,
+            Self::CollectionChildrenMore { .. } => SchemaNodeKind::CollectionChildrenMore,
             Self::CustomType { .. } => SchemaNodeKind::CustomType,
             Self::ColumnsFolder { .. } => SchemaNodeKind::ColumnsFolder,
             Self::IndexesFolder { .. } => SchemaNodeKind::IndexesFolder,
@@ -329,6 +336,7 @@ impl SchemaNodeId {
             | Self::View { profile_id, .. }
             | Self::Collection { profile_id, .. }
             | Self::CollectionChild { profile_id, .. }
+            | Self::CollectionChildrenMore { profile_id, .. }
             | Self::CustomType { profile_id, .. }
             | Self::ColumnsFolder { profile_id, .. }
             | Self::IndexesFolder { profile_id, .. }
@@ -372,6 +380,7 @@ const P_TABLE: &str = "T";
 const P_VIEW: &str = "V";
 const P_COLLECTION: &str = "C";
 const P_COLLECTION_CHILD: &str = "CCH";
+const P_COLLECTION_CHILDREN_MORE: &str = "CCM";
 const P_CUSTOM_TYPE: &str = "Y";
 const P_COLUMNS_FOLDER: &str = "CLF";
 const P_INDEXES_FOLDER: &str = "IXF";
@@ -529,6 +538,17 @@ impl fmt::Display for SchemaNodeId {
                     f,
                     "{}|{}|{}|{}|{}|{}",
                     P_COLLECTION_CHILD, profile_id, database, collection, child_id, name
+                )
+            }
+            Self::CollectionChildrenMore {
+                profile_id,
+                database,
+                collection,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_COLLECTION_CHILDREN_MORE, profile_id, database, collection
                 )
             }
             Self::CustomType {
@@ -931,6 +951,18 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_COLLECTION_CHILDREN_MORE => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                let collection = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::CollectionChildrenMore {
+                    profile_id,
+                    database,
+                    collection,
+                })
+            }
+
             P_CUSTOM_TYPE => {
                 let profile_id =
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
@@ -1183,6 +1215,7 @@ impl SchemaNodeKind {
                 | Self::View
                 | Self::Collection
                 | Self::CollectionChild
+                | Self::CollectionChildrenMore
                 | Self::ConnectionFolder
                 | Self::Schema
                 | Self::TablesFolder
@@ -1231,6 +1264,7 @@ impl SchemaNodeKind {
                 | Self::Database
                 | Self::ConnectionFolder
                 | Self::CollectionChild
+                | Self::CollectionChildrenMore
                 | Self::ScriptFile
         )
     }
@@ -1343,6 +1377,11 @@ mod tests {
             collection: "/aws/lambda/app".into(),
             child_id: "stream-2026-04-25".into(),
             name: "2026/04/25/[$LATEST]abc".into(),
+        });
+        roundtrip(SchemaNodeId::CollectionChildrenMore {
+            profile_id: uuid,
+            database: "logs".into(),
+            collection: "/aws/lambda/app".into(),
         });
         roundtrip(SchemaNodeId::CustomType {
             profile_id: uuid,

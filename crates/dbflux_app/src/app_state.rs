@@ -12,11 +12,11 @@ use dbflux_core::observability::{
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
-    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues, GeneralSettings,
-    GlobalOverrides, HistoryEntry, HistoryManager, HookContext, HookPhase, ProfileManager,
-    ProxyProfile, SavedQuery, SavedQueryManager, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade, ShutdownPhase,
-    SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams,
+    FormValues, GeneralSettings, GlobalOverrides, HistoryEntry, HistoryManager, HookContext,
+    HookPhase, ProfileManager, ProxyProfile, SavedQuery, SavedQueryManager, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
+    ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
 use dbflux_storage::bootstrap::StorageRuntime;
 
@@ -1174,6 +1174,30 @@ impl AppState {
         self.facade
             .connections
             .prepare_fetch_table_details(profile_id, database, schema, table)
+    }
+
+    pub fn prepare_fetch_collection_children(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+        limit: u32,
+    ) -> Result<FetchCollectionChildrenParams, String> {
+        self.facade
+            .connections
+            .prepare_fetch_collection_children(profile_id, database, collection, limit)
+    }
+
+    pub fn set_collection_children_page(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        collection: String,
+        page: dbflux_core::CollectionChildrenPage,
+    ) {
+        self.facade
+            .connections
+            .set_collection_children_page(profile_id, database, collection, page);
     }
 
     pub fn prepare_fetch_schema_types(

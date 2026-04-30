@@ -1,4 +1,5 @@
 use crate::{
+    CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
     Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
     HookContext, ProxyProfile, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
     SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo,
@@ -26,6 +27,10 @@ pub enum CacheKey {
         database: String,
         table: String,
     },
+    CollectionChildren {
+        database: String,
+        collection: String,
+    },
     SchemaTypes {
         database: String,
         schema: Option<String>,
@@ -51,6 +56,13 @@ impl CacheKey {
         Self::TableDetails {
             database: database.into(),
             table: table.into(),
+        }
+    }
+
+    pub fn collection_children(database: impl Into<String>, collection: impl Into<String>) -> Self {
+        Self::CollectionChildren {
+            database: database.into(),
+            collection: collection.into(),
         }
     }
 
@@ -84,6 +96,7 @@ impl CacheKey {
 pub enum CacheEntry<'a> {
     DatabaseSchema(&'a DbSchemaInfo),
     TableDetails(&'a TableInfo),
+    CollectionChildren(&'a CollectionChildrenCache),
     SchemaTypes(&'a Vec<CustomTypeInfo>),
     SchemaIndexes(&'a Vec<SchemaIndexInfo>),
     SchemaForeignKeys(&'a Vec<SchemaForeignKeyInfo>),
@@ -99,6 +112,11 @@ pub enum OwnedCacheEntry {
         database: String,
         table: String,
         details: TableInfo,
+    },
+    CollectionChildren {
+        database: String,
+        collection: String,
+        page: CollectionChildrenPage,
     },
     SchemaTypes {
         database: String,
@@ -245,6 +263,7 @@ pub struct ConnectedProfile {
     /// Lazy-loaded schemas per database (MySQL/MariaDB).
     pub database_schemas: HashMap<String, DbSchemaInfo>,
     pub table_details: HashMap<(String, String), TableInfo>,
+    pub collection_children: HashMap<(String, String), CollectionChildrenCache>,
     pub schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
     pub schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
     pub schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
@@ -273,6 +292,14 @@ impl ConnectedProfile {
                 .table_details
                 .get(&(database.clone(), table.clone()))
                 .map(CacheEntry::TableDetails),
+
+            CacheKey::CollectionChildren {
+                database,
+                collection,
+            } => self
+                .collection_children
+                .get(&(database.clone(), collection.clone()))
+                .map(CacheEntry::CollectionChildren),
 
             CacheKey::SchemaTypes { database, schema } => {
                 let sk = SchemaCacheKey::new(database.as_str(), schema.as_deref());
@@ -311,6 +338,20 @@ impl ConnectedProfile {
                 details,
             } => {
                 self.table_details.insert((database, table), details);
+            }
+
+            OwnedCacheEntry::CollectionChildren {
+                database,
+                collection,
+                page,
+            } => {
+                let cache = self
+                    .collection_children
+                    .entry((database, collection))
+                    .or_default();
+
+                cache.items.extend(page.items);
+                cache.next_page_token = page.next_page_token;
             }
 
             OwnedCacheEntry::SchemaTypes {
@@ -514,6 +555,7 @@ impl ConnectionManager {
                 schema,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
+                collection_children: HashMap::new(),
                 schema_types: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
@@ -611,6 +653,59 @@ impl ConnectionManager {
         self.connections
             .get(&profile_id)
             .is_some_and(|c| !c.cache_contains(&key))
+    }
+
+    pub fn set_collection_children_page(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        collection: String,
+        page: CollectionChildrenPage,
+    ) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.cache_set(OwnedCacheEntry::CollectionChildren {
+                database,
+                collection,
+                page,
+            });
+        }
+    }
+
+    pub fn collection_children_cache(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> Option<&CollectionChildrenCache> {
+        self.connections.get(&profile_id).and_then(|connection| {
+            connection
+                .collection_children
+                .get(&(database.to_string(), collection.to_string()))
+        })
+    }
+
+    pub fn needs_initial_collection_children(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> bool {
+        let key = CacheKey::collection_children(database, collection);
+
+        self.connections
+            .get(&profile_id)
+            .is_some_and(|connection| !connection.cache_contains(&key))
+    }
+
+    pub fn has_more_collection_children(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> bool {
+        self.collection_children_cache(profile_id, database, collection)
+            .and_then(|cache| cache.next_page_token.as_ref())
+            .is_some()
     }
 
     #[allow(dead_code)]
@@ -1009,6 +1104,7 @@ impl ConnectionManager {
                 schema,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
+                collection_children: HashMap::new(),
                 schema_types: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
@@ -1075,6 +1171,45 @@ impl ConnectionManager {
             database: database.to_string(),
             schema: schema.map(String::from),
             table: table.to_string(),
+            connection: connected.connection_for_database(database),
+        })
+    }
+
+    pub fn prepare_fetch_collection_children(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+        limit: u32,
+    ) -> Result<FetchCollectionChildrenParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let page_token = connected
+            .collection_children
+            .get(&(database.to_string(), collection.to_string()))
+            .map(|cache| cache.next_page_token.clone())
+            .unwrap_or(None);
+
+        if connected
+            .collection_children
+            .contains_key(&(database.to_string(), collection.to_string()))
+            && page_token.is_none()
+        {
+            return Err("Collection children already fully cached".to_string());
+        }
+
+        Ok(FetchCollectionChildrenParams {
+            profile_id,
+            database: database.to_string(),
+            collection: collection.to_string(),
+            request: CollectionChildrenRequest {
+                collection: CollectionRef::new(database, collection),
+                limit,
+                page_token,
+            },
             connection: connected.connection_for_database(database),
         })
     }
@@ -1462,6 +1597,37 @@ pub struct FetchTableDetailsResult {
     pub details: TableInfo,
 }
 
+pub struct FetchCollectionChildrenParams {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub collection: String,
+    pub request: CollectionChildrenRequest,
+    pub connection: Arc<dyn Connection>,
+}
+
+impl FetchCollectionChildrenParams {
+    pub fn execute(self) -> Result<FetchCollectionChildrenResult, String> {
+        let page = self
+            .connection
+            .collection_children(&self.request)
+            .map_err(|e| e.to_string())?;
+
+        Ok(FetchCollectionChildrenResult {
+            profile_id: self.profile_id,
+            database: self.database,
+            collection: self.collection,
+            page,
+        })
+    }
+}
+
+pub struct FetchCollectionChildrenResult {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub collection: String,
+    pub page: CollectionChildrenPage,
+}
+
 pub struct FetchSchemaTypesParams {
     pub profile_id: Uuid,
     pub database: String,
@@ -1655,6 +1821,7 @@ mod tests {
             schema,
             database_schemas: HashMap::new(),
             table_details: HashMap::new(),
+            collection_children: HashMap::new(),
             schema_types: HashMap::new(),
             schema_indexes: HashMap::new(),
             schema_foreign_keys: HashMap::new(),
