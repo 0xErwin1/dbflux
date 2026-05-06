@@ -223,7 +223,7 @@ impl ConnectionDriverConfigDto {
         let kind = str_to_db_kind(&self.config_key)?;
 
         match kind {
-            DbKind::Postgres | DbKind::MySQL => {
+            DbKind::Postgres => {
                 let ssh_tunnel = build_ssh_tunnel(self);
 
                 Some(DbConfig::Postgres {
@@ -233,6 +233,24 @@ impl ConnectionDriverConfigDto {
                     port: self.port.unwrap_or(5432) as u16,
                     user: self.user.clone().unwrap_or_default(),
                     database: self.database_name.clone().unwrap_or_default(),
+                    ssl_mode: str_to_ssl_mode(&self.ssl_mode),
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id: None,
+                })
+            }
+            DbKind::MySQL | DbKind::MariaDB => {
+                let ssh_tunnel = build_ssh_tunnel(self);
+
+                Some(DbConfig::MySQL {
+                    use_uri: self.use_uri,
+                    uri: self.uri.clone(),
+                    host: self.host.clone().unwrap_or_default(),
+                    port: self.port.unwrap_or(3306) as u16,
+                    user: self.user.clone().unwrap_or_default(),
+                    database: self
+                        .database_name
+                        .clone()
+                        .filter(|database| !database.is_empty()),
                     ssl_mode: str_to_ssl_mode(&self.ssl_mode),
                     ssh_tunnel,
                     ssh_tunnel_profile_id: None,
@@ -278,7 +296,6 @@ impl ConnectionDriverConfigDto {
                 endpoint: self.dynamo_endpoint.clone(),
                 table: self.dynamo_table.clone(),
             }),
-            _ => None,
         }
     }
 }
@@ -654,5 +671,60 @@ impl ConnectionDriverConfigsRepository {
             })?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mysql_config() -> DbConfig {
+        DbConfig::MySQL {
+            use_uri: false,
+            uri: None,
+            host: "db.example.internal".to_string(),
+            port: 3307,
+            user: "app_user".to_string(),
+            database: Some("app_db".to_string()),
+            ssl_mode: SslMode::Require,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        }
+    }
+
+    #[test]
+    fn mysql_driver_config_round_trips_as_mysql() {
+        let dto =
+            ConnectionDriverConfigDto::from_db_config("profile-id".to_string(), &mysql_config());
+        let config = dto.to_db_config().expect("config should round-trip");
+
+        match config {
+            DbConfig::MySQL {
+                host,
+                port,
+                user,
+                database,
+                ssl_mode,
+                ..
+            } => {
+                assert_eq!(host, "db.example.internal");
+                assert_eq!(port, 3307);
+                assert_eq!(user, "app_user");
+                assert_eq!(database.as_deref(), Some("app_db"));
+                assert_eq!(ssl_mode, SslMode::Require);
+            }
+            other => panic!("expected MySQL config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mariadb_driver_config_key_round_trips_as_mysql_config() {
+        let mut dto =
+            ConnectionDriverConfigDto::from_db_config("profile-id".to_string(), &mysql_config());
+        dto.config_key = "MariaDB".to_string();
+
+        let config = dto.to_db_config().expect("config should round-trip");
+
+        assert!(matches!(config, DbConfig::MySQL { .. }));
     }
 }
