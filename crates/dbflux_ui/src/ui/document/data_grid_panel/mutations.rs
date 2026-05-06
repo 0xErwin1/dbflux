@@ -139,6 +139,14 @@ fn set_value_at_path(current: &mut Value, path: &[String], new_value: Value) -> 
 impl DataGridPanel {
     // === Row Editing ===
 
+    pub(super) fn queue_refresh_after_mutation_success(&mut self, cx: &mut Context<Self>) {
+        if self.pending_batch_remaining.is_some() {
+            self.process_next_batch_op(cx);
+        } else {
+            self.pending_refresh = true;
+        }
+    }
+
     fn apply_inline_value_to_result(&mut self, node_id: &NodeId, new_value: &Value) {
         let Some(doc_index) = node_id.doc_index() else {
             return;
@@ -829,12 +837,7 @@ impl DataGridPanel {
                                 message: "Document inserted".to_string(),
                                 is_error: false,
                             });
-
-                            if panel.pending_batch_remaining.is_some() {
-                                panel.process_next_batch_op(cx);
-                            } else {
-                                panel.pending_refresh = true;
-                            }
+                            panel.queue_refresh_after_mutation_success(cx);
                         }
                         Err(e) => {
                             log::error!("[INSERT] Failed: {}", e);
@@ -971,12 +974,7 @@ impl DataGridPanel {
                                 message: "Row inserted".to_string(),
                                 is_error: false,
                             });
-
-                            if panel.pending_batch_remaining.is_some() {
-                                panel.process_next_batch_op(cx);
-                            } else {
-                                panel.pending_refresh = true;
-                            }
+                            panel.queue_refresh_after_mutation_success(cx);
                         }
                         Err(e) => {
                             log::error!("[INSERT] Failed: {}", e);

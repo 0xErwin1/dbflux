@@ -13,6 +13,31 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DataGridContentMode {
+    EmptyFallback,
+    ResultView,
+    Document,
+    Table,
+}
+
+fn content_mode_for_result(
+    uses_result_view: bool,
+    view_mode: DataViewMode,
+    has_columns: bool,
+    has_data: bool,
+) -> DataGridContentMode {
+    if uses_result_view {
+        DataGridContentMode::ResultView
+    } else if view_mode == DataViewMode::Document && has_data {
+        DataGridContentMode::Document
+    } else if view_mode != DataViewMode::Document && has_columns {
+        DataGridContentMode::Table
+    } else {
+        DataGridContentMode::EmptyFallback
+    }
+}
+
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Process pending state
@@ -111,10 +136,15 @@ impl Render for DataGridPanel {
             || self.result.raw_bytes.is_some();
         let has_columns = !self.result.columns.is_empty();
         let is_loading = self.state == GridState::Loading;
+        let view_mode = self.view_config.mode;
 
         let show_panel_controls = self.show_panel_controls;
         let is_maximized = self.is_maximized;
         let uses_result_view = self.uses_result_view();
+        let content_mode =
+            content_mode_for_result(uses_result_view, view_mode, has_columns, has_data);
+        let shows_table_content = matches!(content_mode, DataGridContentMode::Table);
+        let shows_content_controls = has_data || shows_table_content;
 
         // Get edit state from table
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
@@ -140,7 +170,7 @@ impl Render for DataGridPanel {
             })
             .unwrap_or((false, false, 0, false, false));
 
-        let show_pk_warning = is_table_view && has_data && !is_editable;
+        let show_pk_warning = is_table_view && shows_table_content && !is_editable;
         let show_edit_toolbar = is_table_view && has_columns && is_editable;
 
         div()
@@ -207,7 +237,7 @@ impl Render for DataGridPanel {
                 ))
             })
             // Header bar with panel controls (only when embedded)
-            .when(show_panel_controls && has_data, |d| {
+            .when(show_panel_controls && shows_content_controls, |d| {
                 d.child(
                     div()
                         .flex()
@@ -265,8 +295,6 @@ impl Render for DataGridPanel {
             })
             // Grid, Document, or Result View
             .child({
-                let view_mode = self.view_config.mode;
-                let use_document_view = view_mode == DataViewMode::Document && has_data;
                 let result_view_mode = self.result_view_mode;
 
                 div()
@@ -280,23 +308,22 @@ impl Render for DataGridPanel {
                             }
                         }),
                     )
-                    .when(!has_data && !uses_result_view, |d| {
-                        d.flex()
-                            .items_center()
-                            .justify_center()
-                            .child(Text::muted(if is_loading {
-                                "Loading..."
-                            } else {
-                                "No data"
-                            }))
-                    })
-                    .when(uses_result_view, |d| {
-                        d.child(self.render_result_view(result_view_mode, &theme, cx))
-                    })
-                    .when(!uses_result_view && has_data && use_document_view, |d| {
+                    .when(
+                        matches!(content_mode, DataGridContentMode::EmptyFallback),
+                        |d| {
+                            d.flex().items_center().justify_center().child(Text::muted(
+                                if is_loading { "Loading..." } else { "No data" },
+                            ))
+                        },
+                    )
+                    .when(
+                        matches!(content_mode, DataGridContentMode::ResultView),
+                        |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
+                    )
+                    .when(matches!(content_mode, DataGridContentMode::Document), |d| {
                         d.child(self.render_document_view(&theme, cx))
                     })
-                    .when(!uses_result_view && has_data && !use_document_view, |d| {
+                    .when(matches!(content_mode, DataGridContentMode::Table), |d| {
                         d.when_some(self.data_table.clone(), |d, data_table| d.child(data_table))
                     })
             })
@@ -1328,6 +1355,33 @@ impl DataGridPanel {
                 .children(items),
         )
         .with_priority(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DataGridContentMode;
+    use crate::ui::document::data_view::DataViewMode;
+
+    #[test]
+    fn table_mode_with_columns_and_zero_rows_prefers_table_content() {
+        let mode = super::content_mode_for_result(false, DataViewMode::Table, true, false);
+
+        assert_eq!(mode, DataGridContentMode::Table);
+    }
+
+    #[test]
+    fn table_mode_without_columns_uses_empty_fallback() {
+        let mode = super::content_mode_for_result(false, DataViewMode::Table, false, false);
+
+        assert_eq!(mode, DataGridContentMode::EmptyFallback);
+    }
+
+    #[test]
+    fn document_mode_with_columns_and_zero_rows_keeps_empty_fallback() {
+        let mode = super::content_mode_for_result(false, DataViewMode::Document, true, false);
+
+        assert_eq!(mode, DataGridContentMode::EmptyFallback);
     }
 }
 

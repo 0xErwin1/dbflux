@@ -1357,10 +1357,59 @@ impl EventEmitter<DataGridEvent> for DataGridPanel {}
 
 #[cfg(test)]
 mod tests {
-    use super::DataSource;
-    use dbflux_core::{CollectionRef, Pagination, QueryResult, TableRef};
+    use super::{DataGridPanel, DataSource};
+    use crate::app_state_entity::AppStateEntity;
+    use crate::ui::components::toast::{ToastGlobal, ToastHost};
+    use crate::ui::theme;
+    use dbflux_core::{CollectionRef, ColumnMeta, Pagination, QueryResult, TableRef};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext, TestAppContext};
+    use gpui_component::Root;
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use std::sync::Arc;
+    use std::time::Duration;
     use uuid::Uuid;
+
+    fn isolated_test_app_state(cx: &mut TestAppContext) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        })
+    }
+
+    fn zero_row_columns() -> Vec<ColumnMeta> {
+        vec![
+            ColumnMeta {
+                name: "id".to_string(),
+                type_name: "int4".to_string(),
+                nullable: false,
+                is_primary_key: true,
+            },
+            ColumnMeta {
+                name: "name".to_string(),
+                type_name: "text".to_string(),
+                nullable: true,
+                is_primary_key: false,
+            },
+        ]
+    }
+
+    fn zero_row_result() -> QueryResult {
+        QueryResult::table(zero_row_columns(), Vec::new(), None, Duration::ZERO)
+    }
+
+    fn init_test_runtime(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+    }
 
     #[test]
     fn table_source_accessors_match_expected_values() {
@@ -1432,5 +1481,180 @@ mod tests {
         assert_eq!(source.collection_ref(), None);
         assert_eq!(source.pagination(), None);
         assert_eq!(source.total_rows(), None);
+    }
+
+    #[gpui::test]
+    fn filtered_empty_table_runtime_keeps_header_and_active_filter(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: Some(0),
+                };
+
+                let mut panel = DataGridPanel::new_internal(
+                    source,
+                    app_state.clone(),
+                    vec!["id".to_string()],
+                    window,
+                    cx,
+                );
+
+                panel.set_result(zero_row_result(), cx);
+                panel.filter_input.update(cx, |input, cx| {
+                    input.set_value("id = 999", window, cx);
+                });
+
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        let (filter_value, has_table, row_count, col_count) = window.update(|_, app| {
+            let panel = panel.read(app);
+            let table_state = panel
+                .table_state
+                .as_ref()
+                .expect("filtered empty table should still build table state");
+            let table_state = table_state.read(app);
+
+            (
+                panel.filter_input.read(app).value().to_string(),
+                panel.data_table.is_some(),
+                table_state.row_count(),
+                table_state.col_count(),
+            )
+        });
+
+        assert_eq!(filter_value, "id = 999");
+        assert!(
+            has_table,
+            "filtered empty table should keep table content active"
+        );
+        assert_eq!(
+            row_count, 0,
+            "filtered empty table should remain visually empty"
+        );
+        assert_eq!(col_count, 2, "filtered empty table should keep its headers");
+    }
+
+    #[gpui::test]
+    fn successful_insert_refresh_runtime_keeps_filter_and_can_stay_visually_empty(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: Some(0),
+                };
+
+                let mut panel = DataGridPanel::new_internal(
+                    source,
+                    app_state.clone(),
+                    vec!["id".to_string()],
+                    window,
+                    cx,
+                );
+
+                panel.set_result(zero_row_result(), cx);
+                panel.filter_input.update(cx, |input, cx| {
+                    input.set_value("id = 999", window, cx);
+                });
+
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        let refresh_was_queued = window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.handle_add_row(0, false, cx);
+                panel.queue_refresh_after_mutation_success(cx);
+                let refresh_was_queued = panel.pending_refresh;
+                panel.set_result(zero_row_result(), cx);
+                refresh_was_queued
+            })
+        });
+
+        let (filter_value, pending_inserts) = window.update(|_, app| {
+            let panel = panel.read(app);
+            let pending_inserts = panel
+                .table_state
+                .as_ref()
+                .map(|state| state.read(app).edit_buffer().pending_insert_rows().len())
+                .unwrap_or_default();
+
+            (
+                panel.filter_input.read(app).value().to_string(),
+                pending_inserts,
+            )
+        });
+
+        assert_eq!(filter_value, "id = 999");
+        assert!(
+            refresh_was_queued,
+            "successful insert refresh should be queued"
+        );
+        assert_eq!(
+            pending_inserts, 0,
+            "refresh result should clear the staged insert row"
+        );
+
+        let (row_count, col_count, has_table) = window.update(|_, app| {
+            let panel = panel.read(app);
+            let table_state = panel
+                .table_state
+                .as_ref()
+                .expect("post-refresh filtered result should still build table state");
+            let table_state = table_state.read(app);
+
+            (
+                table_state.row_count(),
+                table_state.col_count(),
+                panel.data_table.is_some(),
+            )
+        });
+
+        assert!(
+            has_table,
+            "successful insert refresh should keep table mode active"
+        );
+        assert_eq!(row_count, 0, "filtered refresh may still be visually empty");
+        assert_eq!(col_count, 2, "filtered refresh should keep headers visible");
     }
 }
