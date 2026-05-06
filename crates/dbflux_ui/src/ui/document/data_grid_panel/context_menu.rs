@@ -559,6 +559,11 @@ impl DataGridPanel {
             .as_ref()
             .map(|m| m.is_document_view)
             .unwrap_or(false);
+        let has_row_target = self
+            .context_menu
+            .as_ref()
+            .map(|m| self.has_context_menu_row_target(m.row, m.is_document_view, cx))
+            .unwrap_or(false);
 
         let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
         let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
@@ -571,7 +576,8 @@ impl DataGridPanel {
         //   [Order trigger]?          (if has_order, shares separator with filter)
         //   [sep + GenSQL trigger]?   (if has_generate_sql)
         //   [sep + CopyQuery trigger]?(if has_copy_query)
-        let base_items = Self::build_context_menu_items(is_editable, is_document_view);
+        let base_items =
+            Self::build_context_menu_items(is_editable, is_document_view, has_row_target);
         let base_count = base_items.len();
 
         // Filter: sep(1) + filter(1) = 2; Order adds 1 more
@@ -803,6 +809,41 @@ impl DataGridPanel {
         }
     }
 
+    fn has_context_menu_row_target(&self, row: usize, is_document_view: bool, cx: &App) -> bool {
+        if is_document_view {
+            return self
+                .document_tree_state
+                .as_ref()
+                .and_then(|state| state.read(cx).get_raw_document(row))
+                .is_some();
+        }
+
+        self.table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).edit_buffer().visual_row_source(row))
+            .is_some()
+    }
+
+    fn context_menu_action_requires_row_target(action: ContextMenuAction) -> bool {
+        matches!(
+            action,
+            ContextMenuAction::Edit
+                | ContextMenuAction::EditInModal
+                | ContextMenuAction::SetDefault
+                | ContextMenuAction::SetNull
+                | ContextMenuAction::DuplicateRow
+                | ContextMenuAction::DeleteRow
+                | ContextMenuAction::GenerateSelectWhere
+                | ContextMenuAction::GenerateInsert
+                | ContextMenuAction::GenerateUpdate
+                | ContextMenuAction::GenerateDelete
+                | ContextMenuAction::CopyAsInsert
+                | ContextMenuAction::CopyAsUpdate
+                | ContextMenuAction::CopyAsDelete
+                | ContextMenuAction::FilterByValue(_)
+        )
+    }
+
     // === Export ===
 
     pub fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -895,57 +936,68 @@ impl DataGridPanel {
     pub(super) fn build_context_menu_items(
         is_editable: bool,
         is_document_view: bool,
+        has_row_target: bool,
     ) -> Vec<ContextMenuItem> {
         if is_document_view {
             // Document view menu: Copy, View/Edit Document, CRUD operations
-            let mut items = vec![
-                ContextMenuItem {
-                    label: "Copy",
-                    action: Some(ContextMenuAction::Copy),
-                    icon: Some(AppIcon::Layers),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "View Document",
-                    action: Some(ContextMenuAction::EditInModal),
-                    icon: Some(AppIcon::Maximize2),
-                    is_separator: false,
-                    is_danger: false,
-                },
-            ];
+            let mut items = Vec::new();
 
-            if is_editable {
+            if has_row_target {
                 items.extend([
                     ContextMenuItem {
-                        label: "",
-                        action: None,
-                        icon: None,
-                        is_separator: true,
-                        is_danger: false,
-                    },
-                    ContextMenuItem {
-                        label: "Add Document",
-                        action: Some(ContextMenuAction::AddRow),
-                        icon: Some(AppIcon::Plus),
-                        is_separator: false,
-                        is_danger: false,
-                    },
-                    ContextMenuItem {
-                        label: "Duplicate Document",
-                        action: Some(ContextMenuAction::DuplicateRow),
+                        label: "Copy",
+                        action: Some(ContextMenuAction::Copy),
                         icon: Some(AppIcon::Layers),
                         is_separator: false,
                         is_danger: false,
                     },
                     ContextMenuItem {
-                        label: "Delete Document",
-                        action: Some(ContextMenuAction::DeleteRow),
-                        icon: Some(AppIcon::Delete),
+                        label: "View Document",
+                        action: Some(ContextMenuAction::EditInModal),
+                        icon: Some(AppIcon::Maximize2),
                         is_separator: false,
-                        is_danger: true,
+                        is_danger: false,
                     },
                 ]);
+            }
+
+            if is_editable {
+                if !items.is_empty() {
+                    items.push(ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    });
+                }
+
+                items.push(ContextMenuItem {
+                    label: "Add Document",
+                    action: Some(ContextMenuAction::AddRow),
+                    icon: Some(AppIcon::Plus),
+                    is_separator: false,
+                    is_danger: false,
+                });
+
+                if has_row_target {
+                    items.extend([
+                        ContextMenuItem {
+                            label: "Duplicate Document",
+                            action: Some(ContextMenuAction::DuplicateRow),
+                            icon: Some(AppIcon::Layers),
+                            is_separator: false,
+                            is_danger: false,
+                        },
+                        ContextMenuItem {
+                            label: "Delete Document",
+                            action: Some(ContextMenuAction::DeleteRow),
+                            icon: Some(AppIcon::Delete),
+                            is_separator: false,
+                            is_danger: true,
+                        },
+                    ]);
+                }
             }
 
             return items;
@@ -961,78 +1013,86 @@ impl DataGridPanel {
         }];
 
         if is_editable {
-            items.extend([
-                ContextMenuItem {
-                    label: "Paste",
-                    action: Some(ContextMenuAction::Paste),
-                    icon: Some(AppIcon::Download),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Edit",
-                    action: Some(ContextMenuAction::Edit),
-                    icon: Some(AppIcon::Pencil),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Edit in Modal",
-                    action: Some(ContextMenuAction::EditInModal),
-                    icon: Some(AppIcon::Maximize2),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "",
-                    action: None,
-                    icon: None,
-                    is_separator: true,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Set to Default",
-                    action: Some(ContextMenuAction::SetDefault),
-                    icon: Some(AppIcon::RotateCcw),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Set to NULL",
-                    action: Some(ContextMenuAction::SetNull),
-                    icon: Some(AppIcon::X),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "",
-                    action: None,
-                    icon: None,
-                    is_separator: true,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Add Row",
-                    action: Some(ContextMenuAction::AddRow),
-                    icon: Some(AppIcon::Plus),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Duplicate Row",
-                    action: Some(ContextMenuAction::DuplicateRow),
-                    icon: Some(AppIcon::Layers),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Delete Row",
-                    action: Some(ContextMenuAction::DeleteRow),
-                    icon: Some(AppIcon::Delete),
-                    is_separator: false,
-                    is_danger: true,
-                },
-            ]);
+            if has_row_target {
+                items.extend([
+                    ContextMenuItem {
+                        label: "Paste",
+                        action: Some(ContextMenuAction::Paste),
+                        icon: Some(AppIcon::Download),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Edit",
+                        action: Some(ContextMenuAction::Edit),
+                        icon: Some(AppIcon::Pencil),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Edit in Modal",
+                        action: Some(ContextMenuAction::EditInModal),
+                        icon: Some(AppIcon::Maximize2),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Set to Default",
+                        action: Some(ContextMenuAction::SetDefault),
+                        icon: Some(AppIcon::RotateCcw),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Set to NULL",
+                        action: Some(ContextMenuAction::SetNull),
+                        icon: Some(AppIcon::X),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    },
+                ]);
+            }
+
+            items.push(ContextMenuItem {
+                label: "Add Row",
+                action: Some(ContextMenuAction::AddRow),
+                icon: Some(AppIcon::Plus),
+                is_separator: false,
+                is_danger: false,
+            });
+
+            if has_row_target {
+                items.extend([
+                    ContextMenuItem {
+                        label: "Duplicate Row",
+                        action: Some(ContextMenuAction::DuplicateRow),
+                        icon: Some(AppIcon::Layers),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Delete Row",
+                        action: Some(ContextMenuAction::DeleteRow),
+                        icon: Some(AppIcon::Delete),
+                        is_separator: false,
+                        is_danger: true,
+                    },
+                ]);
+            }
         }
 
         items
@@ -1042,7 +1102,7 @@ impl DataGridPanel {
     /// This includes all visible items plus the Generate SQL trigger (for table view).
     #[allow(dead_code)]
     pub(super) fn context_menu_item_count(is_editable: bool, is_document_view: bool) -> usize {
-        let base_items = Self::build_context_menu_items(is_editable, is_document_view);
+        let base_items = Self::build_context_menu_items(is_editable, is_document_view, true);
         let base_count = base_items.iter().filter(|i| !i.is_separator).count();
         // Add 1 for Generate SQL only in table view
         if is_document_view {
@@ -1176,7 +1236,9 @@ impl DataGridPanel {
         let menu_y = menu.position.y - self.panel_origin.y;
 
         // Build visible menu items list for keyboard navigation
-        let visible_items = Self::build_context_menu_items(is_editable, menu.is_document_view);
+        let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
+        let visible_items =
+            Self::build_context_menu_items(is_editable, menu.is_document_view, has_row_target);
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
 
@@ -2115,6 +2177,13 @@ impl DataGridPanel {
 
         let is_document_view = menu.is_document_view;
         let backend = self.filter_backend(cx);
+        let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
+
+        if Self::context_menu_action_requires_row_target(action) && !has_row_target {
+            self.restore_focus_after_context_menu(is_document_view, window, cx);
+            cx.notify();
+            return;
+        }
 
         match action {
             ContextMenuAction::Copy => {
@@ -3813,5 +3882,49 @@ impl DataGridPanel {
             CellKind::Unsupported(type_name) => Value::Unsupported(type_name.to_string()),
             CellKind::AutoGenerated(expr) => Value::Text(format!("DEFAULT({})", expr)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DataGridPanel;
+
+    fn labels(items: &[super::ContextMenuItem]) -> Vec<&'static str> {
+        items
+            .iter()
+            .filter(|item| !item.is_separator)
+            .map(|item| item.label)
+            .collect()
+    }
+
+    #[test]
+    fn empty_table_menu_keeps_insert_actions_but_hides_row_actions() {
+        let items = DataGridPanel::build_context_menu_items(true, false, false);
+        let labels = labels(&items);
+
+        assert!(labels.contains(&"Add Row"));
+        assert!(!labels.contains(&"Edit"));
+        assert!(!labels.contains(&"Edit in Modal"));
+        assert!(!labels.contains(&"Duplicate Row"));
+        assert!(!labels.contains(&"Delete Row"));
+    }
+
+    #[test]
+    fn non_editable_table_menu_stays_unchanged_without_row_target() {
+        let items = DataGridPanel::build_context_menu_items(false, false, false);
+
+        assert_eq!(labels(&items), vec!["Copy"]);
+    }
+
+    #[test]
+    fn editable_table_menu_with_row_target_keeps_row_actions() {
+        let items = DataGridPanel::build_context_menu_items(true, false, true);
+        let labels = labels(&items);
+
+        assert!(labels.contains(&"Edit"));
+        assert!(labels.contains(&"Edit in Modal"));
+        assert!(labels.contains(&"Add Row"));
+        assert!(labels.contains(&"Duplicate Row"));
+        assert!(labels.contains(&"Delete Row"));
     }
 }
