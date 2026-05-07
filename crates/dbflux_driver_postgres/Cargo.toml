@@ -24,3 +24,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 dbflux_test_support.workspace = true
+
+[lints]
+workspace = true

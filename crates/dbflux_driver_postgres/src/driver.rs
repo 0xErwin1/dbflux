@@ -1644,6 +1644,8 @@ impl Connection for PostgresConnection {
             return Ok(CrudResult::empty());
         }
 
+        // Invariant: rows is non-empty — checked above.
+        #[allow(clippy::indexing_slicing)]
         let row = &rows[0];
         let returning_row: Row = (0..row.columns().len())
             .map(|i| postgres_value_to_value(row, i))
@@ -1679,6 +1681,8 @@ impl Connection for PostgresConnection {
             return Ok(CrudResult::empty());
         }
 
+        // Invariant: rows is non-empty — checked above.
+        #[allow(clippy::indexing_slicing)]
         let row = &rows[0];
         let returning_row: Row = (0..row.columns().len())
             .map(|i| postgres_value_to_value(row, i))
@@ -1716,6 +1720,8 @@ impl Connection for PostgresConnection {
             return Ok(CrudResult::empty());
         }
 
+        // Invariant: rows is non-empty — checked above.
+        #[allow(clippy::indexing_slicing)]
         let row = &rows[0];
         let returning_row: Row = (0..row.columns().len())
             .map(|i| postgres_value_to_value(row, i))
@@ -2785,6 +2791,8 @@ fn postgres_array_to_value(row: &postgres::Row, idx: usize, type_name: &str) -> 
     }
 }
 
+// Invariant: `idx` is always in `0..row.columns().len()` — callers iterate over that range.
+#[allow(clippy::indexing_slicing)]
 fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
     let col_type = row.columns()[idx].type_();
     let type_name = col_type.name();
@@ -3181,6 +3189,8 @@ fn is_safe_postgres_type_expression(expression: &str) -> bool {
     let mut index = 0usize;
 
     while index < chars.len() {
+        // Invariant: index < chars.len() — loop guard ensures this.
+        #[allow(clippy::indexing_slicing)]
         let ch = chars[index];
         match ch {
             'A'..='Z' | 'a'..='z' | '_' => saw_identifier = true,
