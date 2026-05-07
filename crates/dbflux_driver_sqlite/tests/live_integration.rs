@@ -4,7 +4,7 @@
     clippy::panic,
     clippy::indexing_slicing,
     clippy::result_large_err,
-    clippy::unwrap_in_result,
+    clippy::unwrap_in_result
 )]
 
 use dbflux_core::{
