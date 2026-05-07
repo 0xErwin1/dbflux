@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::result_large_err,
+)]
+
 use dbflux_core::{
     ConnectionProfile, ConstraintKind, DbConfig, DbDriver, DbError, IndexData, QueryRequest,
     SslMode, Value,
