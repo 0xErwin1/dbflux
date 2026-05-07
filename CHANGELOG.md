@@ -2,6 +2,21 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.5.0-dev.2] – 2026-05-07
+
+### Features
+
+* Add built-in CloudWatch Logs integration (#43)
+
+### Fixes
+
+* Sync auth-provider save hooks when profiles are updated
+* Restore `nix develop`
+* Keep empty-table CRUD actions available in the data grid
+* Preserve MySQL connection configs on reload
+
+---
+
 ## [0.5.0-dev.1] – 2026-04-24
 
 ### Features
