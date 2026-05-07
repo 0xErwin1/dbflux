@@ -95,3 +95,18 @@ sha2 = "0.10"
 interprocess = "2.4"
 mlua = "0.10"
 indexmap = "2"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+unused_must_use = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unwrap_in_result = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+indexing_slicing = "warn"
