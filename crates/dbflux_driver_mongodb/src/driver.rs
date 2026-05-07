@@ -689,6 +689,8 @@ fn build_mongodb_uri(
     uri
 }
 
+// Only called from `parse_uri` after `starts_with("mongodb+srv://")` is verified.
+#[allow(clippy::expect_used)]
 fn parse_srv_uri(uri: &str) -> FormValues {
     let mut values = HashMap::new();
     values.insert("use_uri".to_string(), "true".to_string());
@@ -1835,6 +1837,8 @@ impl Connection for MongoConnection {
         Ok(CrudResult::new(affected, None))
     }
 
+    // The `docs.len() == 1` guard inside this function ensures `next()` is always Some.
+    #[allow(clippy::unwrap_used)]
     fn insert_document(&self, insert: &DocumentInsert) -> Result<CrudResult, DbError> {
         let client = self
             .client
@@ -3477,11 +3481,11 @@ mod tests {
             .expect("standard mongodb uri should parse");
 
         assert!(
-            values.get("use_uri").is_none(),
+            !values.contains_key("use_uri"),
             "standard URI should not set use_uri"
         );
         assert!(
-            values.get("uri").is_none(),
+            !values.contains_key("uri"),
             "standard URI should not set uri"
         );
         assert_eq!(values.get("host").map(String::as_str), Some("localhost"));
@@ -3589,8 +3593,8 @@ mod tests {
         let parsed = driver
             .parse_uri(original)
             .expect("standard URI should parse");
-        assert!(parsed.get("use_uri").is_none());
-        assert!(parsed.get("uri").is_none());
+        assert!(!parsed.contains_key("use_uri"));
+        assert!(!parsed.contains_key("uri"));
 
         // Standard URI uses host/port form, not URI mode
         let config = driver.build_config(&parsed).expect("config should build");
@@ -3828,7 +3832,7 @@ mod tests {
         assert_eq!(bson_to_value(&Bson::Boolean(true)), Value::Bool(true));
         assert_eq!(bson_to_value(&Bson::Int32(42)), Value::Int(42));
         assert_eq!(bson_to_value(&Bson::Int64(100)), Value::Int(100));
-        assert_eq!(bson_to_value(&Bson::Double(3.14)), Value::Float(3.14));
+        assert_eq!(bson_to_value(&Bson::Double(2.5)), Value::Float(2.5));
         assert_eq!(
             bson_to_value(&Bson::String("hello".to_string())),
             Value::Text("hello".to_string())

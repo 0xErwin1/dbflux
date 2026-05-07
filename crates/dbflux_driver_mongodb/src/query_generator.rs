@@ -24,6 +24,8 @@ impl QueryGenerator for MongoShellGenerator {
     }
 }
 
+// The `documents.len() == 1` guard ensures `[0]` is always in bounds.
+#[allow(clippy::indexing_slicing)]
 fn generate_insert(insert: &dbflux_core::DocumentInsert) -> String {
     let collection = &insert.collection;
 

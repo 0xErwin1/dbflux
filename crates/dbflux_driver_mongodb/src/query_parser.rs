@@ -531,6 +531,8 @@ fn parse_update_many_operation(args_str: &str) -> Result<MongoOperation, DbError
 }
 
 /// Parse update operation (shared by updateOne/updateMany)
+// The `args.len() < 2` early-return guard ensures `[0]` and `[1]` are always in bounds.
+#[allow(clippy::indexing_slicing)]
 fn parse_update_operation(args_str: &str, many: bool) -> Result<MongoOperation, DbError> {
     let args = parse_arguments(args_str)?;
 
@@ -593,6 +595,8 @@ fn parse_delete_operation(args_str: &str, many: bool) -> Result<MongoOperation, 
 }
 
 /// Parse replaceOne operation arguments
+// The `args.len() < 2` early-return guard ensures `[0]` and `[1]` are always in bounds.
+#[allow(clippy::indexing_slicing)]
 fn parse_replace_one_operation(args_str: &str) -> Result<MongoOperation, DbError> {
     let args = parse_arguments(args_str)?;
 
@@ -715,6 +719,8 @@ fn parse_relaxed_json(input: &str) -> Result<Document, DbError> {
 }
 
 /// Normalize relaxed JSON to strict JSON
+// All indexing is guarded by explicit `i < chars.len()` checks in the loop body.
+#[allow(clippy::indexing_slicing)]
 fn normalize_relaxed_json(input: &str) -> String {
     let mut result = String::with_capacity(input.len() * 2);
     let chars: Vec<char> = input.chars().collect();
