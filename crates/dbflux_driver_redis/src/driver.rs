@@ -676,6 +676,8 @@ impl Connection for RedisConnection {
             .transpose()?;
 
         let value = self.with_connection(query_db, |conn| {
+            // Invariant: parts is non-empty — guarded by `if parts.is_empty()` above.
+            #[allow(clippy::indexing_slicing)]
             let mut command = redis::cmd(&parts[0]);
             for arg in parts.iter().skip(1) {
                 command.arg(arg);
@@ -1732,9 +1734,12 @@ fn fetch_database_count(conn: &mut redis::Connection) -> Result<u32, DbError> {
         ));
     }
 
-    values[1]
+    // Invariant: len >= 2 is guaranteed by the early-return guard above.
+    #[allow(clippy::indexing_slicing)]
+    let db_count = values[1]
         .parse::<u32>()
-        .map_err(|_| DbError::query_failed("Invalid Redis databases count"))
+        .map_err(|_| DbError::query_failed("Invalid Redis databases count"));
+    db_count
 }
 
 fn fetch_keyspace_stats(
@@ -2185,6 +2190,8 @@ fn check_redis_arity(tokens: &[String], query: &str) -> Vec<EditorDiagnostic> {
         return vec![];
     }
 
+    // Invariant: tokens is non-empty — guarded by `if tokens.is_empty()` above.
+    #[allow(clippy::indexing_slicing)]
     let command = tokens[0].to_uppercase();
     let arg_count = tokens.len() - 1;
 
