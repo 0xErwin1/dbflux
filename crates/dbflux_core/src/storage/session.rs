@@ -36,6 +36,9 @@ impl SessionTab {
     pub fn query_language(&self) -> QueryLanguage {
         match self.language.as_str() {
             "sql" => QueryLanguage::Sql,
+            "cwli" => QueryLanguage::CloudWatchLogsInsightsQl,
+            "ppl" => QueryLanguage::OpenSearchPpl,
+            "opensearch-sql" => QueryLanguage::OpenSearchSql,
             "mongo" => QueryLanguage::MongoQuery,
             "redis" => QueryLanguage::RedisCommands,
             "cypher" => QueryLanguage::Cypher,
@@ -51,6 +54,9 @@ impl SessionTab {
     pub fn language_key(language: QueryLanguage) -> String {
         match language {
             QueryLanguage::Sql => "sql".into(),
+            QueryLanguage::CloudWatchLogsInsightsQl => "cwli".into(),
+            QueryLanguage::OpenSearchPpl => "ppl".into(),
+            QueryLanguage::OpenSearchSql => "opensearch-sql".into(),
             QueryLanguage::MongoQuery => "mongo".into(),
             QueryLanguage::RedisCommands => "redis".into(),
             QueryLanguage::Cypher => "cypher".into(),
@@ -250,6 +256,7 @@ mod tests {
                         database: Some("mydb".into()),
                         schema: Some("public".into()),
                         container: None,
+                        source: None,
                     },
                 },
             ],

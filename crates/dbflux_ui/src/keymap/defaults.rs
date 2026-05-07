@@ -19,6 +19,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(form_navigation_layer());
     stack.add_layer(context_bar_layer());
     stack.add_layer(audit_layer());
+    stack.add_layer(event_streams_picker_layer());
 
     stack
 });
@@ -125,6 +126,7 @@ fn sidebar_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Sidebar);
 
     layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
     layer.bind(
         KeyChord::new("q", Modifiers::none()),
         Command::SidebarNextTab,
@@ -253,6 +255,32 @@ fn editor_layer() -> KeymapLayer {
         KeyChord::new("s", Modifiers::ctrl_shift()),
         Command::SaveFileAs,
     );
+
+    layer
+}
+
+fn event_streams_picker_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::EventStreamsPicker);
+
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+
+    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
+    layer.bind(
+        KeyChord::new("home", Modifiers::none()),
+        Command::SelectFirst,
+    );
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
 
     layer
 }

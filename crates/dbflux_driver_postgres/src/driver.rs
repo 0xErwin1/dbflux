@@ -1532,6 +1532,8 @@ impl Connection for PostgresConnection {
             foreign_keys: Some(foreign_keys),
             constraints: Some(constraints),
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         })
     }
 
@@ -2126,6 +2128,8 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
                 foreign_keys: None,
                 constraints: None,
                 sample_fields: None,
+                presentation: dbflux_core::CollectionPresentation::DataGrid,
+                child_items: None,
             }
         })
         .collect();

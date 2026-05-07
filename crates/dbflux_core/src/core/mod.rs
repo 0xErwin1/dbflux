@@ -16,8 +16,8 @@ pub use task::{
 };
 pub use traits::{
     CodeGenScope, CodeGeneratorInfo, Connection, ConnectionExt, ConnectionOverrides, DbDriver,
-    DocumentConnection, KeyValueApi, KeyValueConnection, NoopCancelHandle, QueryCancelHandle,
-    RelationalConnection, SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy,
-    SchemaObjectKind,
+    DocumentConnection, EventStreamTarget, KeyValueApi, KeyValueConnection, NoopCancelHandle,
+    QueryCancelHandle, RelationalConnection, SchemaDropTarget, SchemaFeatures,
+    SchemaLoadingStrategy, SchemaObjectKind, SourceContextSpec, SourceQueryMode,
 };
 pub use value::Value;

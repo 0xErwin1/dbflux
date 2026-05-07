@@ -552,6 +552,15 @@ pub enum QueryLanguage {
     /// Standard SQL (with dialect variations).
     Sql,
 
+    /// CloudWatch Logs Insights query language.
+    CloudWatchLogsInsightsQl,
+
+    /// OpenSearch Piped Processing Language.
+    OpenSearchPpl,
+
+    /// OpenSearch SQL as exposed by CloudWatch Logs.
+    OpenSearchSql,
+
     /// MongoDB Query Language (find, aggregate, etc.).
     MongoQuery,
 
@@ -589,6 +598,8 @@ impl QueryLanguage {
         let ext = path.extension()?.to_str()?.to_lowercase();
         match ext.as_str() {
             "sql" => Some(Self::Sql),
+            "cwli" => Some(Self::CloudWatchLogsInsightsQl),
+            "ppl" => Some(Self::OpenSearchPpl),
             "js" | "mongodb" => Some(Self::MongoQuery),
             "redis" | "red" => Some(Self::RedisCommands),
             "cypher" | "cyp" => Some(Self::Cypher),
@@ -604,7 +615,9 @@ impl QueryLanguage {
     /// Default file extension for "Save As" dialogs.
     pub fn default_extension(&self) -> &'static str {
         match self {
-            Self::Sql | Self::Cql => "sql",
+            Self::Sql | Self::OpenSearchSql | Self::Cql => "sql",
+            Self::CloudWatchLogsInsightsQl => "cwli",
+            Self::OpenSearchPpl => "ppl",
             Self::MongoQuery => "js",
             Self::RedisCommands => "redis",
             Self::Cypher => "cypher",
@@ -620,6 +633,9 @@ impl QueryLanguage {
     pub fn file_dialog_extensions(&self) -> &[&'static str] {
         match self {
             Self::Sql => &["sql"],
+            Self::CloudWatchLogsInsightsQl => &["cwli"],
+            Self::OpenSearchPpl => &["ppl"],
+            Self::OpenSearchSql => &["sql"],
             Self::MongoQuery => &["js", "mongodb"],
             Self::RedisCommands => &["redis", "red"],
             Self::Cypher => &["cypher", "cyp"],
@@ -635,6 +651,9 @@ impl QueryLanguage {
     pub fn display_name(&self) -> &str {
         match self {
             QueryLanguage::Sql => "SQL",
+            QueryLanguage::CloudWatchLogsInsightsQl => "CloudWatch Logs Insights QL",
+            QueryLanguage::OpenSearchPpl => "OpenSearch PPL",
+            QueryLanguage::OpenSearchSql => "OpenSearch SQL",
             QueryLanguage::MongoQuery => "MongoDB Query",
             QueryLanguage::RedisCommands => "Redis Commands",
             QueryLanguage::Cypher => "Cypher",
@@ -651,6 +670,9 @@ impl QueryLanguage {
     pub fn file_extension(&self) -> &'static str {
         match self {
             QueryLanguage::Sql => "sql",
+            QueryLanguage::CloudWatchLogsInsightsQl => "cwli",
+            QueryLanguage::OpenSearchPpl => "ppl",
+            QueryLanguage::OpenSearchSql => "sql",
             QueryLanguage::MongoQuery => "mongodb",
             QueryLanguage::RedisCommands => "redis",
             QueryLanguage::Cypher => "cypher",
@@ -666,7 +688,8 @@ impl QueryLanguage {
     /// Returns the syntax highlighting mode for code editors.
     pub fn editor_mode(&self) -> &'static str {
         match self {
-            QueryLanguage::Sql | QueryLanguage::Cql => "sql",
+            QueryLanguage::Sql | QueryLanguage::OpenSearchSql | QueryLanguage::Cql => "sql",
+            QueryLanguage::CloudWatchLogsInsightsQl | QueryLanguage::OpenSearchPpl => "plaintext",
             QueryLanguage::MongoQuery => "javascript",
             QueryLanguage::RedisCommands => "plaintext",
             QueryLanguage::Cypher => "cypher",
@@ -682,6 +705,15 @@ impl QueryLanguage {
     pub fn placeholder(&self) -> &'static str {
         match self {
             QueryLanguage::Sql => "-- Enter SQL here...",
+            QueryLanguage::CloudWatchLogsInsightsQl => {
+                "fields @timestamp, @message | sort @timestamp desc | limit 100"
+            }
+            QueryLanguage::OpenSearchPpl => {
+                "source = logGroups(logGroupIdentifier: ['LogGroup']) | fields @timestamp, @message | head 100"
+            }
+            QueryLanguage::OpenSearchSql => {
+                "SELECT `@timestamp`, `@message` FROM `logGroups(logGroupIdentifier: ['LogGroup'])` LIMIT 100"
+            }
             QueryLanguage::MongoQuery => "// db.collection.find({})",
             QueryLanguage::RedisCommands => "# Enter Redis command...",
             QueryLanguage::Cypher => "// Enter Cypher query...",
@@ -697,7 +729,11 @@ impl QueryLanguage {
     /// Returns the comment prefix for this query language.
     pub fn comment_prefix(&self) -> &'static str {
         match self {
-            QueryLanguage::Sql | QueryLanguage::InfluxQuery | QueryLanguage::Cql => "--",
+            QueryLanguage::Sql
+            | QueryLanguage::OpenSearchSql
+            | QueryLanguage::InfluxQuery
+            | QueryLanguage::Cql => "--",
+            QueryLanguage::CloudWatchLogsInsightsQl | QueryLanguage::OpenSearchPpl => "#",
             QueryLanguage::MongoQuery | QueryLanguage::Cypher => "//",
             QueryLanguage::RedisCommands | QueryLanguage::Python | QueryLanguage::Bash => "#",
             QueryLanguage::Lua => "--",
@@ -709,6 +745,9 @@ impl QueryLanguage {
         matches!(
             self,
             QueryLanguage::Sql
+                | QueryLanguage::CloudWatchLogsInsightsQl
+                | QueryLanguage::OpenSearchPpl
+                | QueryLanguage::OpenSearchSql
                 | QueryLanguage::MongoQuery
                 | QueryLanguage::RedisCommands
                 | QueryLanguage::Cypher

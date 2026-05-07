@@ -5,6 +5,7 @@ use super::types::{DocumentId, DocumentState};
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::history_modal::{HistoryModal, HistoryQuerySelected};
@@ -19,9 +20,9 @@ use dbflux_core::observability::{
 };
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
-    DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
-    OutputReceiver, QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy,
-    TaskTarget, ValidationResult, detect_dangerous_query,
+    DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext,
+    ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
+    RefreshPolicy, SchemaLoadingStrategy, TaskTarget, ValidationResult, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -80,6 +81,78 @@ pub enum SqlQueryFocus {
     ContextBar,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum ContextBarSlot {
+    #[default]
+    Connection,
+    Database,
+    Schema,
+    SourceQueryMode,
+    SourceTargets,
+    SourceStart,
+    SourceEnd,
+}
+
+fn build_source_window_context(
+    query_mode: Option<String>,
+    targets: &[String],
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+) -> Result<ExecutionSourceContext, &'static str> {
+    let query_mode = query_mode.filter(|value| !value.trim().is_empty());
+    let requires_targets = query_mode.as_deref() != Some("sql");
+
+    if requires_targets && targets.is_empty() {
+        return Err("Select at least one source");
+    }
+
+    let Some(start_ms) = start_ms else {
+        return Err("Start time is required");
+    };
+
+    let Some(end_ms) = end_ms else {
+        return Err("End time is required");
+    };
+
+    if start_ms > end_ms {
+        return Err("Start time must be earlier than end time");
+    }
+
+    Ok(ExecutionSourceContext::CollectionWindow {
+        targets: targets.to_vec(),
+        start_ms,
+        end_ms,
+        query_mode,
+    })
+}
+
+fn format_source_datetime_input(timestamp_ms: i64) -> String {
+    dbflux_core::chrono::DateTime::from_timestamp_millis(timestamp_ms)
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_default()
+}
+
+fn source_input_values_from_context(source: &ExecutionSourceContext) -> Option<(String, String)> {
+    match source {
+        ExecutionSourceContext::CollectionWindow {
+            start_ms, end_ms, ..
+        } => Some((
+            format_source_datetime_input(*start_ms),
+            format_source_datetime_input(*end_ms),
+        )),
+    }
+}
+
+fn query_request_for_execution(
+    query: String,
+    active_database: Option<String>,
+    exec_ctx: &ExecutionContext,
+) -> QueryRequest {
+    QueryRequest::new(query)
+        .with_database(active_database)
+        .with_execution_context(Some(exec_ctx.clone()))
+}
+
 pub struct CodeDocument {
     // Identity
     id: DocumentId,
@@ -107,6 +180,11 @@ pub struct CodeDocument {
     connection_dropdown: Entity<Dropdown>,
     database_dropdown: Entity<Dropdown>,
     schema_dropdown: Entity<Dropdown>,
+    source_query_mode_dropdown: Entity<Dropdown>,
+    source_targets: Entity<MultiSelect>,
+    source_start_input: Entity<InputState>,
+    source_end_input: Entity<InputState>,
+    pending_source_input_values: Option<(String, String)>,
     _context_subscriptions: Vec<Subscription>,
 
     // Execution
@@ -132,7 +210,7 @@ pub struct CodeDocument {
     layout: SqlQueryLayout,
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
-    context_bar_index: usize,
+    context_bar_slot: ContextBarSlot,
     results_maximized: bool,
 
     // Task runner (query execution)
@@ -364,13 +442,62 @@ impl CodeDocument {
             Self::create_database_dropdown(&app_state, &exec_ctx, window, cx);
         let (schema_dropdown, schema_sub) =
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
+        let source_query_mode_dropdown = cx.new(|_cx| {
+            Dropdown::new("ctx-source-query-mode")
+                .placeholder("Syntax")
+                .toolbar_style(true)
+        });
+        let source_targets =
+            cx.new(|_cx| MultiSelect::new("ctx-source-targets").placeholder("Sources"));
+        let source_start_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
+        let source_end_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T01:00:00Z"));
+        let source_query_mode_sub = cx.subscribe_in(
+            &source_query_mode_dropdown,
+            window,
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                this.on_source_query_mode_changed(&event.item, cx);
+            },
+        );
+        let source_targets_sub = cx.subscribe(
+            &source_targets,
+            |this, entity, _event: &MultiSelectChanged, cx| {
+                let selected_targets = entity
+                    .read(cx)
+                    .selected_values()
+                    .iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>();
+
+                this.on_source_targets_changed(selected_targets, cx);
+            },
+        );
+        let source_start_sub = cx.subscribe_in(
+            &source_start_input,
+            window,
+            |this, _input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.on_source_time_range_changed(cx);
+                }
+            },
+        );
+        let source_end_sub = cx.subscribe_in(
+            &source_end_input,
+            window,
+            |this, _input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.on_source_time_range_changed(cx);
+                }
+            },
+        );
         let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
             this.sync_context_dropdowns(cx);
         });
 
         let refresh_policy = default_refresh;
 
-        Self {
+        let mut document = Self {
             id: doc_id,
             title: "Query 1".to_string(),
             state: DocumentState::Clean,
@@ -388,7 +515,21 @@ impl CodeDocument {
             connection_dropdown,
             database_dropdown,
             schema_dropdown,
-            _context_subscriptions: vec![conn_sub, db_sub, schema_sub, app_state_sub],
+            source_query_mode_dropdown,
+            source_targets,
+            source_start_input,
+            source_end_input,
+            pending_source_input_values: None,
+            _context_subscriptions: vec![
+                conn_sub,
+                db_sub,
+                schema_sub,
+                source_query_mode_sub,
+                source_targets_sub,
+                source_start_sub,
+                source_end_sub,
+                app_state_sub,
+            ],
             execution_history: Vec::new(),
             active_execution_index: None,
             pending_result: None,
@@ -405,7 +546,7 @@ impl CodeDocument {
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
-            context_bar_index: 0,
+            context_bar_slot: ContextBarSlot::Connection,
             results_maximized: false,
             runner,
             refresh_policy,
@@ -424,7 +565,10 @@ impl CodeDocument {
             show_saved_label: false,
             _saved_label_timer: None,
             pending_error: None,
-        }
+        };
+
+        document.sync_context_dropdowns(cx);
+        document
     }
 
     pub fn can_auto_refresh(&self, cx: &App) -> bool {
@@ -510,6 +654,10 @@ impl CodeDocument {
 
     /// Set the execution context (e.g. parsed from file header).
     pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
+        self.pending_source_input_values = ctx
+            .source
+            .as_ref()
+            .and_then(source_input_values_from_context);
         self.connection_id = ctx.connection_id;
         self.exec_ctx = ctx;
         self.sync_context_dropdowns(cx);
@@ -953,6 +1101,26 @@ impl CodeDocument {
         if let Err(err) = self.app_state.read(cx).audit_service().record(e) {
             log::warn!("Failed to emit dangerous query audit event: {}", err);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_input_values_from_context;
+    use dbflux_core::ExecutionSourceContext;
+
+    #[test]
+    fn source_input_values_restore_start_and_end_strings() {
+        let values = source_input_values_from_context(&ExecutionSourceContext::CollectionWindow {
+            targets: vec!["/aws/lambda/app".to_string()],
+            start_ms: 1_704_067_200_000,
+            end_ms: 1_704_070_800_000,
+            query_mode: Some("cwli".to_string()),
+        })
+        .expect("source input values");
+
+        assert_eq!(values.0, "2024-01-01T00:00:00Z");
+        assert_eq!(values.1, "2024-01-01T01:00:00Z");
     }
 }
 

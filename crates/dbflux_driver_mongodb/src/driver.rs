@@ -1550,6 +1550,8 @@ impl Connection for MongoConnection {
                     foreign_keys: None,
                     constraints: None,
                     sample_fields: None,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 }
             })
             .collect();
@@ -1677,6 +1679,8 @@ impl Connection for MongoConnection {
             foreign_keys: None,
             constraints: None,
             sample_fields: Some(sample_fields),
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         })
     }
 

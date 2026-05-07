@@ -1,5 +1,23 @@
 use super::*;
 
+fn build_file_content_for_language(
+    editor_content: &str,
+    exec_ctx: &ExecutionContext,
+    language: QueryLanguage,
+) -> String {
+    if !language.supports_connection_context() {
+        return editor_content.to_string();
+    }
+
+    let header = exec_ctx.to_comment_header(language.clone());
+    if header.is_empty() {
+        return editor_content.to_string();
+    }
+
+    let body = CodeDocument::strip_existing_annotations(editor_content, language);
+    format!("{}\n{}", header, body)
+}
+
 impl CodeDocument {
     /// Save to the current path. If no path is set, redirects to Save As.
     pub fn save_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -216,18 +234,11 @@ impl CodeDocument {
     pub fn build_file_content(&self, cx: &App) -> String {
         let editor_content = self.input_state.read(cx).value().to_string();
 
-        let language = self.query_language.clone();
-        if !language.supports_connection_context() {
-            return editor_content;
-        }
-
-        let header = self.exec_ctx.to_comment_header(language.clone());
-        if header.is_empty() {
-            return editor_content;
-        }
-
-        let body = Self::strip_existing_annotations(&editor_content, language);
-        format!("{}\n{}", header, body)
+        build_file_content_for_language(
+            &editor_content,
+            &self.exec_ctx,
+            self.query_language.clone(),
+        )
     }
 
     /// Strip existing annotation comments from the beginning of content.
@@ -258,5 +269,36 @@ impl CodeDocument {
         } else {
             &content[last_annotation_end..]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_file_content_for_language;
+    use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryLanguage};
+    use uuid::Uuid;
+
+    #[test]
+    fn file_headers_remain_relational_only_when_source_window_exists() {
+        let exec_ctx = ExecutionContext {
+            connection_id: Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
+            database: Some("logs".into()),
+            schema: None,
+            container: None,
+            source: Some(ExecutionSourceContext::CollectionWindow {
+                targets: vec!["/aws/lambda/app".into()],
+                start_ms: 10,
+                end_ms: 20,
+                query_mode: Some("cwli".into()),
+            }),
+        };
+
+        let content = build_file_content_for_language("SELECT 1;", &exec_ctx, QueryLanguage::Sql);
+
+        assert!(content.contains("-- @connection:"));
+        assert!(content.contains("-- @database: logs"));
+        assert!(!content.contains("log_groups"));
+        assert!(!content.contains("start_ms"));
+        assert!(!content.contains("end_ms"));
     }
 }

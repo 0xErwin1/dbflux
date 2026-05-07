@@ -88,33 +88,15 @@ impl SshFormNav {
     }
 
     #[cfg(test)]
-    pub(super) fn move_up(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_up(&rows);
-    }
-
-    #[cfg(test)]
     pub(super) fn move_right(&mut self) {
         let rows = self.form_rows();
         self.nav.move_right(&rows);
     }
 
     #[cfg(test)]
-    pub(super) fn move_left(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_left(&rows);
-    }
-
-    #[cfg(test)]
     pub(super) fn tab_next(&mut self) {
         let rows = self.form_rows();
         self.nav.tab_next(&rows);
-    }
-
-    #[cfg(test)]
-    pub(super) fn tab_prev(&mut self) {
-        let rows = self.form_rows();
-        self.nav.tab_prev(&rows);
     }
 
     #[cfg(test)]

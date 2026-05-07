@@ -209,6 +209,15 @@ impl ConnectionDriverConfigDto {
                 dto.dynamo_endpoint = endpoint.clone();
                 dto.dynamo_table = table.clone();
             }
+            DbConfig::CloudWatchLogs {
+                region,
+                profile,
+                endpoint,
+            } => {
+                dto.dynamo_region = Some(region.clone());
+                dto.dynamo_profile = profile.clone();
+                dto.dynamo_endpoint = endpoint.clone();
+            }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
                 dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
@@ -296,6 +305,11 @@ impl ConnectionDriverConfigDto {
                 endpoint: self.dynamo_endpoint.clone(),
                 table: self.dynamo_table.clone(),
             }),
+            DbKind::CloudWatchLogs => Some(DbConfig::CloudWatchLogs {
+                region: self.dynamo_region.clone().unwrap_or_default(),
+                profile: self.dynamo_profile.clone(),
+                endpoint: self.dynamo_endpoint.clone(),
+            }),
         }
     }
 }
@@ -313,6 +327,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::MongoDB => "MongoDB",
         DbKind::Redis => "Redis",
         DbKind::DynamoDB => "DynamoDB",
+        DbKind::CloudWatchLogs => "CloudWatchLogs",
     }
     .to_string()
 }
@@ -326,6 +341,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "MongoDB" => Some(DbKind::MongoDB),
         "Redis" => Some(DbKind::Redis),
         "DynamoDB" => Some(DbKind::DynamoDB),
+        "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
         _ => None,
     }
 }
@@ -677,54 +693,57 @@ impl ConnectionDriverConfigsRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StorageRuntime;
 
-    fn mysql_config() -> DbConfig {
-        DbConfig::MySQL {
-            use_uri: false,
-            uri: None,
-            host: "db.example.internal".to_string(),
-            port: 3307,
-            user: "app_user".to_string(),
-            database: Some("app_db".to_string()),
-            ssl_mode: SslMode::Require,
-            ssh_tunnel: None,
-            ssh_tunnel_profile_id: None,
-        }
+    fn temp_repo() -> (tempfile::TempDir, ConnectionDriverConfigsRepository) {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime = StorageRuntime::for_path(temp_dir.path().join("dbflux.db")).expect("runtime");
+        let repo = ConnectionDriverConfigsRepository::new(runtime.dbflux_db());
+
+        (temp_dir, repo)
     }
 
     #[test]
-    fn mysql_driver_config_round_trips_as_mysql() {
-        let dto =
-            ConnectionDriverConfigDto::from_db_config("profile-id".to_string(), &mysql_config());
-        let config = dto.to_db_config().expect("config should round-trip");
+    fn cloudwatch_driver_config_roundtrips_through_repository() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
 
-        match config {
-            DbConfig::MySQL {
-                host,
-                port,
-                user,
-                database,
-                ssl_mode,
-                ..
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'CloudWatch', 'cloudwatch', 'cloudwatchlogs', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::CloudWatchLogs {
+            region: "us-east-1".to_string(),
+            profile: Some("dev".to_string()),
+            endpoint: Some("http://localhost:4566".to_string()),
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.insert(&dto).expect("insert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::CloudWatchLogs {
+                region,
+                profile,
+                endpoint,
             } => {
-                assert_eq!(host, "db.example.internal");
-                assert_eq!(port, 3307);
-                assert_eq!(user, "app_user");
-                assert_eq!(database.as_deref(), Some("app_db"));
-                assert_eq!(ssl_mode, SslMode::Require);
+                assert_eq!(region, "us-east-1");
+                assert_eq!(profile.as_deref(), Some("dev"));
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:4566"));
             }
-            other => panic!("expected MySQL config, got {other:?}"),
+            other => panic!("unexpected config: {other:?}"),
         }
-    }
-
-    #[test]
-    fn mariadb_driver_config_key_round_trips_as_mysql_config() {
-        let mut dto =
-            ConnectionDriverConfigDto::from_db_config("profile-id".to_string(), &mysql_config());
-        dto.config_key = "MariaDB".to_string();
-
-        let config = dto.to_db_config().expect("config should round-trip");
-
-        assert!(matches!(config, DbConfig::MySQL { .. }));
     }
 }

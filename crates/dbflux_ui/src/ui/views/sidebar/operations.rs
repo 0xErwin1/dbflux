@@ -2525,13 +2525,15 @@ impl Sidebar {
     }
 
     pub(crate) fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
-        let uses_pipeline = self
-            .app_state
-            .read(cx)
-            .profiles()
-            .iter()
-            .find(|p| p.id == profile_id)
-            .is_some_and(|p| p.uses_pipeline());
+        let uses_pipeline = {
+            let app_state = self.app_state.read(cx);
+
+            app_state
+                .profiles()
+                .iter()
+                .find(|p| p.id == profile_id)
+                .is_some_and(|p| app_state.profile_uses_connect_pipeline(p))
+        };
 
         if uses_pipeline {
             self.connect_via_pipeline(profile_id, cx);

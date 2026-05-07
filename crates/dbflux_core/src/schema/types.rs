@@ -595,6 +595,14 @@ pub struct TableInfo {
     /// `None` = not loaded, `Some(vec)` = loaded via document sampling.
     #[serde(default)]
     pub sample_fields: Option<Vec<FieldInfo>>,
+
+    /// Preferred UI presentation for opening this container.
+    #[serde(default)]
+    pub presentation: CollectionPresentation,
+
+    /// Driver-provided child sources that should appear under this container.
+    #[serde(default)]
+    pub child_items: Option<Vec<CollectionChildInfo>>,
 }
 
 /// View metadata.
@@ -774,6 +782,64 @@ pub struct CollectionInfo {
     /// Whether the collection is capped (fixed-size).
     #[serde(default)]
     pub is_capped: bool,
+
+    /// Preferred UI presentation for opening this collection.
+    #[serde(default)]
+    pub presentation: CollectionPresentation,
+
+    /// Driver-provided child sources that should appear under this collection.
+    #[serde(default)]
+    pub child_items: Option<Vec<CollectionChildInfo>>,
+}
+
+/// Preferred UI presentation for document containers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CollectionPresentation {
+    #[default]
+    DataGrid,
+    EventStream,
+}
+
+/// Driver-provided child source metadata for a collection/container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionChildInfo {
+    pub id: String,
+    pub label: String,
+
+    /// Optional driver-provided event timestamp used for generic child pickers.
+    #[serde(default)]
+    pub last_event_ts_ms: Option<i64>,
+
+    #[serde(default)]
+    pub presentation: CollectionPresentation,
+}
+
+/// Request for a page of driver-owned child sources under a collection/container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionChildrenRequest {
+    pub collection: crate::CollectionRef,
+    pub limit: u32,
+
+    #[serde(default)]
+    pub page_token: Option<String>,
+}
+
+/// One page of driver-owned child sources under a collection/container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionChildrenPage {
+    pub items: Vec<CollectionChildInfo>,
+
+    #[serde(default)]
+    pub next_page_token: Option<String>,
+}
+
+/// Cached collection child list plus continuation token.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionChildrenCache {
+    pub items: Vec<CollectionChildInfo>,
+
+    #[serde(default)]
+    pub next_page_token: Option<String>,
 }
 
 /// Field info discovered from document sampling.

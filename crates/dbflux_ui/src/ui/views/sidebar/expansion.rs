@@ -223,11 +223,24 @@ impl Sidebar {
             }
         }
 
-        if matches!(parsed, Some(SchemaNodeId::Collection { .. })) {
+        if let Some(SchemaNodeId::Collection {
+            profile_id,
+            database,
+            name,
+        }) = &parsed
+        {
             let pending = PendingAction::ExpandCollection {
                 item_id: item_id.to_string(),
             };
-            if matches!(
+
+            if self.collection_node_is_event_stream(*profile_id, database, name, cx) {
+                if matches!(
+                    self.ensure_collection_children(*profile_id, database, name, pending, cx),
+                    TableDetailsStatus::NotFound
+                ) {
+                    return false;
+                }
+            } else if matches!(
                 self.ensure_table_details(item_id, pending, cx),
                 TableDetailsStatus::NotFound
             ) {
@@ -319,6 +332,27 @@ impl Sidebar {
         true
     }
 
+    fn collection_node_is_event_stream(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+        cx: &App,
+    ) -> bool {
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|connection| connection.schema_for_target_database(database))
+            .and_then(|schema| {
+                schema
+                    .collections()
+                    .iter()
+                    .find(|item| item.name == collection)
+            })
+            .is_some_and(|item| item.presentation == CollectionPresentation::EventStream)
+    }
+
     pub(super) fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
         let selected_index = self.tree_state.read(cx).selected_index();
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
@@ -382,6 +416,7 @@ impl Sidebar {
             if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
                 conn.database_schemas.remove(db_name);
                 conn.table_details.retain(|(db, _), _| db != db_name);
+                conn.collection_children.retain(|(db, _), _| db != db_name);
                 conn.schema_types.retain(|key, _| key.database != db_name);
                 conn.schema_indexes.retain(|key, _| key.database != db_name);
                 conn.schema_foreign_keys
@@ -408,6 +443,7 @@ impl Sidebar {
             if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
                 let key = (cache_db.to_string(), target.name.clone());
                 conn.table_details.remove(&key);
+                conn.collection_children.remove(&key);
 
                 if target.kind == SchemaObjectKind::Table {
                     let target_schema = target.schema.as_deref();

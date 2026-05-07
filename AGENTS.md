@@ -247,6 +247,15 @@ Architecture details live in `ARCHITECTURE.md`. This file only keeps the agent-f
 
 **Never add driver-specific logic in UI code.** The UI must remain agnostic to specific database implementations.
 
+**This rule is strict and applies to both `dbflux_ui` and app-layer orchestration code.** Do not branch on concrete driver IDs or driver names in the app/UI layer, and do not add direct references to specific drivers there unless the code is only registering/building the driver itself.
+
+In practice, this means:
+
+- No `if driver_id == "..."` or `match driver_id` checks in `dbflux_ui` or app-facing workflow code.
+- No CloudWatch/MongoDB/Redis/etc. special cases in document rendering, sidebar routing, workspace tab opening, or query-context controls.
+- The core must expose the seam the UI needs, and the driver must populate or implement that seam.
+- The UI may only respond to generic core abstractions such as metadata, capabilities, collection presentation hints, child-source descriptors, event-stream targets, and source-context specs.
+
 Instead of:
 
 ```rust
@@ -278,6 +287,10 @@ Key abstractions for UI adaptation:
 - `DatabaseCategory`: Determines view mode (table vs document tree), terminology (rows vs documents)
 - `QueryLanguage`: Determines editor syntax highlighting, placeholder text, comment prefix
 - `DriverCapabilities`: Determines which features to enable (pagination, transactions, etc.)
+- `CollectionPresentation`: Determines how a collection/container opens (for example data grid vs event stream)
+- `CollectionChildInfo`: Declares driver-owned child sources that appear in the sidebar without the UI inferring them from driver-specific conventions
+- `EventStreamTarget`: Lets the workspace/audit viewer open driver-backed event streams without embedding driver-specific routing
+- `SourceContextSpec`: Lets drivers declare extra query-context controls while the UI stays generic
 
 ### Generic Deduplication Patterns
 

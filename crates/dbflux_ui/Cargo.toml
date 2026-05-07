@@ -71,6 +71,10 @@ optional = true
 workspace = true
 optional = true
 
+[dependencies.dbflux_driver_cloudwatch]
+workspace = true
+optional = true
+
 [dependencies.dbflux_aws]
 workspace = true
 optional = true
@@ -80,13 +84,14 @@ workspace = true
 optional = true
 
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "lua", "aws", "mcp"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "lua", "aws", "mcp"]
 sqlite = ["dbflux_driver_sqlite", "dbflux_mcp_server?/sqlite"]
 postgres = ["dbflux_driver_postgres", "dbflux_mcp_server?/postgres"]
 mysql = ["dbflux_driver_mysql", "dbflux_mcp_server?/mysql"]
 mongodb = ["dbflux_driver_mongodb", "dbflux_mcp_server?/mongodb"]
 redis = ["dbflux_driver_redis", "dbflux_mcp_server?/redis"]
 dynamodb = ["dbflux_driver_dynamodb", "dbflux_mcp_server?/dynamodb"]
+cloudwatch = ["dbflux_driver_cloudwatch"]
 lua = ["dbflux_lua", "dbflux_app/lua"]
 aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws", "dbflux_app/aws"]
 mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp"]

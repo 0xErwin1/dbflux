@@ -57,6 +57,7 @@ pub(crate) struct FullTab {
     pub scratch_file_path: Option<String>,
     pub shadow_file_path: Option<String>,
     pub file_path: Option<String>,
+    pub exec_ctx_json: Option<String>,
     /// Execution context fields (extracted from exec_ctx_json, stored as native columns)
     pub exec_ctx_connection_id: Option<String>,
     pub exec_ctx_database: Option<String>,
@@ -198,7 +199,7 @@ impl SessionRepository {
             .prepare(
                 "SELECT id, tab_kind, title, position, is_pinned,
                         scratch_file_path, shadow_file_path, language, file_path,
-                        exec_ctx_connection_id, exec_ctx_database, exec_ctx_schema,
+                        exec_ctx_json, exec_ctx_connection_id, exec_ctx_database, exec_ctx_schema,
                         exec_ctx_container, created_at, updated_at
                  FROM st_session_tabs WHERE session_id = ?1 ORDER BY position ASC",
             )
@@ -223,8 +224,9 @@ impl SessionRepository {
                     row.get::<_, Option<String>>(10)?,
                     row.get::<_, Option<String>>(11)?,
                     row.get::<_, Option<String>>(12)?,
-                    row.get::<_, String>(13)?,
+                    row.get::<_, Option<String>>(13)?,
                     row.get::<_, String>(14)?,
+                    row.get::<_, String>(15)?,
                 ))
             })
             .map_err(|source| StorageError::Sqlite {
@@ -247,6 +249,7 @@ impl SessionRepository {
                     shadow_file_path,
                     language,
                     file_path,
+                    exec_ctx_json,
                     exec_ctx_connection_id,
                     exec_ctx_database,
                     exec_ctx_schema,
@@ -265,6 +268,7 @@ impl SessionRepository {
                         scratch_file_path,
                         shadow_file_path,
                         file_path,
+                        exec_ctx_json,
                         exec_ctx_connection_id,
                         exec_ctx_database,
                         exec_ctx_schema,
@@ -344,10 +348,10 @@ impl SessionRepository {
                 r#"
                 INSERT INTO st_session_tabs (id, session_id, tab_kind, title, position, is_pinned,
                                          scratch_file_path, shadow_file_path,
-                                         language, file_path, exec_ctx_connection_id,
+                                         language, file_path, exec_ctx_json, exec_ctx_connection_id,
                                          exec_ctx_database, exec_ctx_schema, exec_ctx_container,
                                          created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                         datetime('now'), datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     tab_kind = excluded.tab_kind,
@@ -358,6 +362,7 @@ impl SessionRepository {
                     shadow_file_path = excluded.shadow_file_path,
                     language = excluded.language,
                     file_path = excluded.file_path,
+                    exec_ctx_json = excluded.exec_ctx_json,
                     exec_ctx_connection_id = excluded.exec_ctx_connection_id,
                     exec_ctx_database = excluded.exec_ctx_database,
                     exec_ctx_schema = excluded.exec_ctx_schema,
@@ -375,6 +380,7 @@ impl SessionRepository {
                     dto.shadow_file_path,
                     dto.language,
                     dto.file_path,
+                    dto.exec_ctx_json,
                     dto.exec_ctx_connection_id,
                     dto.exec_ctx_database,
                     dto.exec_ctx_schema,
@@ -487,18 +493,26 @@ impl SessionRepository {
                 .tabs
                 .into_iter()
                 .map(|tab| {
-                    // Reconstruct exec_ctx_json from native columns.
-                    let exec_ctx = dbflux_core::ExecutionContext {
-                        connection_id: tab
-                            .exec_ctx_connection_id
-                            .as_ref()
-                            .and_then(|s| uuid::Uuid::parse_str(s).ok()),
-                        database: tab.exec_ctx_database.clone(),
-                        schema: tab.exec_ctx_schema.clone(),
-                        container: tab.exec_ctx_container.clone(),
-                    };
-                    let exec_ctx_json =
-                        serde_json::to_string(&exec_ctx).unwrap_or_else(|_| "{}".to_string());
+                    let exec_ctx_json = tab
+                        .exec_ctx_json
+                        .clone()
+                        .filter(|json| {
+                            serde_json::from_str::<dbflux_core::ExecutionContext>(json).is_ok()
+                        })
+                        .unwrap_or_else(|| {
+                            let exec_ctx = dbflux_core::ExecutionContext {
+                                connection_id: tab
+                                    .exec_ctx_connection_id
+                                    .as_ref()
+                                    .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+                                database: tab.exec_ctx_database.clone(),
+                                schema: tab.exec_ctx_schema.clone(),
+                                container: tab.exec_ctx_container.clone(),
+                                source: None,
+                            };
+
+                            serde_json::to_string(&exec_ctx).unwrap_or_else(|_| "{}".to_string())
+                        });
 
                     RestoredTab {
                         id: tab.id,
@@ -634,6 +648,8 @@ impl SessionRepository {
             let exec_ctx_database = tab.exec_ctx.database.clone();
             let exec_ctx_schema = tab.exec_ctx.schema.clone();
             let exec_ctx_container = tab.exec_ctx.container.clone();
+            let exec_ctx_json = serde_json::to_string(&tab.exec_ctx)
+                .map_err(|error| StorageError::Data(error.to_string()))?;
 
             // Validate exec_ctx_connection_id FK — if the referenced profile doesn't exist,
             // null it to avoid FK constraint failures (mirrors legacy import behavior).
@@ -665,10 +681,10 @@ impl SessionRepository {
                 r#"
                 INSERT INTO st_session_tabs (id, session_id, tab_kind, title, position, is_pinned,
                                          scratch_file_path, shadow_file_path,
-                                         language, file_path, exec_ctx_connection_id,
+                                         language, file_path, exec_ctx_json, exec_ctx_connection_id,
                                          exec_ctx_database, exec_ctx_schema, exec_ctx_container,
                                          created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                         datetime('now'), datetime('now'))
                 "#,
                 params![
@@ -682,6 +698,7 @@ impl SessionRepository {
                     shadow_path_str,
                     tab.language,
                     file_path_str,
+                    exec_ctx_json,
                     exec_ctx_connection_id,
                     exec_ctx_database,
                     exec_ctx_schema,
@@ -747,6 +764,7 @@ pub struct SessionTabDto {
     pub scratch_file_path: Option<String>,
     pub shadow_file_path: Option<String>,
     pub language: Option<String>,
+    pub exec_ctx_json: Option<String>,
     pub exec_ctx_connection_id: Option<String>,
     pub exec_ctx_database: Option<String>,
     pub exec_ctx_schema: Option<String>,
@@ -945,6 +963,7 @@ mod tests {
             scratch_file_path: Some(scratch_path.to_string()),
             shadow_file_path: None,
             language: Some("sql".to_string()),
+            exec_ctx_json: None,
             exec_ctx_connection_id: None,
             exec_ctx_database: None,
             exec_ctx_schema: None,
@@ -1079,6 +1098,7 @@ mod tests {
             scratch_file_path: Some(scratch_file.to_string_lossy().to_string()),
             shadow_file_path: None,
             language: Some("sql".to_string()),
+            exec_ctx_json: None,
             exec_ctx_connection_id: None,
             exec_ctx_database: None,
             exec_ctx_schema: None,
@@ -1155,6 +1175,7 @@ mod tests {
             database: Some("testdb".into()),
             schema: Some("public".into()),
             container: None,
+            source: None,
         };
 
         let manifest = WorkspaceSessionManifest {
@@ -1220,6 +1241,7 @@ mod tests {
             database: Some("analytics".into()),
             schema: Some("metrics".into()),
             container: Some("events".into()),
+            source: None,
         };
 
         let manifest = WorkspaceSessionManifest {
@@ -1264,6 +1286,232 @@ mod tests {
         assert_eq!(restored_ctx.database.as_deref(), Some("analytics"));
         assert_eq!(restored_ctx.schema.as_deref(), Some("metrics"));
         assert_eq!(restored_ctx.container.as_deref(), Some("events"));
+
+        let _ = std::fs::remove_dir_all(&artifact_root);
+    }
+
+    #[test]
+    fn cloudwatch_exec_context_roundtrips_per_document() {
+        let path = temp_db("cloudwatch_exec_ctx");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+        let arc_conn = Arc::new(conn);
+        let repo = SessionRepository::new(arc_conn.clone());
+
+        let profile_id = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+        let profile = ConnectionProfileDto::new(profile_id, "CloudWatch Profile".to_string());
+        let profile_repo = ConnectionProfileRepository::new(arc_conn.clone());
+        profile_repo.insert(&profile).expect("insert profile");
+
+        let manifest = WorkspaceSessionManifest {
+            version: 1,
+            active_index: Some(1),
+            tabs: vec![
+                WorkspaceTab {
+                    id: "cw-1".to_string(),
+                    tab_kind: "Scratch".to_string(),
+                    language: "sql".to_string(),
+                    exec_ctx: dbflux_core::ExecutionContext {
+                        connection_id: Some(profile_id),
+                        database: Some("logs".into()),
+                        schema: None,
+                        container: None,
+                        source: Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                            targets: vec!["/aws/lambda/app".into()],
+                            start_ms: 10,
+                            end_ms: 20,
+                            query_mode: Some("cwli".into()),
+                        }),
+                    },
+                    scratch_path: Some(PathBuf::from("/tmp/cloudwatch-1.sql")),
+                    shadow_path: None,
+                    file_path: None,
+                    title: "CloudWatch One".to_string(),
+                    position: 0,
+                    is_pinned: false,
+                },
+                WorkspaceTab {
+                    id: "cw-2".to_string(),
+                    tab_kind: "Scratch".to_string(),
+                    language: "sql".to_string(),
+                    exec_ctx: dbflux_core::ExecutionContext {
+                        connection_id: Some(profile_id),
+                        database: Some("logs".into()),
+                        schema: None,
+                        container: None,
+                        source: Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                            targets: vec!["/aws/ecs/api".into(), "/aws/batch/job".into()],
+                            start_ms: 30,
+                            end_ms: 40,
+                            query_mode: Some("cwli".into()),
+                        }),
+                    },
+                    scratch_path: Some(PathBuf::from("/tmp/cloudwatch-2.sql")),
+                    shadow_path: None,
+                    file_path: None,
+                    title: "CloudWatch Two".to_string(),
+                    position: 1,
+                    is_pinned: false,
+                },
+            ],
+        };
+
+        repo.save_workspace_session(&manifest).expect("save");
+
+        let artifact_root = std::env::temp_dir().join(format!(
+            "dbflux_test_cloudwatch_exec_ctx_{}_{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let store = ArtifactStore::for_root(artifact_root.clone()).expect("store");
+
+        let restored = repo
+            .restore_session(&store)
+            .expect("restore")
+            .expect("session");
+        assert_eq!(restored.tabs.len(), 2);
+
+        let restored_contexts = restored
+            .tabs
+            .iter()
+            .map(|tab| {
+                serde_json::from_str::<dbflux_core::ExecutionContext>(&tab.exec_ctx_json)
+                    .expect("exec ctx json")
+            })
+            .collect::<Vec<_>>();
+
+        match &restored_contexts[0].source {
+            Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                targets,
+                start_ms,
+                end_ms,
+                query_mode,
+            }) => {
+                assert_eq!(targets, &vec!["/aws/lambda/app".to_string()]);
+                assert_eq!((*start_ms, *end_ms), (10, 20));
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
+            }
+            other => panic!("unexpected first source: {other:?}"),
+        }
+
+        match &restored_contexts[1].source {
+            Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                targets,
+                start_ms,
+                end_ms,
+                query_mode,
+            }) => {
+                assert_eq!(
+                    targets,
+                    &vec!["/aws/ecs/api".to_string(), "/aws/batch/job".to_string()]
+                );
+                assert_eq!((*start_ms, *end_ms), (30, 40));
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
+            }
+            other => panic!("unexpected second source: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&artifact_root);
+    }
+
+    #[test]
+    fn restore_prefers_exec_ctx_json_over_legacy_columns() {
+        let path = temp_db("cloudwatch_exec_ctx_json_backfill");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+        let arc_conn = Arc::new(conn);
+        let repo = SessionRepository::new(arc_conn.clone());
+
+        let profile_id = Uuid::parse_str("33333333-3333-3333-3333-333333333333").unwrap();
+        let profile = ConnectionProfileDto::new(profile_id, "CloudWatch Profile".to_string());
+        let profile_repo = ConnectionProfileRepository::new(arc_conn.clone());
+        profile_repo.insert(&profile).expect("insert profile");
+
+        repo.upsert(&SessionDto {
+            id: "workspace-json".to_string(),
+            name: "workspace".to_string(),
+            kind: "workspace".to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            last_opened_at: chrono::Utc::now().to_rfc3339(),
+            is_last_active: true,
+        })
+        .expect("upsert session");
+
+        let exec_ctx_json = serde_json::to_string(&dbflux_core::ExecutionContext {
+            connection_id: Some(profile_id),
+            database: Some("logs".into()),
+            schema: None,
+            container: None,
+            source: Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                targets: vec!["/aws/json/preferred".into()],
+                start_ms: 111,
+                end_ms: 222,
+                query_mode: Some("cwli".into()),
+            }),
+        })
+        .expect("serialize exec ctx");
+
+        arc_conn
+            .execute(
+                r#"
+                INSERT INTO st_session_tabs (
+                    id, session_id, tab_kind, title, position, is_pinned,
+                    scratch_file_path, shadow_file_path, language, file_path,
+                    exec_ctx_connection_id, exec_ctx_database, exec_ctx_schema, exec_ctx_container,
+                    exec_ctx_json, created_at, updated_at
+                ) VALUES (
+                    ?1, ?2, 'Scratch', 'CloudWatch', 0, 0,
+                    ?3, NULL, 'sql', NULL,
+                    ?4, 'legacy-db', 'legacy-schema', 'legacy-container',
+                    ?5, datetime('now'), datetime('now')
+                )
+                "#,
+                params![
+                    "tab-json",
+                    "workspace-json",
+                    "/tmp/cloudwatch-json.sql",
+                    profile_id.to_string(),
+                    exec_ctx_json,
+                ],
+            )
+            .expect("insert tab");
+
+        let artifact_root = std::env::temp_dir().join(format!(
+            "dbflux_test_cloudwatch_json_restore_{}_{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let store = ArtifactStore::for_root(artifact_root.clone()).expect("store");
+
+        let restored = repo
+            .restore_session(&store)
+            .expect("restore")
+            .expect("session");
+        let restored_ctx: dbflux_core::ExecutionContext =
+            serde_json::from_str(&restored.tabs[0].exec_ctx_json).expect("deserialize exec ctx");
+
+        assert_eq!(restored_ctx.database.as_deref(), Some("logs"));
+        assert!(restored_ctx.schema.is_none());
+        assert!(restored_ctx.container.is_none());
+
+        match restored_ctx.source {
+            Some(dbflux_core::ExecutionSourceContext::CollectionWindow {
+                targets,
+                start_ms,
+                end_ms,
+                query_mode,
+            }) => {
+                assert_eq!(targets, vec!["/aws/json/preferred".to_string()]);
+                assert_eq!((start_ms, end_ms), (111, 222));
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
+            }
+            other => panic!("unexpected restored source: {other:?}"),
+        }
 
         let _ = std::fs::remove_dir_all(&artifact_root);
     }

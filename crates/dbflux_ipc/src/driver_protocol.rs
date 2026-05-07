@@ -2,10 +2,11 @@ use crate::envelope::ProtocolVersion;
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
     ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,
-    DocumentDelete, DocumentInsert, DocumentUpdate, DriverFormDef, DriverMetadata, ExplainRequest,
-    QueryRequest, QueryResult, QueryResultShape, RowDelete, RowInsert, RowPatch, SchemaFeatures,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticRequest, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
+    DocumentDelete, DocumentInsert, DocumentUpdate, DriverFormDef, DriverMetadata,
+    ExecutionContext, ExplainRequest, QueryRequest, QueryResult, QueryResultShape, RowDelete,
+    RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, TableBrowseRequest,
+    TableCountRequest, TableInfo, Value, ViewInfo,
 };
 use dbflux_core::{
     HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -58,6 +59,7 @@ pub struct QueryRequestDto {
     pub offset: Option<u32>,
     pub statement_timeout_ms: Option<u64>,
     pub database: Option<String>,
+    pub execution_context: Option<ExecutionContext>,
 }
 
 impl From<&QueryRequest> for QueryRequestDto {
@@ -71,6 +73,7 @@ impl From<&QueryRequest> for QueryRequestDto {
                 .statement_timeout
                 .map(|timeout| timeout.as_millis() as u64),
             database: value.database.clone(),
+            execution_context: value.execution_context.clone(),
         }
     }
 }
@@ -84,6 +87,7 @@ impl From<QueryRequestDto> for QueryRequest {
             offset: value.offset,
             statement_timeout: value.statement_timeout_ms.map(Duration::from_millis),
             database: value.database,
+            execution_context: value.execution_context,
         }
     }
 }
@@ -568,8 +572,12 @@ impl DriverResponseEnvelope {
 mod tests {
     use super::{
         DriverRequestBody, DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
+        QueryRequestDto,
     };
     use crate::ProtocolVersion;
+    use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryRequest};
+    use std::time::Duration;
+    use uuid::Uuid;
 
     #[test]
     fn request_envelope_uses_explicit_protocol_version() {
@@ -591,5 +599,56 @@ mod tests {
 
         assert_eq!(response.protocol_version, ProtocolVersion::new(1, 0));
         assert_eq!(response.request_id, 41);
+    }
+
+    #[test]
+    fn query_request_dto_roundtrips_execution_context() {
+        let request = QueryRequest {
+            sql: "SELECT * FROM logs".into(),
+            params: Vec::new(),
+            limit: Some(250),
+            offset: Some(5),
+            statement_timeout: Some(Duration::from_secs(30)),
+            database: Some("analytics".into()),
+            execution_context: Some(ExecutionContext {
+                connection_id: Some(
+                    Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+                ),
+                database: Some("analytics".into()),
+                schema: Some("public".into()),
+                container: None,
+                source: Some(ExecutionSourceContext::CollectionWindow {
+                    targets: vec!["/aws/lambda/app".into(), "/aws/ecs/api".into()],
+                    start_ms: 1_710_000_000_000,
+                    end_ms: 1_710_000_300_000,
+                    query_mode: Some("cwli".into()),
+                }),
+            }),
+        };
+
+        let dto = QueryRequestDto::from(&request);
+        let restored = QueryRequest::from(dto.clone());
+
+        assert_eq!(dto.database.as_deref(), Some("analytics"));
+        assert_eq!(restored.database.as_deref(), Some("analytics"));
+
+        match restored.execution_context {
+            Some(ExecutionContext {
+                source:
+                    Some(ExecutionSourceContext::CollectionWindow {
+                        targets,
+                        start_ms,
+                        end_ms,
+                        query_mode,
+                    }),
+                ..
+            }) => {
+                assert_eq!(targets, vec!["/aws/lambda/app", "/aws/ecs/api"]);
+                assert_eq!(start_ms, 1_710_000_000_000);
+                assert_eq!(end_ms, 1_710_000_300_000);
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
+            }
+            other => panic!("unexpected execution context: {other:?}"),
+        }
     }
 }

@@ -420,6 +420,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::MongoDB => "MongoDB",
         DbKind::Redis => "Redis",
         DbKind::DynamoDB => "DynamoDB",
+        DbKind::CloudWatchLogs => "CloudWatchLogs",
     }
     .to_string()
 }
@@ -433,6 +434,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "MongoDB" => Some(DbKind::MongoDB),
         "Redis" => Some(DbKind::Redis),
         "DynamoDB" => Some(DbKind::DynamoDB),
+        "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
         _ => None,
     }
 }
@@ -445,6 +447,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::MongoDB => dbflux_core::DbConfig::default_mongodb(),
         DbKind::Redis => dbflux_core::DbConfig::default_redis(),
         DbKind::DynamoDB => dbflux_core::DbConfig::default_dynamodb(),
+        DbKind::CloudWatchLogs => dbflux_core::DbConfig::default_cloudwatch_logs(),
         _ => dbflux_core::DbConfig::default_postgres(),
     }
 }

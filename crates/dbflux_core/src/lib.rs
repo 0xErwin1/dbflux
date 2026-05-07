@@ -39,6 +39,7 @@ pub use connection::{
     ConnectionResolutionError, ConnectionTree, ConnectionTreeManager, ConnectionTreeNode,
     ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig, DbKind,
     DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender, ExecutionContext,
+    ExecutionSourceContext, FetchCollectionChildrenParams, FetchCollectionChildrenResult,
     FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
     FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
     FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
@@ -56,11 +57,12 @@ pub use connection::{
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
     ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,
-    DocumentConnection, ErrorLocation, FormattedError, KeyValueApi, KeyValueConnection,
-    NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter, RelationalConnection,
-    SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind, ShutdownCoordinator,
-    ShutdownPhase, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
-    Value, sanitize_uri,
+    DocumentConnection, ErrorLocation, EventStreamTarget, FormattedError, KeyValueApi,
+    KeyValueConnection, NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter,
+    RelationalConnection, SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy,
+    SchemaObjectKind, ShutdownCoordinator, ShutdownPhase, SourceContextSpec, SourceQueryMode,
+    TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value,
+    sanitize_uri,
 };
 
 pub use data::{
@@ -76,13 +78,13 @@ pub use data::{
 };
 
 pub use driver::{
-    DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification, FormFieldDef,
-    FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel, MONGODB_FORM,
-    MYSQL_FORM, MutationCapabilities, OperationClassifier, POSTGRES_FORM, PaginationStyle,
-    QueryCapabilities, QueryLanguage, REDIS_FORM, SQLITE_FORM, SelectOption, SyntaxInfo,
-    TransactionCapabilities, WhereOperator, field_file_path, field_password, field_use_uri,
-    ssh_tab,
+    CLOUDWATCH_FORM, DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel,
+    MONGODB_FORM, MYSQL_FORM, MutationCapabilities, OperationClassifier, POSTGRES_FORM,
+    PaginationStyle, QueryCapabilities, QueryLanguage, REDIS_FORM, SQLITE_FORM, SelectOption,
+    SyntaxInfo, TransactionCapabilities, WhereOperator, field_file_path, field_password,
+    field_use_uri, ssh_tab,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};
@@ -105,17 +107,18 @@ pub use query::{
 
 pub use schema::node_id as schema_node_id;
 pub use schema::{
-    CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
-    ConstraintKind, ContainerInfo, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo,
-    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, GraphInfo,
-    GraphSchema, IndexBuilder, IndexData, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo,
-    KeyValueSchema, MeasurementInfo, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo,
-    ParseSchemaNodeIdError, PropertyInfo, RelationalSchema, RelationshipTypeInfo,
-    RetentionPolicyInfo, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
-    SchemaIndexInfo, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SearchIndexInfo,
-    SearchMappingInfo, SearchSchema, TableInfo, TimeSeriesFieldInfo, TimeSeriesSchema,
-    VectorCollectionInfo, VectorMetadataField, VectorMetric, VectorSchema, ViewInfo,
-    WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
+    CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,
+    CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
+    ColumnFamilyInfo, ColumnInfo, ConstraintInfo, ConstraintKind, ContainerInfo, CustomTypeInfo,
+    CustomTypeKind, DataStructure, DatabaseInfo, DbSchemaInfo, DocumentSchema, FieldInfo,
+    ForeignKeyBuilder, ForeignKeyInfo, GraphInfo, GraphSchema, IndexBuilder, IndexData,
+    IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, MeasurementInfo,
+    MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, ParseSchemaNodeIdError, PropertyInfo,
+    RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind,
+    SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo,
+    TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
+    VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
 };
 
 pub use sql::{

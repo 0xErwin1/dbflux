@@ -137,6 +137,7 @@ impl MigrationRegistry {
         registry.register(mod_004_audit_saved_filters::MigrationImpl);
         registry.register(mod_005_rpc_service_kind::MigrationImpl);
         registry.register(mod_006_rpc_service_api_contract::MigrationImpl);
+        registry.register(mod_007_session_exec_ctx_json::MigrationImpl);
         registry
     }
 
@@ -281,6 +282,7 @@ mod mod_003_audit_settings;
 mod mod_004_audit_saved_filters;
 mod mod_005_rpc_service_kind;
 mod mod_006_rpc_service_api_contract;
+mod mod_007_session_exec_ctx_json;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -288,6 +290,7 @@ pub use mod_003_audit_settings::MigrationImpl as MigrationImplAuditSettings;
 pub use mod_004_audit_saved_filters::MigrationImpl as MigrationImplAuditSavedFilters;
 pub use mod_005_rpc_service_kind::MigrationImpl as MigrationImplRpcServiceKind;
 pub use mod_006_rpc_service_api_contract::MigrationImpl as MigrationImplRpcServiceApiContract;
+pub use mod_007_session_exec_ctx_json::MigrationImpl as MigrationImplSessionExecCtxJson;
 
 // ---------------------------------------------------------------------------
 // Database verification utilities
@@ -368,7 +371,11 @@ mod tests {
         let count_first: i64 = conn
             .query_row("SELECT COUNT(*) FROM sys_migrations", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(count_first, 6, "expected 6 migrations after first run");
+        assert_eq!(
+            count_first,
+            registry.migrations.len() as i64,
+            "expected all registered migrations after first run"
+        );
 
         registry.run_all(&conn).unwrap();
 
@@ -376,8 +383,9 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sys_migrations", [], |row| row.get(0))
             .unwrap();
         assert_eq!(
-            count_second, 6,
-            "expected still 6 migrations after second run (idempotent)"
+            count_second,
+            registry.migrations.len() as i64,
+            "expected same migration count after second run (idempotent)"
         );
 
         drop(conn);
@@ -503,8 +511,8 @@ mod tests {
         let pending_before = registry.get_pending(&conn).unwrap();
         assert_eq!(
             pending_before.len(),
-            6,
-            "expected 6 pending migrations before running"
+            registry.migrations.len(),
+            "expected all registered migrations pending before running"
         );
         assert_eq!(pending_before[0].name(), "001_initial");
         assert_eq!(pending_before[1].name(), "002_audit_extended");
@@ -512,6 +520,7 @@ mod tests {
         assert_eq!(pending_before[3].name(), "004_audit_saved_filters");
         assert_eq!(pending_before[4].name(), "005_rpc_service_kind");
         assert_eq!(pending_before[5].name(), "006_rpc_service_api_contract");
+        assert_eq!(pending_before[6].name(), "007_session_exec_ctx_json");
 
         registry.run_all(&conn).unwrap();
 
@@ -634,6 +643,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(service_kind, "driver");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_session_exec_ctx_json_migration_skips_when_session_tabs_table_is_absent() {
+        let temp_dir = temp_dir("exec_ctx_json_missing_table");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "CREATE TABLE sys_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))",
+            [],
+        )
+        .unwrap();
+
+        let registry = MigrationRegistry::new();
+        registry.run_all(&conn).unwrap();
+
+        let applied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sys_migrations WHERE name = '007_session_exec_ctx_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1);
 
         drop(conn);
         let _ = std::fs::remove_dir_all(temp_dir);

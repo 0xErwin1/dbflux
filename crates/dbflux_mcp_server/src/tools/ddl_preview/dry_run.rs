@@ -28,6 +28,7 @@ pub fn dry_run_ddl(
         offset: None,
         statement_timeout: None,
         database: database.map(|s| s.to_string()),
+        execution_context: None,
     };
     connection.execute(&begin_req)?;
 
@@ -39,6 +40,7 @@ pub fn dry_run_ddl(
         offset: None,
         statement_timeout: None,
         database: database.map(|s| s.to_string()),
+        execution_context: None,
     };
     let ddl_result = connection.execute(&ddl_req);
 
@@ -58,6 +60,7 @@ pub fn dry_run_ddl(
         offset: None,
         statement_timeout: None,
         database: database.map(|s| s.to_string()),
+        execution_context: None,
     };
     connection.execute(&rollback_req)?;
 

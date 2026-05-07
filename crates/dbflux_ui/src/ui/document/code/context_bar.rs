@@ -11,12 +11,24 @@ fn context_dropdown_min_width(index: usize) -> Pixels {
     }
 }
 
-fn context_dropdown_is_keyboard_focused(
+fn context_slot_is_keyboard_focused(
     focus_mode: SqlQueryFocus,
-    context_bar_index: usize,
-    dropdown_index: usize,
+    active_slot: ContextBarSlot,
+    slot: ContextBarSlot,
 ) -> bool {
-    focus_mode == SqlQueryFocus::ContextBar && context_bar_index == dropdown_index
+    focus_mode == SqlQueryFocus::ContextBar && active_slot == slot
+}
+
+fn parse_source_datetime_input(value: &str) -> Option<i64> {
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    dbflux_core::chrono::DateTime::parse_from_rfc3339(trimmed)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
 }
 
 impl CodeDocument {
@@ -88,16 +100,222 @@ impl CodeDocument {
             .connection_id
             .filter(|id| self.app_state.read(cx).connections().contains_key(id));
 
-        let completion_provider: Rc<dyn CompletionProvider> =
-            Rc::new(QueryCompletionProvider::new(
-                self.query_language.clone(),
-                self.app_state.clone(),
-                connection_id,
-            ));
+        let query_language = self.effective_query_language(cx);
+
+        let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
+            QueryCompletionProvider::new(query_language, self.app_state.clone(), connection_id),
+        );
 
         self.input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = Some(completion_provider);
         });
+    }
+
+    fn current_source_context_spec(&self, cx: &App) -> Option<dbflux_core::SourceContextSpec> {
+        let connection_id = self.exec_ctx.connection_id.or(self.connection_id)?;
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&connection_id)
+            .and_then(|connected| connected.connection.source_context_spec())
+    }
+
+    fn current_source_query_mode_value(&self, cx: &App) -> Option<String> {
+        let spec = self.current_source_context_spec(cx)?;
+
+        self.source_query_mode_dropdown
+            .read(cx)
+            .selected_value()
+            .map(|value| value.to_string())
+            .or(spec.default_query_mode)
+            .or_else(|| spec.query_modes.first().map(|mode| mode.value.clone()))
+    }
+
+    fn effective_query_language(&self, cx: &App) -> QueryLanguage {
+        let Some(spec) = self.current_source_context_spec(cx) else {
+            return self.query_language.clone();
+        };
+
+        let selected_mode = self.current_source_query_mode_value(cx);
+
+        spec.query_modes
+            .into_iter()
+            .find(|mode| Some(mode.value.as_str()) == selected_mode.as_deref())
+            .map(|mode| mode.query_language)
+            .unwrap_or_else(|| self.query_language.clone())
+    }
+
+    pub(super) fn should_show_source_controls(&self, cx: &App) -> bool {
+        self.current_source_context_spec(cx).is_some()
+    }
+
+    fn source_target_items(&self, cx: &App) -> Vec<DropdownItem> {
+        let Some(connection_id) = self.exec_ctx.connection_id.or(self.connection_id) else {
+            return Vec::new();
+        };
+
+        let Some(connected) = self.app_state.read(cx).connections().get(&connection_id) else {
+            return Vec::new();
+        };
+
+        let schema = self
+            .exec_ctx
+            .database
+            .as_deref()
+            .and_then(|database| connected.schema_for_target_database(database))
+            .or(connected.schema.as_ref());
+
+        let Some(schema) = schema else {
+            return Vec::new();
+        };
+
+        let mut items = schema
+            .collections()
+            .iter()
+            .map(|collection| DropdownItem::with_value(&collection.name, &collection.name))
+            .collect::<Vec<_>>();
+
+        items.sort_by(|left, right| left.label.as_ref().cmp(right.label.as_ref()));
+        items
+    }
+
+    fn current_source_targets(&self, cx: &App) -> Vec<String> {
+        self.source_targets
+            .read(cx)
+            .selected_values()
+            .iter()
+            .map(|value| value.to_string())
+            .collect()
+    }
+
+    pub(super) fn current_source_context(
+        &self,
+        cx: &App,
+    ) -> Result<ExecutionSourceContext, &'static str> {
+        let query_mode = self.current_source_query_mode_value(cx);
+        let targets = self.current_source_targets(cx);
+        let start_input = self.source_start_input.read(cx).value().to_string();
+        let end_input = self.source_end_input.read(cx).value().to_string();
+
+        if start_input.trim().is_empty()
+            && end_input.trim().is_empty()
+            && let Some(source @ ExecutionSourceContext::CollectionWindow { .. }) =
+                self.exec_ctx.source.clone()
+        {
+            return Ok(source);
+        }
+
+        let start_ms = parse_source_datetime_input(&start_input);
+        let end_ms = parse_source_datetime_input(&end_input);
+
+        build_source_window_context(query_mode, &targets, start_ms, end_ms)
+    }
+
+    fn sync_source_exec_context(&mut self, cx: &mut Context<Self>) {
+        if !self.should_show_source_controls(cx) {
+            self.exec_ctx.source = None;
+            return;
+        }
+
+        let start_blank = self.source_start_input.read(cx).value().trim().is_empty();
+        let end_blank = self.source_end_input.read(cx).value().trim().is_empty();
+
+        if start_blank
+            && end_blank
+            && matches!(
+                self.exec_ctx.source,
+                Some(ExecutionSourceContext::CollectionWindow { .. })
+            )
+        {
+            return;
+        }
+
+        self.exec_ctx.source = self.current_source_context(cx).ok();
+    }
+
+    fn sync_source_controls(&mut self, cx: &mut Context<Self>) {
+        let should_show = self.should_show_source_controls(cx);
+        let items = if should_show {
+            self.source_target_items(cx)
+        } else {
+            Vec::new()
+        };
+
+        let source_spec = self.current_source_context_spec(cx);
+        let query_mode_items = source_spec
+            .as_ref()
+            .map(|spec| {
+                spec.query_modes
+                    .iter()
+                    .map(|mode| DropdownItem::with_value(&mode.label, &mode.value))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let selected_query_mode = match self.exec_ctx.source.as_ref() {
+            Some(ExecutionSourceContext::CollectionWindow { query_mode, .. }) => {
+                query_mode.clone().or_else(|| {
+                    source_spec
+                        .as_ref()
+                        .and_then(|spec| spec.default_query_mode.clone())
+                })
+            }
+            None => source_spec
+                .as_ref()
+                .and_then(|spec| spec.default_query_mode.clone()),
+        };
+
+        let selected_query_mode_index = selected_query_mode.as_ref().and_then(|selected| {
+            query_mode_items
+                .iter()
+                .position(|item| item.value.as_ref() == selected)
+        });
+
+        self.source_query_mode_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(query_mode_items, cx);
+            dropdown.set_selected_index(selected_query_mode_index, cx);
+        });
+
+        let selected_values = match self.exec_ctx.source.as_ref() {
+            Some(ExecutionSourceContext::CollectionWindow { targets, .. }) => targets.clone(),
+            None => Vec::new(),
+        };
+
+        self.source_targets.update(cx, |multi_select, cx| {
+            multi_select.set_items(items, cx);
+            multi_select.set_selected_values(&selected_values, cx);
+        });
+
+        self.sync_source_exec_context(cx);
+    }
+
+    pub(super) fn on_source_query_mode_changed(
+        &mut self,
+        _item: &DropdownItem,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_source_exec_context(cx);
+        self.update_completion_provider(cx);
+        self.schedule_diagnostic_refresh(cx);
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
+    pub(super) fn on_source_targets_changed(
+        &mut self,
+        _selected_targets: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_source_exec_context(cx);
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
+    pub(super) fn on_source_time_range_changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_source_exec_context(cx);
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
     }
 
     pub(super) fn sync_context_dropdowns(&mut self, cx: &mut Context<Self>) {
@@ -218,6 +436,7 @@ impl CodeDocument {
             });
         }
 
+        self.sync_source_controls(cx);
         self.update_completion_provider(cx);
 
         if did_change {
@@ -564,6 +783,10 @@ impl CodeDocument {
     // === Visibility helpers for render ===
 
     pub(super) fn should_show_database_dropdown(&self, cx: &App) -> bool {
+        if self.should_show_source_controls(cx) {
+            return false;
+        }
+
         let Some(conn_id) = self.exec_ctx.connection_id else {
             return false;
         };
@@ -582,6 +805,10 @@ impl CodeDocument {
     }
 
     pub(super) fn should_show_schema_dropdown(&self, cx: &App) -> bool {
+        if self.should_show_source_controls(cx) {
+            return false;
+        }
+
         let Some(conn_id) = self.exec_ctx.connection_id else {
             return false;
         };
@@ -601,55 +828,73 @@ impl CodeDocument {
 
     // === Context bar keyboard navigation ===
 
-    /// Returns the list of visible dropdown indices:
-    /// 0 = Connection (always), 1 = Database (if visible), 2 = Schema (if visible).
-    fn visible_dropdown_indices(&self, cx: &App) -> Vec<usize> {
+    /// Returns the visible context-bar slots for the current document.
+    fn visible_context_bar_slots(&self, cx: &App) -> Vec<ContextBarSlot> {
         if !self.query_language.supports_connection_context() {
             return Vec::new();
         }
 
-        let mut indices = vec![0]; // Connection is always visible
+        let mut slots = vec![ContextBarSlot::Connection];
+
+        if self.should_show_source_controls(cx) {
+            if self
+                .current_source_context_spec(cx)
+                .is_some_and(|spec| !spec.query_modes.is_empty())
+            {
+                slots.push(ContextBarSlot::SourceQueryMode);
+            }
+            slots.push(ContextBarSlot::SourceTargets);
+            slots.push(ContextBarSlot::SourceStart);
+            slots.push(ContextBarSlot::SourceEnd);
+            return slots;
+        }
+
         if self.should_show_database_dropdown(cx) {
-            indices.push(1);
+            slots.push(ContextBarSlot::Database);
         }
         if self.should_show_schema_dropdown(cx) {
-            indices.push(2);
+            slots.push(ContextBarSlot::Schema);
         }
-        indices
+
+        slots
     }
 
-    fn dropdown_for_index(&self, index: usize) -> &Entity<Dropdown> {
-        match index {
-            0 => &self.connection_dropdown,
-            1 => &self.database_dropdown,
-            _ => &self.schema_dropdown,
+    fn dropdown_for_slot(&self, slot: ContextBarSlot) -> Option<&Entity<Dropdown>> {
+        match slot {
+            ContextBarSlot::Connection => Some(&self.connection_dropdown),
+            ContextBarSlot::Database => Some(&self.database_dropdown),
+            ContextBarSlot::Schema => Some(&self.schema_dropdown),
+            ContextBarSlot::SourceQueryMode => Some(&self.source_query_mode_dropdown),
+            ContextBarSlot::SourceTargets
+            | ContextBarSlot::SourceStart
+            | ContextBarSlot::SourceEnd => None,
         }
     }
 
     pub(super) fn enter_context_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.visible_dropdown_indices(cx);
+        let visible = self.visible_context_bar_slots(cx);
         if visible.is_empty() {
             return;
         }
 
         self.focus_mode = SqlQueryFocus::ContextBar;
-        self.context_bar_index = visible[0];
+        self.context_bar_slot = visible[0];
         self.focus_handle.focus(window);
         self.update_context_bar_focus_rings(cx);
         cx.notify();
     }
 
-    /// Clamp `context_bar_index` to a visible dropdown after connection changes.
+    /// Clamp `context_bar_slot` to a visible control after connection changes.
     fn revalidate_context_bar_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.visible_dropdown_indices(cx);
+        let visible = self.visible_context_bar_slots(cx);
 
         if visible.is_empty() {
             self.exit_context_bar(window, cx);
             return;
         }
 
-        if !visible.contains(&self.context_bar_index) {
-            self.context_bar_index = visible[0];
+        if !visible.contains(&self.context_bar_slot) {
+            self.context_bar_slot = visible[0];
         }
 
         self.update_context_bar_focus_rings(cx);
@@ -669,15 +914,16 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let visible = self.visible_dropdown_indices(cx);
+        let visible = self.visible_context_bar_slots(cx);
         if visible.is_empty() {
             self.exit_context_bar(window, cx);
             return true;
         }
 
         // If a dropdown is open, route j/k/Enter/Escape to it
-        let current_dropdown = self.dropdown_for_index(self.context_bar_index).clone();
-        if current_dropdown.read(cx).is_open() {
+        if let Some(current_dropdown) = self.dropdown_for_slot(self.context_bar_slot).cloned()
+            && current_dropdown.read(cx).is_open()
+        {
             match cmd {
                 Command::SelectNext => {
                     current_dropdown.update(cx, |dd, cx| dd.select_next_item(cx));
@@ -701,20 +947,24 @@ impl CodeDocument {
 
         match cmd {
             Command::FocusRight => {
-                if let Some(pos) = visible.iter().position(|&i| i == self.context_bar_index)
+                if let Some(pos) = visible
+                    .iter()
+                    .position(|&slot| slot == self.context_bar_slot)
                     && pos + 1 < visible.len()
                 {
-                    self.context_bar_index = visible[pos + 1];
+                    self.context_bar_slot = visible[pos + 1];
                     self.update_context_bar_focus_rings(cx);
                     cx.notify();
                 }
                 true
             }
             Command::FocusLeft => {
-                if let Some(pos) = visible.iter().position(|&i| i == self.context_bar_index)
+                if let Some(pos) = visible
+                    .iter()
+                    .position(|&slot| slot == self.context_bar_slot)
                     && pos > 0
                 {
-                    self.context_bar_index = visible[pos - 1];
+                    self.context_bar_slot = visible[pos - 1];
                     self.update_context_bar_focus_rings(cx);
                     cx.notify();
                 }
@@ -722,7 +972,31 @@ impl CodeDocument {
             }
 
             Command::Execute => {
-                current_dropdown.update(cx, |dd, cx| dd.toggle_open(cx));
+                match self.context_bar_slot {
+                    ContextBarSlot::SourceQueryMode => {
+                        self.source_query_mode_dropdown
+                            .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                    }
+                    ContextBarSlot::SourceTargets => {
+                        self.source_targets
+                            .update(cx, |multi_select, cx| multi_select.toggle_open(cx));
+                    }
+                    ContextBarSlot::SourceStart => {
+                        self.source_start_input
+                            .update(cx, |state, cx| state.focus(window, cx));
+                    }
+                    ContextBarSlot::SourceEnd => {
+                        self.source_end_input
+                            .update(cx, |state, cx| state.focus(window, cx));
+                    }
+                    _ => {
+                        if let Some(current_dropdown) =
+                            self.dropdown_for_slot(self.context_bar_slot).cloned()
+                        {
+                            current_dropdown.update(cx, |dd, cx| dd.toggle_open(cx));
+                        }
+                    }
+                }
                 true
             }
 
@@ -742,21 +1016,33 @@ impl CodeDocument {
         let theme = cx.theme();
         let active_color = theme.ring;
 
-        for idx in [0, 1, 2] {
-            let dropdown = self.dropdown_for_index(idx);
-            let color = if idx == self.context_bar_index {
-                Some(active_color)
-            } else {
-                None
-            };
-            dropdown.update(cx, |dd, cx| dd.set_focus_ring(color, cx));
+        for slot in [
+            ContextBarSlot::Connection,
+            ContextBarSlot::Database,
+            ContextBarSlot::Schema,
+            ContextBarSlot::SourceQueryMode,
+        ] {
+            if let Some(dropdown) = self.dropdown_for_slot(slot) {
+                let color = if slot == self.context_bar_slot {
+                    Some(active_color)
+                } else {
+                    None
+                };
+                dropdown.update(cx, |dd, cx| dd.set_focus_ring(color, cx));
+            }
         }
     }
 
     fn clear_context_bar_focus_rings(&self, cx: &mut Context<Self>) {
-        for idx in [0, 1, 2] {
-            let dropdown = self.dropdown_for_index(idx);
-            dropdown.update(cx, |dd, cx| dd.set_focus_ring(None, cx));
+        for slot in [
+            ContextBarSlot::Connection,
+            ContextBarSlot::Database,
+            ContextBarSlot::Schema,
+            ContextBarSlot::SourceQueryMode,
+        ] {
+            if let Some(dropdown) = self.dropdown_for_slot(slot) {
+                dropdown.update(cx, |dd, cx| dd.set_focus_ring(None, cx));
+            }
         }
     }
 
@@ -769,8 +1055,10 @@ impl CodeDocument {
 
         let theme = cx.theme();
 
+        let show_source_controls = self.should_show_source_controls(cx);
         let show_db = self.should_show_database_dropdown(cx);
         let show_schema = self.should_show_schema_dropdown(cx);
+        let source_spec = self.current_source_context_spec(cx);
 
         div()
             .id("exec-context-bar")
@@ -794,25 +1082,94 @@ impl CodeDocument {
                 div()
                     .min_w(context_dropdown_min_width(0))
                     .child(focus_frame(
-                        context_dropdown_is_keyboard_focused(
+                        context_slot_is_keyboard_focused(
                             self.focus_mode,
-                            self.context_bar_index,
-                            0,
+                            self.context_bar_slot,
+                            ContextBarSlot::Connection,
                         ),
                         Some(theme.ring),
                         control_shell(self.connection_dropdown.clone(), cx),
                         cx,
                     )),
             )
-            .when(show_db, |el| {
+            .when(show_source_controls, |el| {
+                let source_spec = source_spec.as_ref();
+
+                el.when(
+                    source_spec.is_some_and(|spec| !spec.query_modes.is_empty()),
+                    |el| {
+                        el.child(Text::caption(
+                            source_spec
+                                .and_then(|spec| spec.query_mode_label.clone())
+                                .unwrap_or_else(|| "Syntax".to_string()),
+                        ))
+                        .child(div().min_w(px(180.0)).child(focus_frame(
+                            context_slot_is_keyboard_focused(
+                                self.focus_mode,
+                                self.context_bar_slot,
+                                ContextBarSlot::SourceQueryMode,
+                            ),
+                            Some(theme.ring),
+                            control_shell(self.source_query_mode_dropdown.clone(), cx),
+                            cx,
+                        )))
+                    },
+                )
+                .child(Text::caption(
+                    source_spec
+                        .map(|spec| spec.targets_label.clone())
+                        .unwrap_or_else(|| "Sources".to_string()),
+                ))
+                .child(div().min_w(px(260.0)).child(focus_frame(
+                    context_slot_is_keyboard_focused(
+                        self.focus_mode,
+                        self.context_bar_slot,
+                        ContextBarSlot::SourceTargets,
+                    ),
+                    Some(theme.ring),
+                    control_shell(self.source_targets.clone(), cx),
+                    cx,
+                )))
+                .child(Text::caption(
+                    source_spec
+                        .map(|spec| spec.start_label.clone())
+                        .unwrap_or_else(|| "Start".to_string()),
+                ))
+                .child(div().min_w(px(180.0)).child(focus_frame(
+                    context_slot_is_keyboard_focused(
+                        self.focus_mode,
+                        self.context_bar_slot,
+                        ContextBarSlot::SourceStart,
+                    ),
+                    Some(theme.ring),
+                    control_shell(Input::new(&self.source_start_input), cx),
+                    cx,
+                )))
+                .child(Text::caption(
+                    source_spec
+                        .map(|spec| spec.end_label.clone())
+                        .unwrap_or_else(|| "End".to_string()),
+                ))
+                .child(div().min_w(px(180.0)).child(focus_frame(
+                    context_slot_is_keyboard_focused(
+                        self.focus_mode,
+                        self.context_bar_slot,
+                        ContextBarSlot::SourceEnd,
+                    ),
+                    Some(theme.ring),
+                    control_shell(Input::new(&self.source_end_input), cx),
+                    cx,
+                )))
+            })
+            .when(!show_source_controls && show_db, |el| {
                 el.child(Text::caption("Database:")).child(
                     div()
                         .min_w(context_dropdown_min_width(1))
                         .child(focus_frame(
-                            context_dropdown_is_keyboard_focused(
+                            context_slot_is_keyboard_focused(
                                 self.focus_mode,
-                                self.context_bar_index,
-                                1,
+                                self.context_bar_slot,
+                                ContextBarSlot::Database,
                             ),
                             Some(theme.ring),
                             control_shell(self.database_dropdown.clone(), cx),
@@ -820,15 +1177,15 @@ impl CodeDocument {
                         )),
                 )
             })
-            .when(show_schema, |el| {
+            .when(!show_source_controls && show_schema, |el| {
                 el.child(Text::caption("Schema:")).child(
                     div()
                         .min_w(context_dropdown_min_width(2))
                         .child(focus_frame(
-                            context_dropdown_is_keyboard_focused(
+                            context_slot_is_keyboard_focused(
                                 self.focus_mode,
-                                self.context_bar_index,
-                                2,
+                                self.context_bar_slot,
+                                ContextBarSlot::Schema,
                             ),
                             Some(theme.ring),
                             control_shell(self.schema_dropdown.clone(), cx),
@@ -850,7 +1207,11 @@ impl CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::{SqlQueryFocus, context_dropdown_is_keyboard_focused, context_dropdown_min_width};
+    use super::{
+        ContextBarSlot, SqlQueryFocus, build_source_window_context, context_dropdown_min_width,
+        context_slot_is_keyboard_focused, parse_source_datetime_input,
+    };
+    use dbflux_core::ExecutionSourceContext;
     use gpui::px;
 
     #[test]
@@ -866,20 +1227,90 @@ mod tests {
 
     #[test]
     fn only_active_context_bar_dropdown_reports_keyboard_focus() {
-        assert!(context_dropdown_is_keyboard_focused(
+        assert!(context_slot_is_keyboard_focused(
             SqlQueryFocus::ContextBar,
-            1,
-            1,
+            ContextBarSlot::Database,
+            ContextBarSlot::Database,
         ));
-        assert!(!context_dropdown_is_keyboard_focused(
+        assert!(!context_slot_is_keyboard_focused(
             SqlQueryFocus::ContextBar,
-            1,
-            0,
+            ContextBarSlot::Database,
+            ContextBarSlot::Connection,
         ));
-        assert!(!context_dropdown_is_keyboard_focused(
+        assert!(!context_slot_is_keyboard_focused(
             SqlQueryFocus::Editor,
-            1,
-            1,
+            ContextBarSlot::Database,
+            ContextBarSlot::Database,
         ));
+    }
+
+    #[test]
+    fn source_datetime_inputs_parse_rfc3339_values() {
+        assert!(parse_source_datetime_input("2026-04-24T12:34:56Z").is_some());
+        assert!(parse_source_datetime_input("").is_none());
+        assert!(parse_source_datetime_input("not-a-date").is_none());
+    }
+
+    #[test]
+    fn valid_source_context_requires_targets_and_ordered_bounds() {
+        let source = build_source_window_context(
+            Some("cwli".to_string()),
+            &["/aws/lambda/app".to_string()],
+            Some(10),
+            Some(20),
+        )
+        .expect("valid source context");
+
+        match source {
+            ExecutionSourceContext::CollectionWindow {
+                targets,
+                start_ms,
+                end_ms,
+                query_mode,
+            } => {
+                assert_eq!(targets, vec!["/aws/lambda/app"]);
+                assert_eq!(start_ms, 10);
+                assert_eq!(end_ms, 20);
+                assert_eq!(query_mode.as_deref(), Some("cwli"));
+            }
+        }
+
+        assert_eq!(
+            build_source_window_context(Some("cwli".to_string()), &[], Some(10), Some(20))
+                .unwrap_err(),
+            "Select at least one source"
+        );
+        assert_eq!(
+            build_source_window_context(
+                Some("cwli".to_string()),
+                &["/aws/lambda/app".to_string()],
+                None,
+                Some(20),
+            )
+            .unwrap_err(),
+            "Start time is required"
+        );
+        assert_eq!(
+            build_source_window_context(
+                Some("cwli".to_string()),
+                &["/aws/lambda/app".to_string()],
+                Some(20),
+                Some(10),
+            )
+            .unwrap_err(),
+            "Start time must be earlier than end time"
+        );
+    }
+
+    #[test]
+    fn sql_source_context_allows_empty_targets() {
+        let source = build_source_window_context(Some("sql".to_string()), &[], Some(10), Some(20))
+            .expect("sql source context without explicit targets");
+
+        match source {
+            ExecutionSourceContext::CollectionWindow { targets, .. } => {
+                assert!(targets.is_empty());
+            }
+        }
     }
 }

@@ -330,7 +330,11 @@ impl AppIcon {
             QueryLanguage::MongoQuery => Self::BrandMongodb,
             QueryLanguage::RedisCommands => Self::BrandRedis,
             QueryLanguage::InfluxQuery => Self::BrandInfluxDb,
-            QueryLanguage::Sql | QueryLanguage::Cql => Self::Database,
+            QueryLanguage::Sql
+            | QueryLanguage::CloudWatchLogsInsightsQl
+            | QueryLanguage::OpenSearchPpl
+            | QueryLanguage::OpenSearchSql
+            | QueryLanguage::Cql => Self::Database,
             QueryLanguage::Cypher => Self::Database,
             QueryLanguage::Custom(_) => Self::FileCode,
         }

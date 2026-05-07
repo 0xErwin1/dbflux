@@ -1,5 +1,7 @@
 use super::*;
+use crate::keymap::ContextId;
 use crate::platform;
+use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::tokens::FontSizes;
 use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
 use dbflux_components::primitives::{Icon, Text, overlay_bg};
@@ -62,6 +64,7 @@ impl Render for Workspace {
         let header_size = px(25.0);
         let sidebar_context_menu = self.sidebar.read(cx).context_menu_state().cloned();
         let tab_context_menu = self.tab_bar.read(cx).context_menu_state().cloned();
+        let child_picker_open = self.sidebar.read(cx).has_child_picker_open();
 
         // Linux CSD title bar: render only when the compositor has negotiated CSD mode.
         let linux_title_bar = platform::render_csd_title_bar(window, cx, "DBFlux");
@@ -585,6 +588,38 @@ impl Render for Workspace {
                 {
                     root
                 }
+            })
+            .when(child_picker_open, |root| {
+                let sidebar_entity = self.sidebar.clone();
+                let focus_handle = self
+                    .sidebar
+                    .read(cx)
+                    .child_picker_focus_handle()
+                    .unwrap_or_else(|| self.focus_handle.clone());
+                let content = self.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.render_child_picker_content(cx).into_any_element()
+                });
+
+                root.child(
+                    ModalFrame::new(
+                        "event-stream-child-picker",
+                        &focus_handle,
+                        move |_window, cx| {
+                            sidebar_entity.update(cx, |sidebar, cx| {
+                                sidebar.close_child_picker(cx);
+                            });
+                        },
+                    )
+                    .context_id(ContextId::EventStreamsPicker)
+                    .icon(AppIcon::ScrollText)
+                    .title("Event Streams")
+                    .width(px(1000.0))
+                    .height(px(720.0))
+                    .top_offset(px(60.0))
+                    .block_scroll()
+                    .child(content)
+                    .render(cx),
+                )
             })
             // Context menu rendered at workspace level for proper positioning
             .when_some(sidebar_context_menu, |this, menu| {

@@ -13,7 +13,10 @@ use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::{Icon, IconName};
 
-use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};
+use super::{
+    ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View,
+    uses_aws_auth_profile_dropdown,
+};
 
 impl ConnectionManagerWindow {
     pub(super) fn render_focus_shell(
@@ -402,7 +405,9 @@ impl ConnectionManagerWindow {
         ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if !is_ssh_tab && field_def.id == "profile" && self.selected_driver_id() == Some("dynamodb")
+        if !is_ssh_tab
+            && field_def.id == "profile"
+            && uses_aws_auth_profile_dropdown(self.selected_driver_id())
         {
             let field_enabled = self.is_field_enabled(field_def);
 
@@ -419,9 +424,6 @@ impl ConnectionManagerWindow {
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
                                     this.begin_inline_editor_interaction(cx);
-                                    this.auth_profile_dropdown.update(cx, |dropdown, cx| {
-                                        dropdown.open(cx);
-                                    });
                                 }),
                             )
                         })

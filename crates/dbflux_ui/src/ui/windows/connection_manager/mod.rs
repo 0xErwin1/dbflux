@@ -41,6 +41,10 @@ fn auth_profile_needs_login(
         )
 }
 
+fn uses_aws_auth_profile_dropdown(driver_id: Option<&str>) -> bool {
+    matches!(driver_id, Some("dynamodb") | Some("cloudwatch"))
+}
+
 /// Focus state for driver selection screen
 #[derive(Clone, Copy, PartialEq, Default)]
 enum DriverFocus {
@@ -2375,16 +2379,16 @@ impl ConnectionManagerWindow {
             self.selected_auth_profile_id = selection;
             self.selected_ssm_auth_profile_id = selection;
 
-            self.sync_dynamodb_fields_from_auth_profile(window, cx);
+            self.sync_aws_driver_fields_from_auth_profile(window, cx);
         }
     }
 
-    fn sync_dynamodb_fields_from_auth_profile(
+    fn sync_aws_driver_fields_from_auth_profile(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_driver_id() != Some("dynamodb") {
+        if !uses_aws_auth_profile_dropdown(self.selected_driver_id()) {
             return;
         }
 
@@ -2893,6 +2897,7 @@ impl EventEmitter<DismissEvent> for ConnectionManagerWindow {}
 mod tests {
     use super::ConnectionManagerWindow;
     use super::auth_profile_needs_login;
+    use super::uses_aws_auth_profile_dropdown;
     use dbflux_core::AuthSessionState;
 
     // --- parse_hook_ids ---
@@ -2993,5 +2998,13 @@ mod tests {
             Some(&AuthSessionState::LoginRequired)
         ));
         assert!(!auth_profile_needs_login(true, None));
+    }
+
+    #[test]
+    fn aws_auth_profile_dropdown_is_enabled_for_dynamodb_and_cloudwatch() {
+        assert!(uses_aws_auth_profile_dropdown(Some("dynamodb")));
+        assert!(uses_aws_auth_profile_dropdown(Some("cloudwatch")));
+        assert!(!uses_aws_auth_profile_dropdown(Some("postgres")));
+        assert!(!uses_aws_auth_profile_dropdown(None));
     }
 }

@@ -65,6 +65,8 @@ pub fn relational_schema_with_table(
         foreign_keys: None,
         constraints: None,
         sample_fields: None,
+        presentation: dbflux_core::CollectionPresentation::DataGrid,
+        child_items: None,
     };
 
     let schema = DbSchemaInfo {

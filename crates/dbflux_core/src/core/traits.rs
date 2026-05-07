@@ -3,14 +3,15 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
-    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
-    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
-    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner,
-    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableBrowseRequest,
-    TableCountRequest, TableInfo, Value, ViewInfo,
+    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionChildrenPage,
+    CollectionChildrenRequest, CollectionCountRequest, CollectionRef, ConnectionProfile,
+    CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind, DbSchemaInfo,
+    DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
+    DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest, FormValues,
+    LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect, SqlGenerationRequest,
+    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -87,6 +88,33 @@ pub enum SchemaObjectKind {
     View,
     Database,
     Collection,
+}
+
+/// Additional source controls requested by a driver for query execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceQueryMode {
+    pub value: String,
+    pub label: String,
+    pub query_language: QueryLanguage,
+}
+
+/// Additional source controls requested by a driver for query execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceContextSpec {
+    pub targets_label: String,
+    pub targets_placeholder: String,
+    pub start_label: String,
+    pub end_label: String,
+    pub query_mode_label: Option<String>,
+    pub query_modes: Vec<SourceQueryMode>,
+    pub default_query_mode: Option<String>,
+}
+
+/// A driver-owned event stream target that can be opened in the audit document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventStreamTarget {
+    pub collection: CollectionRef,
+    pub child_id: Option<String>,
 }
 
 impl SchemaObjectKind {
@@ -808,6 +836,16 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// List driver-owned child sources under a collection/container.
+    fn collection_children(
+        &self,
+        _request: &CollectionChildrenRequest,
+    ) -> Result<CollectionChildrenPage, DbError> {
+        Err(DbError::NotSupported(
+            "Collection child listing not supported by this driver".to_string(),
+        ))
+    }
+
     /// Count documents in a collection with an optional filter.
     ///
     /// The default implementation returns `NotSupported`.
@@ -815,6 +853,22 @@ pub trait Connection: Send + Sync {
         Err(DbError::NotSupported(
             "Collection counting not supported by this driver".to_string(),
         ))
+    }
+
+    /// Browse a driver-owned event stream source as canonical observability records.
+    fn browse_event_stream(
+        &self,
+        _target: &EventStreamTarget,
+        _query: &EventQuery,
+    ) -> Result<EventPage, DbError> {
+        Err(DbError::NotSupported(
+            "Event stream browsing not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Optional source-context controls exposed by this driver in query documents.
+    fn source_context_spec(&self) -> Option<SourceContextSpec> {
+        None
     }
 
     /// Explain a query execution plan for a table or custom query.

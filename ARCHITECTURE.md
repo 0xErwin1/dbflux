@@ -379,6 +379,7 @@ crates/
 
 - `DocumentHandle` manages document lifecycle as GPUI entities
 - `CodeDocument` provides language-aware editing for queries and scripts (SQL/MongoDB/Redis/Lua/Python/Bash) with multiple result tabs and live output for scripts. Connection/database/schema controls are only shown for languages that support connection context.
+- Driver-owned source-context controls are declared through generic core seams (`SourceContextSpec`, `ExecutionSourceContext`) and rendered generically by `CodeDocument`; no driver-specific query-context widgets should live in the UI layer.
 - Auto-save: tabs auto-save to scratch files (untitled) or shadow files (file-backed) on a 2-second debounce. Explicit Ctrl+S writes to the original file. Tabs close without warnings.
 - Session restore: `SessionStore` persists a manifest of open tabs to `~/.local/share/dbflux/sessions/`. On startup, all tabs are restored with conflict detection for externally modified files.
 - `DataDocument` enables standalone data browsing independent of queries
@@ -398,6 +399,7 @@ crates/
 ### Schema & Navigation
 
 - Sidebar: `crates/dbflux_ui/src/ui/views/sidebar/` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files, script hooks, and other user files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading.
+- Driver-owned child resources under collections/containers are published through generic `CollectionChildInfo` metadata. The sidebar must not infer driver-specific children from names, field types, or driver IDs.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
 - Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
 
@@ -409,10 +411,16 @@ crates/
   - `DriverCapabilities`: bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
 - **Error formatting**: `crates/dbflux_core/src/core/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
-- Core domain API: `crates/dbflux_core/src/core/traits.rs` defines `DbDriver`, `Connection`, SQL generation, and cancellation contracts.
+- Core domain API: `crates/dbflux_core/src/core/traits.rs` defines `DbDriver`, `Connection`, SQL generation, cancellation contracts, and generic driver-to-UI seams such as `EventStreamTarget` and `SourceContextSpec`.
 - **Query generation**: `crates/dbflux_core/src/query/generator.rs` defines `QueryGenerator` as the driver-owned source of truth for mutation text plus read/query templates. SQL drivers use `SqlMutationGenerator`; MongoDB, Redis, and DynamoDB expose their own native generators. The UI and MCP access generators through `Connection::query_generator()` so previews and copied queries come from the driver rather than a UI-local formatter.
 - Driver forms: `crates/dbflux_core/src/driver/form.rs` defines dynamic form schemas that drivers provide for connection configuration. Supports both form-based and URI connection modes.
-- **Driver/UI decoupling**: The UI never checks driver IDs directly. Instead, it uses `DriverMetadata` abstractions (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`) to adapt behavior. This allows new drivers to work automatically without UI changes.
+- **Driver/UI decoupling**: The UI and app orchestration layers must never branch on concrete driver IDs or embed driver-specific routing. The core exposes the seams, and drivers fill them.
+  - `DriverMetadata` covers broad adaptation (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`).
+  - `CollectionPresentation` tells the UI how a collection/container opens (for example data grid vs event stream).
+  - `CollectionChildInfo` lets drivers publish child sources under a collection/container without UI heuristics.
+  - `EventStreamTarget` gives workspace/audit a generic identifier for driver-backed event streams.
+  - `SourceContextSpec` lets drivers declare extra query-context controls without hardcoding driver names in `dbflux_ui`.
+  - If the UI needs new behavior, add a generic core abstraction first; do not add `if driver_id == ...` in `dbflux_ui` or app-facing workflow code.
 
 ### Auth & Access Pipeline
 
@@ -505,7 +513,7 @@ crates/
 
 **Session persistence**: Scratch/shadow files and session manifest in `~/.local/share/dbflux/sessions/` for tab restore on startup.
 
-**Execution context**: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, and schema selection; serialized as annotation comments in saved files.
+**Execution context**: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, schema, and generic driver-declared source context. The current generic source-window shape is `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`. Only connection/database/schema annotations are serialized into saved file headers.
 
 **History modal**: `crates/dbflux_ui/src/ui/overlays/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
 
@@ -601,7 +609,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 **UI Integration**:
 - `McpApprovalsView` (`crates/dbflux_ui/src/ui/document/governance.rs`) for reviewing pending executions
 - `mcp_section.rs` in Settings for trusted clients, roles, and policies
-- `AuditDocument` (`crates/dbflux_ui/src/ui/document/audit.rs`) as the unified audit viewer for all event categories (no separate MCP audit surface)
+- `AuditDocument` (`crates/dbflux_ui/src/ui/document/audit/`) as the unified event viewer for both internal audit records and driver-backed external event streams exposed through generic `EventStreamTarget`s (no driver-specific audit document path in the UI)
 - `LoginModal` and `SsoWizard` overlays for AWS SSO authentication flow
 
 ## Data Flow
@@ -611,7 +619,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Connect flow: `AppState::prepare_pipeline_input` builds a provider-agnostic pre-connect pipeline input. The pipeline runs auth/session validation, dynamic value resolution, and managed/direct access setup before driver connect + schema fetch. Supports form-based configuration, direct URI input, optional proxy/SSH, and managed access (`aws-ssm`). Connection hooks still run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
 - Query flow: `CodeDocument` submits database queries to a `Connection` implementation when the active `QueryLanguage` supports connection context. The query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs (handled in `code/execution.rs`).
 - Script flow: `CodeDocument` executes Lua, Python, and Bash documents as script hooks rather than database queries. Script runs create a local output channel, stream live text into a document-owned buffer, and keep the final output as a text result when execution completes.
-- View mode selection: `DataGridPanel` (in `document/data_grid_panel/`) automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB and DynamoDB, key-value view for Redis. Context menus include "Copy as Query" for generating driver-specific mutation statements/envelopes via `QueryGenerator`.
+- View mode selection: `DataGridPanel` (in `document/data_grid_panel/`) automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB and DynamoDB, key-value view for Redis. Event-stream-like document containers are opened through `CollectionPresentation::EventStream` rather than UI-side driver checks. Context menus include "Copy as Query" for generating driver-specific mutation statements/envelopes via `QueryGenerator`.
 - Query preview: `SqlPreviewModal` (in `overlays/sql_preview_modal.rs`) routes relational read/DML previews through `QueryGenerator` for row, table, and view previews, while DDL stays on `CodeGenerator`. Non-SQL languages (MongoDB, Redis) still use generic preview mode with static text and language-specific syntax highlighting.
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (crates/dbflux_ui/src/ui/views/workspace/).
 - Lazy loading: Drivers fetch table/collection metadata (columns, indexes) on-demand when items are expanded in sidebar, not during initial connection (performance optimization for large databases).

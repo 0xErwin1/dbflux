@@ -8,6 +8,12 @@ enum OpenDocumentDecision {
     OpenNew,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollectionDocumentPresentation {
+    DataGrid,
+    AuditLike,
+}
+
 fn decide_open_document(
     has_connection: bool,
     existing_id: Option<crate::ui::document::DocumentId>,
@@ -21,6 +27,39 @@ fn decide_open_document(
     }
 
     OpenDocumentDecision::OpenNew
+}
+
+fn collection_document_presentation_for_connection(
+    connected: &crate::app::ConnectedProfile,
+    collection: &dbflux_core::CollectionRef,
+) -> CollectionDocumentPresentation {
+    let schema = connected
+        .schema_for_target_database(collection.database.as_str())
+        .or(connected.schema.as_ref());
+
+    let presentation = schema
+        .and_then(|schema| {
+            schema
+                .collections()
+                .iter()
+                .find(|entry| {
+                    entry.name == collection.name
+                        && entry
+                            .database
+                            .as_deref()
+                            .unwrap_or(collection.database.as_str())
+                            == collection.database.as_str()
+                })
+                .map(|entry| entry.presentation)
+        })
+        .unwrap_or(dbflux_core::CollectionPresentation::DataGrid);
+
+    match presentation {
+        dbflux_core::CollectionPresentation::DataGrid => CollectionDocumentPresentation::DataGrid,
+        dbflux_core::CollectionPresentation::EventStream => {
+            CollectionDocumentPresentation::AuditLike
+        }
+    }
 }
 
 impl Workspace {
@@ -410,13 +449,36 @@ impl Workspace {
             .connections()
             .contains_key(&profile_id);
 
+        let presentation = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| {
+                collection_document_presentation_for_connection(connected, &collection)
+            })
+            .unwrap_or(CollectionDocumentPresentation::DataGrid);
+
         let existing_id = if has_connection {
             self.tab_manager
                 .read(cx)
                 .documents()
                 .iter()
-                .find(|doc| {
-                    doc.is_collection(&collection, cx) && doc.connection_id(cx) == Some(profile_id)
+                .find(|doc| match presentation {
+                    CollectionDocumentPresentation::DataGrid => {
+                        doc.is_collection(&collection, cx)
+                            && doc.connection_id(cx) == Some(profile_id)
+                    }
+                    CollectionDocumentPresentation::AuditLike => {
+                        matches!(doc, DocumentHandle::Audit { entity, .. }
+                        if entity.read(cx).matches_event_stream(
+                            profile_id,
+                            &dbflux_core::EventStreamTarget {
+                                collection: collection.clone(),
+                                child_id: None,
+                            },
+                        ))
+                    }
                 })
                 .map(|doc| doc.id())
         } else {
@@ -442,17 +504,36 @@ impl Workspace {
             OpenDocumentDecision::OpenNew => {}
         }
 
-        // Create a DataDocument for the collection
-        let doc = cx.new(|cx| {
-            DataDocument::new_for_collection(
-                profile_id,
-                collection.clone(),
-                self.app_state.clone(),
-                window,
-                cx,
-            )
-        });
-        let handle = DocumentHandle::data(doc, cx);
+        let handle = match presentation {
+            CollectionDocumentPresentation::DataGrid => {
+                let doc = cx.new(|cx| {
+                    DataDocument::new_for_collection(
+                        profile_id,
+                        collection.clone(),
+                        self.app_state.clone(),
+                        window,
+                        cx,
+                    )
+                });
+                DocumentHandle::data(doc, cx)
+            }
+            CollectionDocumentPresentation::AuditLike => {
+                let doc = cx.new(|cx| {
+                    crate::ui::document::AuditDocument::new_for_event_stream(
+                        profile_id,
+                        dbflux_core::EventStreamTarget {
+                            collection: collection.clone(),
+                            child_id: None,
+                        },
+                        collection.name.clone(),
+                        self.app_state.clone(),
+                        window,
+                        cx,
+                    )
+                });
+                DocumentHandle::audit(doc, cx)
+            }
+        };
 
         self.tab_manager.update(cx, |mgr, cx| {
             mgr.open(handle, cx);
@@ -463,6 +544,66 @@ impl Workspace {
             collection.database,
             collection.name
         );
+    }
+
+    pub(super) fn open_event_stream_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        target: dbflux_core::EventStreamTarget,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::components::toast::ToastExt;
+
+        let has_connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+
+        let existing_id = if has_connection {
+            self.tab_manager
+                .read(cx)
+                .documents()
+                .iter()
+                .find(|doc| {
+                    matches!(doc, DocumentHandle::Audit { entity, .. }
+                        if entity.read(cx).matches_event_stream(profile_id, &target))
+                })
+                .map(|doc| doc.id())
+        } else {
+            None
+        };
+
+        match decide_open_document(has_connection, existing_id) {
+            OpenDocumentDecision::ErrorNoConnection => {
+                cx.toast_error("No active connection for this event source", window);
+                return;
+            }
+            OpenDocumentDecision::FocusExisting(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+                return;
+            }
+            OpenDocumentDecision::OpenNew => {}
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::AuditDocument::new_for_event_stream(
+                profile_id,
+                target.clone(),
+                title.clone(),
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(DocumentHandle::audit(doc, cx), cx);
+        });
     }
 
     pub(super) fn open_key_value_document(
@@ -1542,6 +1683,8 @@ mod tests {
                     foreign_keys: None,
                     constraints: None,
                     sample_fields: None,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 },
                 TableInfo {
                     name: "orders".to_string(),
@@ -1551,6 +1694,8 @@ mod tests {
                     foreign_keys: None,
                     constraints: None,
                     sample_fields: None,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 },
             ],
             views: vec![ViewInfo {
@@ -1600,6 +1745,8 @@ mod tests {
                     foreign_keys: None,
                     constraints: None,
                     sample_fields: None,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 }],
                 views: vec![],
                 custom_types: None,
@@ -1642,6 +1789,8 @@ mod tests {
                     indexes: None,
                     validator: None,
                     is_capped: false,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 },
                 CollectionInfo {
                     name: "orders".to_string(),
@@ -1652,6 +1801,8 @@ mod tests {
                     indexes: None,
                     validator: None,
                     is_capped: false,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 },
             ],
             ..Default::default()

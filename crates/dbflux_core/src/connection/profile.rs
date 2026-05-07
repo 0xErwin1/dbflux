@@ -20,6 +20,7 @@ pub enum DbKind {
     MongoDB,
     Redis,
     DynamoDB,
+    CloudWatchLogs,
 }
 
 impl DbKind {
@@ -32,6 +33,7 @@ impl DbKind {
             DbKind::MongoDB => "MongoDB",
             DbKind::Redis => "Redis",
             DbKind::DynamoDB => "DynamoDB",
+            DbKind::CloudWatchLogs => "CloudWatch Logs",
         }
     }
 }
@@ -215,6 +217,13 @@ pub enum DbConfig {
         #[serde(default)]
         table: Option<String>,
     },
+    CloudWatchLogs {
+        region: String,
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        endpoint: Option<String>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -236,6 +245,7 @@ impl DbConfig {
             DbConfig::MongoDB { .. } => DbKind::MongoDB,
             DbConfig::Redis { .. } => DbKind::Redis,
             DbConfig::DynamoDB { .. } => DbKind::DynamoDB,
+            DbConfig::CloudWatchLogs { .. } => DbKind::CloudWatchLogs,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -312,13 +322,24 @@ impl DbConfig {
         }
     }
 
+    pub fn default_cloudwatch_logs() -> Self {
+        DbConfig::CloudWatchLogs {
+            region: "us-east-1".to_string(),
+            profile: None,
+            endpoint: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
             | DbConfig::MySQL { ssh_tunnel, .. }
             | DbConfig::MongoDB { ssh_tunnel, .. }
             | DbConfig::Redis { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => None,
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => None,
         }
     }
 
@@ -345,9 +366,10 @@ impl DbConfig {
                 ssh_tunnel_profile_id,
                 ..
             } => ssh_tunnel.is_some() || ssh_tunnel_profile_id.is_some(),
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
-                false
-            }
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => false,
         }
     }
 
@@ -358,7 +380,10 @@ impl DbConfig {
             | DbConfig::MySQL { host, port, .. }
             | DbConfig::MongoDB { host, port, .. }
             | DbConfig::Redis { host, port, .. } => Some((host, *port)),
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => None,
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => None,
         }
     }
 
@@ -393,7 +418,10 @@ impl DbConfig {
                 *port = tunnel_port;
                 *use_uri = false;
             }
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {}
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => {}
         }
     }
 
@@ -407,7 +435,10 @@ impl DbConfig {
             | DbConfig::MySQL { use_uri, uri, .. }
             | DbConfig::MongoDB { use_uri, uri, .. }
             | DbConfig::Redis { use_uri, uri, .. } => (use_uri, uri),
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => {
                 return None;
             }
         };
@@ -436,7 +467,7 @@ impl DbConfig {
             DbConfig::MongoDB { database, .. } => database.clone(),
             DbConfig::Redis { database, .. } => database.map(|d| d.to_string()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
-            DbConfig::DynamoDB { .. } => None,
+            DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::External { .. } => None,
         }
     }
@@ -818,6 +849,7 @@ impl ConnectionProfile {
             DbKind::MongoDB => "mongodb",
             DbKind::Redis => "redis",
             DbKind::DynamoDB => "dynamodb",
+            DbKind::CloudWatchLogs => "cloudwatch",
         }
     }
 
@@ -833,6 +865,24 @@ impl ConnectionProfile {
     /// (has auth profile, value refs, or unified access method).
     pub fn uses_pipeline(&self) -> bool {
         self.auth_profile_id.is_some() || !self.value_refs.is_empty() || self.access_kind.is_some()
+    }
+
+    /// Returns an external auth profile name embedded in the driver config.
+    ///
+    /// This lets app-layer connection orchestration route profiles through the
+    /// generic auth pipeline without matching on concrete driver names.
+    pub fn external_auth_profile_name(&self) -> Option<&str> {
+        match &self.config {
+            DbConfig::CloudWatchLogs {
+                profile: Some(profile),
+                ..
+            }
+            | DbConfig::DynamoDB {
+                profile: Some(profile),
+                ..
+            } => Some(profile.as_str()),
+            _ => None,
+        }
     }
 
     /// Derives an AccessKind from legacy fields (proxy_profile_id, ssh_tunnel_profile_id)
@@ -1094,6 +1144,54 @@ mod tests {
                 assert_eq!(table.as_deref(), Some("users"));
             }
             _ => panic!("expected DynamoDB config variant"),
+        }
+    }
+
+    #[test]
+    fn cloudwatch_config_kind_and_driver_id_fallback_work() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000100",
+            "name": "legacy-cloudwatch",
+            "config": {
+                "CloudWatchLogs": {
+                    "region": "us-east-1"
+                }
+            }
+        }"#;
+
+        let profile: ConnectionProfile =
+            serde_json::from_str(json).expect("cloudwatch profile should deserialize");
+
+        assert_eq!(profile.kind(), DbKind::CloudWatchLogs);
+        assert_eq!(profile.driver_id(), "cloudwatch");
+    }
+
+    #[test]
+    fn cloudwatch_profile_serde_roundtrip_preserves_optional_fields() {
+        let profile = ConnectionProfile::new(
+            "cloudwatch",
+            DbConfig::CloudWatchLogs {
+                region: "us-west-2".to_string(),
+                profile: Some("dev".to_string()),
+                endpoint: Some("http://localhost:4566".to_string()),
+            },
+        );
+
+        let json = serde_json::to_string(&profile).expect("serialize should succeed");
+        let restored: ConnectionProfile =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+
+        match restored.config {
+            DbConfig::CloudWatchLogs {
+                region,
+                profile,
+                endpoint,
+            } => {
+                assert_eq!(region, "us-west-2");
+                assert_eq!(profile.as_deref(), Some("dev"));
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:4566"));
+            }
+            _ => panic!("expected CloudWatch Logs config variant"),
         }
     }
 

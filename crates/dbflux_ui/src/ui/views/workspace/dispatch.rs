@@ -1,7 +1,80 @@
 use super::*;
 
+fn sidebar_tree_command_is_blocked_by_search_focus(cmd: Command) -> bool {
+    matches!(
+        cmd,
+        Command::SelectNext
+            | Command::SelectPrev
+            | Command::SelectFirst
+            | Command::SelectLast
+            | Command::Execute
+            | Command::ExpandCollapse
+            | Command::ColumnLeft
+            | Command::ColumnRight
+            | Command::Cancel
+            | Command::Rename
+            | Command::Delete
+            | Command::CreateFolder
+            | Command::SidebarNextTab
+            | Command::OpenItemMenu
+            | Command::ExtendSelectNext
+            | Command::ExtendSelectPrev
+            | Command::ToggleSelection
+            | Command::MoveSelectedUp
+            | Command::MoveSelectedDown
+    )
+}
+
 impl CommandDispatcher for Workspace {
     fn dispatch(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.sidebar.read(cx).has_child_picker_open() {
+            match cmd {
+                Command::SelectNext => {
+                    self.sidebar.update(cx, |s, cx| s.picker_select_next(cx));
+                    return true;
+                }
+                Command::SelectPrev => {
+                    self.sidebar.update(cx, |s, cx| s.picker_select_prev(cx));
+                    return true;
+                }
+                Command::SelectFirst => {
+                    self.sidebar.update(cx, |s, cx| s.picker_select_first(cx));
+                    return true;
+                }
+                Command::SelectLast => {
+                    self.sidebar.update(cx, |s, cx| s.picker_select_last(cx));
+                    return true;
+                }
+                Command::Execute => {
+                    self.sidebar.update(cx, |s, cx| s.picker_execute(cx));
+                    return true;
+                }
+                Command::FocusSearch => {
+                    self.sidebar
+                        .update(cx, |s, cx| s.picker_focus_search(window, cx));
+                    return true;
+                }
+                Command::Cancel => {
+                    if self.sidebar.read(cx).child_picker_filter_is_focused() {
+                        // Pop focus back to the list so subsequent Cancel closes the modal.
+                        self.sidebar
+                            .update(cx, |s, cx| s.picker_focus_list(window, cx));
+                    } else {
+                        self.sidebar.update(cx, |s, cx| s.close_child_picker(cx));
+                    }
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+
+        if self.focus_target == FocusTarget::Sidebar
+            && self.sidebar.read(cx).search_input_is_focused(window, cx)
+            && sidebar_tree_command_is_blocked_by_search_focus(cmd)
+        {
+            return false;
+        }
+
         // When context menu is open, only allow menu-related commands
         if self.focus_target == FocusTarget::Sidebar
             && self.sidebar.read(cx).has_context_menu_open()
@@ -590,7 +663,12 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::FocusSearch => {
-                if self.focus_target == FocusTarget::Document {
+                if self.focus_target == FocusTarget::Sidebar {
+                    self.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.focus_active_search(window, cx);
+                    });
+                    true
+                } else if self.focus_target == FocusTarget::Document {
                     if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
                         doc.dispatch_command(Command::FocusSearch, window, cx);
                     }
@@ -723,5 +801,40 @@ impl CommandDispatcher for Workspace {
                 true
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidebar_tree_command_is_blocked_by_search_focus;
+    use crate::keymap::Command;
+
+    #[test]
+    fn sidebar_search_focus_blocks_tree_navigation_commands() {
+        assert!(sidebar_tree_command_is_blocked_by_search_focus(
+            Command::SelectNext
+        ));
+        assert!(sidebar_tree_command_is_blocked_by_search_focus(
+            Command::Execute
+        ));
+        assert!(sidebar_tree_command_is_blocked_by_search_focus(
+            Command::Delete
+        ));
+        assert!(sidebar_tree_command_is_blocked_by_search_focus(
+            Command::MoveSelectedDown
+        ));
+    }
+
+    #[test]
+    fn sidebar_search_focus_leaves_unrelated_commands_available() {
+        assert!(!sidebar_tree_command_is_blocked_by_search_focus(
+            Command::RunQuery
+        ));
+        assert!(!sidebar_tree_command_is_blocked_by_search_focus(
+            Command::ToggleSidebar
+        ));
+        assert!(!sidebar_tree_command_is_blocked_by_search_focus(
+            Command::OpenSettings
+        ));
     }
 }

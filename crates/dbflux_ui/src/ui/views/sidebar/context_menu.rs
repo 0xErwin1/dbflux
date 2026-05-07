@@ -104,6 +104,16 @@ impl Sidebar {
                     [ContextMenuItem::item("Open", ContextMenuAction::Open)],
                 );
 
+                if self.collection_supports_child_picker(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Browse Event Streams",
+                            ContextMenuAction::OpenChildPicker,
+                        )],
+                    );
+                }
+
                 Self::append_menu_section(
                     &mut items,
                     [
@@ -154,6 +164,16 @@ impl Sidebar {
                     [ContextMenuItem::item("Open", ContextMenuAction::Open)],
                 );
 
+                if self.collection_supports_child_picker(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Browse Event Streams",
+                            ContextMenuAction::OpenChildPicker,
+                        )],
+                    );
+                }
+
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::item(
@@ -162,37 +182,41 @@ impl Sidebar {
                     )],
                 );
 
-                Self::append_menu_section(
-                    &mut items,
-                    [ContextMenuItem::item(
-                        "Generate Query",
-                        ContextMenuAction::Submenu(vec![
-                            ContextMenuItem::item(
-                                "find",
-                                ContextMenuAction::GenerateCollectionCode(CollectionCodeKind::Find),
-                            ),
-                            ContextMenuItem::item(
-                                "insertOne",
-                                ContextMenuAction::GenerateCollectionCode(
-                                    CollectionCodeKind::InsertOne,
+                if !self.collection_is_event_stream(item_id, cx) {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Generate Query",
+                            ContextMenuAction::Submenu(vec![
+                                ContextMenuItem::item(
+                                    "find",
+                                    ContextMenuAction::GenerateCollectionCode(
+                                        CollectionCodeKind::Find,
+                                    ),
                                 ),
-                            ),
-                            ContextMenuItem::item(
-                                "updateOne",
-                                ContextMenuAction::GenerateCollectionCode(
-                                    CollectionCodeKind::UpdateOne,
+                                ContextMenuItem::item(
+                                    "insertOne",
+                                    ContextMenuAction::GenerateCollectionCode(
+                                        CollectionCodeKind::InsertOne,
+                                    ),
                                 ),
-                            ),
-                            ContextMenuItem::item(
-                                "deleteOne",
-                                ContextMenuAction::GenerateCollectionCode(
-                                    CollectionCodeKind::DeleteOne,
+                                ContextMenuItem::item(
+                                    "updateOne",
+                                    ContextMenuAction::GenerateCollectionCode(
+                                        CollectionCodeKind::UpdateOne,
+                                    ),
                                 ),
-                            ),
-                        ]),
-                    )
-                    .with_icon(AppIcon::Code)],
-                );
+                                ContextMenuItem::item(
+                                    "deleteOne",
+                                    ContextMenuAction::GenerateCollectionCode(
+                                        CollectionCodeKind::DeleteOne,
+                                    ),
+                                ),
+                            ]),
+                        )
+                        .with_icon(AppIcon::Code)],
+                    );
+                }
 
                 // Drop collection gated on DDL capabilities
                 if self
@@ -658,6 +682,112 @@ impl Sidebar {
         conn.connection.metadata().ddl.clone()
     }
 
+    pub(super) fn collection_info_for_item(&self, item_id: &str, cx: &App) -> Option<TableInfo> {
+        let SchemaNodeId::Collection {
+            profile_id,
+            database,
+            name,
+        } = parse_node_id(item_id)?
+        else {
+            return None;
+        };
+
+        let state = self.app_state.read(cx);
+        let conn = state.connections().get(&profile_id)?;
+        let cache_key = (database.clone(), name.clone());
+
+        if let Some(details) = conn.table_details.get(&cache_key) {
+            return Some(details.clone());
+        }
+
+        conn.database_schemas
+            .get(&database)
+            .and_then(|schema| schema.tables.iter().find(|table| table.name == name))
+            .cloned()
+            .or_else(|| {
+                conn.schema.as_ref().and_then(|schema| {
+                    schema.collections().iter().find_map(|collection| {
+                        if collection.name != name {
+                            return None;
+                        }
+
+                        if collection
+                            .database
+                            .as_deref()
+                            .is_some_and(|db| db != database)
+                        {
+                            return None;
+                        }
+
+                        Some(TableInfo {
+                            name: collection.name.clone(),
+                            schema: Some(database.clone()),
+                            columns: None,
+                            indexes: collection.indexes.clone().map(IndexData::Document),
+                            foreign_keys: None,
+                            constraints: None,
+                            sample_fields: collection.sample_fields.clone(),
+                            presentation: collection.presentation,
+                            child_items: collection.child_items.clone(),
+                        })
+                    })
+                })
+            })
+    }
+
+    fn collection_supports_child_picker(&self, item_id: &str, cx: &App) -> bool {
+        self.collection_info_for_item(item_id, cx)
+            .is_some_and(|collection| {
+                collection.presentation == CollectionPresentation::EventStream
+                    || collection
+                        .child_items
+                        .as_ref()
+                        .is_some_and(|items| !items.is_empty())
+            })
+    }
+
+    fn collection_is_event_stream(&self, item_id: &str, cx: &App) -> bool {
+        self.collection_info_for_item(item_id, cx)
+            .is_some_and(|collection| {
+                collection.presentation == CollectionPresentation::EventStream
+            })
+    }
+
+    fn open_child_picker(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let pending = PendingAction::OpenChildPicker {
+            item_id: item_id.to_string(),
+        };
+
+        let status = match parse_node_id(item_id) {
+            Some(SchemaNodeId::Collection {
+                profile_id,
+                database,
+                name,
+            }) if self.collection_is_event_stream(item_id, cx) => {
+                self.ensure_collection_children(profile_id, &database, &name, pending, cx)
+            }
+            _ => self.ensure_table_details(item_id, pending, cx),
+        };
+
+        match status {
+            TableDetailsStatus::Ready => {
+                self.pending_child_picker_item = Some(item_id.to_string());
+            }
+            TableDetailsStatus::Loading => {
+                self.pending_toast = Some(PendingToast {
+                    message: "Loading event streams...".to_string(),
+                    is_error: false,
+                });
+            }
+            TableDetailsStatus::NotFound => {
+                self.pending_toast = Some(PendingToast {
+                    message: "Event streams are not available for this collection".to_string(),
+                    is_error: true,
+                });
+            }
+        }
+    }
+
     pub fn context_menu_select_next(&mut self, cx: &mut Context<Self>) {
         if let Some(ref mut menu) = self.context_menu
             && let Some(next_index) = Self::next_selectable_index(&menu.items, menu.selected_index)
@@ -764,6 +894,9 @@ impl Sidebar {
                 } else {
                     self.browse_table(&item_id, cx);
                 }
+            }
+            ContextMenuAction::OpenChildPicker => {
+                self.open_child_picker(&item_id, cx);
             }
             ContextMenuAction::ViewSchema => {
                 self.set_expanded(&item_id, true, cx);

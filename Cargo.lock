@@ -638,6 +638,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sigv4",
  "aws-smithy-async",
+ "aws-smithy-eventstream",
  "aws-smithy-http",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -652,6 +653,31 @@ dependencies = [
  "pin-project-lite",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "aws-sdk-cloudwatchlogs"
+version = "1.119.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9dcb178173d324aabcb02d6856655b13be5ae1aa5f8f2d8ce3522e174b74256"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-eventstream",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand 2.3.0",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
 ]
 
 [[package]]
@@ -806,6 +832,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37411f8e0f4bea0c3ca0958ce7f18f6439db24d555dbd809787262cd00926aa9"
 dependencies = [
  "aws-credential-types",
+ "aws-smithy-eventstream",
  "aws-smithy-http",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
@@ -833,11 +860,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-smithy-eventstream"
+version = "0.60.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c0b3e587fbaa5d7f7e870544508af8ce82ea47cd30376e69e1e37c4ac746f79"
+dependencies = [
+ "aws-smithy-types",
+ "bytes",
+ "crc32fast",
+]
+
+[[package]]
 name = "aws-smithy-http"
 version = "0.63.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d619373d490ad70966994801bc126846afaa0d1ee920697a031f0cf63f2568e7"
 dependencies = [
+ "aws-smithy-eventstream",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes",
@@ -2195,6 +2234,7 @@ dependencies = [
  "dbflux_audit",
  "dbflux_aws",
  "dbflux_core",
+ "dbflux_driver_cloudwatch",
  "dbflux_driver_dynamodb",
  "dbflux_driver_ipc",
  "dbflux_driver_mongodb",
@@ -2238,6 +2278,7 @@ dependencies = [
  "dbflux_audit",
  "dbflux_aws",
  "dbflux_core",
+ "dbflux_driver_cloudwatch",
  "dbflux_driver_dynamodb",
  "dbflux_driver_ipc",
  "dbflux_driver_mongodb",
@@ -2344,6 +2385,18 @@ dependencies = [
  "tree-sitter-sequel",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "dbflux_driver_cloudwatch"
+version = "0.5.0-dev.1"
+dependencies = [
+ "aws-config",
+ "aws-sdk-cloudwatchlogs",
+ "dbflux_core",
+ "log",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -2655,6 +2708,7 @@ dependencies = [
  "dbflux_aws",
  "dbflux_components",
  "dbflux_core",
+ "dbflux_driver_cloudwatch",
  "dbflux_driver_dynamodb",
  "dbflux_driver_ipc",
  "dbflux_driver_mongodb",

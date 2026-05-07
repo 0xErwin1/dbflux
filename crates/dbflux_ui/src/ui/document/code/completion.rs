@@ -22,6 +22,7 @@ impl QueryCompletionProvider {
     fn keyword_candidates(&self) -> &'static [&'static str] {
         match self.query_language {
             dbflux_core::QueryLanguage::Sql
+            | dbflux_core::QueryLanguage::OpenSearchSql
             | dbflux_core::QueryLanguage::Cql
             | dbflux_core::QueryLanguage::InfluxQuery => &[
                 "SELECT", "FROM", "WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "ON",
@@ -29,6 +30,14 @@ impl QueryCompletionProvider {
                 "UPDATE", "SET", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE", "BEGIN",
                 "COMMIT", "ROLLBACK", "COUNT", "SUM", "AVG", "MIN", "MAX", "DISTINCT", "AND", "OR",
                 "NOT", "NULL", "IS", "LIKE", "IN", "BETWEEN", "EXISTS",
+            ],
+            dbflux_core::QueryLanguage::CloudWatchLogsInsightsQl => &[
+                "fields", "filter", "parse", "stats", "sort", "limit", "display", "dedup",
+                "pattern", "diff", "anomaly", "unnest", "unmask", "SOURCE",
+            ],
+            dbflux_core::QueryLanguage::OpenSearchPpl => &[
+                "source", "where", "fields", "stats", "sort", "head", "eval", "parse", "dedup",
+                "top", "rare", "join", "flatten", "fillnull", "rename",
             ],
             dbflux_core::QueryLanguage::MongoQuery => &[
                 "db",

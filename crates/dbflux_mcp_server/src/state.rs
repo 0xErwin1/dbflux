@@ -558,6 +558,7 @@ fn str_to_db_kind(value: &str) -> Option<dbflux_core::DbKind> {
         "MongoDB" => Some(dbflux_core::DbKind::MongoDB),
         "Redis" => Some(dbflux_core::DbKind::Redis),
         "DynamoDB" => Some(dbflux_core::DbKind::DynamoDB),
+        "CloudWatchLogs" => Some(dbflux_core::DbKind::CloudWatchLogs),
         _ => None,
     }
 }
@@ -571,6 +572,7 @@ fn default_db_config_for_kind(kind: dbflux_core::DbKind) -> dbflux_core::DbConfi
         dbflux_core::DbKind::MongoDB => dbflux_core::DbConfig::default_mongodb(),
         dbflux_core::DbKind::Redis => dbflux_core::DbConfig::default_redis(),
         dbflux_core::DbKind::DynamoDB => dbflux_core::DbConfig::default_dynamodb(),
+        dbflux_core::DbKind::CloudWatchLogs => dbflux_core::DbConfig::default_cloudwatch_logs(),
     }
 }
 

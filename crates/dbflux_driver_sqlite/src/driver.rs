@@ -834,6 +834,8 @@ impl Connection for SqliteConnection {
             foreign_keys: Some(foreign_keys),
             constraints: Some(constraints),
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         })
     }
 
@@ -1335,6 +1337,8 @@ impl SqliteConnection {
                 foreign_keys: None,
                 constraints: None,
                 sample_fields: None,
+                presentation: dbflux_core::CollectionPresentation::DataGrid,
+                child_items: None,
             })
             .collect();
 
@@ -1958,6 +1962,8 @@ mod tests {
             foreign_keys: None,
             constraints: None,
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         };
 
         let composite_pk = TableInfo {
@@ -1985,6 +1991,8 @@ mod tests {
             foreign_keys: None,
             constraints: None,
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         };
 
         let single_sql = sqlite_generate_create_table(&single_pk);

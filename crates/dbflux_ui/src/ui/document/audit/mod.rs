@@ -3,32 +3,26 @@
 mod filters;
 mod source_adapter;
 
-pub use filters::{AuditFilters, TimeRange};
+pub use filters::{AuditFilters, TimeRange, TimestampDisplayMode};
 pub use source_adapter::AuditSourceAdapter;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::filter_bar::{FilterBarItem, FilterBarMode, FilterBarState};
 use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
-// FilterBar item indices — used both when building the state and in dispatch_command.
-const FILTER_BAR_IDX_SEARCH: usize = 0;
-const FILTER_BAR_IDX_TIME: usize = 1;
-const FILTER_BAR_IDX_LEVEL: usize = 2;
-const FILTER_BAR_IDX_CATEGORY: usize = 3;
-const FILTER_BAR_IDX_OUTCOME: usize = 4;
-const FILTER_BAR_IDX_REFRESH: usize = 5;
-const FILTER_BAR_IDX_REFRESH_POLICY: usize = 6;
-const FILTER_BAR_IDX_CLEAR: usize = 7;
 use crate::ui::components::toast::{PendingToast, flush_pending_toast};
+use crate::ui::document::audit::filters::{format_timestamp_ms, validate_custom_range_parts};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::controls::{
+    GpuiInput as Input, InputEvent, InputState, ReadonlyTextView, SelectableText,
+};
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_core::{
-    Pagination, RefreshPolicy,
+    CollectionRef, EventQuery, EventRecord, EventStreamTarget, Pagination, RefreshPolicy,
     observability::{EventCategory, EventOutcome, EventSeverity},
 };
 use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter};
@@ -37,7 +31,11 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::calendar::Date;
+use gpui_component::date_picker::{DatePicker, DatePickerEvent, DatePickerState};
 use gpui_component::scroll::ScrollableElement;
+use serde_json::{Value as JsonValue, json};
+use uuid::Uuid;
 
 use super::chrome::{compact_top_bar, workspace_footer_bar};
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
@@ -104,13 +102,48 @@ pub enum AuditDocumentEvent {
 
 const DEFAULT_PAGE_SIZE: u32 = 100;
 
+#[derive(Clone)]
+enum AuditDocumentSource {
+    Internal {
+        adapter: AuditSourceAdapter,
+    },
+    ExternalEventStream {
+        profile_id: Uuid,
+        target: EventStreamTarget,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ToolbarSlot {
+    Search,
+    Time,
+    CustomStart,
+    CustomEnd,
+    CustomApply,
+    Timezone,
+    Level,
+    Category,
+    Outcome,
+    Refresh,
+    RefreshPolicy,
+    Clear,
+}
+
+struct LoadedEventPage {
+    events: Vec<AuditEventDto>,
+    total_events: u64,
+}
+
 /// Audit event viewer document.
 pub struct AuditDocument {
-    adapter: AuditSourceAdapter,
+    app_state: Entity<AppStateEntity>,
+    source: AuditDocumentSource,
     filters: AuditFilters,
     events: Vec<AuditEventDto>,
     total_events: u64,
     expanded_event_ids: HashSet<i64>,
+    external_message_inputs: HashMap<i64, Entity<InputState>>,
+    external_details_inputs: HashMap<i64, Entity<InputState>>,
     pagination: Pagination,
     status_message: Option<String>,
     is_loading: bool,
@@ -120,7 +153,15 @@ pub struct AuditDocument {
     pending_toast: Option<PendingToast>,
     export_menu_open: bool,
     search_input: Entity<InputState>,
+    custom_date_range_picker: Entity<DatePickerState>,
+    custom_start_hour_dropdown: Entity<Dropdown>,
+    custom_start_minute_dropdown: Entity<Dropdown>,
+    custom_end_hour_dropdown: Entity<Dropdown>,
+    custom_end_minute_dropdown: Entity<Dropdown>,
     dropdown_time_range: Entity<Dropdown>,
+    dropdown_timestamp_mode: Entity<Dropdown>,
+    selected_time_range: Option<TimeRange>,
+    timestamp_mode: TimestampDisplayMode,
     multi_select_level: Entity<MultiSelect>,
     multi_select_category: Entity<MultiSelect>,
     multi_select_outcome: Entity<MultiSelect>,
@@ -158,15 +199,96 @@ impl AuditDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let audit_repo = app_state.read(cx).storage_runtime().audit();
+
+        Self::new_with_source(
+            app_state,
+            AuditDocumentSource::Internal {
+                adapter: AuditSourceAdapter::new(audit_repo),
+            },
+            "Audit".to_string(),
+            "Search events...",
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_for_event_stream(
+        profile_id: Uuid,
+        target: EventStreamTarget,
+        title: String,
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_source(
+            app_state,
+            AuditDocumentSource::ExternalEventStream { profile_id, target },
+            title,
+            "Filter events...",
+            window,
+            cx,
+        )
+    }
+
+    fn new_with_source(
+        app_state: Entity<AppStateEntity>,
+        source: AuditDocumentSource,
+        title: String,
+        search_placeholder: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus_handle = cx.focus_handle();
 
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search events..."));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder));
+        let custom_date_range_picker =
+            cx.new(|cx| DatePickerState::range(window, cx).date_format("%Y-%m-%d"));
+        let custom_start_hour_dropdown = cx.new(|_cx| {
+            Dropdown::new("audit-custom-start-hour")
+                .placeholder("HH")
+                .items(Self::hour_items())
+                .selected_index(Some(0))
+        });
+        let custom_start_minute_dropdown = cx.new(|_cx| {
+            Dropdown::new("audit-custom-start-minute")
+                .placeholder("MM")
+                .items(Self::minute_items())
+                .selected_index(Some(0))
+        });
+        let custom_end_hour_dropdown = cx.new(|_cx| {
+            Dropdown::new("audit-custom-end-hour")
+                .placeholder("HH")
+                .items(Self::hour_items())
+                .selected_index(Some(23))
+        });
+        let custom_end_minute_dropdown = cx.new(|_cx| {
+            Dropdown::new("audit-custom-end-minute")
+                .placeholder("MM")
+                .items(Self::minute_items())
+                .selected_index(Some(59))
+        });
+
+        let initial_time_range = Self::initial_time_range(&source);
+        let time_range_placeholder =
+            if matches!(source, AuditDocumentSource::ExternalEventStream { .. }) {
+                "All time"
+            } else {
+                "Last 12 h"
+            };
 
         let dropdown_time_range = cx.new(|_cx| {
             Dropdown::new("audit-time-range")
-                .placeholder("Last 24 h")
+                .placeholder(time_range_placeholder)
                 .items(Self::time_range_items())
-                .selected_index(Some(2))
+                .selected_index(initial_time_range)
+        });
+
+        let dropdown_timestamp_mode = cx.new(|_cx| {
+            Dropdown::new("audit-timestamp-mode")
+                .placeholder("Local")
+                .items(Self::timestamp_mode_items())
+                .selected_index(Some(0))
         });
 
         let multi_select_level = cx.new(|cx| {
@@ -190,9 +312,6 @@ impl AuditDocument {
             ms
         });
 
-        let audit_repo = app_state.read(cx).storage_runtime().audit();
-        let adapter = AuditSourceAdapter::new(audit_repo);
-
         let search_sub = cx.subscribe(&search_input, |this, _, event: &InputEvent, cx| {
             match event {
                 InputEvent::PressEnter { secondary: false } => {
@@ -209,15 +328,70 @@ impl AuditDocument {
             }
         });
 
+        let custom_date_range_sub = cx.subscribe(
+            &custom_date_range_picker,
+            |this, _, _event: &DatePickerEvent, cx| {
+                this.status_message = None;
+                cx.notify();
+            },
+        );
+
+        let custom_start_hour_sub = cx.subscribe(
+            &custom_start_hour_dropdown,
+            |this, _, _event: &DropdownSelectionChanged, cx| {
+                this.status_message = None;
+                cx.notify();
+            },
+        );
+        let custom_start_minute_sub = cx.subscribe(
+            &custom_start_minute_dropdown,
+            |this, _, _event: &DropdownSelectionChanged, cx| {
+                this.status_message = None;
+                cx.notify();
+            },
+        );
+        let custom_end_hour_sub = cx.subscribe(
+            &custom_end_hour_dropdown,
+            |this, _, _event: &DropdownSelectionChanged, cx| {
+                this.status_message = None;
+                cx.notify();
+            },
+        );
+        let custom_end_minute_sub = cx.subscribe(
+            &custom_end_minute_dropdown,
+            |this, _, _event: &DropdownSelectionChanged, cx| {
+                this.status_message = None;
+                cx.notify();
+            },
+        );
+
         let time_range_sub = cx.subscribe(
             &dropdown_time_range,
             |this, _, event: &DropdownSelectionChanged, cx| {
                 if let Some(range) = Self::time_range_for_index(event.index) {
+                    this.selected_time_range = Some(range);
+                    this.refresh_filter_bar_items();
+
+                    if range == TimeRange::Custom {
+                        cx.notify();
+                        return;
+                    }
+
                     let (start_ms, end_ms) = range.to_filter_values();
                     this.filters.start_ms = start_ms;
                     this.filters.end_ms = end_ms;
                     this.reset_pagination();
                     this.load_events(cx);
+                }
+            },
+        );
+
+        let timestamp_mode_sub = cx.subscribe(
+            &dropdown_timestamp_mode,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                if let Some(mode) = Self::timestamp_mode_for_index(event.index) {
+                    this.timestamp_mode = mode;
+                    cx.notify();
                 }
             },
         );
@@ -323,25 +497,32 @@ impl AuditDocument {
             },
         );
 
-        // All navigable items in order: Search, Time, Level, Category, Outcome, Refresh, Clear.
-        // Indices must match the FILTER_BAR_IDX_* constants above.
-        let filter_bar = FilterBarState::new(vec![
-            FilterBarItem::input("Search:", search_input.clone()),
-            FilterBarItem::dropdown("Time:", dropdown_time_range.clone()),
-            FilterBarItem::button("Level"),
-            FilterBarItem::button("Category"),
-            FilterBarItem::button("Outcome"),
-            FilterBarItem::button_with_icon("Refresh", AppIcon::RefreshCcw),
-            FilterBarItem::dropdown("Auto-refresh:", refresh_dropdown.clone()),
-            FilterBarItem::button("Clear"),
-        ]);
+        let selected_time_range = initial_time_range.and_then(Self::time_range_for_index);
+        let filter_bar = FilterBarState::new(Self::toolbar_items_for_state(
+            &source,
+            selected_time_range,
+            &search_input,
+            &dropdown_time_range,
+            &dropdown_timestamp_mode,
+            &custom_date_range_picker,
+            &custom_start_hour_dropdown,
+            &custom_start_minute_dropdown,
+            &custom_end_hour_dropdown,
+            &custom_end_minute_dropdown,
+            &refresh_dropdown,
+        ));
+
+        let filters = Self::default_filters_for_source(&source);
 
         Self {
-            adapter,
-            filters: Self::default_filters(),
+            app_state,
+            source,
+            filters,
             events: Vec::new(),
             total_events: 0,
             expanded_event_ids: HashSet::new(),
+            external_message_inputs: HashMap::new(),
+            external_details_inputs: HashMap::new(),
             pagination: Pagination::Offset {
                 limit: DEFAULT_PAGE_SIZE,
                 offset: 0,
@@ -349,12 +530,20 @@ impl AuditDocument {
             status_message: None,
             is_loading: false,
             id: DocumentId::new(),
-            title: "Audit".to_string(),
+            title,
             pending_initial_load: true,
             pending_toast: None,
             export_menu_open: false,
             search_input,
+            custom_date_range_picker,
+            custom_start_hour_dropdown,
+            custom_start_minute_dropdown,
+            custom_end_hour_dropdown,
+            custom_end_minute_dropdown,
             dropdown_time_range,
+            dropdown_timestamp_mode,
+            selected_time_range,
+            timestamp_mode: TimestampDisplayMode::Local,
             multi_select_level,
             multi_select_category,
             multi_select_outcome,
@@ -364,7 +553,13 @@ impl AuditDocument {
             _refresh_timer: None,
             _subscriptions: vec![
                 search_sub,
+                custom_date_range_sub,
+                custom_start_hour_sub,
+                custom_start_minute_sub,
+                custom_end_hour_sub,
+                custom_end_minute_sub,
                 time_range_sub,
+                timestamp_mode_sub,
                 level_sub,
                 category_sub,
                 outcome_sub,
@@ -397,6 +592,140 @@ impl AuditDocument {
         doc.pending_initial_load = false;
 
         doc
+    }
+
+    pub fn matches_event_stream(&self, profile_id: Uuid, target: &EventStreamTarget) -> bool {
+        match &self.source {
+            AuditDocumentSource::ExternalEventStream {
+                profile_id: doc_profile_id,
+                target: doc_target,
+            } => *doc_profile_id == profile_id && doc_target == target,
+            AuditDocumentSource::Internal { .. } => false,
+        }
+    }
+
+    fn is_external_event_stream(&self) -> bool {
+        matches!(self.source, AuditDocumentSource::ExternalEventStream { .. })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn toolbar_items_for_state(
+        source: &AuditDocumentSource,
+        selected_time_range: Option<TimeRange>,
+        search_input: &Entity<InputState>,
+        dropdown_time_range: &Entity<Dropdown>,
+        dropdown_timestamp_mode: &Entity<Dropdown>,
+        custom_date_range_picker: &Entity<DatePickerState>,
+        custom_start_hour_dropdown: &Entity<Dropdown>,
+        custom_start_minute_dropdown: &Entity<Dropdown>,
+        custom_end_hour_dropdown: &Entity<Dropdown>,
+        custom_end_minute_dropdown: &Entity<Dropdown>,
+        refresh_dropdown: &Entity<Dropdown>,
+    ) -> Vec<FilterBarItem> {
+        let mut toolbar_items = vec![
+            FilterBarItem::input("Search:", search_input.clone()),
+            FilterBarItem::dropdown("Time:", dropdown_time_range.clone()),
+            FilterBarItem::dropdown("Time zone:", dropdown_timestamp_mode.clone()),
+        ];
+
+        if selected_time_range == Some(TimeRange::Custom) {
+            toolbar_items.extend([
+                FilterBarItem::date_picker("Range:", custom_date_range_picker.clone()),
+                FilterBarItem::dropdown("Start hour:", custom_start_hour_dropdown.clone()),
+                FilterBarItem::dropdown("Start minute:", custom_start_minute_dropdown.clone()),
+                FilterBarItem::dropdown("End hour:", custom_end_hour_dropdown.clone()),
+                FilterBarItem::dropdown("End minute:", custom_end_minute_dropdown.clone()),
+                FilterBarItem::button("Apply"),
+            ]);
+        }
+
+        if matches!(source, AuditDocumentSource::Internal { .. }) {
+            toolbar_items.extend([
+                FilterBarItem::button("Level"),
+                FilterBarItem::button("Category"),
+                FilterBarItem::button("Outcome"),
+            ]);
+        }
+
+        toolbar_items.extend([
+            FilterBarItem::button_with_icon("Refresh", AppIcon::RefreshCcw),
+            FilterBarItem::dropdown("Auto-refresh:", refresh_dropdown.clone()),
+            FilterBarItem::button("Clear"),
+        ]);
+
+        toolbar_items
+    }
+
+    fn refresh_filter_bar_items(&mut self) {
+        self.filter_bar.set_items(Self::toolbar_items_for_state(
+            &self.source,
+            self.selected_time_range,
+            &self.search_input,
+            &self.dropdown_time_range,
+            &self.dropdown_timestamp_mode,
+            &self.custom_date_range_picker,
+            &self.custom_start_hour_dropdown,
+            &self.custom_start_minute_dropdown,
+            &self.custom_end_hour_dropdown,
+            &self.custom_end_minute_dropdown,
+            &self.refresh_dropdown,
+        ));
+    }
+
+    fn toolbar_index(&self, slot: ToolbarSlot) -> Option<usize> {
+        let custom_offset = if self.selected_time_range == Some(TimeRange::Custom) {
+            6
+        } else {
+            0
+        };
+
+        match (&self.source, slot) {
+            (_, ToolbarSlot::Search) => Some(0),
+            (_, ToolbarSlot::Time) => Some(1),
+            (_, ToolbarSlot::Timezone) => Some(2),
+            (_, ToolbarSlot::CustomStart) if custom_offset > 0 => Some(3),
+            (_, ToolbarSlot::CustomEnd) if custom_offset > 0 => Some(6),
+            (_, ToolbarSlot::CustomApply) if custom_offset > 0 => Some(8),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Level) => Some(3 + custom_offset),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Category) => {
+                Some(4 + custom_offset)
+            }
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Outcome) => Some(5 + custom_offset),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Refresh) => Some(6 + custom_offset),
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::RefreshPolicy) => {
+                Some(7 + custom_offset)
+            }
+            (AuditDocumentSource::Internal { .. }, ToolbarSlot::Clear) => Some(8 + custom_offset),
+            (AuditDocumentSource::ExternalEventStream { .. }, ToolbarSlot::Refresh) => {
+                Some(3 + custom_offset)
+            }
+            (AuditDocumentSource::ExternalEventStream { .. }, ToolbarSlot::RefreshPolicy) => {
+                Some(4 + custom_offset)
+            }
+            (AuditDocumentSource::ExternalEventStream { .. }, ToolbarSlot::Clear) => {
+                Some(5 + custom_offset)
+            }
+            _ => None,
+        }
+    }
+
+    fn slot_has_ring(&self, slot: ToolbarSlot) -> bool {
+        if self.filter_bar.mode() != FilterBarMode::Navigating {
+            return false;
+        }
+
+        let focused_index = self.filter_bar.focused_index();
+
+        if self.selected_time_range == Some(TimeRange::Custom) {
+            match slot {
+                ToolbarSlot::CustomStart => return (3..=5).contains(&focused_index),
+                ToolbarSlot::CustomEnd => return (6..=7).contains(&focused_index),
+                _ => {}
+            }
+        }
+
+        self.filter_bar.mode() == FilterBarMode::Navigating
+            && self.toolbar_index(slot) == Some(focused_index)
     }
 
     pub fn set_category_filter(&mut self, category: Option<EventCategory>, cx: &mut Context<Self>) {
@@ -466,12 +795,104 @@ impl AuditDocument {
         }));
     }
 
-    fn default_filters() -> AuditFilters {
+    fn initial_time_range(source: &AuditDocumentSource) -> Option<usize> {
+        match source {
+            AuditDocumentSource::ExternalEventStream { .. } => None,
+            AuditDocumentSource::Internal { .. } => Some(4),
+        }
+    }
+
+    fn default_filters_for_source(source: &AuditDocumentSource) -> AuditFilters {
         let mut filters = AuditFilters::default();
-        let (start_ms, end_ms) = TimeRange::Last24h.to_filter_values();
-        filters.start_ms = start_ms;
-        filters.end_ms = end_ms;
+
+        if !matches!(source, AuditDocumentSource::ExternalEventStream { .. }) {
+            let (start_ms, end_ms) = TimeRange::Last12Hours.to_filter_values();
+            filters.start_ms = start_ms;
+            filters.end_ms = end_ms;
+        }
+
         filters
+    }
+
+    fn source_loading_label(&self) -> &'static str {
+        if self.is_external_event_stream() {
+            "Loading events..."
+        } else {
+            "Loading audit events..."
+        }
+    }
+
+    fn source_error_heading(&self) -> &'static str {
+        if self.is_external_event_stream() {
+            "Failed to load events"
+        } else {
+            "Failed to load audit events"
+        }
+    }
+
+    fn source_empty_label(&self) -> &'static str {
+        if self.is_external_event_stream() {
+            "No events match the current filters."
+        } else {
+            "No audit events match the current filters."
+        }
+    }
+
+    fn source_row_label(&self) -> &'static str {
+        if self.is_external_event_stream() {
+            "events"
+        } else {
+            "rows"
+        }
+    }
+
+    fn external_page_to_loaded(page: dbflux_core::EventPage) -> LoadedEventPage {
+        let events = page
+            .events
+            .into_iter()
+            .map(Self::audit_event_from_record)
+            .collect::<Vec<_>>();
+        let total_events = page
+            .total
+            .map(|value| value as u64)
+            .unwrap_or_else(|| page.offset as u64 + events.len() as u64 + u64::from(page.has_more));
+
+        LoadedEventPage {
+            events,
+            total_events,
+        }
+    }
+
+    fn audit_event_from_record(record: EventRecord) -> AuditEventDto {
+        AuditEventDto {
+            id: record.id.unwrap_or_default(),
+            actor_id: record.actor_id.unwrap_or_default(),
+            tool_id: record.action.clone(),
+            decision: String::new(),
+            reason: None,
+            profile_id: None,
+            classification: None,
+            duration_ms: record.duration_ms,
+            created_at: record.ts_ms.to_string(),
+            created_at_epoch_ms: record.ts_ms,
+            level: Some(record.level.as_str().to_string()),
+            category: Some(record.category.as_str().to_string()),
+            action: Some(record.action),
+            outcome: Some(record.outcome.as_str().to_string()),
+            actor_type: Some(record.actor_type.as_str().to_string()),
+            source_id: Some(record.source_id.as_str().to_string()),
+            summary: Some(record.summary),
+            connection_id: record.connection_id,
+            database_name: record.database_name,
+            driver_id: record.driver_id,
+            object_type: record.object_type,
+            object_id: record.object_id,
+            details_json: record.details_json,
+            error_code: record.error_code,
+            error_message: record.error_message,
+            session_id: record.session_id,
+            correlation_id: record.correlation_id,
+        }
     }
 
     fn active_filter(&self, limit: Option<usize>, offset: Option<usize>) -> AuditQueryFilter {
@@ -588,7 +1009,7 @@ impl AuditDocument {
         let request_id = self.load_request_id;
         self.is_loading = true;
         self.export_menu_open = false;
-        self.status_message = Some("Loading audit events...".to_string());
+        self.status_message = Some(self.source_loading_label().to_string());
         cx.notify();
 
         let page_filter = self.active_filter(
@@ -596,16 +1017,74 @@ impl AuditDocument {
             Some(self.pagination_offset()),
         );
         let count_filter = self.active_filter(None, None);
-        let adapter = self.adapter.clone();
+        let task_id = match &self.source {
+            AuditDocumentSource::ExternalEventStream { profile_id, .. } => {
+                Some(self.app_state.update(cx, |state, _| {
+                    let (task_id, _) = state.start_task_for_profile(
+                        dbflux_core::TaskKind::Query,
+                        format!("Loading event stream: {}", self.title),
+                        Some(*profile_id),
+                    );
+                    task_id
+                }))
+            }
+            AuditDocumentSource::Internal { .. } => None,
+        };
 
-        let task = cx.background_executor().spawn(async move {
-            let events = adapter.query_filter(&page_filter)?;
-            let total = adapter.count_filter(&count_filter)?;
-            Ok::<_, String>((events, total))
-        });
+        let task = match &self.source {
+            AuditDocumentSource::Internal { adapter } => {
+                let adapter = adapter.clone();
+
+                cx.background_executor().spawn(async move {
+                    let events = adapter.query_filter(&page_filter)?;
+                    let total = adapter.count_filter(&count_filter)?;
+
+                    Ok::<_, String>(LoadedEventPage {
+                        events,
+                        total_events: total,
+                    })
+                })
+            }
+            AuditDocumentSource::ExternalEventStream { profile_id, target } => {
+                let Some(connection) = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(profile_id)
+                    .map(|connected| connected.connection.clone())
+                else {
+                    self.events.clear();
+                    self.total_events = 0;
+                    self.expanded_event_ids.clear();
+                    self.is_loading = false;
+                    self.status_message =
+                        Some("Connection not found for this event source".to_string());
+                    cx.notify();
+                    return;
+                };
+
+                let target = target.clone();
+                let query = EventQuery {
+                    from_ts_ms: self.filters.start_ms,
+                    to_ts_ms: self.filters.end_ms,
+                    free_text: self.filters.free_text.clone(),
+                    limit: Some(self.pagination_limit()),
+                    offset: Some(self.pagination_offset()),
+                    ..EventQuery::default()
+                };
+
+                cx.background_executor().spawn(async move {
+                    let page = connection
+                        .browse_event_stream(&target, &query)
+                        .map_err(|error| format!("external event stream browse failed: {error}"))?;
+
+                    Ok::<_, String>(Self::external_page_to_loaded(page))
+                })
+            }
+        };
 
         cx.spawn(async move |this, cx| match task.await {
-            Ok((events, total_events)) => {
+            Ok(page) => {
                 let _ = cx.update(|cx| {
                     this.update(cx, |doc, cx| {
                         if doc.load_request_id != request_id {
@@ -613,14 +1092,21 @@ impl AuditDocument {
                         }
 
                         let visible_ids: HashSet<i64> =
-                            events.iter().map(|event| event.id).collect();
+                            page.events.iter().map(|event| event.id).collect();
 
-                        doc.events = events;
-                        doc.total_events = total_events;
+                        doc.events = page.events;
+                        doc.total_events = page.total_events;
                         doc.is_loading = false;
                         doc.status_message = None;
                         doc.expanded_event_ids
                             .retain(|event_id| visible_ids.contains(event_id));
+                        doc.retain_external_inline_inputs(&visible_ids);
+
+                        if let Some(task_id) = task_id {
+                            doc.app_state.update(cx, |state, _| {
+                                state.complete_task(task_id);
+                            });
+                        }
 
                         cx.notify();
                     })
@@ -636,8 +1122,16 @@ impl AuditDocument {
                         doc.events.clear();
                         doc.total_events = 0;
                         doc.expanded_event_ids.clear();
+                        doc.clear_external_inline_inputs();
                         doc.is_loading = false;
                         doc.status_message = Some(format!("Error loading events: {}", error));
+
+                        if let Some(task_id) = task_id {
+                            let details = format!("Error loading events: {}", error);
+                            doc.app_state.update(cx, |state, _| {
+                                state.fail_task_with_details(task_id, error.clone(), details);
+                            });
+                        }
 
                         cx.notify();
                     })
@@ -654,14 +1148,85 @@ impl AuditDocument {
         self.load_events(cx);
     }
 
+    fn custom_date_range(
+        &self,
+        cx: &App,
+    ) -> Option<(
+        dbflux_core::chrono::NaiveDate,
+        dbflux_core::chrono::NaiveDate,
+    )> {
+        match self.custom_date_range_picker.read(cx).date() {
+            Date::Range(Some(start), Some(end)) => Some((start, end)),
+            _ => None,
+        }
+    }
+
+    fn selected_dropdown_number(dropdown: &Entity<Dropdown>, cx: &App) -> Option<u32> {
+        dropdown.read(cx).selected_value()?.parse::<u32>().ok()
+    }
+
+    fn custom_time_parts(&self, cx: &App) -> Option<(u32, u32, u32, u32)> {
+        Some((
+            Self::selected_dropdown_number(&self.custom_start_hour_dropdown, cx)?,
+            Self::selected_dropdown_number(&self.custom_start_minute_dropdown, cx)?,
+            Self::selected_dropdown_number(&self.custom_end_hour_dropdown, cx)?,
+            Self::selected_dropdown_number(&self.custom_end_minute_dropdown, cx)?,
+        ))
+    }
+
+    fn can_apply_custom_time_range(&self, cx: &App) -> bool {
+        self.custom_date_range(cx).is_some() && self.custom_time_parts(cx).is_some()
+    }
+
+    fn apply_custom_time_range(&mut self, cx: &mut Context<Self>) {
+        let Some((start_date, end_date)) = self.custom_date_range(cx) else {
+            return;
+        };
+        let Some((start_hour, start_minute, end_hour, end_minute)) = self.custom_time_parts(cx)
+        else {
+            return;
+        };
+
+        match validate_custom_range_parts(
+            start_date,
+            start_hour,
+            start_minute,
+            end_date,
+            end_hour,
+            end_minute,
+            self.timestamp_mode,
+        ) {
+            Ok((start_ms, end_ms)) => {
+                self.filters.start_ms = Some(start_ms);
+                self.filters.end_ms = Some(end_ms);
+                self.selected_time_range = Some(TimeRange::Custom);
+                self.status_message = None;
+                self.reset_pagination();
+                self.load_events(cx);
+            }
+            Err(error) => {
+                self.status_message = Some(error.clone());
+                self.pending_toast = Some(PendingToast {
+                    message: error,
+                    is_error: true,
+                });
+                cx.notify();
+            }
+        }
+    }
+
     pub fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.filters = Self::default_filters();
+        self.filters = Self::default_filters_for_source(&self.source);
         self.reset_pagination();
         self.export_menu_open = false;
 
         self.suppress_load = true;
-        self.dropdown_time_range
-            .update(cx, |dropdown, cx| dropdown.set_selected_index(Some(2), cx));
+        let selected_time_range = Self::initial_time_range(&self.source);
+        self.selected_time_range = selected_time_range.and_then(Self::time_range_for_index);
+        self.dropdown_time_range.update(cx, |dropdown, cx| {
+            dropdown.set_selected_index(selected_time_range, cx)
+        });
+        self.refresh_filter_bar_items();
         self.multi_select_level
             .update(cx, |ms, cx| ms.clear_selection(cx));
         self.multi_select_category
@@ -670,6 +1235,17 @@ impl AuditDocument {
             .update(cx, |ms, cx| ms.clear_selection(cx));
         self.search_input
             .update(cx, |state, cx| state.set_value("", window, cx));
+        self.custom_date_range_picker.update(cx, |picker, cx| {
+            picker.set_date(Date::Range(None, None), window, cx);
+        });
+        self.custom_start_hour_dropdown
+            .update(cx, |dropdown, cx| dropdown.set_selected_index(Some(0), cx));
+        self.custom_start_minute_dropdown
+            .update(cx, |dropdown, cx| dropdown.set_selected_index(Some(0), cx));
+        self.custom_end_hour_dropdown
+            .update(cx, |dropdown, cx| dropdown.set_selected_index(Some(23), cx));
+        self.custom_end_minute_dropdown
+            .update(cx, |dropdown, cx| dropdown.set_selected_index(Some(59), cx));
         self.suppress_load = false;
 
         self.load_events(cx);
@@ -681,6 +1257,129 @@ impl AuditDocument {
         }
 
         cx.notify();
+    }
+
+    fn retain_external_inline_inputs(&mut self, visible_ids: &HashSet<i64>) {
+        Self::retain_event_input_cache(&mut self.external_message_inputs, visible_ids);
+        Self::retain_event_input_cache(&mut self.external_details_inputs, visible_ids);
+    }
+
+    fn retain_event_input_cache<T>(cache: &mut HashMap<i64, T>, visible_ids: &HashSet<i64>) {
+        cache.retain(|event_id, _| visible_ids.contains(event_id));
+    }
+
+    fn clear_external_inline_inputs(&mut self) {
+        self.external_message_inputs.clear();
+        self.external_details_inputs.clear();
+    }
+
+    fn ensure_external_message_input(
+        &mut self,
+        event_id: i64,
+        message: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        Self::ensure_event_text_input(
+            &mut self.external_message_inputs,
+            event_id,
+            message,
+            None,
+            window,
+            cx,
+        )
+    }
+
+    fn ensure_external_details_input(
+        &mut self,
+        event_id: i64,
+        details_json: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        Self::ensure_event_text_input(
+            &mut self.external_details_inputs,
+            event_id,
+            details_json,
+            Some("json"),
+            window,
+            cx,
+        )
+    }
+
+    fn ensure_event_text_input(
+        cache: &mut HashMap<i64, Entity<InputState>>,
+        event_id: i64,
+        value: &str,
+        editor_mode: Option<&'static str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        let value = value.to_string();
+        let rows = if editor_mode.is_some() {
+            Self::event_code_rows(&value, 4)
+        } else {
+            Self::event_message_rows(&value, 2)
+        };
+
+        let input = cache
+            .entry(event_id)
+            .or_insert_with(|| {
+                let initial_value = value.clone();
+                let initial_rows = rows;
+
+                cx.new(|cx| {
+                    let mut state = if let Some(editor_mode) = editor_mode {
+                        InputState::new(window, cx)
+                            .code_editor(editor_mode)
+                            .line_number(false)
+                            .rows(initial_rows)
+                            .soft_wrap(true)
+                    } else {
+                        InputState::new(window, cx)
+                            .auto_grow(initial_rows, usize::MAX)
+                            .soft_wrap(true)
+                    };
+
+                    state.set_value(&initial_value, window, cx);
+                    state
+                })
+            })
+            .clone();
+
+        if input.read(cx).value() != value {
+            input.update(cx, |state, cx| state.set_value(value, window, cx));
+        }
+
+        input
+    }
+
+    fn event_text_rows(value: &str, min_rows: usize) -> usize {
+        const ESTIMATED_CHARS_PER_ROW: usize = 80;
+
+        let line_rows = value.lines().count().max(1);
+        let wrap_rows = value
+            .lines()
+            .map(|line| {
+                let char_count = line.chars().count();
+                char_count.div_ceil(ESTIMATED_CHARS_PER_ROW).max(1)
+            })
+            .sum::<usize>()
+            .max(1);
+
+        line_rows.max(wrap_rows).max(min_rows)
+    }
+
+    fn event_message_rows(value: &str, min_rows: usize) -> usize {
+        Self::event_text_rows(value, min_rows)
+    }
+
+    fn event_code_rows(value: &str, min_rows: usize) -> usize {
+        value.lines().count().max(min_rows).max(1)
+    }
+
+    fn event_text_height(rows: usize) -> Pixels {
+        px((rows as f32 * 24.0) + 20.0)
     }
 
     fn go_to_prev_page(&mut self, cx: &mut Context<Self>) {
@@ -713,21 +1412,55 @@ impl AuditDocument {
 
     fn time_range_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::new("Last 15 min"),
-            DropdownItem::new("Last hour"),
-            DropdownItem::new("Last 24 h"),
-            DropdownItem::new("Last 7 days"),
+            DropdownItem::new("Last 5 min"),
+            DropdownItem::new("Last 30 min"),
+            DropdownItem::new("Last 1 h"),
+            DropdownItem::new("Last 3 h"),
+            DropdownItem::new("Last 12 h"),
+            DropdownItem::new("Custom"),
         ]
     }
 
     fn time_range_for_index(index: usize) -> Option<TimeRange> {
         match index {
-            0 => Some(TimeRange::Last15min),
-            1 => Some(TimeRange::LastHour),
-            2 => Some(TimeRange::Last24h),
-            3 => Some(TimeRange::Last7Days),
+            0 => Some(TimeRange::Last5min),
+            1 => Some(TimeRange::Last30min),
+            2 => Some(TimeRange::LastHour),
+            3 => Some(TimeRange::Last3Hours),
+            4 => Some(TimeRange::Last12Hours),
+            5 => Some(TimeRange::Custom),
             _ => None,
         }
+    }
+
+    fn timestamp_mode_items() -> Vec<DropdownItem> {
+        vec![DropdownItem::new("Local"), DropdownItem::new("UTC")]
+    }
+
+    fn timestamp_mode_for_index(index: usize) -> Option<TimestampDisplayMode> {
+        match index {
+            0 => Some(TimestampDisplayMode::Local),
+            1 => Some(TimestampDisplayMode::Utc),
+            _ => None,
+        }
+    }
+
+    fn hour_items() -> Vec<DropdownItem> {
+        (0..24)
+            .map(|hour| {
+                let value = format!("{hour:02}");
+                DropdownItem::with_value(value.clone(), value)
+            })
+            .collect()
+    }
+
+    fn minute_items() -> Vec<DropdownItem> {
+        (0..60)
+            .map(|minute| {
+                let value = format!("{minute:02}");
+                DropdownItem::with_value(value.clone(), value)
+            })
+            .collect()
     }
 
     fn level_items() -> Vec<DropdownItem> {
@@ -885,13 +1618,8 @@ impl AuditDocument {
         }
     }
 
-    fn format_timestamp_ms(ms: i64) -> String {
-        let secs = ms / 1000;
-        let millis = ms % 1000;
-        let hours = (secs / 3600) % 24;
-        let minutes = (secs / 60) % 60;
-        let secs = secs % 60;
-        format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, secs, millis)
+    fn format_timestamp_ms(&self, ms: i64) -> String {
+        format_timestamp_ms(ms, self.timestamp_mode)
     }
 
     fn format_connection_driver(
@@ -932,30 +1660,29 @@ impl AuditDocument {
     /// Execute the button action for the currently focused FilterBar item.
     /// Only called when `activate_input` returned `false` (Button variant).
     fn execute_filter_bar_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.filter_bar.focused_index() {
-            FILTER_BAR_IDX_REFRESH => {
-                self.refresh(cx);
-                self.filter_bar.deactivate();
-                self.focus_handle.focus(window);
+        let focused_index = self.filter_bar.focused_index();
+
+        if self.toolbar_index(ToolbarSlot::Refresh) == Some(focused_index) {
+            self.refresh(cx);
+            self.filter_bar.deactivate();
+            self.focus_handle.focus(window);
+        } else if self.toolbar_index(ToolbarSlot::Clear) == Some(focused_index) {
+            self.clear_filters(window, cx);
+            self.filter_bar.deactivate();
+            self.focus_handle.focus(window);
+        } else if self.toolbar_index(ToolbarSlot::CustomApply) == Some(focused_index) {
+            if self.can_apply_custom_time_range(cx) {
+                self.apply_custom_time_range(cx);
             }
-            FILTER_BAR_IDX_CLEAR => {
-                self.clear_filters(window, cx);
-                self.filter_bar.deactivate();
-                self.focus_handle.focus(window);
-            }
-            FILTER_BAR_IDX_LEVEL => {
-                self.multi_select_level
-                    .update(cx, |ms, cx| ms.toggle_open(cx));
-            }
-            FILTER_BAR_IDX_CATEGORY => {
-                self.multi_select_category
-                    .update(cx, |ms, cx| ms.toggle_open(cx));
-            }
-            FILTER_BAR_IDX_OUTCOME => {
-                self.multi_select_outcome
-                    .update(cx, |ms, cx| ms.toggle_open(cx));
-            }
-            _ => {}
+        } else if self.toolbar_index(ToolbarSlot::Level) == Some(focused_index) {
+            self.multi_select_level
+                .update(cx, |ms, cx| ms.toggle_open(cx));
+        } else if self.toolbar_index(ToolbarSlot::Category) == Some(focused_index) {
+            self.multi_select_category
+                .update(cx, |ms, cx| ms.toggle_open(cx));
+        } else if self.toolbar_index(ToolbarSlot::Outcome) == Some(focused_index) {
+            self.multi_select_outcome
+                .update(cx, |ms, cx| ms.toggle_open(cx));
         }
     }
 
@@ -1510,7 +2237,16 @@ impl AuditDocument {
     }
 
     fn do_export(&mut self, format: String, cx: &mut Context<Self>) {
-        let adapter = self.adapter.clone();
+        let AuditDocumentSource::Internal { adapter } = &self.source else {
+            self.pending_toast = Some(PendingToast {
+                message: "Export is only available for the built-in audit viewer".to_string(),
+                is_error: true,
+            });
+            cx.notify();
+            return;
+        };
+
+        let adapter = adapter.clone();
         let filter = self.active_filter(None, None);
         let format_for_task = format.clone();
 
@@ -1712,19 +2448,15 @@ impl AuditDocument {
     fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
 
-        // Compute which item (if any) has the keyboard focus ring.
-        let navigating = self.filter_bar.mode() == FilterBarMode::Navigating;
-        let focused_idx = self.filter_bar.focused_index();
-
-        let ring = |idx: usize| navigating && focused_idx == idx;
-
         // Search input.
+        let custom_range_visible = self.selected_time_range == Some(TimeRange::Custom);
+
         let search_control = div()
             .flex()
             .items_center()
-            .w(px(220.0))
+            .w(px(360.0))
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_SEARCH), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Search), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(
@@ -1736,28 +2468,117 @@ impl AuditDocument {
         // Dropdown wrappers — ring goes around the whole labeled control.
         let time_control = div()
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_TIME), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Time), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(self.dropdown_time_range.clone());
 
+        let timestamp_mode_control = div()
+            .rounded(Radii::SM)
+            .when(self.slot_has_ring(ToolbarSlot::Timezone), |d| {
+                d.border_1().border_color(theme.ring)
+            })
+            .child(self.dropdown_timestamp_mode.clone());
+
+        let can_apply_custom_time_range = self.can_apply_custom_time_range(cx);
+        let custom_apply_button = div()
+            .id("audit-custom-time-apply")
+            .h(Heights::BUTTON)
+            .flex()
+            .items_center()
+            .px(Spacing::SM)
+            .rounded(Radii::SM)
+            .border_1()
+            .border_color(if self.slot_has_ring(ToolbarSlot::CustomApply) {
+                theme.ring
+            } else {
+                theme.input
+            })
+            .when(can_apply_custom_time_range, |d| {
+                d.cursor_pointer()
+                    .hover(|d| d.bg(theme.secondary))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.apply_custom_time_range(cx);
+                    }))
+            })
+            .when(!can_apply_custom_time_range, |d| d.opacity(0.45))
+            .child(Text::caption("Apply"));
+
+        let custom_time_controls = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                div()
+                    .w(px(260.0))
+                    .rounded(Radii::SM)
+                    .when(self.slot_has_ring(ToolbarSlot::CustomStart), |d| {
+                        d.border_1().border_color(theme.ring)
+                    })
+                    .child(
+                        DatePicker::new(&self.custom_date_range_picker)
+                            .small()
+                            .placeholder("Select date range")
+                            .number_of_months(2),
+                    ),
+            )
+            .child(Text::caption("from"))
+            .child(
+                div()
+                    .w(px(72.0))
+                    .rounded(Radii::SM)
+                    .when(self.slot_has_ring(ToolbarSlot::CustomStart), |d| {
+                        d.border_1().border_color(theme.ring)
+                    })
+                    .child(self.custom_start_hour_dropdown.clone()),
+            )
+            .child(
+                div()
+                    .w(px(72.0))
+                    .rounded(Radii::SM)
+                    .when(self.slot_has_ring(ToolbarSlot::CustomStart), |d| {
+                        d.border_1().border_color(theme.ring)
+                    })
+                    .child(self.custom_start_minute_dropdown.clone()),
+            )
+            .child(Text::caption("to"))
+            .child(
+                div()
+                    .w(px(72.0))
+                    .rounded(Radii::SM)
+                    .when(self.slot_has_ring(ToolbarSlot::CustomEnd), |d| {
+                        d.border_1().border_color(theme.ring)
+                    })
+                    .child(self.custom_end_hour_dropdown.clone()),
+            )
+            .child(
+                div()
+                    .w(px(72.0))
+                    .rounded(Radii::SM)
+                    .when(self.slot_has_ring(ToolbarSlot::CustomEnd), |d| {
+                        d.border_1().border_color(theme.ring)
+                    })
+                    .child(self.custom_end_minute_dropdown.clone()),
+            )
+            .child(custom_apply_button);
+
         let level_control = div()
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_LEVEL), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Level), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(self.multi_select_level.clone());
 
         let category_control = div()
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_CATEGORY), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Category), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(self.multi_select_category.clone());
 
         let outcome_control = div()
             .rounded(Radii::SM)
-            .when(ring(FILTER_BAR_IDX_OUTCOME), |d| {
+            .when(self.slot_has_ring(ToolbarSlot::Outcome), |d| {
                 d.border_1().border_color(theme.ring)
             })
             .child(self.multi_select_outcome.clone());
@@ -1783,7 +2604,7 @@ impl AuditDocument {
             .rounded(Radii::SM)
             .bg(theme.background)
             .border_1()
-            .border_color(if ring(FILTER_BAR_IDX_REFRESH) {
+            .border_color(if self.slot_has_ring(ToolbarSlot::Refresh) {
                 theme.ring
             } else {
                 theme.input
@@ -1814,7 +2635,7 @@ impl AuditDocument {
                     .w(px(28.0))
                     .h_full()
                     .rounded_r(Radii::SM)
-                    .when(ring(FILTER_BAR_IDX_REFRESH_POLICY), |d| {
+                    .when(self.slot_has_ring(ToolbarSlot::RefreshPolicy), |d| {
                         d.border_1().border_color(theme.ring)
                     })
                     .child(self.refresh_dropdown.clone()),
@@ -1829,7 +2650,7 @@ impl AuditDocument {
             .px(Spacing::SM)
             .rounded(Radii::SM)
             .border_1()
-            .border_color(if ring(FILTER_BAR_IDX_CLEAR) {
+            .border_color(if self.slot_has_ring(ToolbarSlot::Clear) {
                 theme.ring
             } else {
                 gpui::transparent_black()
@@ -1843,28 +2664,47 @@ impl AuditDocument {
 
         let _ = window;
 
-        compact_top_bar(
-            &theme,
-            vec![
+        compact_top_bar(&theme, {
+            let mut items = vec![
                 search_control.into_any_element(),
                 time_control.into_any_element(),
-                level_control.into_any_element(),
-                category_control.into_any_element(),
-                outcome_control.into_any_element(),
+                timestamp_mode_control.into_any_element(),
+            ];
+
+            if custom_range_visible {
+                items.push(custom_time_controls.into_any_element());
+            }
+
+            if !self.is_external_event_stream() {
+                items.extend([
+                    level_control.into_any_element(),
+                    category_control.into_any_element(),
+                    outcome_control.into_any_element(),
+                ]);
+            }
+
+            items.extend([
                 div().flex_1().into_any_element(),
                 refresh_btn.into_any_element(),
                 clear_btn.into_any_element(),
-            ],
-        )
+            ]);
+
+            items
+        })
+        .h(px(64.0))
+        .items_center()
+        .justify_center()
+        .py(Spacing::XS)
+        .flex_wrap()
     }
 
-    fn render_event_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_event_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.events.is_empty() && self.is_loading {
             return div()
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .child(Text::muted("Loading audit events..."))
+                .child(Text::muted(self.source_loading_label()))
                 .into_any_element();
         }
 
@@ -1879,7 +2719,7 @@ impl AuditDocument {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(Text::heading("Failed to load audit events").danger())
+                .child(Text::heading(self.source_error_heading()).danger())
                 .child(Text::muted(self.status_message.clone().unwrap_or_default()))
                 .child(
                     Button::new("audit-retry")
@@ -1899,14 +2739,16 @@ impl AuditDocument {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(Text::muted("No audit events match the current filters."))
+                .child(Text::muted(self.source_empty_label()))
                 .into_any_element();
         }
 
-        let mut rows = Vec::with_capacity(self.events.len());
-        for (row_index, event) in self.events.iter().cloned().enumerate() {
+        let events = self.events.clone();
+        let mut rows = Vec::with_capacity(events.len());
+
+        for (row_index, event) in events.into_iter().enumerate() {
             rows.push(
-                self.render_event_row(row_index, event, cx)
+                self.render_event_row(row_index, event, window, cx)
                     .into_any_element(),
             );
         }
@@ -1922,44 +2764,30 @@ impl AuditDocument {
     }
 
     fn render_event_row(
-        &self,
+        &mut self,
         row_index: usize,
         event: AuditEventDto,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let event_id = event.id;
         let is_expanded = self.expanded_event_ids.contains(&event_id);
         // Only highlight the selected row when this document has GPUI focus.
         // When focus moves to the sidebar, the highlight disappears so the
         // user isn't confused by three simultaneous focus indicators.
         let is_selected = self.has_focus && self.selected_row == Some(row_index);
-        let timestamp = Self::format_timestamp_ms(event.created_at_epoch_ms);
-        let level = event.level.as_deref();
-        let level_display: AnyElement = match level {
-            Some(l) => div()
-                .px_1p5()
-                .py_px()
-                .rounded(px(3.0))
-                .bg(Self::level_bg_color(Some(l), theme))
-                .flex_shrink_0()
-                .child(
-                    Text::label_sm(l.to_uppercase())
-                        .font_size(FontSizes::XS)
-                        .color(Self::level_color(Some(l), theme)),
-                )
-                .into_any_element(),
-            None => Self::null_display(theme).flex_shrink_0().into_any_element(),
-        };
+        let timestamp = self.format_timestamp_ms(event.created_at_epoch_ms);
         let summary = event.summary.clone().unwrap_or_default();
         let summary_display: AnyElement = if summary.is_empty() {
-            Self::null_display(theme).into_any_element()
+            Self::null_display(&theme).into_any_element()
         } else {
             Text::body(summary).into_any_element()
         };
-        let category = Self::short_category_label(event.category.as_deref());
         let connection_driver =
             Self::format_connection_driver(&event.connection_id, &event.driver_id);
+        let event_action = event.action.clone();
+        let external_event_id = event.object_id.clone();
 
         // Background priority: selected (keyboard cursor) > expanded > default.
         // Use theme.list_active for the selected row — same token as key_value and sidebar.
@@ -2016,16 +2844,59 @@ impl AuditDocument {
                         .muted(),
                     )
                     .child(Text::code(timestamp))
-                    .child(level_display)
-                    .child(Text::caption(category.to_string()))
+                    .when(self.is_external_event_stream(), |row| {
+                        row.when_some(event_action.clone(), |row, value| {
+                            row.child(
+                                div()
+                                    .px_1p5()
+                                    .py_px()
+                                    .rounded(px(3.0))
+                                    .bg(theme.primary.opacity(0.15))
+                                    .max_w(px(240.0))
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .child(Text::label_sm(value).font_size(FontSizes::XS)),
+                                    ),
+                            )
+                        })
+                    })
+                    .when(!self.is_external_event_stream(), |row| {
+                        let level = event.level.as_deref();
+                        let level_display: AnyElement = match level {
+                            Some(l) => div()
+                                .px_1p5()
+                                .py_px()
+                                .rounded(px(3.0))
+                                .bg(Self::level_bg_color(Some(l), &theme))
+                                .flex_shrink_0()
+                                .child(
+                                    Text::label_sm(l.to_uppercase())
+                                        .font_size(FontSizes::XS)
+                                        .color(Self::level_color(Some(l), &theme)),
+                                )
+                                .into_any_element(),
+                            None => Self::null_display(&theme)
+                                .flex_shrink_0()
+                                .into_any_element(),
+                        };
+                        let category = Self::short_category_label(event.category.as_deref());
+
+                        row.child(level_display)
+                            .child(Text::caption(category.to_string()))
+                    })
                     .child(div().text_sm().flex_1().truncate().child(summary_display))
+                    .when_some(
+                        external_event_id.filter(|_| self.is_external_event_stream()),
+                        |row, value| row.child(Text::caption(value)),
+                    )
                     .when_some(
                         connection_driver.filter(|value| !value.is_empty()),
                         |row, value| row.child(Text::caption(value)),
                     ),
             )
             .when(is_expanded, |root| {
-                root.child(self.render_inline_detail(event, cx))
+                root.child(self.render_inline_detail(event, window, cx))
             })
     }
 
@@ -2048,12 +2919,17 @@ impl AuditDocument {
     }
 
     fn render_inline_detail(
-        &self,
+        &mut self,
         event: AuditEventDto,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
-        let timestamp = Self::format_timestamp_ms(event.created_at_epoch_ms);
+    ) -> AnyElement {
+        if self.is_external_event_stream() {
+            return self.render_external_inline_detail(event, window, cx);
+        }
+
+        let theme = cx.theme().clone();
+        let timestamp = self.format_timestamp_ms(event.created_at_epoch_ms);
         let level = event.level.clone();
         let category = match Self::short_category_label(event.category.as_deref()) {
             "NULL" => None,
@@ -2106,26 +2982,30 @@ impl AuditDocument {
                     .flex_wrap()
                     .gap_4()
                     .children(vec![
-                        self.render_detail_field("Time", Some(timestamp), theme)
+                        self.render_detail_field("Time", Some(timestamp), &theme)
                             .into_any_element(),
-                        self.render_detail_field("Level", level, theme)
+                        self.render_detail_field("Level", level, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Category", category, theme)
+                        self.render_detail_field("Category", category, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Outcome", outcome, theme)
+                        self.render_detail_field("Outcome", outcome, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Actor", Some(actor), theme)
+                        self.render_detail_field("Actor", Some(actor), &theme)
                             .into_any_element(),
-                        self.render_detail_field("Action", action, theme)
+                        self.render_detail_field("Action", action, &theme)
                             .into_any_element(),
-                        self.render_detail_field("Source", source, theme)
+                        self.render_detail_field("Source", source, &theme)
                             .into_any_element(),
                     ])
                     .when_some(connection_driver, |row, value| {
-                        row.child(self.render_detail_field("Connection/Driver", Some(value), theme))
+                        row.child(self.render_detail_field(
+                            "Connection/Driver",
+                            Some(value),
+                            &theme,
+                        ))
                     })
                     .when_some(duration, |row, value| {
-                        row.child(self.render_detail_field("Duration", Some(value), theme))
+                        row.child(self.render_detail_field("Duration", Some(value), &theme))
                     }),
             )
             .when_some(summary, |root, value| {
@@ -2186,6 +3066,89 @@ impl AuditDocument {
                         ),
                 )
             })
+            .into_any_element()
+    }
+
+    fn render_external_inline_detail(
+        &mut self,
+        event: AuditEventDto,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+        let row_event_id = event.id;
+        let timestamp = self.format_timestamp_ms(event.created_at_epoch_ms);
+        let source_name = event.connection_id.clone();
+        let source_partition = event.action.clone();
+        let event_id = event.object_id.clone();
+        let secondary_timestamp = event
+            .error_message
+            .as_deref()
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|value| self.format_timestamp_ms(value));
+        let message = event.summary.clone().filter(|value| !value.is_empty());
+        let details_json = event.details_json.clone().filter(|value| !value.is_empty());
+
+        div()
+            .px_4()
+            .pb_3()
+            .pt_1()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .bg(theme.secondary.opacity(0.35))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_4()
+                    .children(vec![
+                        self.render_detail_field("Time", Some(timestamp), &theme)
+                            .into_any_element(),
+                        self.render_detail_field("Source", source_name, &theme)
+                            .into_any_element(),
+                        self.render_detail_field("Partition", source_partition, &theme)
+                            .into_any_element(),
+                        self.render_detail_field("Event ID", event_id, &theme)
+                            .into_any_element(),
+                    ])
+                    .when_some(secondary_timestamp, |row, value| {
+                        row.child(self.render_detail_field("Secondary Time", Some(value), &theme))
+                    }),
+            )
+            .when_some(message, |root, value| {
+                let message_input =
+                    self.ensure_external_message_input(row_event_id, &value, window, cx);
+
+                root.child(
+                    div()
+                        .flex_col()
+                        .gap_1p5()
+                        .child(Label::new("Message"))
+                        .child(SelectableText::new(&message_input).w_full()),
+                )
+            })
+            .when_some(details_json, |root, value| {
+                let pretty_details = Self::pretty_json(&value);
+                let details_input =
+                    self.ensure_external_details_input(row_event_id, &pretty_details, window, cx);
+                let details_rows = Self::event_code_rows(&pretty_details, 4);
+
+                root.child(
+                    div()
+                        .flex_col()
+                        .gap_1p5()
+                        .child(Label::new("Details"))
+                        .child(
+                            div().bg(theme.secondary).p_2().rounded(px(4.0)).child(
+                                ReadonlyTextView::new(&details_input)
+                                    .w_full()
+                                    .h(Self::event_text_height(details_rows)),
+                            ),
+                        ),
+                )
+            })
+            .into_any_element()
     }
 
     fn render_export_button(
@@ -2277,9 +3240,15 @@ impl AuditDocument {
         // Left: row count with icon — same as DataGridPanel.
         let left = {
             let row_count_label = if let Some((start, end)) = self.current_page_range() {
-                format!("{}-{} of {} rows", start, end, self.total_events)
+                format!(
+                    "{}-{} of {} {}",
+                    start,
+                    end,
+                    self.total_events,
+                    self.source_row_label()
+                )
             } else {
-                format!("{} rows", self.total_events)
+                format!("{} {}", self.total_events, self.source_row_label())
             };
 
             div()
@@ -2373,9 +3342,10 @@ impl AuditDocument {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .when(self.total_events > 0, |d| {
-                d.child(self.render_export_button(&theme, cx))
-            })
+            .when(
+                self.total_events > 0 && !self.is_external_event_stream(),
+                |d| d.child(self.render_export_button(&theme, cx)),
+            )
             .when_some(
                 self.status_message.clone().filter(|_| self.is_loading),
                 |d, _| d.child(Text::dim("Loading...")),
@@ -2446,7 +3416,7 @@ impl Render for AuditDocument {
                     .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .child(self.render_event_list(cx))
+                    .child(self.render_event_list(window, cx))
                     .children(context_menu),
             )
             .child(self.render_status_bar(cx))
@@ -2456,7 +3426,11 @@ impl Render for AuditDocument {
 #[cfg(test)]
 mod tests {
     use super::AuditDocument;
-    use dbflux_core::observability::EventCategory;
+    use std::collections::{HashMap, HashSet};
+
+    use dbflux_core::{
+        EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+    };
 
     #[test]
     fn category_index_maps_none_to_all() {
@@ -2466,5 +3440,63 @@ mod tests {
     #[test]
     fn category_index_maps_mcp_to_mcp_dropdown_entry() {
         assert_eq!(AuditDocument::category_index(Some(EventCategory::Mcp)), 7);
+    }
+
+    #[test]
+    fn audit_event_from_record_preserves_event_stream_fields() {
+        let event = AuditDocument::audit_event_from_record(EventRecord {
+            id: Some(7),
+            ts_ms: 1000,
+            level: EventSeverity::Info,
+            category: EventCategory::System,
+            action: "partition-a".to_string(),
+            outcome: EventOutcome::Success,
+            actor_type: EventActorType::System,
+            actor_id: None,
+            source_id: EventSourceId::System,
+            connection_id: Some("source-a".to_string()),
+            database_name: Some("logs".to_string()),
+            driver_id: Some("cloudwatch".to_string()),
+            object_type: Some("event_stream".to_string()),
+            object_id: Some("event-123".to_string()),
+            summary: "hello".to_string(),
+            details_json: Some("{\"message\":\"hello\"}".to_string()),
+            error_code: None,
+            error_message: Some("2000".to_string()),
+            duration_ms: None,
+            session_id: None,
+            correlation_id: None,
+        });
+
+        assert_eq!(event.id, 7);
+        assert_eq!(event.created_at_epoch_ms, 1000);
+        assert_eq!(event.action.as_deref(), Some("partition-a"));
+        assert_eq!(event.summary.as_deref(), Some("hello"));
+        assert_eq!(event.object_id.as_deref(), Some("event-123"));
+        assert_eq!(event.connection_id.as_deref(), Some("source-a"));
+    }
+
+    #[test]
+    fn retain_event_input_cache_drops_non_visible_entries() {
+        let mut cache = HashMap::from([(1_i64, "message"), (2_i64, "details"), (3_i64, "extra")]);
+        let visible_ids = HashSet::from([2_i64, 3_i64]);
+
+        AuditDocument::retain_event_input_cache(&mut cache, &visible_ids);
+
+        assert_eq!(cache, HashMap::from([(2_i64, "details"), (3_i64, "extra")]));
+    }
+
+    #[test]
+    fn event_text_rows_adds_wrap_height_for_long_lines() {
+        let long_line = "x".repeat(161);
+
+        assert_eq!(AuditDocument::event_text_rows(&long_line, 2), 3);
+    }
+
+    #[test]
+    fn event_code_rows_is_more_conservative_for_pretty_json_blocks() {
+        let line = "a\nb\nc";
+
+        assert_eq!(AuditDocument::event_code_rows(line, 2), 3);
     }
 }

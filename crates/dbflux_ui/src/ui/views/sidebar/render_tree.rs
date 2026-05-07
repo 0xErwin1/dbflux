@@ -178,6 +178,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::CustomType
                 | SchemaNodeKind::ScriptsFolder
                 | SchemaNodeKind::Collection
+                | SchemaNodeKind::CollectionChild
                 | SchemaNodeKind::CollectionsFolder
                 | SchemaNodeKind::DatabaseIndexesFolder
                 | SchemaNodeKind::CollectionFieldsFolder
@@ -960,6 +961,7 @@ fn resolve_node_icon(
         SchemaNodeKind::Constraint => (Some(AppIcon::Lock), "", params.color_yellow),
         SchemaNodeKind::CollectionsFolder => (Some(AppIcon::Folder), "", params.color_teal),
         SchemaNodeKind::Collection => (Some(AppIcon::Box), "", params.color_teal),
+        SchemaNodeKind::CollectionChild => (Some(AppIcon::ScrollText), "", params.color_teal),
         SchemaNodeKind::DatabaseIndexesFolder | SchemaNodeKind::CollectionIndexesFolder => {
             (Some(AppIcon::Hash), "", params.color_purple)
         }
@@ -1067,6 +1069,7 @@ fn resolve_label_color(
         | SchemaNodeKind::CollectionFieldsFolder
         | SchemaNodeKind::CollectionIndexesFolder => params.color_gray,
         SchemaNodeKind::Collection => params.color_teal,
+        SchemaNodeKind::CollectionChild => params.color_teal,
         SchemaNodeKind::CollectionField => params.color_blue,
         SchemaNodeKind::CollectionIndex => params.color_purple,
         SchemaNodeKind::ScriptsFolder => theme.foreground,

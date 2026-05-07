@@ -27,7 +27,7 @@ pub trait TreeStore {
     fn save(&self, tree: &ConnectionTree) -> Result<(), DbError>;
 }
 
-pub use context::ExecutionContext;
+pub use context::{ExecutionContext, ExecutionSourceContext};
 pub use hook::{
     ConnectionHook, ConnectionHookBindings, ConnectionHooks, DetachedProcessHandle,
     DetachedProcessReceiver, DetachedProcessSender, HookContext, HookExecution, HookExecutionMode,
@@ -39,7 +39,8 @@ pub use hook::{
 pub use item_manager::{AuthProfileManager, Identifiable, ItemManager};
 pub use manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
-    ConnectionManager, ConnectionResolutionError, DatabaseConnection, FetchDatabaseSchemaParams,
+    ConnectionManager, ConnectionResolutionError, DatabaseConnection,
+    FetchCollectionChildrenParams, FetchCollectionChildrenResult, FetchDatabaseSchemaParams,
     FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
     FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaTypesParams,
     FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
