@@ -23,6 +23,40 @@ fn child_picker_filtered_total(picker: &ChildPickerState) -> usize {
         .count()
 }
 
+/// Returns the filtered + sorted children in current display order, ignoring pagination.
+fn sorted_visible_children(picker: &ChildPickerState) -> Vec<CollectionChildInfo> {
+    let query = picker.filter_query.to_lowercase();
+    let mut rows: Vec<CollectionChildInfo> = picker
+        .children
+        .iter()
+        .filter(|child| query.is_empty() || child.label.to_lowercase().contains(&query))
+        .cloned()
+        .collect();
+
+    match picker.sort_column {
+        ChildPickerSortColumn::Name => rows.sort_by(|left, right| left.label.cmp(&right.label)),
+        ChildPickerSortColumn::LastEvent => rows.sort_by(|left, right| {
+            left.last_event_ts_ms
+                .cmp(&right.last_event_ts_ms)
+                .then_with(|| left.label.cmp(&right.label))
+        }),
+    }
+
+    if picker.sort_descending {
+        rows.reverse();
+    }
+
+    rows
+}
+
+/// Adjusts `picker.page` so the row at `selected_index` falls within the visible page.
+fn ensure_selected_in_page(picker: &mut ChildPickerState) {
+    if picker.page_size == 0 {
+        return;
+    }
+    picker.page = picker.selected_index / picker.page_size;
+}
+
 impl Sidebar {
     pub(super) fn render_add_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
@@ -251,13 +285,29 @@ impl Sidebar {
         let filter_subscription = cx.subscribe_in(
             &input_for_subscription,
             window,
-            |this, input_state, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change)
-                    && let Some(picker) = this.child_picker.as_mut()
-                {
-                    picker.filter_query = input_state.read(cx).value().to_string();
-                    picker.page = 0;
-                    cx.notify();
+            |this, input_state, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    if let Some(picker) = this.child_picker.as_mut() {
+                        picker.filter_query = input_state.read(cx).value().to_string();
+                        picker.page = 0;
+                        picker.selected_index = 0;
+                        cx.notify();
+                    }
+                }
+                InputEvent::Focus => {
+                    if let Some(picker) = this.child_picker.as_mut() {
+                        picker.filter_focused = true;
+                        cx.notify();
+                    }
+                }
+                InputEvent::Blur => {
+                    if let Some(picker) = this.child_picker.as_mut() {
+                        picker.filter_focused = false;
+                        cx.notify();
+                    }
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.picker_execute(cx);
                 }
             },
         );
@@ -277,21 +327,25 @@ impl Sidebar {
             .or(collection.child_items)
             .unwrap_or_default();
 
+        let focus_handle = cx.focus_handle();
         self.child_picker = Some(ChildPickerState {
             profile_id,
             database,
             collection: name.clone(),
             title: format!("Event streams: {}", name),
-            focus_handle: cx.focus_handle(),
+            focus_handle: focus_handle.clone(),
             children,
             filter_input,
             filter_query: String::new(),
             page: 0,
-            page_size: 25,
+            page_size: 50,
             sort_column: ChildPickerSortColumn::LastEvent,
             sort_descending: true,
+            selected_index: 0,
+            filter_focused: false,
         });
 
+        focus_handle.focus(window);
         cx.notify();
     }
 
@@ -305,10 +359,108 @@ impl Sidebar {
         self.child_picker.is_some()
     }
 
+    pub fn child_picker_filter_is_focused(&self) -> bool {
+        self.child_picker
+            .as_ref()
+            .is_some_and(|picker| picker.filter_focused)
+    }
+
     pub fn child_picker_focus_handle(&self) -> Option<FocusHandle> {
         self.child_picker
             .as_ref()
             .map(|picker| picker.focus_handle.clone())
+    }
+
+    /// Total filtered/sorted row count, used to clamp the selection index.
+    fn child_picker_visible_total(picker: &ChildPickerState) -> usize {
+        child_picker_filtered_total(picker)
+    }
+
+    pub fn picker_select_next(&mut self, cx: &mut Context<Self>) {
+        if let Some(picker) = self.child_picker.as_mut() {
+            let total = Self::child_picker_visible_total(picker);
+            if total == 0 {
+                return;
+            }
+            picker.selected_index = (picker.selected_index + 1).min(total - 1);
+            ensure_selected_in_page(picker);
+            cx.notify();
+        }
+    }
+
+    pub fn picker_select_prev(&mut self, cx: &mut Context<Self>) {
+        if let Some(picker) = self.child_picker.as_mut() {
+            let total = Self::child_picker_visible_total(picker);
+            if total == 0 {
+                return;
+            }
+            picker.selected_index = picker.selected_index.saturating_sub(1);
+            ensure_selected_in_page(picker);
+            cx.notify();
+        }
+    }
+
+    pub fn picker_select_first(&mut self, cx: &mut Context<Self>) {
+        if let Some(picker) = self.child_picker.as_mut() {
+            picker.selected_index = 0;
+            ensure_selected_in_page(picker);
+            cx.notify();
+        }
+    }
+
+    pub fn picker_select_last(&mut self, cx: &mut Context<Self>) {
+        if let Some(picker) = self.child_picker.as_mut() {
+            let total = Self::child_picker_visible_total(picker);
+            if total == 0 {
+                return;
+            }
+            picker.selected_index = total - 1;
+            ensure_selected_in_page(picker);
+            cx.notify();
+        }
+    }
+
+    pub fn picker_focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(picker) = self.child_picker.as_ref() {
+            let filter_input = picker.filter_input.clone();
+            filter_input.update(cx, |input, cx| input.focus(window, cx));
+        }
+    }
+
+    pub fn picker_focus_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(picker) = self.child_picker.as_ref() {
+            picker.focus_handle.focus(window);
+            cx.notify();
+        }
+    }
+
+    pub fn picker_execute(&mut self, cx: &mut Context<Self>) {
+        let Some(picker) = self.child_picker.as_ref() else {
+            return;
+        };
+
+        let Some(child) = sorted_visible_children(picker)
+            .into_iter()
+            .nth(picker.selected_index)
+        else {
+            return;
+        };
+
+        let target = EventStreamTarget {
+            collection: CollectionRef::new(&picker.database, &picker.collection),
+            child_id: Some(child.id.clone()),
+        };
+
+        let profile_id = picker.profile_id;
+        let title = child.label.clone();
+
+        cx.emit(SidebarEvent::OpenCollectionChild {
+            profile_id,
+            target,
+            title,
+        });
+
+        self.close_child_picker(cx);
     }
 
     pub fn render_child_picker_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -317,36 +469,17 @@ impl Sidebar {
             return div();
         };
 
-        let query = picker.filter_query.to_lowercase();
-        let mut rows = picker
-            .children
-            .iter()
-            .filter(|child| query.is_empty() || child.label.to_lowercase().contains(&query))
-            .cloned()
-            .collect::<Vec<_>>();
+        let rows = sorted_visible_children(picker);
 
-        match picker.sort_column {
-            ChildPickerSortColumn::Name => rows.sort_by(|left, right| left.label.cmp(&right.label)),
-            ChildPickerSortColumn::LastEvent => rows.sort_by(|left, right| {
-                left.last_event_ts_ms
-                    .cmp(&right.last_event_ts_ms)
-                    .then_with(|| left.label.cmp(&right.label))
-            }),
-        }
-
-        if picker.sort_descending {
-            rows.reverse();
-        }
-
-        let total = child_picker_filtered_total(picker);
+        let total = rows.len();
         let page_count = total.max(1).div_ceil(picker.page_size);
         let page = picker.page.min(page_count.saturating_sub(1));
         let start = page.saturating_mul(picker.page_size);
         let end = (start + picker.page_size).min(total);
         let visible_rows = rows[start..end].to_vec();
+        let selected_index = picker.selected_index;
 
         let sidebar = cx.entity().clone();
-        let close_button_sidebar = sidebar.clone();
         let prev_sidebar = sidebar.clone();
         let next_sidebar = sidebar.clone();
         let name_sort_sidebar = sidebar.clone();
@@ -354,63 +487,39 @@ impl Sidebar {
         let profile_id = picker.profile_id;
         let database = picker.database.clone();
         let collection = picker.collection.clone();
-        let title = picker.title.clone();
+        let subtitle = picker.title.clone();
 
+        let can_prev = page > 0;
+        let can_next = page + 1 < page_count;
         let page_label = if total == 0 {
-            "0 streams".to_string()
+            "Page 0/0".to_string()
         } else {
-            format!("{}-{} of {}", start + 1, end, total)
+            format!("Page {}/{} ({}-{})", page + 1, page_count, start + 1, end)
         };
 
         div()
-            .track_focus(&picker.focus_handle)
             .flex()
             .flex_col()
-            .size_full()
-            .bg(theme.sidebar)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(Radii::MD)
-            .shadow_lg()
+            .flex_1()
+            .min_h_0()
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(Spacing::SM)
+                    .px(Spacing::MD)
+                    .pt(Spacing::SM)
+                    .child(Text::muted(subtitle).font_size(FontSizes::XS)),
+            )
+            .child(
+                div()
+                    .px(Spacing::MD)
                     .py(Spacing::SM)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(Text::body(title).font_size(FontSizes::SM))
-                    .child(
-                        div()
-                            .id("child-picker-close")
-                            .cursor_pointer()
-                            .px(Spacing::XS)
-                            .py(Spacing::XS)
-                            .rounded(Radii::SM)
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(move |_, _, cx| {
-                                close_button_sidebar.update(cx, |this, cx| {
-                                    this.close_child_picker(cx);
-                                });
-                            })
-                            .child(Text::muted("Close").font_size(FontSizes::XS)),
-                    ),
-            )
-            .child(
-                div()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(Input::new(&picker.filter_input).xsmall().cleanable(true)),
+                    .child(Input::new(&picker.filter_input).cleanable(true)),
             )
             .child(
                 div()
                     .flex()
-                    .px(Spacing::SM)
+                    .px(Spacing::MD)
                     .py(Spacing::XS)
+                    .gap(Spacing::SM)
                     .border_b_1()
                     .border_color(theme.border)
                     .text_size(FontSizes::XS)
@@ -464,10 +573,11 @@ impl Sidebar {
             .child(
                 div()
                     .flex_1()
+                    .min_h_0()
                     .overflow_y_scrollbar()
                     .when(visible_rows.is_empty(), |el| {
                         el.child(
-                            div().px(Spacing::SM).py(Spacing::SM).child(
+                            div().px(Spacing::MD).py(Spacing::SM).child(
                                 Text::muted("No event streams found").font_size(FontSizes::SM),
                             ),
                         )
@@ -480,16 +590,17 @@ impl Sidebar {
                             let child_id = child.id.clone();
                             let child_label = child.label.clone();
                             let timestamp = format_child_timestamp(child.last_event_ts_ms);
+                            let absolute_index = start + row_index;
+                            let is_selected = absolute_index == selected_index;
 
                             div()
                                 .id(("child-picker-row", row_index))
                                 .flex()
-                                .gap(Spacing::XS)
-                                .px(Spacing::SM)
+                                .gap(Spacing::SM)
+                                .px(Spacing::MD)
                                 .py(Spacing::XS)
-                                .border_b_1()
-                                .border_color(theme.border)
                                 .cursor_pointer()
+                                .when(is_selected, |d| d.bg(theme.list_active))
                                 .hover(|d| d.bg(theme.list_active))
                                 .on_click(move |_, _, cx| {
                                     row_sidebar.update(cx, |this, cx| {
@@ -520,23 +631,22 @@ impl Sidebar {
                 div()
                     .flex()
                     .items_center()
-                    .justify_between()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
+                    .justify_center()
+                    .gap(Spacing::SM)
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
                     .border_t_1()
                     .border_color(theme.border)
-                    .child(Text::muted(page_label).font_size(FontSizes::XS))
                     .child(
                         div()
+                            .id("child-picker-prev")
                             .flex()
-                            .gap(Spacing::XS)
-                            .child(
-                                div()
-                                    .id("child-picker-prev")
-                                    .cursor_pointer()
-                                    .px(Spacing::XS)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
+                            .items_center()
+                            .gap_1()
+                            .px(Spacing::XS)
+                            .rounded(Radii::SM)
+                            .when(can_prev, |d| {
+                                d.cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(move |_, _, cx| {
                                         prev_sidebar.update(cx, |this, cx| {
@@ -546,15 +656,34 @@ impl Sidebar {
                                             cx.notify();
                                         });
                                     })
-                                    .child(Text::caption("Prev")),
-                            )
-                            .child(
-                                div()
-                                    .id("child-picker-next")
-                                    .cursor_pointer()
-                                    .px(Spacing::XS)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
+                            })
+                            .when(!can_prev, |d| d.opacity(0.5))
+                            .child(Icon::new(AppIcon::ChevronLeft).size(px(12.0)).color(
+                                if can_prev {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            ))
+                            .child(Text::caption("Prev").font_size(FontSizes::XS).color(
+                                if can_prev {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )),
+                    )
+                    .child(Text::caption(page_label).font_size(FontSizes::XS))
+                    .child(
+                        div()
+                            .id("child-picker-next")
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px(Spacing::XS)
+                            .rounded(Radii::SM)
+                            .when(can_next, |d| {
+                                d.cursor_pointer()
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(move |_, _, cx| {
                                         next_sidebar.update(cx, |this, cx| {
@@ -569,8 +698,22 @@ impl Sidebar {
                                             cx.notify();
                                         });
                                     })
-                                    .child(Text::caption("Next")),
-                            ),
+                            })
+                            .when(!can_next, |d| d.opacity(0.5))
+                            .child(Text::caption("Next").font_size(FontSizes::XS).color(
+                                if can_next {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            ))
+                            .child(Icon::new(AppIcon::ChevronRight).size(px(12.0)).color(
+                                if can_next {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )),
                     ),
             )
     }

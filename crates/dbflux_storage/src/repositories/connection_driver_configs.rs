@@ -310,7 +310,6 @@ impl ConnectionDriverConfigDto {
                 profile: self.dynamo_profile.clone(),
                 endpoint: self.dynamo_endpoint.clone(),
             }),
-            _ => None,
         }
     }
 }
@@ -694,6 +693,7 @@ impl ConnectionDriverConfigsRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StorageRuntime;
 
     fn temp_repo() -> (tempfile::TempDir, ConnectionDriverConfigsRepository) {
         let temp_dir = tempfile::tempdir().expect("tempdir");

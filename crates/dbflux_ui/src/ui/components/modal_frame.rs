@@ -41,7 +41,6 @@ impl ModalFrame {
         self
     }
 
-    #[allow(dead_code)]
     pub fn context_id(mut self, context_id: ContextId) -> Self {
         self.inner = self.inner.key_context(context_id.as_gpui_context());
         self

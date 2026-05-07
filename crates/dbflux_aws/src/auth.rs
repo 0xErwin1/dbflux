@@ -1292,14 +1292,36 @@ fn sso_cache_dir() -> PathBuf {
 /// `startUrl` field matches the normalized URL (ignoring trailing slashes).
 /// Returns `None` if no matching file exists or it cannot be read.
 fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
-    // Fast path: exact hash match (both with and without trailing slash).
+    // Fast path: exact hash match. The AWS CLI may write the cache under either
+    // the trimmed or trailing-slash form of the URL, and stale files from a
+    // previous variant can coexist with a freshly-written one. Pick the most
+    // recently modified file among the candidates so a fresh `aws sso login`
+    // always wins over a stale prior cache entry.
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf, String)> = None;
     for candidate in [normalized_url, &format!("{}/", normalized_url)] {
         let hash = Sha1::digest(candidate.as_bytes());
         let path = sso_cache_dir().join(format!("{:x}.json", hash));
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            log::debug!("SSO cache hit (hash match): {}", path.display());
-            return Some(contents);
+
+        let metadata = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let mtime = metadata
+            .modified()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        match &newest {
+            Some((current_mtime, _, _)) if *current_mtime >= mtime => {}
+            _ => newest = Some((mtime, path, contents)),
         }
+    }
+    if let Some((_, path, contents)) = newest {
+        log::debug!("SSO cache hit (hash match): {}", path.display());
+        return Some(contents);
     }
 
     // Slow path: scan all files and compare by startUrl field value.

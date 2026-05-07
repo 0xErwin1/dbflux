@@ -98,33 +98,9 @@ impl ProxyFormNav {
     }
 
     #[cfg(test)]
-    pub(super) fn move_up(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_up(&rows);
-    }
-
-    #[cfg(test)]
     pub(super) fn move_right(&mut self) {
         let rows = self.form_rows();
         self.nav.move_right(&rows);
-    }
-
-    #[cfg(test)]
-    pub(super) fn move_left(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_left(&rows);
-    }
-
-    #[cfg(test)]
-    pub(super) fn move_first(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_first(&rows);
-    }
-
-    #[cfg(test)]
-    pub(super) fn move_last(&mut self) {
-        let rows = self.form_rows();
-        self.nav.move_last(&rows);
     }
 
     pub(super) fn is_input_field(field: ProxyFormField) -> bool {

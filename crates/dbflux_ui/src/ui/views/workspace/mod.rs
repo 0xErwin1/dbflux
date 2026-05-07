@@ -892,6 +892,15 @@ impl Workspace {
             return ContextId::CommandPalette;
         }
 
+        if self.sidebar.read(cx).has_child_picker_open() {
+            // When the filter input inside the picker is focused, defer to the
+            // text-input keymap so typing does not trigger list navigation.
+            if self.sidebar.read(cx).child_picker_filter_is_focused() {
+                return ContextId::TextInput;
+            }
+            return ContextId::EventStreamsPicker;
+        }
+
         if self.sql_preview_modal.read(cx).is_visible() {
             return ContextId::SqlPreviewModal;
         }
@@ -1095,7 +1104,14 @@ impl Workspace {
                         });
                     }
                     pipeline::PipelineProgressEvent::WatchClosed { last_state } => {
-                        if !matches!(last_state, dbflux_core::PipelineState::Connected) {
+                        if matches!(last_state, dbflux_core::PipelineState::Connected) {
+                            // The pipeline completed successfully but the watch channel sender
+                            // was dropped before the poll task could observe it via changed().
+                            // Treat this as Completed: the connection succeeded.
+                            this.login_modal.update(cx, |modal, cx| {
+                                modal.close(cx);
+                            });
+                        } else {
                             this.login_modal.update(cx, |modal, cx| {
                                 modal.apply_pipeline_state(
                                     &pipeline_profile_name,

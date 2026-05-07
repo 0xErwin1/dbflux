@@ -724,54 +724,11 @@ impl Sidebar {
         };
 
         let collection_children = if effective.presentation == CollectionPresentation::EventStream {
-            match child_items {
-                Some(items) if !items.is_empty() => {
-                    let mut children: Vec<TreeItem> = items
-                        .into_iter()
-                        .map(|child| {
-                            TreeItem::new(
-                                SchemaNodeId::CollectionChild {
-                                    profile_id,
-                                    database: database_name.to_string(),
-                                    collection: coll_name.to_string(),
-                                    child_id: child.id,
-                                    name: child.label.clone(),
-                                }
-                                .to_string(),
-                                child.label,
-                            )
-                        })
-                        .collect();
-
-                    if has_more_children {
-                        children.push(TreeItem::new(
-                            SchemaNodeId::CollectionChildrenMore {
-                                profile_id,
-                                database: database_name.to_string(),
-                                collection: coll_name.to_string(),
-                            }
-                            .to_string(),
-                            "Load more streams...".to_string(),
-                        ));
-                    }
-
-                    children
-                }
-                Some(_) if has_more_children => vec![TreeItem::new(
-                    SchemaNodeId::CollectionChildrenMore {
-                        profile_id,
-                        database: database_name.to_string(),
-                        collection: coll_name.to_string(),
-                    }
-                    .to_string(),
-                    "Load more streams...".to_string(),
-                )],
-                Some(_) => vec![TreeItem::new(
-                    format!("collection-empty-streams:{profile_id}:{database_name}:{coll_name}"),
-                    "No event streams".to_string(),
-                )],
-                None => Vec::new(),
-            }
+            // Event-stream collections are leaves in the tree: streams are
+            // browsed exclusively through the dedicated picker modal, never
+            // inline. Suppressing children also removes the expand chevron.
+            let _ = (child_items, has_more_children);
+            Vec::new()
         } else {
             vec![
                 TreeItem::new(
@@ -1347,8 +1304,7 @@ impl Sidebar {
 mod tests {
     use super::Sidebar;
     use dbflux_core::{
-        CollectionChildInfo, CollectionChildrenCache, CollectionPresentation, FieldInfo,
-        SchemaNodeId, TableInfo,
+        CollectionChildInfo, CollectionChildrenCache, CollectionPresentation, FieldInfo, TableInfo,
     };
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -1380,7 +1336,10 @@ mod tests {
     }
 
     #[test]
-    fn collection_item_uses_driver_provided_child_items_when_present() {
+    fn event_stream_collections_are_leaves_regardless_of_driver_child_items() {
+        // Event-stream collections are now leaves in the tree; their streams
+        // are reached exclusively through the picker modal so the row never
+        // shows an expand chevron.
         let item = Sidebar::build_collection_item(
             Uuid::new_v4(),
             "logs",
@@ -1409,12 +1368,13 @@ mod tests {
             &Default::default(),
         );
 
-        assert_eq!(item.children.len(), 1);
-        assert_eq!(item.children[0].label.as_ref(), "2026/04/25/[$LATEST]abc");
+        assert!(item.children.is_empty());
     }
 
     #[test]
-    fn collection_item_adds_load_more_when_child_page_has_next_token() {
+    fn event_stream_collections_stay_leaves_even_with_pending_pagination() {
+        // The presence of a `next_page_token` from the driver must not
+        // promote an event-stream collection to an expandable folder.
         let profile_id = Uuid::new_v4();
         let collection = "/aws/lambda/app".to_string();
         let mut child_cache = HashMap::new();
@@ -1449,17 +1409,7 @@ mod tests {
             &child_cache,
         );
 
-        assert_eq!(item.children.len(), 2);
-        assert_eq!(item.children[1].label.as_ref(), "Load more streams...");
-        assert_eq!(
-            item.children[1].id.as_ref(),
-            SchemaNodeId::CollectionChildrenMore {
-                profile_id,
-                database: "logs".to_string(),
-                collection,
-            }
-            .to_string()
-        );
+        assert!(item.children.is_empty());
     }
 }
 

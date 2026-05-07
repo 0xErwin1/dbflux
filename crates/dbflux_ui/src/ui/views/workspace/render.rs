@@ -1,4 +1,5 @@
 use super::*;
+use crate::keymap::ContextId;
 use crate::platform;
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::tokens::FontSizes;
@@ -609,6 +610,8 @@ impl Render for Workspace {
                             });
                         },
                     )
+                    .context_id(ContextId::EventStreamsPicker)
+                    .icon(AppIcon::ScrollText)
                     .title("Event Streams")
                     .width(px(1000.0))
                     .height(px(720.0))

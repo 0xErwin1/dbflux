@@ -510,6 +510,8 @@ struct ChildPickerState {
     page_size: usize,
     sort_column: ChildPickerSortColumn,
     sort_descending: bool,
+    selected_index: usize,
+    filter_focused: bool,
 }
 
 /// Result of checking whether table details are available.
