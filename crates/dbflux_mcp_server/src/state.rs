@@ -1012,8 +1012,14 @@ mod tests {
                 provider_id: "rpc-auth".to_string(),
                 profile_id,
                 expires_at: None,
+                session_data: None,
             }),
             resolve_credentials: FakeAuthRpcResult::Ok(credentials),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
+                retriable: false,
+            }),
             expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
                 .ok()
                 .filter(|token| !token.is_empty()),
@@ -1119,10 +1125,16 @@ mod tests {
                 provider_id: "rpc-auth".to_string(),
                 profile_id: uuid::Uuid::nil(),
                 expires_at: None,
+                session_data: None,
             }),
             resolve_credentials: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
                 code: dbflux_ipc::AuthProviderRpcErrorCode::UnsupportedMethod,
                 message: "unused".to_string(),
+                retriable: false,
+            }),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
                 retriable: false,
             }),
             expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
@@ -1180,10 +1192,16 @@ mod tests {
                 provider_id: "rpc-auth".to_string(),
                 profile_id,
                 expires_at: None,
+                session_data: None,
             }),
             resolve_credentials: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
                 code: dbflux_ipc::AuthProviderRpcErrorCode::UnsupportedMethod,
                 message: "unused".to_string(),
+                retriable: false,
+            }),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
                 retriable: false,
             }),
             expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
@@ -1259,6 +1277,11 @@ mod tests {
                 message: "unused".to_string(),
                 retriable: false,
             }),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
+                retriable: false,
+            }),
             expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
                 .ok()
                 .filter(|token| !token.is_empty()),
@@ -1296,6 +1319,11 @@ mod tests {
             resolve_credentials: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
                 code: dbflux_ipc::AuthProviderRpcErrorCode::UnsupportedMethod,
                 message: "unused".to_string(),
+                retriable: false,
+            }),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
                 retriable: false,
             }),
             expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
