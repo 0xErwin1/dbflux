@@ -21,7 +21,10 @@ pub const APP_CONTROL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const DRIVER_RPC_V1_0: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const DRIVER_RPC_VERSION: ProtocolVersion = ProtocolVersion::new(1, 1);
 pub const AUTH_PROVIDER_RPC_V1_0: ProtocolVersion = ProtocolVersion::new(1, 0);
-pub const AUTH_PROVIDER_RPC_VERSION: ProtocolVersion = ProtocolVersion::new(1, 1);
+pub const AUTH_PROVIDER_RPC_V1_1: ProtocolVersion = ProtocolVersion::new(1, 1);
+pub const AUTH_PROVIDER_RPC_V1_2: ProtocolVersion = ProtocolVersion::new(1, 2);
+/// Current highest auth-provider protocol version.
+pub const AUTH_PROVIDER_RPC_VERSION: ProtocolVersion = AUTH_PROVIDER_RPC_V1_2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,8 +58,8 @@ pub const AUTH_PROVIDER_RPC_API_CONTRACT: RpcApiContract =
 pub const DRIVER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 2] =
     [DRIVER_RPC_V1_0, DRIVER_RPC_VERSION];
 
-pub const AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 2] =
-    [AUTH_PROVIDER_RPC_VERSION, AUTH_PROVIDER_RPC_V1_0];
+pub const AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 3] =
+    [AUTH_PROVIDER_RPC_V1_2, AUTH_PROVIDER_RPC_V1_1, AUTH_PROVIDER_RPC_V1_0];
 
 pub const fn driver_rpc_supported_versions() -> &'static [ProtocolVersion] {
     &DRIVER_RPC_SUPPORTED_VERSIONS

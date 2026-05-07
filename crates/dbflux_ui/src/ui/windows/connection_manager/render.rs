@@ -746,6 +746,12 @@ impl ConnectionManagerWindow {
                     div().into_any_element()
                 }
             }
+
+            // Phase A scaffolding: DynamicSelect rendering is implemented in
+            // Phase B (auth-provider settings panel). Driver connection forms
+            // do not declare DynamicSelect fields, so this branch is currently
+            // unreachable in practice.
+            FormFieldKind::DynamicSelect { .. } => div().into_any_element(),
         }
     }
 

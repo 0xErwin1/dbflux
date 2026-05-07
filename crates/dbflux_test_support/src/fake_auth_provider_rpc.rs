@@ -6,8 +6,8 @@ use dbflux_core::auth::{AuthFormDef, AuthProviderCapabilities, AuthSessionState}
 use dbflux_ipc::auth_provider_protocol::{
     AuthProviderHelloResponse, AuthProviderHelloResponseV1_1, AuthProviderRequestBody,
     AuthProviderRequestEnvelope, AuthProviderResponseBody, AuthProviderResponseEnvelope,
-    AuthProviderRpcError, AuthProviderRpcErrorCode, AuthSessionDto, ResolvedCredentialsDto,
-    parse_auth_profile,
+    AuthProviderRpcError, AuthProviderRpcErrorCode, AuthSessionDto, FetchFieldOptionsResponse,
+    ResolvedCredentialsDto, parse_auth_profile,
 };
 use dbflux_ipc::{
     AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, ProtocolVersion,
@@ -36,6 +36,7 @@ pub struct FakeAuthProviderRpcConfig {
     pub login_progress: Option<Option<String>>,
     pub login: FakeAuthRpcResult<AuthSessionDto>,
     pub resolve_credentials: FakeAuthRpcResult<ResolvedCredentialsDto>,
+    pub fetch_dynamic_options: FakeAuthRpcResult<FetchFieldOptionsResponse>,
     pub expected_auth_token: Option<String>,
 }
 
@@ -60,6 +61,11 @@ impl FakeAuthProviderRpcConfig {
             resolve_credentials: FakeAuthRpcResult::Err(AuthProviderRpcError {
                 code: AuthProviderRpcErrorCode::UnsupportedMethod,
                 message: "resolve_credentials not configured".to_string(),
+                retriable: false,
+            }),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(AuthProviderRpcError {
+                code: AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
                 retriable: false,
             }),
             expected_auth_token: std::env::var(AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
@@ -285,6 +291,26 @@ fn handle_request(
                         AuthProviderResponseBody::Credentials {
                             credentials: credentials.clone(),
                         },
+                    ))
+                }
+                FakeAuthRpcResult::Err(error) => {
+                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                        request.protocol_version,
+                        request.request_id,
+                        AuthProviderResponseBody::Error(error.clone()),
+                    ))
+                }
+            }
+        }
+        AuthProviderRequestBody::FetchDynamicOptions(fetch) => {
+            let _ = parse_auth_profile(&fetch.profile_json);
+
+            match &config.fetch_dynamic_options {
+                FakeAuthRpcResult::Ok(response) => {
+                    FakeResponse::Single(AuthProviderResponseEnvelope::ok(
+                        request.protocol_version,
+                        request.request_id,
+                        AuthProviderResponseBody::DynamicOptions(response.clone()),
                     ))
                 }
                 FakeAuthRpcResult::Err(error) => {
