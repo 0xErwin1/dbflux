@@ -2,6 +2,41 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.5.0-dev.3] – 2026-05-08
+
+### Features
+
+* External RPC auth providers reach AWS-parity capability: any provider can now
+  declare `FormFieldKind::DynamicSelect` fields whose options are fetched via
+  the new `FetchFieldOptions` IPC method, drive an interactive login flow whose
+  device URL surfaces in the existing login modal, and round-trip opaque
+  session state through `AuthSessionDto.session_data`.
+* Auth-provider IPC bumped to v1.2 with a `secret_dependency_opt_in` manifest
+  flag; the host strips `Password`-typed values from `FetchFieldOptions`
+  requests by default.
+* AWS SSO Account ID and Role Name dropdowns now travel through the generic
+  `DynamicSelect` path; the Settings → Access Providers panel no longer hard-
+  codes any provider id.
+* The Provider selector in Settings → Access Providers is a single dropdown
+  over the full registry (built-in + RPC-discovered providers), and the form
+  reloads from the selected provider's manifest.
+* Workspace-wide rustc/clippy lints (warn level) opted into by all driver
+  crates; `rustfmt.toml` baseline added.
+
+### Fixes
+
+* `FetchOptionsError::SessionExpired` and `NeedsLogin` now surface a visible
+  per-field re-login hint and provider-level banner instead of being silently
+  logged.
+* `RefreshTrigger::Manual` no longer auto-fetches on every render; it fetches
+  only on cache miss.
+
+### Chores
+
+* CI pipeline runs DynamoDB live integration tests.
+* Rustfmt pass over `cfg_attr` blocks and trailing commas in driver `allow`
+  attributes.
+
 ## [0.5.0-dev.2] – 2026-05-07
 
 ### Features
