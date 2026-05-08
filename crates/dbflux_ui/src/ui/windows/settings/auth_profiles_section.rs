@@ -51,6 +51,8 @@ pub(super) struct AuthProfilesSection {
     provider_login_loading: bool,
     provider_login_status: Option<(String, bool)>,
 
+    /// Dropdown for selecting the auth provider.
+    provider_dropdown: Entity<Dropdown>,
     /// Generic dynamic-select dropdowns keyed by field id.
     dynamic_dropdowns: HashMap<String, Entity<Dropdown>>,
     /// Cached options indexed by `(provider_id, field_id, dep_hash)`.
@@ -81,6 +83,8 @@ pub(super) struct AuthProfilesSection {
     /// Subscriptions for DynamicSelect dropdown selection events.
     /// Rebuilt whenever `rebuild_form_inputs` is called.
     _dropdown_subscriptions: Vec<Subscription>,
+    /// Subscription for provider dropdown selection events.
+    _provider_dropdown_subscription: Option<Subscription>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -117,17 +121,16 @@ impl EventEmitter<AuthProfilesSectionEvent> for AuthProfilesSection {}
 impl EventEmitter<SectionFocusEvent> for AuthProfilesSection {}
 
 fn build_form_rows(
-    provider_count: usize,
+    has_providers: bool,
     dynamic_field_count: usize,
     selected_provider_supports_login: bool,
     is_editing: bool,
 ) -> Vec<Vec<AuthFormField>> {
     let mut rows = vec![vec![AuthFormField::Name]];
 
-    let provider_row: Vec<AuthFormField> =
-        (0..provider_count).map(AuthFormField::Provider).collect();
-    if !provider_row.is_empty() {
-        rows.push(provider_row);
+    // The provider selector is always a single dropdown widget — one focusable slot.
+    if has_providers {
+        rows.push(vec![AuthFormField::Provider(0)]);
     }
 
     for idx in 0..dynamic_field_count {
@@ -257,11 +260,37 @@ impl AuthProfilesSection {
 
         let input_name = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
 
+        let provider_dropdown = cx.new(|_cx| {
+            Dropdown::new(SharedString::from("auth-provider-selector"))
+                .placeholder("Select provider…")
+        });
+
         let app_state_subscription =
             cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
                 this.pending_sync_from_app_state = true;
                 cx.notify();
             });
+
+        let provider_dropdown_subscription = cx.subscribe_in(
+            &provider_dropdown,
+            window,
+            |this, _, event: &DropdownSelectionChanged, window, cx| {
+                let provider_id = event.item.value.to_string();
+                this.selected_provider_id = Some(provider_id);
+                this.rebuild_form_inputs(window, cx);
+
+                for input in this.form_inputs.values() {
+                    input.update(cx, |state, cx| {
+                        state.set_value("", window, cx);
+                    });
+                }
+
+                this.options_cache.clear();
+                this.field_login_hint.clear();
+
+                cx.notify();
+            },
+        );
 
         let mut section = Self {
             app_state,
@@ -279,6 +308,7 @@ impl AuthProfilesSection {
             provider_login_loading: false,
             provider_login_status: None,
 
+            provider_dropdown,
             dynamic_dropdowns: HashMap::new(),
             options_cache: HashMap::new(),
             field_login_hint: HashMap::new(),
@@ -296,6 +326,7 @@ impl AuthProfilesSection {
             _subscriptions: vec![app_state_subscription],
             _blur_subscriptions: Vec::new(),
             _dropdown_subscriptions: Vec::new(),
+            _provider_dropdown_subscription: Some(provider_dropdown_subscription),
         };
 
         section.rebuild_form_inputs(window, cx);
@@ -785,6 +816,10 @@ impl AuthProfilesSection {
     }
 
     fn sync_from_app_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Refresh provider entries so newly discovered RPC providers appear
+        // in the dropdown without requiring a section reload.
+        self.provider_entries_cache = self.provider_entries(cx);
+
         let profiles = self.app_state.read(cx).auth_profiles().to_vec();
 
         if profiles.is_empty() {
@@ -1427,50 +1462,29 @@ impl AuthProfilesSection {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
-        let providers = self.provider_entries(cx);
+        let items: Vec<DropdownItem> = self
+            .provider_entries_cache
+            .iter()
+            .map(|(provider_id, label)| {
+                DropdownItem::with_value(label.clone(), provider_id.clone())
+            })
+            .collect();
 
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .children(providers.into_iter().map(|(provider_id, label)| {
-                let selected = self.selected_provider_id.as_deref() == Some(provider_id.as_str());
+        let selected_index = self
+            .selected_provider_id
+            .as_deref()
+            .and_then(|provider_id| {
+                self.provider_entries_cache
+                    .iter()
+                    .position(|(id, _)| id == provider_id)
+            });
 
-                div()
-                    .rounded(px(6.0))
-                    .border_1()
-                    .border_color(if selected {
-                        theme.primary
-                    } else {
-                        transparent_black()
-                    })
-                    .child(
-                        Button::new(
-                            SharedString::from(format!("auth-provider-{}", provider_id)),
-                            label,
-                        )
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.selected_provider_id = Some(provider_id.clone());
-                                this.rebuild_form_inputs(window, cx);
+        self.provider_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_items(items, cx);
+            dropdown.set_selected_index(selected_index, cx);
+        });
 
-                                for input in this.form_inputs.values() {
-                                    input.update(cx, |state, cx| {
-                                        state.set_value("", window, cx);
-                                    });
-                                }
-
-                                this.options_cache.clear();
-                                this.field_login_hint.clear();
-
-                                cx.notify();
-                            },
-                        )),
-                    )
-            }))
+        self.provider_dropdown.clone()
     }
 
     fn render_profile_list(
@@ -1834,7 +1848,7 @@ impl FormSection for AuthProfilesSection {
 
     fn form_rows(&self) -> Vec<Vec<Self::FormField>> {
         build_form_rows(
-            self.provider_entries_cache.len(),
+            !self.provider_entries_cache.is_empty(),
             self.provider_field_order.len(),
             self.selected_provider_supports_login,
             self.editing_profile_id.is_some(),
@@ -1873,24 +1887,12 @@ impl FormSection for AuthProfilesSection {
             AuthFormField::Name | AuthFormField::DynamicField(_) => {
                 self.focus_current_field(window, cx);
             }
-            AuthFormField::Provider(idx) => {
-                let providers = self.provider_entries(cx);
-                if let Some((provider_id, _)) = providers.get(idx) {
-                    let provider_id = provider_id.clone();
-                    self.selected_provider_id = Some(provider_id.clone());
-                    self.rebuild_form_inputs(window, cx);
-
-                    for input in self.form_inputs.values() {
-                        input.update(cx, |state, cx| {
-                            state.set_value("", window, cx);
-                        });
-                    }
-
-                    self.options_cache.clear();
-                    self.field_login_hint.clear();
-
-                    self.validate_form_field();
-                }
+            AuthFormField::Provider(_) => {
+                // The provider selector is a single dropdown widget.
+                // Keyboard activation (Enter) on this row focuses the dropdown;
+                // the dropdown's own keyboard handling takes over from there.
+                // No state mutation is needed here — selection is driven by
+                // the `DropdownSelectionChanged` subscription in the constructor.
             }
             AuthFormField::Enabled => {
                 self.profile_enabled = !self.profile_enabled;
@@ -1927,7 +1929,7 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn form_rows_include_generic_provider_login_without_aws_feature() {
-        let rows = build_form_rows(1, 2, true, false);
+        let rows = build_form_rows(true, 2, true, false);
 
         assert!(
             rows.iter()
