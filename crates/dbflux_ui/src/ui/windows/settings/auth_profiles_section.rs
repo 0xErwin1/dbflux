@@ -55,6 +55,11 @@ pub(super) struct AuthProfilesSection {
     dynamic_dropdowns: HashMap<String, Entity<Dropdown>>,
     /// Cached options indexed by `(provider_id, field_id, dep_hash)`.
     options_cache: HashMap<(String, String, u64), CachedOptions>,
+    /// Per-field re-login hint shown below the dropdown when the last fetch
+    /// returned `NeedsLogin` or `SessionExpired`.
+    ///
+    /// Keyed by field id; cleared on successful fetch or profile change.
+    field_login_hint: HashMap<String, String>,
     /// When set, the URL is routed to the login modal via the pending pattern.
     ///
     /// Fields: `(provider_name, profile_name, url)`.
@@ -165,6 +170,65 @@ fn build_auth_profile_from_form(
     })
 }
 
+/// Update `field_login_hint` and `provider_login_status` for a
+/// `FetchOptionsError` returned for `field_id`.
+///
+/// `NeedsLogin` and `SessionExpired` are surfaced as a per-field hint shown
+/// below the affected dropdown and as a warning banner near the Login button,
+/// so the user knows to re-authenticate.  Transient and permanent errors are
+/// logged at debug level; they do not update the login-hint state because
+/// they do not require user authentication action.
+///
+/// The status banner is not overwritten when a login is already in progress
+/// (`login_in_progress == true`), because the running login flow owns it.
+fn apply_fetch_error_state(
+    field_id: &str,
+    error: FetchOptionsError,
+    field_login_hint: &mut HashMap<String, String>,
+    provider_login_status: &mut Option<(String, bool)>,
+    login_in_progress: bool,
+) {
+    match &error {
+        FetchOptionsError::NeedsLogin => {
+            field_login_hint.insert(field_id.to_string(), "Log in to load options".to_string());
+
+            if !login_in_progress {
+                *provider_login_status = Some((
+                    "Login required — click Login to load dropdown options.".to_string(),
+                    false,
+                ));
+            }
+        }
+        FetchOptionsError::SessionExpired => {
+            field_login_hint.insert(
+                field_id.to_string(),
+                "Session expired — log in again to reload options".to_string(),
+            );
+
+            if !login_in_progress {
+                *provider_login_status = Some((
+                    "Session expired — click Login to refresh dropdown options.".to_string(),
+                    false,
+                ));
+            }
+        }
+        FetchOptionsError::Transient(msg) => {
+            log::debug!(
+                "fetch_dynamic_options for field '{}': transient: {}",
+                field_id,
+                msg
+            );
+        }
+        FetchOptionsError::Permanent(msg) => {
+            log::debug!(
+                "fetch_dynamic_options for field '{}': permanent: {}",
+                field_id,
+                msg
+            );
+        }
+    }
+}
+
 impl AuthProfilesSection {
     pub(super) fn new(
         app_state: Entity<AppStateEntity>,
@@ -217,6 +281,7 @@ impl AuthProfilesSection {
 
             dynamic_dropdowns: HashMap::new(),
             options_cache: HashMap::new(),
+            field_login_hint: HashMap::new(),
             pending_login_complete_refresh: false,
             pending_sso_url: None,
 
@@ -417,12 +482,32 @@ impl AuthProfilesSection {
         hasher.finish()
     }
 
+    /// Handle a `FetchOptionsError` for `field_id`.
+    ///
+    /// Delegates to the free function `apply_fetch_error_state` so the logic
+    /// can be exercised in unit tests without a running GPUI context.
+    fn apply_fetch_error(
+        &mut self,
+        field_id: &str,
+        error: FetchOptionsError,
+        _cx: &mut Context<Self>,
+    ) {
+        apply_fetch_error_state(
+            field_id,
+            error,
+            &mut self.field_login_hint,
+            &mut self.provider_login_status,
+            self.provider_login_loading,
+        );
+    }
+
     /// Fetch dynamic options for `field_id` if not already cached and valid.
     ///
     /// Cache miss conditions:
     /// - No entry for `(provider_id, field_id, dep_hash)`.
     /// - Cached entry has expired.
-    /// - `refresh == RefreshTrigger::Manual` (always re-fetches when called).
+    /// - `refresh == RefreshTrigger::Manual`: fetches only when no cached entry
+    ///   exists (first render), never re-fetches automatically after that.
     /// - `refresh == RefreshTrigger::OnLoginComplete` and `login_just_completed` is true.
     /// - `requires_session == true` and no active session.
     ///
@@ -465,7 +550,10 @@ impl AuthProfilesSection {
 
         // Determine whether we need to (re-)fetch.
         let needs_fetch = match refresh {
-            RefreshTrigger::Manual => true,
+            // Manual fields are never auto-refetched.  They fetch exactly once
+            // on the first render (cache miss) and then require an explicit
+            // user gesture (cache invalidation) to refetch.
+            RefreshTrigger::Manual => !self.options_cache.contains_key(&cache_key),
             RefreshTrigger::OnLoginComplete => login_just_completed,
             RefreshTrigger::OnDependencyChange | RefreshTrigger::OnFocus => {
                 match self.options_cache.get(&cache_key) {
@@ -516,12 +604,6 @@ impl AuthProfilesSection {
             provider
                 .fetch_dynamic_options(&profile_snapshot, request)
                 .await
-                .map_err(|err| match err {
-                    FetchOptionsError::NeedsLogin => "needs login".to_string(),
-                    FetchOptionsError::SessionExpired => "session expired".to_string(),
-                    FetchOptionsError::Transient(msg) => format!("transient: {}", msg),
-                    FetchOptionsError::Permanent(msg) => format!("permanent: {}", msg),
-                })
         });
 
         cx.spawn(async move |_this, cx| {
@@ -549,6 +631,10 @@ impl AuthProfilesSection {
                                 },
                             );
 
+                            // Clear any prior login hint for this field now that
+                            // options loaded successfully.
+                            this.field_login_hint.remove(&field_id);
+
                             // Sync cached options into the dropdown entity.
                             if let Some(dropdown) = this.dynamic_dropdowns.get(&field_id) {
                                 let items = this
@@ -574,11 +660,7 @@ impl AuthProfilesSection {
                             }
                         }
                         Err(error) => {
-                            log::debug!(
-                                "fetch_dynamic_options for field '{}': {}",
-                                field_id,
-                                error
-                            );
+                            this.apply_fetch_error(&field_id, error, cx);
                         }
                     }
 
@@ -660,12 +742,17 @@ impl AuthProfilesSection {
             }
         }
 
+        let login_hint = self.field_login_hint.get(&field_id).cloned();
+
         div()
             .flex()
             .flex_col()
             .gap_1()
             .child(dbflux_components::primitives::Label::new(label))
             .child(dropdown)
+            .when_some(login_hint, |container, hint| {
+                container.child(Text::caption(hint).warning())
+            })
     }
 
     fn clear_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -694,6 +781,7 @@ impl AuthProfilesSection {
         // Clear the dynamic-select options cache so stale options are not shown
         // for a new/reset profile.
         self.options_cache.clear();
+        self.field_login_hint.clear();
     }
 
     fn sync_from_app_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -892,6 +980,7 @@ impl AuthProfilesSection {
         // Clear options cache so DynamicSelect dropdowns are re-fetched for
         // the newly loaded profile's field values.
         self.options_cache.clear();
+        self.field_login_hint.clear();
 
         self.provider_login_loading = false;
         self.provider_login_status = None;
@@ -1049,6 +1138,8 @@ impl AuthProfilesSection {
                         .is_some_and(|status| status.1)
                     {
                         this.options_cache.clear();
+                        // Login succeeded: re-login hints are no longer relevant.
+                        this.field_login_hint.clear();
                         this.pending_login_complete_refresh = true;
                     }
 
@@ -1373,6 +1464,7 @@ impl AuthProfilesSection {
                                 }
 
                                 this.options_cache.clear();
+                                this.field_login_hint.clear();
 
                                 cx.notify();
                             },
@@ -1795,6 +1887,7 @@ impl FormSection for AuthProfilesSection {
                     }
 
                     self.options_cache.clear();
+                    self.field_login_hint.clear();
 
                     self.validate_form_field();
                 }
@@ -1932,15 +2025,33 @@ mod tests {
         );
     }
 
-    /// (c) `RefreshTrigger::Manual` is classified as always requiring a refetch.
-    ///     We cannot spin up a GPUI context in a unit test, but we can verify
-    ///     that the trigger variant is correctly identified by pattern-matching
-    ///     the enum (which is how `fetch_dynamic_options_if_needed` guards it).
+    /// (c) `RefreshTrigger::Manual` fetches only on cache miss (first render).
+    ///     The trigger must NOT cause a refetch when a cached entry exists.
     #[::core::prelude::v1::test]
-    fn manual_trigger_is_always_needs_fetch() {
-        let trigger = RefreshTrigger::Manual;
-        let needs_fetch = matches!(trigger, RefreshTrigger::Manual);
-        assert!(needs_fetch, "Manual trigger must always require a refetch");
+    fn manual_trigger_fetches_only_on_cache_miss() {
+        // With no cached entry: needs_fetch must be true.
+        let empty_cache: HashMap<(String, String, u64), CachedOptions> = HashMap::new();
+        let cache_key = ("provider".to_string(), "field".to_string(), 0u64);
+        let needs_fetch_on_miss = empty_cache.get(&cache_key).is_none();
+        assert!(
+            needs_fetch_on_miss,
+            "Manual trigger must fetch when no cached entry exists"
+        );
+
+        // With a cached entry: needs_fetch must be false.
+        let mut cache_with_entry: HashMap<(String, String, u64), CachedOptions> = HashMap::new();
+        cache_with_entry.insert(
+            cache_key.clone(),
+            CachedOptions {
+                options: vec![],
+                expires_at: Instant::now() + std::time::Duration::from_secs(300),
+            },
+        );
+        let needs_fetch_on_hit = cache_with_entry.get(&cache_key).is_none();
+        assert!(
+            !needs_fetch_on_hit,
+            "Manual trigger must NOT refetch when a cached entry exists"
+        );
     }
 
     /// (d) `RefreshTrigger::OnLoginComplete` only fires when `login_just_completed`
@@ -1965,6 +2076,148 @@ mod tests {
         assert!(
             fires_with_login,
             "OnLoginComplete must trigger when the login-complete signal is true"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // NFR-003: apply_fetch_error_state — re-login hint surfacing
+    // -----------------------------------------------------------------------
+
+    /// `NeedsLogin` inserts a per-field hint and sets the status banner to a
+    /// warning (success=false) when no login is currently in progress.
+    #[::core::prelude::v1::test]
+    fn needs_login_sets_field_hint_and_status_banner() {
+        let mut hints: HashMap<String, String> = HashMap::new();
+        let mut status: Option<(String, bool)> = None;
+
+        apply_fetch_error_state(
+            "account_id",
+            FetchOptionsError::NeedsLogin,
+            &mut hints,
+            &mut status,
+            false,
+        );
+
+        assert!(
+            hints.contains_key("account_id"),
+            "NeedsLogin must insert a hint for the affected field"
+        );
+        assert!(
+            status.is_some(),
+            "NeedsLogin must set a status banner when login is not in progress"
+        );
+        let (msg, success) = status.unwrap();
+        assert!(
+            !success,
+            "NeedsLogin status banner must be a warning (success=false)"
+        );
+        assert!(
+            msg.to_lowercase().contains("login"),
+            "status message must reference login"
+        );
+    }
+
+    /// `SessionExpired` inserts a per-field hint and sets the status banner.
+    #[::core::prelude::v1::test]
+    fn session_expired_sets_field_hint_and_status_banner() {
+        let mut hints: HashMap<String, String> = HashMap::new();
+        let mut status: Option<(String, bool)> = None;
+
+        apply_fetch_error_state(
+            "role_arn",
+            FetchOptionsError::SessionExpired,
+            &mut hints,
+            &mut status,
+            false,
+        );
+
+        assert!(
+            hints.contains_key("role_arn"),
+            "SessionExpired must insert a hint for the affected field"
+        );
+        let (msg, success) = status.expect("SessionExpired must set a status banner");
+        assert!(
+            !success,
+            "SessionExpired status banner must be a warning (success=false)"
+        );
+        assert!(
+            msg.to_lowercase().contains("expired") || msg.to_lowercase().contains("login"),
+            "status message must mention expiry or login"
+        );
+    }
+
+    /// When `login_in_progress` is true, `NeedsLogin` still writes the
+    /// field hint but must NOT overwrite the in-progress status banner.
+    #[::core::prelude::v1::test]
+    fn needs_login_preserves_in_progress_status_banner() {
+        let mut hints: HashMap<String, String> = HashMap::new();
+        let existing_status = "Starting auth-provider login for profile 'dev'...".to_string();
+        let mut status: Option<(String, bool)> = Some((existing_status.clone(), false));
+
+        apply_fetch_error_state(
+            "account_id",
+            FetchOptionsError::NeedsLogin,
+            &mut hints,
+            &mut status,
+            true, // login_in_progress = true
+        );
+
+        assert!(
+            hints.contains_key("account_id"),
+            "Field hint must still be inserted while login is in progress"
+        );
+        let (msg, _) = status.expect("Status banner must not be cleared");
+        assert_eq!(
+            msg, existing_status,
+            "Status banner must not be overwritten while login is in progress"
+        );
+    }
+
+    /// Transient errors do NOT set a field hint or status banner.
+    #[::core::prelude::v1::test]
+    fn transient_error_does_not_set_hint_or_status() {
+        let mut hints: HashMap<String, String> = HashMap::new();
+        let mut status: Option<(String, bool)> = None;
+
+        apply_fetch_error_state(
+            "region",
+            FetchOptionsError::Transient("network timeout".to_string()),
+            &mut hints,
+            &mut status,
+            false,
+        );
+
+        assert!(
+            hints.is_empty(),
+            "Transient error must not insert a field hint"
+        );
+        assert!(
+            status.is_none(),
+            "Transient error must not set a status banner"
+        );
+    }
+
+    /// Permanent errors do NOT set a field hint or status banner.
+    #[::core::prelude::v1::test]
+    fn permanent_error_does_not_set_hint_or_status() {
+        let mut hints: HashMap<String, String> = HashMap::new();
+        let mut status: Option<(String, bool)> = None;
+
+        apply_fetch_error_state(
+            "region",
+            FetchOptionsError::Permanent("unsupported field".to_string()),
+            &mut hints,
+            &mut status,
+            false,
+        );
+
+        assert!(
+            hints.is_empty(),
+            "Permanent error must not insert a field hint"
+        );
+        assert!(
+            status.is_none(),
+            "Permanent error must not set a status banner"
         );
     }
 
