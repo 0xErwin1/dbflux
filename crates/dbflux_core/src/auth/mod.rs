@@ -4,11 +4,51 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::OnceLock;
 
+use serde::{Deserialize, Serialize};
+
 use crate::DbError;
 use crate::driver::form::DriverFormDef;
 use crate::values::CompositeValueResolver;
 
 pub use types::*;
+
+/// Request to fetch the available options for a `DynamicSelect` field.
+///
+/// Providers receive this from the UI layer when a field's options need to be
+/// populated or refreshed.
+#[derive(Debug, Clone)]
+pub struct FetchOptionsRequest {
+    /// ID of the `DynamicSelect` field whose options are being requested.
+    pub field_id: String,
+    /// Current values of fields listed in the target field's `depends_on`.
+    pub dependencies: HashMap<String, String>,
+    /// Serialized session data, if a session is active.
+    pub session: Option<serde_json::Value>,
+}
+
+/// Successful response to a `FetchOptions` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchOptionsResponse {
+    /// Options to populate the dropdown.
+    pub options: Vec<crate::SelectOption>,
+    /// How long (in seconds) the caller may cache these options.
+    ///
+    /// `None` means do not cache.
+    pub cache_hint_seconds: Option<u32>,
+}
+
+/// Error returned when a `FetchOptions` request fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchOptionsError {
+    /// The user has never logged in — no session exists.
+    NeedsLogin,
+    /// A session existed but is no longer valid.
+    SessionExpired,
+    /// Retry-eligible failure (network, 5xx, throttling, etc.).
+    Transient(String),
+    /// Non-retriable failure (misconfiguration, unknown field, etc.).
+    Permanent(String),
+}
 
 /// Type alias for auth provider form definitions.
 ///
@@ -116,6 +156,22 @@ pub trait DynAuthProvider: Send + Sync {
     /// (e.g., appending an AWS profile entry to `~/.aws/config`).
     /// The default is a no-op.
     fn after_profile_saved(&self, _profile: &AuthProfile) {}
+
+    /// Fetch the available options for a `DynamicSelect` field declared in this
+    /// provider's `form_def()`.
+    ///
+    /// Called by the UI when the user opens the auth profile editor and for each
+    /// `DynamicSelect` field whose cache is stale or invalidated. The default
+    /// returns `FetchOptionsError::Permanent("not supported")`.
+    async fn fetch_dynamic_options(
+        &self,
+        _profile: &AuthProfile,
+        _request: FetchOptionsRequest,
+    ) -> Result<FetchOptionsResponse, FetchOptionsError> {
+        Err(FetchOptionsError::Permanent(
+            "fetch_dynamic_options not implemented for this provider".to_string(),
+        ))
+    }
 }
 
 static EMPTY_AUTH_FORM: OnceLock<AuthFormDef> = OnceLock::new();
@@ -233,6 +289,14 @@ impl DynAuthProvider for SharedDynAuthProvider {
     fn after_profile_saved(&self, profile: &AuthProfile) {
         self.provider.after_profile_saved(profile);
     }
+
+    async fn fetch_dynamic_options(
+        &self,
+        profile: &AuthProfile,
+        request: FetchOptionsRequest,
+    ) -> Result<FetchOptionsResponse, FetchOptionsError> {
+        self.provider.fetch_dynamic_options(profile, request).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -288,6 +352,14 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
 
     fn after_profile_saved(&self, profile: &AuthProfile) {
         self.as_ref().after_profile_saved(profile);
+    }
+
+    async fn fetch_dynamic_options(
+        &self,
+        profile: &AuthProfile,
+        request: FetchOptionsRequest,
+    ) -> Result<FetchOptionsResponse, FetchOptionsError> {
+        self.as_ref().fetch_dynamic_options(profile, request).await
     }
 }
 

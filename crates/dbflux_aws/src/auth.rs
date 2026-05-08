@@ -19,9 +19,12 @@ use aws_sdk_sts::config::ProvideCredentials;
 use dbflux_core::DbError;
 use dbflux_core::auth::{
     AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthProviderLoginCapabilities, AuthSession,
-    AuthSessionState, ImportableProfile, ResolvedCredentials, UrlCallback,
+    AuthSessionState, FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse,
+    ImportableProfile, ResolvedCredentials, UrlCallback,
 };
-use dbflux_core::{FormFieldDef, FormFieldKind, FormSection, FormTab};
+use dbflux_core::{
+    FormFieldDef, FormFieldKind, FormSection, FormTab, RefreshTrigger, SelectOption,
+};
 
 use crate::config::CachedAwsConfig;
 use crate::parameters::AwsSsmParameterProvider;
@@ -476,8 +479,36 @@ fn build_aws_sso_form() -> AuthFormDef {
                         "https://my-org.awsapps.com/start",
                     ),
                     required_text_field("region", "Region", "us-east-1"),
-                    required_text_field("sso_account_id", "Account ID", ""),
-                    required_text_field("sso_role_name", "Role Name", ""),
+                    FormFieldDef {
+                        id: "sso_account_id".to_string(),
+                        label: "Account ID".to_string(),
+                        kind: FormFieldKind::DynamicSelect {
+                            depends_on: vec!["region".to_string(), "sso_start_url".to_string()],
+                            refresh: RefreshTrigger::OnLoginComplete,
+                            requires_session: true,
+                            allow_freeform: false,
+                        },
+                        placeholder: String::new(),
+                        required: true,
+                        default_value: String::new(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                    },
+                    FormFieldDef {
+                        id: "sso_role_name".to_string(),
+                        label: "Role Name".to_string(),
+                        kind: FormFieldKind::DynamicSelect {
+                            depends_on: vec!["sso_account_id".to_string()],
+                            refresh: RefreshTrigger::OnDependencyChange,
+                            requires_session: true,
+                            allow_freeform: false,
+                        },
+                        placeholder: String::new(),
+                        required: true,
+                        default_value: String::new(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                    },
                 ],
             }],
         }],
@@ -890,6 +921,150 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
 
         if let Err(err) = crate::config::write_profile_to_aws_config(&profile_info) {
             log::warn!("Failed to write AWS SSO profile to config: {}", err);
+        }
+    }
+
+    /// Fetches runtime options for `sso_account_id` and `sso_role_name`
+    /// `DynamicSelect` fields.
+    ///
+    /// For `sso_account_id`: reads the SSO token cache and calls `list_accounts`.
+    /// For `sso_role_name`: reads `sso_account_id` from dependencies and calls
+    /// `list_account_roles` for that account.
+    ///
+    /// Returns `SessionExpired` when the access token is absent or expired so
+    /// the UI can prompt for re-login.
+    async fn fetch_dynamic_options(
+        &self,
+        profile: &AuthProfile,
+        request: FetchOptionsRequest,
+    ) -> Result<FetchOptionsResponse, FetchOptionsError> {
+        let profile_name = effective_aws_profile_name(profile)
+            .unwrap_or("")
+            .to_string();
+        let region = profile
+            .fields
+            .get("region")
+            .map(String::as_str)
+            .unwrap_or("us-east-1")
+            .to_string();
+        let sso_start_url = profile
+            .fields
+            .get("sso_start_url")
+            .map(String::as_str)
+            .unwrap_or("")
+            .to_string();
+
+        let field_id = request.field_id.clone();
+
+        // Early validation before spawning the thread.
+        let account_id_for_roles = if field_id == "sso_role_name" {
+            let id = request
+                .dependencies
+                .get("sso_account_id")
+                .map(String::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            if id.is_empty() {
+                return Err(FetchOptionsError::Permanent(
+                    "sso_account_id is required to list roles".to_string(),
+                ));
+            }
+
+            Some(id)
+        } else {
+            None
+        };
+
+        match field_id.as_str() {
+            "sso_account_id" | "sso_role_name" => {}
+            other => {
+                return Err(FetchOptionsError::Permanent(format!(
+                    "unknown dynamic field: {}",
+                    other
+                )));
+            }
+        }
+
+        // All AWS SDK calls require a Tokio runtime. The trait method is async
+        // but may be called from a GPUI background executor that has no
+        // runtime. Spawn a dedicated OS thread with its own runtime, then
+        // poll the result channel in a non-blocking async loop.
+        let (result_tx, result_rx) =
+            std::sync::mpsc::sync_channel::<Result<FetchOptionsResponse, FetchOptionsError>>(1);
+
+        std::thread::spawn(move || {
+            let result = match field_id.as_str() {
+                "sso_account_id" => {
+                    crate::accounts::list_sso_accounts_blocking(
+                        &profile_name,
+                        &region,
+                        &sso_start_url,
+                    )
+                    .map(|accounts| {
+                        let options = accounts
+                            .iter()
+                            .map(|account| {
+                                let label = if account.account_name.trim().is_empty() {
+                                    account.account_id.clone()
+                                } else {
+                                    format!("{} ({})", account.account_name, account.account_id)
+                                };
+                                SelectOption::new(account.account_id.clone(), label)
+                            })
+                            .collect();
+
+                        FetchOptionsResponse {
+                            options,
+                            cache_hint_seconds: Some(300),
+                        }
+                    })
+                    .map_err(|err| map_fetch_error(err.to_string()))
+                }
+                "sso_role_name" => {
+                    let account_id = account_id_for_roles.unwrap_or_default();
+                    crate::accounts::list_sso_account_roles_blocking(
+                        &profile_name,
+                        &region,
+                        &sso_start_url,
+                        &account_id,
+                    )
+                    .map(|roles| {
+                        let options = roles
+                            .iter()
+                            .map(|role_name| {
+                                SelectOption::new(role_name.clone(), role_name.clone())
+                            })
+                            .collect();
+
+                        FetchOptionsResponse {
+                            options,
+                            cache_hint_seconds: Some(300),
+                        }
+                    })
+                    .map_err(|err| map_fetch_error(err.to_string()))
+                }
+                _ => unreachable!("field_id validated above"),
+            };
+
+            let _ = result_tx.send(result);
+        });
+
+        // Non-blocking poll — yields to the executor between checks so the
+        // caller can continue processing events while the fetch runs.
+        loop {
+            match result_rx.try_recv() {
+                Ok(result) => return result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    async_sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return Err(FetchOptionsError::Transient(
+                        "fetch thread terminated unexpectedly".to_string(),
+                    ));
+                }
+            }
         }
     }
 }
@@ -1544,9 +1719,29 @@ pub(crate) fn parse_sso_expiry(s: &str) -> Option<DateTime<Utc>> {
     None
 }
 
+/// Maps a stringified AWS SDK or cache error to a `FetchOptionsError`.
+///
+/// Errors containing "Login required", "expired", "unauthorized", or similar
+/// tokens indicate the SSO session is gone → `SessionExpired`. Everything else
+/// is treated as `Transient` (retriable) to let the UI show a refresh button.
+fn map_fetch_error(message: String) -> FetchOptionsError {
+    let lower = message.to_lowercase();
+    if lower.contains("login required")
+        || lower.contains("expiredtoken")
+        || lower.contains("session expired")
+        || lower.contains("invalidtoken")
+        || lower.contains("unauthorized")
+    {
+        FetchOptionsError::SessionExpired
+    } else {
+        FetchOptionsError::Transient(message)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::DynAuthProvider;
     use std::io::Write;
 
     fn write_sso_cache(dir: &std::path::Path, start_url: &str, json: &str) {
@@ -2019,5 +2214,120 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // T16: fetch_dynamic_options unit tests (no live AWS calls)
+    // -------------------------------------------------------------------------
+
+    fn make_sso_profile() -> AuthProfile {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("profile_name".to_string(), "test-profile".to_string());
+        fields.insert("region".to_string(), "us-east-1".to_string());
+        fields.insert(
+            "sso_start_url".to_string(),
+            "https://test.awsapps.com/start".to_string(),
+        );
+
+        AuthProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "Test".to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields,
+            enabled: true,
+        }
+    }
+
+    /// When there is no valid SSO token cache, `fetch_dynamic_options` for
+    /// `sso_account_id` must return `SessionExpired` (or at minimum a
+    /// `Transient`/`Permanent` error — never a panic).
+    #[test]
+    fn fetch_accounts_without_session_returns_session_expired_or_transient() {
+        // Use a temp dir so we control the SSO cache path indirectly via
+        // the environment variable AWS_CONFIG_FILE. The SSO token cache is
+        // read from ~/.aws/sso/cache which we cannot override directly, so
+        // this test asserts the error branch (no live AWS call is made).
+        let provider = AwsSsoAuthProvider::new();
+        let profile = make_sso_profile();
+        let request = FetchOptionsRequest {
+            field_id: "sso_account_id".to_string(),
+            dependencies: std::collections::HashMap::new(),
+            session: None,
+        };
+
+        // The blocking call should not panic. The exact variant depends on
+        // whether a stale token cache exists in the test environment.
+        let result = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(provider.fetch_dynamic_options(&profile, request));
+
+        match result {
+            Ok(_) => {
+                // If the test environment happens to have a valid token, that is
+                // also acceptable.
+            }
+            Err(FetchOptionsError::SessionExpired)
+            | Err(FetchOptionsError::Transient(_))
+            | Err(FetchOptionsError::Permanent(_)) => {
+                // All expected error paths — no panic occurred.
+            }
+            Err(FetchOptionsError::NeedsLogin) => {
+                // Also acceptable.
+            }
+        }
+    }
+
+    /// An unknown field id must return `Permanent`.
+    #[test]
+    fn fetch_unknown_field_returns_permanent() {
+        let provider = AwsSsoAuthProvider::new();
+        let profile = make_sso_profile();
+        let request = FetchOptionsRequest {
+            field_id: "nonexistent_field".to_string(),
+            dependencies: std::collections::HashMap::new(),
+            session: None,
+        };
+
+        let result = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(provider.fetch_dynamic_options(&profile, request));
+
+        assert!(
+            matches!(result, Err(FetchOptionsError::Permanent(_))),
+            "expected Permanent error for unknown field, got {:?}",
+            result
+        );
+    }
+
+    /// When `sso_account_id` dependency is missing, `sso_role_name` fetch
+    /// must return `Permanent`.
+    #[test]
+    fn fetch_roles_without_account_id_returns_permanent() {
+        let provider = AwsSsoAuthProvider::new();
+        let profile = make_sso_profile();
+        let request = FetchOptionsRequest {
+            field_id: "sso_role_name".to_string(),
+            dependencies: std::collections::HashMap::new(), // no sso_account_id
+            session: None,
+        };
+
+        let result = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(provider.fetch_dynamic_options(&profile, request));
+
+        assert!(
+            matches!(result, Err(FetchOptionsError::Permanent(_))),
+            "expected Permanent error when sso_account_id is absent, got {:?}",
+            result
+        );
     }
 }

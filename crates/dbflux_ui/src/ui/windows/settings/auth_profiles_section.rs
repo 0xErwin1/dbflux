@@ -10,7 +10,10 @@ use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
-use dbflux_core::{AccessKind, AuthProfile, FormFieldKind, RefreshTrigger, ImportableProfile};
+use dbflux_core::{
+    AccessKind, AuthProfile, FetchOptionsError, FetchOptionsRequest, FormFieldKind,
+    ImportableProfile, RefreshTrigger,
+};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
@@ -21,9 +24,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
-
-#[cfg(feature = "aws")]
-use dbflux_aws::{AwsSsoAccount, list_sso_account_roles_blocking, list_sso_accounts_blocking};
 
 /// Cached dropdown options for a `DynamicSelect` field.
 ///
@@ -52,7 +52,6 @@ pub(super) struct AuthProfilesSection {
     provider_login_status: Option<(String, bool)>,
 
     /// Generic dynamic-select dropdowns keyed by field id.
-    /// Used for non-AWS providers that declare `FormFieldKind::DynamicSelect` fields.
     dynamic_dropdowns: HashMap<String, Entity<Dropdown>>,
     /// Cached options indexed by `(provider_id, field_id, dep_hash)`.
     options_cache: HashMap<(String, String, u64), CachedOptions>,
@@ -60,31 +59,9 @@ pub(super) struct AuthProfilesSection {
     ///
     /// Fields: `(provider_name, profile_name, url)`.
     pending_sso_url: Option<(String, String, Option<String>)>,
-
-    #[cfg(feature = "aws")]
-    sso_account_dropdown: Entity<Dropdown>,
-    #[cfg(feature = "aws")]
-    sso_role_dropdown: Entity<Dropdown>,
-    #[cfg(feature = "aws")]
-    sso_accounts: Vec<AwsSsoAccount>,
-    #[cfg(feature = "aws")]
-    sso_roles: Vec<String>,
-    #[cfg(feature = "aws")]
-    sso_accounts_loading: bool,
-    #[cfg(feature = "aws")]
-    sso_roles_loading: bool,
-    #[cfg(feature = "aws")]
-    sso_accounts_error: Option<String>,
-    #[cfg(feature = "aws")]
-    sso_roles_error: Option<String>,
-    #[cfg(feature = "aws")]
-    sso_login_loading: bool,
-    #[cfg(feature = "aws")]
-    sso_login_status: Option<(String, bool)>,
-    #[cfg(feature = "aws")]
-    sso_accounts_context_key: Option<String>,
-    #[cfg(feature = "aws")]
-    sso_roles_context_key: Option<String>,
+    /// When true, the next render cycle will re-fetch options for all
+    /// `OnLoginComplete` DynamicSelect fields.
+    pending_login_complete_refresh: bool,
 
     auth_focus: AuthFocus,
     auth_form_field: AuthFormField,
@@ -96,6 +73,9 @@ pub(super) struct AuthProfilesSection {
 
     _subscriptions: Vec<Subscription>,
     _blur_subscriptions: Vec<Subscription>,
+    /// Subscriptions for DynamicSelect dropdown selection events.
+    /// Rebuilt whenever `rebuild_form_inputs` is called.
+    _dropdown_subscriptions: Vec<Subscription>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -110,10 +90,6 @@ pub(super) enum AuthFormField {
     Provider(usize),
     DynamicField(usize),
     ProviderLogin,
-    #[cfg(feature = "aws")]
-    SsoAccount,
-    #[cfg(feature = "aws")]
-    SsoRole,
     Enabled,
     DeleteButton,
     SaveButton,
@@ -139,7 +115,6 @@ fn build_form_rows(
     provider_count: usize,
     dynamic_field_count: usize,
     selected_provider_supports_login: bool,
-    _include_aws_sso_fields: bool,
     is_editing: bool,
 ) -> Vec<Vec<AuthFormField>> {
     let mut rows = vec![vec![AuthFormField::Name]];
@@ -156,12 +131,6 @@ fn build_form_rows(
 
     if selected_provider_supports_login {
         rows.push(vec![AuthFormField::ProviderLogin]);
-    }
-
-    #[cfg(feature = "aws")]
-    if _include_aws_sso_fields {
-        rows.push(vec![AuthFormField::SsoAccount]);
-        rows.push(vec![AuthFormField::SsoRole]);
     }
 
     rows.push(vec![AuthFormField::Enabled]);
@@ -224,60 +193,11 @@ impl AuthProfilesSection {
 
         let input_name = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
 
-        #[cfg(feature = "aws")]
-        let sso_account_dropdown =
-            cx.new(|_cx| Dropdown::new("auth-sso-account-dropdown").placeholder("Select account"));
-        #[cfg(feature = "aws")]
-        let sso_role_dropdown =
-            cx.new(|_cx| Dropdown::new("auth-sso-role-dropdown").placeholder("Select role"));
-
         let app_state_subscription =
             cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
                 this.pending_sync_from_app_state = true;
                 cx.notify();
             });
-
-        #[cfg(feature = "aws")]
-        let sso_account_dropdown_sub = cx.subscribe_in(
-            &sso_account_dropdown,
-            window,
-            |this, _, event: &DropdownSelectionChanged, window, cx| {
-                this.set_form_value_in_window(
-                    "sso_account_id",
-                    event.item.value.to_string(),
-                    window,
-                    cx,
-                );
-                this.set_form_value_in_window("sso_role_name", "", window, cx);
-
-                this.sso_roles.clear();
-                this.sso_roles_error = None;
-                this.sso_roles_loading = false;
-                this.sso_roles_context_key = None;
-
-                this.sso_role_dropdown.update(cx, |dropdown, cx| {
-                    dropdown.set_items(Vec::new(), cx);
-                    dropdown.set_selected_index(None, cx);
-                });
-
-                cx.notify();
-            },
-        );
-
-        #[cfg(feature = "aws")]
-        let sso_role_dropdown_sub = cx.subscribe_in(
-            &sso_role_dropdown,
-            window,
-            |this, _, event: &DropdownSelectionChanged, window, cx| {
-                this.set_form_value_in_window(
-                    "sso_role_name",
-                    event.item.value.to_string(),
-                    window,
-                    cx,
-                );
-                cx.notify();
-            },
-        );
 
         let mut section = Self {
             app_state,
@@ -297,32 +217,8 @@ impl AuthProfilesSection {
 
             dynamic_dropdowns: HashMap::new(),
             options_cache: HashMap::new(),
+            pending_login_complete_refresh: false,
             pending_sso_url: None,
-
-            #[cfg(feature = "aws")]
-            sso_account_dropdown,
-            #[cfg(feature = "aws")]
-            sso_role_dropdown,
-            #[cfg(feature = "aws")]
-            sso_accounts: Vec::new(),
-            #[cfg(feature = "aws")]
-            sso_roles: Vec::new(),
-            #[cfg(feature = "aws")]
-            sso_accounts_loading: false,
-            #[cfg(feature = "aws")]
-            sso_roles_loading: false,
-            #[cfg(feature = "aws")]
-            sso_accounts_error: None,
-            #[cfg(feature = "aws")]
-            sso_roles_error: None,
-            #[cfg(feature = "aws")]
-            sso_login_loading: false,
-            #[cfg(feature = "aws")]
-            sso_login_status: None,
-            #[cfg(feature = "aws")]
-            sso_accounts_context_key: None,
-            #[cfg(feature = "aws")]
-            sso_roles_context_key: None,
 
             auth_focus: AuthFocus::ProfileList,
             auth_form_field: AuthFormField::Name,
@@ -332,14 +228,9 @@ impl AuthProfilesSection {
             pending_profile_scroll_idx: None,
             switching_input: false,
 
-            _subscriptions: vec![
-                app_state_subscription,
-                #[cfg(feature = "aws")]
-                sso_account_dropdown_sub,
-                #[cfg(feature = "aws")]
-                sso_role_dropdown_sub,
-            ],
+            _subscriptions: vec![app_state_subscription],
             _blur_subscriptions: Vec::new(),
+            _dropdown_subscriptions: Vec::new(),
         };
 
         section.rebuild_form_inputs(window, cx);
@@ -430,22 +321,67 @@ impl AuthProfilesSection {
             .map(|(field_id, _, _)| field_id.clone())
             .collect();
 
+        let mut dropdown_subs: Vec<Subscription> = Vec::new();
+
         for (field_id, placeholder, kind) in field_defs {
-            if self.form_inputs.contains_key(&field_id) {
-                continue;
-            }
+            match kind {
+                FormFieldKind::DynamicSelect { .. } => {
+                    // For DynamicSelect fields: keep an InputState as the value
+                    // store so save_profile can read it uniformly. The InputState
+                    // is hidden from the UI; the Dropdown entity is rendered instead.
+                    if !self.form_inputs.contains_key(&field_id) {
+                        let input = cx.new(|cx| InputState::new(window, cx));
+                        self.form_inputs.insert(field_id.clone(), input);
+                    }
 
-            let input = cx.new(|cx| {
-                let state = InputState::new(window, cx).placeholder(placeholder);
-                match kind {
-                    FormFieldKind::Password => state.masked(true),
-                    _ => state,
+                    // Create or reuse the dropdown entity.
+                    if !self.dynamic_dropdowns.contains_key(&field_id) {
+                        let dropdown_id = format!("auth-dynamic-{}", field_id);
+                        let placeholder_str = if placeholder.is_empty() {
+                            "Select...".to_string()
+                        } else {
+                            placeholder
+                        };
+                        let dropdown = cx.new(|_cx| {
+                            Dropdown::new(SharedString::from(dropdown_id))
+                                .placeholder(placeholder_str)
+                        });
+                        self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
+                    }
+
+                    // Subscribe to dropdown selection to write back into form_inputs.
+                    let dropdown = self.dynamic_dropdowns[&field_id].clone();
+                    let input = self.form_inputs[&field_id].clone();
+                    let sub = cx.subscribe_in(
+                        &dropdown,
+                        window,
+                        move |_this, _, event: &DropdownSelectionChanged, window, cx| {
+                            input.update(cx, |state, cx| {
+                                state.set_value(event.item.value.to_string(), window, cx);
+                            });
+                        },
+                    );
+                    dropdown_subs.push(sub);
                 }
-            });
+                _ => {
+                    if self.form_inputs.contains_key(&field_id) {
+                        continue;
+                    }
 
-            self.form_inputs.insert(field_id, input);
+                    let input = cx.new(|cx| {
+                        let state = InputState::new(window, cx).placeholder(placeholder);
+                        match kind {
+                            FormFieldKind::Password => state.masked(true),
+                            _ => state,
+                        }
+                    });
+
+                    self.form_inputs.insert(field_id, input);
+                }
+            }
         }
 
+        self._dropdown_subscriptions = dropdown_subs;
         self.rebuild_blur_subscriptions(cx);
     }
 
@@ -550,17 +486,42 @@ impl AuthProfilesSection {
         let field_id = field.id.clone();
         let this = cx.entity().clone();
 
-        // Phase C will replace this stub with an actual RPC call through the
-        // `fetch_dynamic_options` trait method added to `DynAuthProvider`.
-        // For now, the background task always returns an error so the cache
-        // remains empty and no dropdown is populated until Phase C lands.
-        let provider_id_for_log = provider.provider_id().to_string();
-        let field_id_for_bg = field_id.clone();
+        // Build a profile snapshot from the current form values so the provider
+        // can access `profile_name`, `region`, `sso_start_url`, etc. The profile
+        // name is set to a placeholder when the user has not filled it in yet —
+        // the provider only reads `fields`, not `name`, for option fetching.
+        let provider_id_snap = provider.provider_id().to_string();
+        let profile_id_snap = self.editing_profile_id.unwrap_or_else(Uuid::new_v4);
+        let fields_snap: HashMap<String, String> = self
+            .form_inputs
+            .iter()
+            .map(|(key, input)| (key.clone(), input.read(cx).value().to_string()))
+            .collect();
+
+        let profile_snapshot = AuthProfile {
+            id: profile_id_snap,
+            name: self.input_name.read(cx).value().to_string(),
+            provider_id: provider_id_snap,
+            fields: fields_snap,
+            enabled: self.profile_enabled,
+        };
+
+        let request = FetchOptionsRequest {
+            field_id: field_id.clone(),
+            dependencies: deps,
+            session,
+        };
+
         let fetch_task = cx.background_executor().spawn(async move {
-            let _ = (provider_id_for_log, deps, session, field_id_for_bg);
-            Err::<dbflux_ipc::FetchFieldOptionsResponse, String>(
-                "fetch_dynamic_options not yet wired; stub — Phase C".to_string(),
-            )
+            provider
+                .fetch_dynamic_options(&profile_snapshot, request)
+                .await
+                .map_err(|err| match err {
+                    FetchOptionsError::NeedsLogin => "needs login".to_string(),
+                    FetchOptionsError::SessionExpired => "session expired".to_string(),
+                    FetchOptionsError::Transient(msg) => format!("transient: {}", msg),
+                    FetchOptionsError::Permanent(msg) => format!("permanent: {}", msg),
+                })
         });
 
         cx.spawn(async move |_this, cx| {
@@ -578,10 +539,7 @@ impl AuthProfilesSection {
                                     ttl_secs
                                 });
 
-                            let options = response.options.iter().map(|opt| dbflux_core::SelectOption {
-                                value: opt.value.clone(),
-                                label: opt.label.clone(),
-                            }).collect();
+                            let options = response.options;
 
                             this.options_cache.insert(
                                 (provider_id.clone(), field_id.clone(), dep_hash),
@@ -628,14 +586,13 @@ impl AuthProfilesSection {
     }
 
     // ---------------------------------------------------------------------------
-    // T12: Render a generic DynamicSelect dropdown row
+    // Generic DynamicSelect dropdown row
     // ---------------------------------------------------------------------------
 
-    /// Render or create a dropdown for a `DynamicSelect` field.
+    /// Render a `DynamicSelect` field as a dropdown row.
     ///
-    /// The dropdown entity is lazily created and stored in `dynamic_dropdowns`.
-    /// This method is only called for non-AWS providers; the AWS-specific
-    /// `sso_account_dropdown` / `sso_role_dropdown` path remains unchanged.
+    /// The dropdown entity was created in `rebuild_form_inputs`. This method
+    /// syncs the current cached options into the dropdown and renders it.
     fn render_dynamic_dropdown_row(
         &mut self,
         field: &dbflux_core::FormFieldDef,
@@ -644,7 +601,8 @@ impl AuthProfilesSection {
         let field_id = field.id.clone();
         let label = field.label.clone();
 
-        // Lazily create the dropdown entity if it does not exist yet.
+        // Build the dropdown if it was not yet created (e.g. if rebuild_form_inputs
+        // was not called before the first render — defensive path only).
         if !self.dynamic_dropdowns.contains_key(&field_id) {
             let placeholder = if field.placeholder.is_empty() {
                 "Select...".to_string()
@@ -652,14 +610,15 @@ impl AuthProfilesSection {
                 field.placeholder.clone()
             };
             let dropdown_id = format!("auth-dynamic-{}", field_id);
-            let dropdown =
-                cx.new(|_cx| Dropdown::new(SharedString::from(dropdown_id)).placeholder(placeholder));
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new(SharedString::from(dropdown_id)).placeholder(placeholder)
+            });
             self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
         }
 
         let dropdown = self.dynamic_dropdowns[&field_id].clone();
 
-        // Populate from cache if options are available.
+        // Sync cached options into the dropdown.
         if let Some(provider_id) = self.selected_provider_id.clone() {
             let deps: HashMap<String, String> = match &field.kind {
                 FormFieldKind::DynamicSelect { depends_on, .. } => depends_on
@@ -677,13 +636,25 @@ impl AuthProfilesSection {
             let cache_key = (provider_id, field_id.clone(), dep_hash);
 
             if let Some(cached) = self.options_cache.get(&cache_key) {
-                let items = cached
+                let current_value = self
+                    .form_inputs
+                    .get(&field_id)
+                    .map(|input| input.read(cx).value().to_string())
+                    .unwrap_or_default();
+
+                let items: Vec<DropdownItem> = cached
                     .options
                     .iter()
                     .map(|opt| DropdownItem::with_value(opt.label.clone(), opt.value.clone()))
-                    .collect::<Vec<_>>();
+                    .collect();
+
+                let selected_index = items
+                    .iter()
+                    .position(|item| item.value == current_value);
+
                 dropdown.update(cx, |d, cx| {
                     d.set_items(items, cx);
+                    d.set_selected_index(selected_index, cx);
                 });
             }
         }
@@ -694,29 +665,6 @@ impl AuthProfilesSection {
             .gap_1()
             .child(dbflux_components::primitives::Label::new(label))
             .child(dropdown)
-    }
-
-    #[cfg(feature = "aws")]
-    fn form_value(&self, field_id: &str, cx: &App) -> String {
-        self.form_inputs
-            .get(field_id)
-            .map(|input| input.read(cx).value().to_string())
-            .unwrap_or_default()
-    }
-
-    #[cfg(feature = "aws")]
-    fn set_form_value_in_window(
-        &mut self,
-        field_id: &str,
-        value: impl Into<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(input) = self.form_inputs.get(field_id) {
-            input.update(cx, |state, cx| {
-                state.set_value(value.into(), window, cx);
-            });
-        }
     }
 
     fn clear_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -742,8 +690,9 @@ impl AuthProfilesSection {
             });
         }
 
-        #[cfg(feature = "aws")]
-        self.reset_sso_listing_state(cx);
+        // Clear the dynamic-select options cache so stale options are not shown
+        // for a new/reset profile.
+        self.options_cache.clear();
     }
 
     fn sync_from_app_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -939,15 +888,9 @@ impl AuthProfilesSection {
             });
         }
 
-        #[cfg(feature = "aws")]
-        {
-            self.sso_accounts_context_key = None;
-            self.sso_roles_context_key = None;
-            self.sso_accounts_error = None;
-            self.sso_roles_error = None;
-            self.sso_login_loading = false;
-            self.sso_login_status = None;
-        }
+        // Clear options cache so DynamicSelect dropdowns are re-fetched for
+        // the newly loaded profile's field values.
+        self.options_cache.clear();
 
         self.provider_login_loading = false;
         self.provider_login_status = None;
@@ -1097,16 +1040,15 @@ impl AuthProfilesSection {
                             Some((provider_name_for_url, profile_name_for_url, url));
                     }
 
-                    #[cfg(feature = "aws")]
-                    if this.is_aws_sso_selected()
-                        && this
-                            .provider_login_status
-                            .as_ref()
-                            .is_some_and(|status| status.1)
+                    // When login completed successfully, schedule a re-fetch of
+                    // all DynamicSelect fields with OnLoginComplete trigger.
+                    if this
+                        .provider_login_status
+                        .as_ref()
+                        .is_some_and(|status| status.1)
                     {
-                        this.sso_accounts_context_key = None;
-                        this.sso_roles_context_key = None;
-                        this.ensure_sso_listing(cx);
+                        this.options_cache.clear();
+                        this.pending_login_complete_refresh = true;
                     }
 
                     cx.notify();
@@ -1388,16 +1330,6 @@ impl AuthProfilesSection {
             )
     }
 
-    #[cfg(feature = "aws")]
-    fn render_dropdown_row(&self, label: &str, dropdown: &Entity<Dropdown>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(Label::new(label.to_string()))
-            .child(dropdown.clone())
-    }
-
     fn render_provider_selector(
         &mut self,
         _window: &mut Window,
@@ -1439,8 +1371,7 @@ impl AuthProfilesSection {
                                     });
                                 }
 
-                                #[cfg(feature = "aws")]
-                                this.reset_sso_listing_state(cx);
+                                this.options_cache.clear();
 
                                 cx.notify();
                             },
@@ -1543,289 +1474,6 @@ impl AuthProfilesSection {
             )
     }
 
-    #[cfg(feature = "aws")]
-    fn is_aws_sso_selected(&self) -> bool {
-        self.selected_provider_id.as_deref() == Some("aws-sso")
-    }
-
-    #[cfg(feature = "aws")]
-    fn sso_listing_context_from_form(
-        &self,
-        cx: &Context<Self>,
-    ) -> Option<(String, String, String)> {
-        let profile_name = self.form_value("profile_name", cx).trim().to_string();
-        let region = self.form_value("region", cx).trim().to_string();
-        let start_url = self.form_value("sso_start_url", cx).trim().to_string();
-
-        if profile_name.is_empty() || region.is_empty() || start_url.is_empty() {
-            return None;
-        }
-
-        Some((profile_name, region, start_url))
-    }
-
-    #[cfg(feature = "aws")]
-    fn reset_sso_listing_state(&mut self, cx: &mut Context<Self>) {
-        self.sso_accounts.clear();
-        self.sso_roles.clear();
-        self.sso_accounts_loading = false;
-        self.sso_roles_loading = false;
-        self.sso_accounts_error = None;
-        self.sso_roles_error = None;
-        self.sso_login_loading = false;
-        self.sso_login_status = None;
-        self.sso_accounts_context_key = None;
-        self.sso_roles_context_key = None;
-
-        self.sso_account_dropdown.update(cx, |dropdown, cx| {
-            dropdown.set_items(Vec::new(), cx);
-            dropdown.set_selected_index(None, cx);
-        });
-        self.sso_role_dropdown.update(cx, |dropdown, cx| {
-            dropdown.set_items(Vec::new(), cx);
-            dropdown.set_selected_index(None, cx);
-        });
-    }
-
-    #[cfg(feature = "aws")]
-    fn sync_account_dropdown_selection(&self, cx: &mut Context<Self>) {
-        let selected = self.form_value("sso_account_id", cx);
-        let selected_index = self
-            .sso_accounts
-            .iter()
-            .position(|account| account.account_id == selected);
-
-        self.sso_account_dropdown.update(cx, |dropdown, cx| {
-            dropdown.set_selected_index(selected_index, cx);
-        });
-    }
-
-    #[cfg(feature = "aws")]
-    fn sync_role_dropdown_selection(&self, cx: &mut Context<Self>) {
-        let selected = self.form_value("sso_role_name", cx);
-        let selected_index = self
-            .sso_roles
-            .iter()
-            .position(|role_name| role_name == &selected);
-
-        self.sso_role_dropdown.update(cx, |dropdown, cx| {
-            dropdown.set_selected_index(selected_index, cx);
-        });
-    }
-
-    #[cfg(feature = "aws")]
-    fn fetch_sso_accounts(
-        &mut self,
-        profile_name: String,
-        region: String,
-        start_url: String,
-        context_key: String,
-        cx: &mut Context<Self>,
-    ) {
-        let this = cx.entity().clone();
-        let profile_name_for_error = profile_name.clone();
-
-        let task = cx
-            .background_executor()
-            .spawn(async move { list_sso_accounts_blocking(&profile_name, &region, &start_url) });
-
-        cx.spawn(async move |_this, cx| {
-            let result = task.await;
-
-            if let Err(err) = cx.update(|cx| {
-                this.update(cx, |this, cx| {
-                    if this.sso_accounts_context_key.as_deref() != Some(context_key.as_str()) {
-                        return;
-                    }
-
-                    this.sso_accounts_loading = false;
-
-                    match result {
-                        Ok(accounts) => {
-                            this.sso_accounts = accounts;
-                            this.sso_accounts_error = None;
-
-                            let items = this
-                                .sso_accounts
-                                .iter()
-                                .map(|account| {
-                                    let label = if account.account_name.trim().is_empty() {
-                                        account.account_id.clone()
-                                    } else {
-                                        format!("{} ({})", account.account_name, account.account_id)
-                                    };
-
-                                    DropdownItem::with_value(label, account.account_id.clone())
-                                })
-                                .collect::<Vec<_>>();
-
-                            this.sso_account_dropdown.update(cx, |dropdown, cx| {
-                                dropdown.set_items(items, cx);
-                            });
-                            this.sync_account_dropdown_selection(cx);
-                        }
-                        Err(error) => {
-                            this.sso_accounts.clear();
-                            this.sso_accounts_error =
-                                Some(format!("profile '{}': {}", profile_name_for_error, error));
-
-                            this.sso_account_dropdown.update(cx, |dropdown, cx| {
-                                dropdown.set_items(Vec::new(), cx);
-                                dropdown.set_selected_index(None, cx);
-                            });
-                        }
-                    }
-
-                    cx.notify();
-                });
-            }) {
-                log::warn!("Failed to apply AWS SSO accounts listing result: {:?}", err);
-            }
-        })
-        .detach();
-    }
-
-    #[cfg(feature = "aws")]
-    fn fetch_sso_roles(
-        &mut self,
-        profile_name: String,
-        region: String,
-        start_url: String,
-        account_id: String,
-        context_key: String,
-        cx: &mut Context<Self>,
-    ) {
-        let this = cx.entity().clone();
-        let profile_name_for_error = profile_name.clone();
-
-        let task = cx.background_executor().spawn(async move {
-            list_sso_account_roles_blocking(&profile_name, &region, &start_url, &account_id)
-        });
-
-        cx.spawn(async move |_this, cx| {
-            let result = task.await;
-
-            if let Err(err) = cx.update(|cx| {
-                this.update(cx, |this, cx| {
-                    if this.sso_roles_context_key.as_deref() != Some(context_key.as_str()) {
-                        return;
-                    }
-
-                    this.sso_roles_loading = false;
-
-                    match result {
-                        Ok(roles) => {
-                            this.sso_roles = roles;
-                            this.sso_roles_error = None;
-
-                            let items = this
-                                .sso_roles
-                                .iter()
-                                .map(|role_name| {
-                                    DropdownItem::with_value(role_name.clone(), role_name.clone())
-                                })
-                                .collect::<Vec<_>>();
-
-                            this.sso_role_dropdown.update(cx, |dropdown, cx| {
-                                dropdown.set_items(items, cx);
-                            });
-                            this.sync_role_dropdown_selection(cx);
-                        }
-                        Err(error) => {
-                            this.sso_roles.clear();
-                            this.sso_roles_error =
-                                Some(format!("profile '{}': {}", profile_name_for_error, error));
-
-                            this.sso_role_dropdown.update(cx, |dropdown, cx| {
-                                dropdown.set_items(Vec::new(), cx);
-                                dropdown.set_selected_index(None, cx);
-                            });
-                        }
-                    }
-
-                    cx.notify();
-                });
-            }) {
-                log::warn!("Failed to apply AWS SSO roles listing result: {:?}", err);
-            }
-        })
-        .detach();
-    }
-
-    #[cfg(feature = "aws")]
-    fn ensure_sso_listing(&mut self, cx: &mut Context<Self>) {
-        let Some((profile_name, region, start_url)) = self.sso_listing_context_from_form(cx) else {
-            self.reset_sso_listing_state(cx);
-            return;
-        };
-
-        let accounts_context_key = format!("{}|{}|{}", profile_name, region, start_url);
-
-        if self.sso_accounts_context_key.as_deref() != Some(accounts_context_key.as_str()) {
-            self.sso_accounts_context_key = Some(accounts_context_key.clone());
-            self.sso_accounts_loading = true;
-            self.sso_accounts_error = None;
-            self.sso_accounts.clear();
-            self.sso_roles.clear();
-            self.sso_roles_loading = false;
-            self.sso_roles_error = None;
-            self.sso_roles_context_key = None;
-
-            self.sso_account_dropdown.update(cx, |dropdown, cx| {
-                dropdown.set_items(Vec::new(), cx);
-                dropdown.set_selected_index(None, cx);
-            });
-
-            self.sso_role_dropdown.update(cx, |dropdown, cx| {
-                dropdown.set_items(Vec::new(), cx);
-                dropdown.set_selected_index(None, cx);
-            });
-
-            self.fetch_sso_accounts(
-                profile_name.clone(),
-                region.clone(),
-                start_url.clone(),
-                accounts_context_key.clone(),
-                cx,
-            );
-        }
-
-        let account_id = self.form_value("sso_account_id", cx).trim().to_string();
-        if account_id.is_empty() {
-            self.sso_roles.clear();
-            self.sso_roles_loading = false;
-            self.sso_roles_error = None;
-            self.sso_roles_context_key = None;
-            self.sso_role_dropdown.update(cx, |dropdown, cx| {
-                dropdown.set_items(Vec::new(), cx);
-                dropdown.set_selected_index(None, cx);
-            });
-            return;
-        }
-
-        let roles_context_key = format!("{}|{}", accounts_context_key, account_id);
-        if self.sso_roles_context_key.as_deref() != Some(roles_context_key.as_str()) {
-            self.sso_roles_context_key = Some(roles_context_key.clone());
-            self.sso_roles_loading = true;
-            self.sso_roles_error = None;
-            self.sso_roles.clear();
-
-            self.sso_role_dropdown.update(cx, |dropdown, cx| {
-                dropdown.set_items(Vec::new(), cx);
-                dropdown.set_selected_index(None, cx);
-            });
-
-            self.fetch_sso_roles(
-                profile_name,
-                region,
-                start_url,
-                account_id,
-                roles_context_key,
-                cx,
-            );
-        }
-    }
-
     fn render_editor_panel(
         &mut self,
         window: &mut Window,
@@ -1834,16 +1482,16 @@ impl AuthProfilesSection {
         let theme = cx.theme().clone();
         let is_editing = self.editing_profile_id.is_some();
 
-        #[cfg(feature = "aws")]
-        if self.is_aws_sso_selected() {
-            self.ensure_sso_listing(cx);
-            self.sync_account_dropdown_selection(cx);
-            self.sync_role_dropdown_selection(cx);
+        // Drive DynamicSelect fetches for the current provider's fields.
+        // `fetch_dynamic_options_if_needed` is a no-op for fields already
+        // cached and within their TTL.
+        let login_just_completed = self.pending_login_complete_refresh;
+        if login_just_completed {
+            self.pending_login_complete_refresh = false;
         }
 
-        // Collect field defs from the selected provider before the mutable borrow
-        // for rendering (can't hold an Arc while calling &mut self methods).
-        let provider_field_defs: Vec<dbflux_core::FormFieldDef> = self
+        let provider_id_for_fetch = self.selected_provider_id.clone().unwrap_or_default();
+        let field_defs_for_fetch: Vec<dbflux_core::FormFieldDef> = self
             .selected_provider(cx)
             .map(|provider| {
                 provider
@@ -1857,16 +1505,27 @@ impl AuthProfilesSection {
             })
             .unwrap_or_default();
 
+        for field in &field_defs_for_fetch {
+            if matches!(field.kind, FormFieldKind::DynamicSelect { .. }) {
+                self.fetch_dynamic_options_if_needed(
+                    provider_id_for_fetch.clone(),
+                    field,
+                    None, // session data — future: pass from AuthSession
+                    login_just_completed,
+                    cx,
+                );
+            }
+        }
+
+        // Collect field defs from the selected provider before the mutable borrow
+        // for rendering (can't hold an Arc while calling &mut self methods).
+        let provider_field_defs: Vec<dbflux_core::FormFieldDef> = field_defs_for_fetch;
+
         let dynamic_fields: Vec<AnyElement> = provider_field_defs
             .iter()
             .enumerate()
             .map(|(idx, field)| {
-                // AWS SSO provider: DynamicSelect fields are rendered via the
-                // hardcoded sso_account_dropdown / sso_role_dropdown path below.
-                // Generic providers: DynamicSelect → generic dropdown row.
-                let is_aws_sso = self.selected_provider_id.as_deref() == Some("aws-sso");
-
-                if matches!(field.kind, FormFieldKind::DynamicSelect { .. }) && !is_aws_sso {
+                if matches!(field.kind, FormFieldKind::DynamicSelect { .. }) {
                     self.render_dynamic_dropdown_row(field, cx).into_any_element()
                 } else if let Some(input) = self.form_inputs.get(&field.id) {
                     let form_field = AuthFormField::DynamicField(idx);
@@ -1952,43 +1611,6 @@ impl AuthProfilesSection {
                             })
                         })
                 })
-                .when(
-                    cfg!(feature = "aws")
-                        && self.selected_provider_id.as_deref() == Some("aws-sso"),
-                    |content| {
-                        #[cfg(feature = "aws")]
-                        {
-                            content
-                                .child(self.render_dropdown_row(
-                                    "SSO Account ID",
-                                    &self.sso_account_dropdown,
-                                ))
-                                .child(
-                                    self.render_dropdown_row(
-                                        "SSO Role Name",
-                                        &self.sso_role_dropdown,
-                                    ),
-                                )
-                                .when_some(self.sso_accounts_error.as_ref(), |content, error| {
-                                    content.child(
-                                        Text::caption(format!("Account listing failed: {}", error))
-                                            .warning(),
-                                    )
-                                })
-                                .when_some(self.sso_roles_error.as_ref(), |content, error| {
-                                    content.child(
-                                        Text::caption(format!("Role listing failed: {}", error))
-                                            .warning(),
-                                    )
-                                })
-                        }
-
-                        #[cfg(not(feature = "aws"))]
-                        {
-                            content
-                        }
-                    },
-                )
                 .child(
                     div()
                         .flex()
@@ -2121,7 +1743,6 @@ impl FormSection for AuthProfilesSection {
             self.provider_entries_cache.len(),
             self.provider_field_order.len(),
             self.selected_provider_supports_login,
-            self.selected_provider_id.as_deref() == Some("aws-sso"),
             self.editing_profile_id.is_some(),
         )
     }
@@ -2171,8 +1792,7 @@ impl FormSection for AuthProfilesSection {
                         });
                     }
 
-                    #[cfg(feature = "aws")]
-                    self.reset_sso_listing_state(cx);
+                    self.options_cache.clear();
 
                     self.validate_form_field();
                 }
@@ -2189,8 +1809,6 @@ impl FormSection for AuthProfilesSection {
             AuthFormField::DeleteButton => {
                 self.request_delete_selected_profile(cx);
             }
-            #[cfg(feature = "aws")]
-            AuthFormField::SsoAccount | AuthFormField::SsoRole => {}
         }
     }
 
@@ -2214,7 +1832,7 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn form_rows_include_generic_provider_login_without_aws_feature() {
-        let rows = build_form_rows(1, 2, true, false, false);
+        let rows = build_form_rows(1, 2, true, false);
 
         assert!(
             rows.iter()

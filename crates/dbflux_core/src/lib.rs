@@ -20,7 +20,8 @@ pub use access::{AccessHandle, AccessKind, AccessManager};
 
 pub use auth::{
     AuthFormDef, AuthProfile, AuthProfileSummary, AuthProvider, AuthSession, AuthSessionState,
-    DynAuthProvider, ImportableProfile, ResolvedCredentials,
+    DynAuthProvider, FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse,
+    ImportableProfile, ResolvedCredentials,
 };
 
 pub use config::{
