@@ -533,7 +533,7 @@ impl RpcServiceKind {
     pub fn default_api_contract(self) -> ServiceRpcApiContract {
         match self {
             RpcServiceKind::Driver => ServiceRpcApiContract::new("driver_rpc", 1, 1),
-            RpcServiceKind::AuthProvider => ServiceRpcApiContract::new("auth_provider_rpc", 1, 0),
+            RpcServiceKind::AuthProvider => ServiceRpcApiContract::new("auth_provider_rpc", 1, 2),
         }
     }
 }
@@ -1175,7 +1175,7 @@ mod tests {
             env: HashMap::new(),
             startup_timeout_ms: Some(5_000),
             kind: RpcServiceKind::AuthProvider,
-            api_contract: Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 0)),
+            api_contract: Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 2)),
         };
 
         let json = serde_json::to_value(&service).unwrap();
@@ -1186,7 +1186,7 @@ mod tests {
         assert_eq!(restored.kind, RpcServiceKind::AuthProvider);
         assert_eq!(
             restored.api_contract,
-            Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 0))
+            Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 2))
         );
     }
 
