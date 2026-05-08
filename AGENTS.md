@@ -307,9 +307,13 @@ Key abstractions for UI adaptation:
 ### RPC Services Foundation
 
 - RPC services are first-class persisted descriptors with `RpcServiceKind` (`Driver`, `AuthProvider`).
-- Only `Driver` services are active today; `AuthProvider` services may be stored and discovered but must remain inert until a real auth-provider adapter exists.
+- Both `Driver` and `AuthProvider` services are active. `AuthProvider` services connect through `RpcAuthProvider` in `dbflux_ipc`, which implements `DynAuthProvider` from `dbflux_core`.
 - The runtime seam for service discovery/classification lives in `dbflux_app::rpc_services`; extend that boundary for future RPC capabilities instead of hardcoding new driver-only bootstrap logic in `app_state.rs`.
 - Preserve compatibility for external driver registration IDs as `rpc:<socket_id>`.
+- `DynAuthProvider::fetch_dynamic_options` is a real trait method (default implementation returns `Permanent("not supported")`); `RpcAuthProvider` implements it by dispatching `FetchDynamicOptions` requests over IPC.
+- The auth-provider IPC protocol is at v1.2 and gained `FetchDynamicOptions` request / `DynamicOptions` response variants, plus the `secret_dependency_opt_in` manifest flag. Providers advertising v1.2 have `fetch_dynamic_options` available; older providers get `Permanent("not supported")`.
+- The Settings UI for Auth Profiles is provider-agnostic. To surface dynamic dropdowns a provider must declare `FormFieldKind::DynamicSelect` fields in its manifest. The host strips secret field values from dependency maps unless the provider sets `secret_dependency_opt_in: true`.
+- `AuthSession.data` round-trips opaquely through the IPC DTO via JSON downcast and is never persisted.
 
 ### Connection Hooks
 

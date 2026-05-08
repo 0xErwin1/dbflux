@@ -144,7 +144,7 @@ Current validation boundary:
 
 ## Auth-provider RPC contract
 
-The active auth-provider RPC API family is `auth_provider_rpc` at `1.0`.
+The active auth-provider RPC API family is `auth_provider_rpc` at `1.2`.
 
 DBFlux uses persisted `api_family` / `api_major` metadata as a startup preflight. Compatible rows then negotiate the highest shared minor version during `Hello`.
 
@@ -154,7 +154,11 @@ Client request:
 AuthProviderRequestBody::Hello(AuthProviderHelloRequest {
     client_name: "dbflux_ipc".to_string(),
     client_version: "<version>".to_string(),
-    supported_versions: vec![ProtocolVersion::new(1, 0)],
+    supported_versions: vec![
+        ProtocolVersion::new(1, 2),
+        ProtocolVersion::new(1, 1),
+        ProtocolVersion::new(1, 0),
+    ],
     auth_token: Some("<token>".to_string()),
 })
 ```
@@ -166,6 +170,8 @@ Server response must include:
 - `display_name`
 - `form_definition`
 
+The v1.2 `Hello` response additionally carries `secret_dependency_opt_in` (`bool`), declaring whether the provider opts in to receiving secret field values inside dependency maps for dynamic option lookups. When `false` (default), DBFlux strips secret values from dependency maps before forwarding `FetchDynamicOptions` requests.
+
 Supported request / response flow:
 
 | Request | Response | Purpose |
@@ -174,11 +180,13 @@ Supported request / response flow:
 | `ValidateSession` | `SessionState` | validate cached auth state |
 | `Login` | `LoginUrlProgress?` + `LoginResult` | optional verification URL + terminal login result |
 | `ResolveCredentials` | `Credentials` | resolve runtime credential fields |
+| `FetchDynamicOptions` | `DynamicOptions` | resolve dynamic dropdown options for a `DynamicSelect` form field (v1.2+) |
 
 Notes:
 
 - `Login` may emit zero or one `LoginUrlProgress` event before `LoginResult`.
 - If no progress event is sent, DBFlux treats the verification URL callback as `None`.
+- `FetchDynamicOptions` is available only when the negotiated version is at least `1.2`. Providers that negotiate below v1.2 receive a permanent "not supported" outcome from the host without an IPC round-trip.
 - `detect_importable_profiles`, profile write-back hooks, and provider-specific value-provider registration are intentionally out of scope for the RPC contract in this change.
 - Auth-provider runtime failures surface through existing `DbError` handling and do not abort startup.
 

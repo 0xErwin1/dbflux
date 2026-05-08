@@ -87,7 +87,7 @@
 - Do use type-erased handles (`Box<dyn Any + Send + Sync>`) when storing cross-crate RAII objects to avoid circular dependencies.
 - Do use the `TunnelConnector` trait for new tunnel protocols instead of duplicating RAII/lifecycle logic.
 - Don't combine proxy and SSH tunnel on the same connection (mutually exclusive, enforced in `ConnectProfileParams::execute()`).
-- Do use `ExecutionClassification` to categorize operations for MCP policy decisions (Metadata/Read/Write/Destructive/Admin).
+- Do use `ExecutionClassification` to categorize operations for MCP policy decisions (Metadata/Read/Write/Destructive/AdminSafe/Admin/AdminDestructive).
 - Do implement `SettingsSection` trait for settings sections that need keyboard navigation and dirty-state tracking.
 - Do use `FormSection` trait for form-based settings sections with 2D grid navigation and blur handling.
 - Do use `McpGovernanceService` trait for MCP-related governance operations; do not bypass policy engine.
