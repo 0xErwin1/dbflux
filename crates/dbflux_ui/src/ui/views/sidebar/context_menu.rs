@@ -970,10 +970,9 @@ impl Sidebar {
                 self.duplicate_profile(&item_id, cx);
             }
             ContextMenuAction::Delete => {
-                if self.try_dispatch_batch_delete(&item_id, cx) {
-                    return;
+                if !self.try_dispatch_batch_delete(&item_id, cx) {
+                    self.show_delete_confirm_modal(&item_id, cx);
                 }
-                self.show_delete_confirm_modal(&item_id, cx);
             }
             ContextMenuAction::OpenDatabase => {
                 self.execute_item(&item_id, cx);
@@ -991,10 +990,9 @@ impl Sidebar {
                 self.pending_rename_item = Some(item_id.clone());
             }
             ContextMenuAction::DeleteFolder => {
-                if self.try_dispatch_batch_delete(&item_id, cx) {
-                    return;
+                if !self.try_dispatch_batch_delete(&item_id, cx) {
+                    self.show_delete_confirm_modal(&item_id, cx);
                 }
-                self.show_delete_confirm_modal(&item_id, cx);
             }
             ContextMenuAction::MoveToFolder(target_folder_id) => {
                 self.move_item_to_folder(&item_id, target_folder_id, cx);
@@ -1018,10 +1016,9 @@ impl Sidebar {
                 self.pending_rename_item = Some(item_id.clone());
             }
             ContextMenuAction::DeleteScript => {
-                if self.try_dispatch_batch_delete(&item_id, cx) {
-                    return;
+                if !self.try_dispatch_batch_delete(&item_id, cx) {
+                    self.show_delete_confirm_modal(&item_id, cx);
                 }
-                self.show_delete_confirm_modal(&item_id, cx);
             }
             ContextMenuAction::NewScriptFile => {
                 let parent = Self::parent_dir_from_item_id(&item_id);
