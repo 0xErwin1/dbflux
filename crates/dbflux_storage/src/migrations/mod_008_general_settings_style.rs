@@ -16,6 +16,25 @@ impl Migration for MigrationImpl {
     }
 
     fn run(&self, tx: &Transaction) -> Result<(), MigrationError> {
+        // Skip entirely when the base table is absent.
+        // This can happen in tests that pre-seed sys_migrations with earlier
+        // migration names but create only a subset of tables manually.
+        let table_exists: bool = tx
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cfg_general_settings'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .map_err(|source| MigrationError::Sqlite {
+                path: std::path::PathBuf::from("<unknown>"),
+                source,
+            })?;
+
+        if !table_exists {
+            return Ok(());
+        }
+
         // SQLite does not support IF NOT EXISTS on ALTER TABLE, so we check
         // whether the column already exists before attempting to add it.
         let column_exists: bool = tx
