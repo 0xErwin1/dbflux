@@ -78,7 +78,8 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
 
         assert_centralized_fonts(theme);
         assert_eq!(theme.border, rgb_to_hsla(0x1F2430));
-        assert_eq!(theme.popover, rgb_to_hsla(0x141B24));
+        // raised color updated to 0x151E2B (was 0x141B24)
+        assert_eq!(theme.popover, rgb_to_hsla(0x151E2B));
     });
 
     cx.update(|cx| theme::apply_theme(ThemeSetting::Light, Option::<&mut Window>::None, cx));
@@ -90,7 +91,8 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
         assert_eq!(theme.foreground, rgb_to_hsla(0x5C6166));
         assert_eq!(theme.border, rgb_to_hsla(0xD9DEE8));
         assert_eq!(theme.primary_foreground, rgb_to_hsla(0x0A0E14));
-        assert_eq!(theme.danger_foreground, rgb_to_hsla(0x0A0E14));
+        // danger_fg changed to 0xFFFFFF (all themes)
+        assert_eq!(theme.danger_foreground, rgb_to_hsla(0xFFFFFF));
         assert_eq!(theme.success_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.warning_foreground, rgb_to_hsla(0x0A0E14));
         assert_eq!(theme.info_foreground, rgb_to_hsla(0x0A0E14));
@@ -131,6 +133,22 @@ fn mirage_theme_uses_dark_mode_palette_while_preserving_centralized_fonts(cx: &m
             theme.highlight_theme.style.editor_active_line_number,
             Some(rgb_to_hsla(0xCBCCC6))
         );
+    });
+}
+
+#[gpui::test]
+fn ayu_dark_chrome_fixes_applied(cx: &mut TestAppContext) {
+    cx.update(theme::init);
+
+    cx.update(|cx| {
+        let theme = Theme::global_mut(cx);
+
+        // input alpha 0.10 → 0.14
+        assert!((theme.input.a - 0.14).abs() < 0.001, "input alpha should be 0.14");
+        // raised color 0x141B24 → 0x151E2B (popover and secondary track raised)
+        assert_eq!(theme.popover, rgb_to_hsla(0x151E2B));
+        // danger_fg white in all themes
+        assert_eq!(theme.danger_foreground, rgb_to_hsla(0xFFFFFF));
     });
 }
 

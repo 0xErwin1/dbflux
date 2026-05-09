@@ -135,7 +135,7 @@ fn apply_ayu_dark(cx: &mut App) {
     let accent = rgb_to_hsla(0xFFB454);
     let border = rgb_to_hsla(0x1F2430);
 
-    let raised = rgb_to_hsla(0x141B24);
+    let raised = rgb_to_hsla(0x151E2B);
     let selection = rgb_to_hsla(0x273747);
 
     let error = rgb_to_hsla(0xF07178);
@@ -176,7 +176,8 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.danger = error;
     theme.danger_hover = rgb_to_hsla(0xD8656B);
     theme.danger_active = rgb_to_hsla(0xC05A5E);
-    theme.danger_foreground = rgb_to_hsla(0x0A0E14);
+    // White foreground on danger red — higher contrast than dark 0x0A0E14
+    theme.danger_foreground = rgb_to_hsla(0xFFFFFF);
 
     // Semantic colors - Success
     theme.success = success;
@@ -206,8 +207,8 @@ fn apply_ayu_dark(cx: &mut App) {
     // Focus ring
     theme.ring = rgb_to_hsla_alpha(0xFFB454, 0.75);
 
-    // Input
-    theme.input = rgb_to_hsla_alpha(0xB3B1AD, 0.1);
+    // Input — alpha increased from 0.10 to 0.14 for better legibility on dark bg
+    theme.input = rgb_to_hsla_alpha(0xB3B1AD, 0.14);
 
     // Scrollbar
     theme.scrollbar = background;
@@ -370,7 +371,8 @@ fn apply_ayu_mirage(cx: &mut App) {
     theme.danger = error;
     theme.danger_hover = rgb_to_hsla(0xDB7A6D);
     theme.danger_active = rgb_to_hsla(0xC56D61);
-    theme.danger_foreground = background;
+    // White foreground on danger red — higher contrast than dark background
+    theme.danger_foreground = rgb_to_hsla(0xFFFFFF);
 
     theme.success = success;
     theme.success_hover = rgb_to_hsla(0x99C444);
@@ -529,7 +531,8 @@ fn apply_ayu_light(cx: &mut App) {
     theme.danger = error;
     theme.danger_hover = rgb_to_hsla(0xCF4848);
     theme.danger_active = rgb_to_hsla(0xB84040);
-    theme.danger_foreground = rgb_to_hsla(0x0A0E14);
+    // White foreground on danger red — higher contrast than near-black 0x0A0E14
+    theme.danger_foreground = rgb_to_hsla(0xFFFFFF);
 
     theme.success = success;
     theme.success_hover = rgb_to_hsla(0x79A100);

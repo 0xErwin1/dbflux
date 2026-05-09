@@ -1,4 +1,4 @@
-use gpui::{Hsla, Pixels, px, rgb};
+use gpui::{BoxShadow, Hsla, Pixels, Point, px, rgb};
 
 pub struct Spacing;
 
@@ -59,6 +59,45 @@ impl Radii {
     pub const LG: Pixels = px(3.0);
     /// Full radius — pill shapes, avatars, status dots.
     pub const FULL: Pixels = px(9999.0);
+}
+
+/// Centralized box-shadow definitions.
+///
+/// Use these instead of constructing `BoxShadow` at call sites so the shadow
+/// treatment stays consistent across the app.
+pub struct Shadows;
+
+impl Shadows {
+    /// Medium shadow — used for elevated panels, dropdowns, and tooltips.
+    ///
+    /// Equivalent to a subtle single-layer downward shadow with moderate blur.
+    pub fn md() -> BoxShadow {
+        BoxShadow {
+            color: gpui::hsla(0.0, 0.0, 0.0, 0.24),
+            offset: Point {
+                x: px(0.0),
+                y: px(4.0),
+            },
+            blur_radius: px(8.0),
+            spread_radius: px(0.0),
+        }
+    }
+
+    /// Large shadow — used for modals, overlays, and floating windows.
+    ///
+    /// Two-layer shadow: a large diffuse spread plus a tight close shadow for
+    /// depth perception.
+    pub fn lg() -> BoxShadow {
+        BoxShadow {
+            color: gpui::hsla(0.0, 0.0, 0.0, 0.32),
+            offset: Point {
+                x: px(0.0),
+                y: px(8.0),
+            },
+            blur_radius: px(24.0),
+            spread_radius: px(0.0),
+        }
+    }
 }
 
 pub struct SyntaxColors;
@@ -180,7 +219,7 @@ impl SyntaxColors {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Radii};
+    use super::{ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Radii, Shadows};
     use gpui::px;
 
     // DS token baseline: Default-style scale must match the design spec.
@@ -201,6 +240,24 @@ mod tests {
         assert_eq!(Radii::MD, px(2.0));
         assert_eq!(Radii::LG, px(3.0));
         assert_eq!(Radii::FULL, px(9999.0));
+    }
+
+    #[test]
+    fn shadows_md_has_expected_geometry() {
+        let shadow = Shadows::md();
+        assert_eq!(shadow.offset.y, px(4.0));
+        assert_eq!(shadow.blur_radius, px(8.0));
+        assert_eq!(shadow.spread_radius, px(0.0));
+        assert!((shadow.color.a - 0.24).abs() < 0.001);
+    }
+
+    #[test]
+    fn shadows_lg_has_expected_geometry() {
+        let shadow = Shadows::lg();
+        assert_eq!(shadow.offset.y, px(8.0));
+        assert_eq!(shadow.blur_radius, px(24.0));
+        assert_eq!(shadow.spread_radius, px(0.0));
+        assert!((shadow.color.a - 0.32).abs() < 0.001);
     }
 
     #[test]

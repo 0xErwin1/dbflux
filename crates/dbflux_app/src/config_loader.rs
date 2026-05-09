@@ -946,6 +946,7 @@ fn load_general_settings(
 
     GeneralSettings {
         theme: theme_setting_from_storage(&dto.theme),
+        style: dbflux_core::AppStyle::Default,
         restore_session_on_startup: dto.restore_session_on_startup != 0,
         reopen_last_connections: dto.reopen_last_connections != 0,
         default_focus_on_startup: match dto.default_focus_on_startup.as_str() {

@@ -928,7 +928,7 @@ impl AppTab {
 impl RenderOnce for AppTab {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let weight = if self.active {
-            FontWeight::BOLD
+            FontWeight::SEMIBOLD
         } else {
             FontWeight::MEDIUM
         };

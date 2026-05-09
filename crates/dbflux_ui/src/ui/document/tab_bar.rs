@@ -293,9 +293,18 @@ impl TabBar {
             .gap(Spacing::SM)
             .cursor_pointer()
             .when(is_active, |el| {
+                let stripe_color = cx.theme().primary;
                 el.bg(cx.theme().tab_bar)
-                    .border_b_2()
-                    .border_color(cx.theme().accent)
+                    .child(
+                        // Active-tab indicator: 1 px stripe at the bottom edge.
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h(Heights::TAB_STRIPE)
+                            .bg(stripe_color),
+                    )
                     .child(
                         canvas(
                             move |bounds: Bounds<Pixels>, _, _| {

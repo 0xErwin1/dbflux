@@ -4,7 +4,7 @@ use gpui_component::ActiveTheme;
 
 use crate::tokens::Radii;
 
-pub(crate) const FOCUS_FRAME_BORDER_WIDTH: Pixels = px(2.0);
+pub(crate) const FOCUS_FRAME_BORDER_WIDTH: Pixels = px(1.0);
 const FOCUS_FRAME_RADIUS: Pixels = Radii::MD;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +85,6 @@ mod tests {
 
     #[test]
     fn frame_layout_matches_shared_border_contract() {
-        assert_eq!(FOCUS_FRAME_BORDER_WIDTH, px(2.0));
+        assert_eq!(FOCUS_FRAME_BORDER_WIDTH, px(1.0));
     }
 }
