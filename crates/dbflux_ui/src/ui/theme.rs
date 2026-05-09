@@ -114,17 +114,17 @@ fn persist_font_config(theme: &mut Theme) {
 
 /// Apply border-radius values to the theme based on the active `AppStyle`.
 ///
-/// - `AppStyle::Compact` — square corners (0 px), matching the previous
-///   flat chrome behaviour.
-/// - `AppStyle::Default` — subtle radii: 2 px (`radius`) and 3 px (`radius_lg`),
-///   matching the design system token values.
+/// - `AppStyle::Default` — square corners (0 px), the project's flat chrome
+///   baseline.
+/// - `AppStyle::Compact` — subtle radii: 2 px (`radius`) and 3 px (`radius_lg`),
+///   matching the Design System token values.
 fn apply_style_radius(theme: &mut Theme, style: AppStyle) {
     match style {
-        AppStyle::Compact => {
+        AppStyle::Default => {
             theme.radius = px(0.0);
             theme.radius_lg = px(0.0);
         }
-        AppStyle::Default => {
+        AppStyle::Compact => {
             theme.radius = px(2.0);
             theme.radius_lg = px(3.0);
         }

@@ -33,30 +33,36 @@ impl Heights {
 
 pub struct FontSizes;
 
+/// Static font-size constants matching `AppStyle::Default` (the project's
+/// baseline density). For style-aware sizing at render sites, prefer the
+/// `density::font_*(cx)` accessors so the active `AppStyle` is honoured.
 impl FontSizes {
-    /// Extra-small — used for badges, captions, tooltips (Default style: 11 px).
-    pub const XS: Pixels = px(11.0);
-    /// Small — used for labels and secondary metadata (Default style: 12 px).
-    pub const SM: Pixels = px(12.0);
-    /// Base — primary body and input text (Default style: 13 px).
-    pub const BASE: Pixels = px(13.0);
-    /// Large — emphasized labels and nav items (Default style: 14 px).
-    pub const LG: Pixels = px(14.0);
-    /// Extra-large — sub-headings and panel titles (Default style: 16 px).
-    pub const XL: Pixels = px(16.0);
-    /// Title — window-level headings (Default style: 18 px).
-    pub const TITLE: Pixels = px(18.0);
+    /// Extra-small — used for badges, captions, tooltips (Default: 12 px).
+    pub const XS: Pixels = px(12.0);
+    /// Small — used for labels and secondary metadata (Default: 13 px).
+    pub const SM: Pixels = px(13.0);
+    /// Base — primary body and input text (Default: 14 px).
+    pub const BASE: Pixels = px(14.0);
+    /// Large — emphasized labels and nav items (Default: 15 px).
+    pub const LG: Pixels = px(15.0);
+    /// Extra-large — sub-headings and panel titles (Default: 18 px).
+    pub const XL: Pixels = px(18.0);
+    /// Title — window-level headings (Default: 20 px).
+    pub const TITLE: Pixels = px(20.0);
 }
 
 pub struct Radii;
 
+/// Static border-radius constants matching `AppStyle::Default` (square
+/// corners). For style-aware radii at render sites, prefer the
+/// `density::radius_*(cx)` accessors so the active `AppStyle` is honoured.
 impl Radii {
-    /// Small radius — controls, inputs, badges (Default style: 2 px).
-    pub const SM: Pixels = px(2.0);
-    /// Medium radius — dropdowns, popovers (Default style: 2 px).
-    pub const MD: Pixels = px(2.0);
-    /// Large radius — modals, cards (Default style: 3 px).
-    pub const LG: Pixels = px(3.0);
+    /// Small radius — controls, inputs, badges (Default: 0 px).
+    pub const SM: Pixels = px(0.0);
+    /// Medium radius — dropdowns, popovers (Default: 0 px).
+    pub const MD: Pixels = px(0.0);
+    /// Large radius — modals, cards (Default: 0 px).
+    pub const LG: Pixels = px(0.0);
     /// Full radius — pill shapes, avatars, status dots.
     pub const FULL: Pixels = px(9999.0);
 }
@@ -222,23 +228,23 @@ mod tests {
     use super::{ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Radii, Shadows};
     use gpui::px;
 
-    // DS token baseline: Default-style scale must match the design spec.
+    // Static-constant baseline: matches AppStyle::Default (project's flat,
+    // larger-text default). Style-aware sites use density::font_*/radius_*.
     #[test]
     fn font_sizes_match_default_style_scale() {
-        assert_eq!(FontSizes::XS, px(11.0));
-        assert_eq!(FontSizes::SM, px(12.0));
-        assert_eq!(FontSizes::BASE, px(13.0));
-        assert_eq!(FontSizes::LG, px(14.0));
-        assert_eq!(FontSizes::XL, px(16.0));
-        assert_eq!(FontSizes::TITLE, px(18.0));
+        assert_eq!(FontSizes::XS, px(12.0));
+        assert_eq!(FontSizes::SM, px(13.0));
+        assert_eq!(FontSizes::BASE, px(14.0));
+        assert_eq!(FontSizes::LG, px(15.0));
+        assert_eq!(FontSizes::XL, px(18.0));
+        assert_eq!(FontSizes::TITLE, px(20.0));
     }
 
-    // DS token baseline: Default-style radii.
     #[test]
     fn radii_match_default_style_scale() {
-        assert_eq!(Radii::SM, px(2.0));
-        assert_eq!(Radii::MD, px(2.0));
-        assert_eq!(Radii::LG, px(3.0));
+        assert_eq!(Radii::SM, px(0.0));
+        assert_eq!(Radii::MD, px(0.0));
+        assert_eq!(Radii::LG, px(0.0));
         assert_eq!(Radii::FULL, px(9999.0));
     }
 

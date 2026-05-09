@@ -395,13 +395,13 @@ pub enum ThemeSetting {
 
 /// Controls global layout density.
 ///
-/// - `Default` — standard spacing, 2 px radii, font scale 11–18 px.
-/// - `Compact` — tighter spacing, square corners, font scale 12–20 px.
+/// - `Default` — standard density, square corners, font scale 12–20 px.
+/// - `Compact` — denser layout, 2 px radii, font scale 11–18 px (Design System).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppStyle {
-    Default,
     #[default]
+    Default,
     Compact,
 }
 
