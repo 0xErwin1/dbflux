@@ -1,8 +1,9 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, App, FontWeight, Hsla, SharedString, Window, div};
+use gpui::{AnyElement, App, FontWeight, Hsla, Pixels, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 use std::borrow::Cow;
 
+use crate::density;
 use crate::primitives::{Text, TextColorSelection, TextDefaultColor};
 use crate::tokens::FontSizes;
 
@@ -358,12 +359,17 @@ impl MonoLabel {
         self
     }
 
+    /// Inspect the text contract without a render context.
+    ///
+    /// Uses Default-tier font sizes as the fallback when no explicit size
+    /// override is set, because `inspect()` is called outside render where
+    /// the density global is not available.
     #[doc(hidden)]
     pub fn inspect(&self) -> MonoTextInspection {
         inspect_mono_text(&Self::build_text(
             self.text.clone(),
             self.color,
-            self.size_override,
+            self.size_override.unwrap_or(FontSizes::BASE),
             self.weight_override,
         ))
     }
@@ -371,10 +377,10 @@ impl MonoLabel {
     fn build_text(
         text: SharedString,
         color: Option<Hsla>,
-        size_override: Option<gpui::Pixels>,
+        size: Pixels,
         weight_override: Option<FontWeight>,
     ) -> Text {
-        let text = Text::code(text).font_size(size_override.unwrap_or(FontSizes::BASE));
+        let text = Text::code(text).font_size(size);
 
         let text = match weight_override {
             Some(weight) => text.font_weight(weight),
@@ -392,20 +398,16 @@ impl MonoLabel {
         Self::build_text(
             self.text.clone(),
             self.color,
-            self.size_override,
+            self.size_override.unwrap_or(FontSizes::BASE),
             self.weight_override,
         )
     }
 }
 
 impl RenderOnce for MonoLabel {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        Self::build_text(
-            self.text,
-            self.color,
-            self.size_override,
-            self.weight_override,
-        )
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let size = self.size_override.unwrap_or_else(|| density::font_base(cx));
+        Self::build_text(self.text, self.color, size, self.weight_override)
     }
 }
 
@@ -442,12 +444,16 @@ impl MonoCaption {
         self
     }
 
+    /// Inspect the text contract without a render context.
+    ///
+    /// Uses Default-tier font sizes as the fallback when no explicit size
+    /// override is set.
     #[doc(hidden)]
     pub fn inspect(&self) -> MonoTextInspection {
         inspect_mono_text(&Self::build_text(
             self.text.clone(),
             self.color,
-            self.size_override,
+            self.size_override.unwrap_or(FontSizes::XS),
             self.weight_override,
         ))
     }
@@ -455,10 +461,10 @@ impl MonoCaption {
     fn build_text(
         text: SharedString,
         color: Option<Hsla>,
-        size_override: Option<gpui::Pixels>,
+        size: Pixels,
         weight_override: Option<FontWeight>,
     ) -> Text {
-        let text = Text::code(text).font_size(size_override.unwrap_or(FontSizes::XS));
+        let text = Text::code(text).font_size(size);
 
         let text = match weight_override {
             Some(weight) => text.font_weight(weight),
@@ -476,20 +482,16 @@ impl MonoCaption {
         Self::build_text(
             self.text.clone(),
             self.color,
-            self.size_override,
+            self.size_override.unwrap_or(FontSizes::XS),
             self.weight_override,
         )
     }
 }
 
 impl RenderOnce for MonoCaption {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        Self::build_text(
-            self.text,
-            self.color,
-            self.size_override,
-            self.weight_override,
-        )
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let size = self.size_override.unwrap_or_else(|| density::font_xs(cx));
+        Self::build_text(self.text, self.color, size, self.weight_override)
     }
 }
 
@@ -526,12 +528,16 @@ impl MonoMeta {
         self
     }
 
+    /// Inspect the text contract without a render context.
+    ///
+    /// Uses Default-tier font sizes as the fallback when no explicit size
+    /// override is set.
     #[doc(hidden)]
     pub fn inspect(&self) -> MonoTextInspection {
         inspect_mono_text(&Self::build_text(
             self.text.clone(),
             self.color,
-            self.size_override,
+            self.size_override.unwrap_or(FontSizes::SM),
             self.weight_override,
         ))
     }
@@ -539,10 +545,10 @@ impl MonoMeta {
     fn build_text(
         text: SharedString,
         color: Option<Hsla>,
-        size_override: Option<gpui::Pixels>,
+        size: Pixels,
         weight_override: Option<FontWeight>,
     ) -> Text {
-        let text = Text::code(text).font_size(size_override.unwrap_or(FontSizes::SM));
+        let text = Text::code(text).font_size(size);
 
         let text = match weight_override {
             Some(weight) => text.font_weight(weight),
@@ -560,20 +566,16 @@ impl MonoMeta {
         Self::build_text(
             self.text.clone(),
             self.color,
-            self.size_override,
+            self.size_override.unwrap_or(FontSizes::SM),
             self.weight_override,
         )
     }
 }
 
 impl RenderOnce for MonoMeta {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        Self::build_text(
-            self.text,
-            self.color,
-            self.size_override,
-            self.weight_override,
-        )
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let size = self.size_override.unwrap_or_else(|| density::font_sm(cx));
+        Self::build_text(self.text, self.color, size, self.weight_override)
     }
 }
 
@@ -678,9 +680,9 @@ impl PanelTitle {
         self
     }
 
-    fn build_text(text: SharedString, color: Option<Hsla>) -> Text {
+    fn build_text(text: SharedString, color: Option<Hsla>, size: Pixels) -> Text {
         let text = Text::field_label(text)
-            .font_size(FontSizes::LG)
+            .font_size(size)
             .font_weight(FontWeight::SEMIBOLD);
 
         match color {
@@ -691,8 +693,8 @@ impl PanelTitle {
 }
 
 impl RenderOnce for PanelTitle {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        Self::build_text(self.text, self.color)
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        Self::build_text(self.text, self.color, density::font_lg(cx))
     }
 }
 

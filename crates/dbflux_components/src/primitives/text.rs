@@ -2,6 +2,7 @@ use gpui::prelude::*;
 use gpui::{App, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font};
 use gpui_component::ActiveTheme;
 
+use crate::density;
 use crate::tokens::FontSizes;
 use crate::typography::AppFonts;
 
@@ -312,6 +313,28 @@ impl Text {
 }
 
 impl TextVariant {
+    /// Resolve the font size for this variant using the active density tier.
+    ///
+    /// Unlike `role_contract().size` (which always returns the Default-tier constant),
+    /// this reads the density global and returns the Compact-tier value when active.
+    pub(crate) fn density_size(self, cx: &App) -> gpui::Pixels {
+        match self {
+            Self::Heading | Self::Headline2 => density::font_xl(cx),
+            Self::Body | Self::Label | Self::FieldLabel => density::font_base(cx),
+            Self::LabelSm
+            | Self::Caption
+            | Self::Muted
+            | Self::Dim
+            | Self::DimSecondary
+            | Self::Code
+            | Self::SubSectionLabel
+            | Self::BodySm => density::font_sm(cx),
+            Self::Title | Self::Headline3 => density::font_title(cx),
+            Self::Headline1 => density::font_lg(cx),
+            Self::SidebarGroupLabel | Self::CaptionXs | Self::KeyHint => density::font_xs(cx),
+        }
+    }
+
     pub(crate) fn role_contract(self) -> TextRoleContract {
         match self {
             Self::Heading => TextRoleContract {
@@ -456,7 +479,9 @@ impl RenderOnce for Text {
         let theme = cx.theme();
         let contract = self.variant.role_contract();
 
-        let size = self.size_override.unwrap_or(contract.size);
+        let size = self
+            .size_override
+            .unwrap_or_else(|| self.variant.density_size(cx));
         let weight = self.weight_override.unwrap_or(contract.weight);
         let color = self
             .color_override
