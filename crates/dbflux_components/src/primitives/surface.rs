@@ -2,6 +2,7 @@ use gpui::prelude::*;
 use gpui::{App, Hsla, Pixels, div};
 use gpui_component::ActiveTheme;
 
+use crate::density;
 use crate::tokens::{ChromeEdgeRole, Radii};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,19 +106,31 @@ fn variant_bg(variant: SurfaceVariant, theme: &gpui_component::Theme) -> Hsla {
         .resolve(theme)
 }
 
-fn variant_radius(variant: SurfaceVariant) -> Pixels {
-    inspect_surface_role(variant.into()).radius
-}
-
 fn role_bg(role: SurfaceRole, theme: &gpui_component::Theme) -> Hsla {
     inspect_surface_role(role).background.resolve(theme)
+}
+
+/// Resolve the border radius for a surface role using the active density tier.
+///
+/// The inspection's `radius` field always carries Default-tier constants for
+/// test assertions. Rendering must call this function instead so that the
+/// Compact tier (square corners) is reflected at runtime.
+fn role_density_radius(role: SurfaceRole, cx: &App) -> Pixels {
+    match inspect_surface_role(role).radius {
+        r if r == Radii::SM => density::radius_sm(cx),
+        r if r == Radii::MD => density::radius_md(cx),
+        r if r == Radii::LG => density::radius_lg(cx),
+        other => other,
+    }
 }
 
 pub fn surface_role(role: SurfaceRole, cx: &App) -> gpui::Div {
     let theme = cx.theme();
     let inspection = inspect_surface_role(role);
 
-    let mut el = div().bg(role_bg(role, theme)).rounded(inspection.radius);
+    let mut el = div()
+        .bg(role_bg(role, theme))
+        .rounded(role_density_radius(role, cx));
 
     if let Some(edge) = inspection.edge {
         el = el.border_1().border_color(edge.resolve(theme));
@@ -169,11 +182,12 @@ pub fn surface_overlay(_cx: &App) -> gpui::Div {
 pub fn surface(variant: SurfaceVariant, cx: &App) -> gpui::Div {
     let theme = cx.theme();
     let bg = variant_bg(variant, theme);
-    let radius = variant_radius(variant);
+    let role: SurfaceRole = variant.into();
+    let radius = role_density_radius(role, cx);
 
     let mut el = div().bg(bg).rounded(radius);
 
-    if let Some(edge) = inspect_surface_role(variant.into()).edge {
+    if let Some(edge) = inspect_surface_role(role).edge {
         el = el.border_1().border_color(edge.resolve(theme));
     }
 
