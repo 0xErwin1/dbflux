@@ -358,6 +358,7 @@ pub(crate) struct DbFluxServer {
     pub(crate) state: ServerState,
     #[allow(dead_code)] // Used for policy evaluation
     pub(crate) governance: GovernanceMiddleware,
+    #[allow(dead_code)] // Built by the #[tool_router] macro; held to keep tool routes alive
     pub(crate) tool_router: ToolRouter<DbFluxServer>,
 }
 
