@@ -67,11 +67,7 @@ impl RenderOnce for KbdBadge {
             theme.foreground
         };
 
-        let border_color = if self.muted {
-            theme.border
-        } else {
-            theme.border
-        };
+        let border_color = theme.border;
 
         div()
             .flex()

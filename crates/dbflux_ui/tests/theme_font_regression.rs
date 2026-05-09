@@ -144,7 +144,10 @@ fn ayu_dark_chrome_fixes_applied(cx: &mut TestAppContext) {
         let theme = Theme::global_mut(cx);
 
         // input alpha 0.10 → 0.14
-        assert!((theme.input.a - 0.14).abs() < 0.001, "input alpha should be 0.14");
+        assert!(
+            (theme.input.a - 0.14).abs() < 0.001,
+            "input alpha should be 0.14"
+        );
         // raised color 0x141B24 → 0x151E2B (popover and secondary track raised)
         assert_eq!(theme.popover, rgb_to_hsla(0x151E2B));
         // danger_fg white in all themes
