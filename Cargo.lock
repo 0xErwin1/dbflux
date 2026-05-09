@@ -2358,6 +2358,7 @@ dependencies = [
 name = "dbflux_components"
 version = "0.5.0-dev.3"
 dependencies = [
+ "dbflux_core",
  "gpui",
  "gpui-component",
 ]
