@@ -2,10 +2,9 @@ use gpui::prelude::*;
 use gpui::{App, Hsla, Pixels, div, px};
 use gpui_component::ActiveTheme;
 
-use crate::tokens::Radii;
+use crate::density;
 
 pub(crate) const FOCUS_FRAME_BORDER_WIDTH: Pixels = px(1.0);
-const FOCUS_FRAME_RADIUS: Pixels = Radii::MD;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FocusFrameBorderKind {
@@ -40,14 +39,16 @@ pub fn focus_frame(
         FocusFrameBorderKind::CustomRing => ring_color.expect("custom ring color should exist"),
     };
 
+    let radius = density::radius_md(cx);
+
     div()
         .relative()
-        .rounded(FOCUS_FRAME_RADIUS)
+        .rounded(radius)
         .child(
             div()
                 .absolute()
                 .inset_0()
-                .rounded(FOCUS_FRAME_RADIUS)
+                .rounded(radius)
                 .border(FOCUS_FRAME_BORDER_WIDTH)
                 .border_color(border_color),
         )
