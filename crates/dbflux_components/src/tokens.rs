@@ -26,28 +26,38 @@ impl Heights {
     pub const ICON_SM: Pixels = px(16.0);
     pub const ICON_MD: Pixels = px(20.0);
     pub const ICON_LG: Pixels = px(24.0);
+    /// Height of the active-tab indicator stripe — a 1 px absolutely-positioned
+    /// child div rendered at the bottom edge of the active tab item.
+    pub const TAB_STRIPE: Pixels = px(1.0);
 }
 
 pub struct FontSizes;
 
 impl FontSizes {
-    pub const XS: Pixels = px(12.0);
-    pub const SM: Pixels = px(13.0);
-    pub const BASE: Pixels = px(14.0);
-    pub const LG: Pixels = px(15.0);
-    pub const XL: Pixels = px(18.0);
-    pub const TITLE: Pixels = px(20.0);
+    /// Extra-small — used for badges, captions, tooltips (Default style: 11 px).
+    pub const XS: Pixels = px(11.0);
+    /// Small — used for labels and secondary metadata (Default style: 12 px).
+    pub const SM: Pixels = px(12.0);
+    /// Base — primary body and input text (Default style: 13 px).
+    pub const BASE: Pixels = px(13.0);
+    /// Large — emphasized labels and nav items (Default style: 14 px).
+    pub const LG: Pixels = px(14.0);
+    /// Extra-large — sub-headings and panel titles (Default style: 16 px).
+    pub const XL: Pixels = px(16.0);
+    /// Title — window-level headings (Default style: 18 px).
+    pub const TITLE: Pixels = px(18.0);
 }
 
 pub struct Radii;
 
 impl Radii {
-    // DBFlux uses a flat, square chrome — every named radius collapses to 0.
-    // `Radii::FULL` is reserved for explicitly pill-shaped surfaces (avatars,
-    // status dots) and stays as-is.
-    pub const SM: Pixels = px(0.0);
-    pub const MD: Pixels = px(0.0);
-    pub const LG: Pixels = px(0.0);
+    /// Small radius — controls, inputs, badges (Default style: 2 px).
+    pub const SM: Pixels = px(2.0);
+    /// Medium radius — dropdowns, popovers (Default style: 2 px).
+    pub const MD: Pixels = px(2.0);
+    /// Large radius — modals, cards (Default style: 3 px).
+    pub const LG: Pixels = px(3.0);
+    /// Full radius — pill shapes, avatars, status dots.
     pub const FULL: Pixels = px(9999.0);
 }
 
@@ -170,7 +180,28 @@ impl SyntaxColors {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, Radii};
+    use super::{ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Radii};
+    use gpui::px;
+
+    // DS token baseline: Default-style scale must match the design spec.
+    #[test]
+    fn font_sizes_match_default_style_scale() {
+        assert_eq!(FontSizes::XS, px(11.0));
+        assert_eq!(FontSizes::SM, px(12.0));
+        assert_eq!(FontSizes::BASE, px(13.0));
+        assert_eq!(FontSizes::LG, px(14.0));
+        assert_eq!(FontSizes::XL, px(16.0));
+        assert_eq!(FontSizes::TITLE, px(18.0));
+    }
+
+    // DS token baseline: Default-style radii.
+    #[test]
+    fn radii_match_default_style_scale() {
+        assert_eq!(Radii::SM, px(2.0));
+        assert_eq!(Radii::MD, px(2.0));
+        assert_eq!(Radii::LG, px(3.0));
+        assert_eq!(Radii::FULL, px(9999.0));
+    }
 
     #[test]
     fn chrome_edge_roles_map_to_low_emphasis_theme_slots() {

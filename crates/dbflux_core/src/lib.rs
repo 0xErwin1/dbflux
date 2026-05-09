@@ -25,7 +25,7 @@ pub use auth::{
 };
 
 pub use config::{
-    AppConfig, AppConfigStore, AppConfigWarning, DangerousAction, DriverKey,
+    AppConfig, AppConfigStore, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
     EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, GeneralSettings, GlobalOverrides,
     GovernanceSettings, LoadedAppConfig, PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting,
     RpcServiceKind, ScriptEntry, ScriptsDirectory, ServiceConfig, ServiceRpcApiContract,

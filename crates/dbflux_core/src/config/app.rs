@@ -300,6 +300,9 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub theme: ThemeSetting,
 
+    #[serde(default)]
+    pub style: AppStyle,
+
     // -- Startup & Session --
     #[serde(default = "default_true")]
     pub restore_session_on_startup: bool,
@@ -347,6 +350,7 @@ impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             theme: ThemeSetting::Dark,
+            style: AppStyle::Default,
             restore_session_on_startup: true,
             reopen_last_connections: false,
             default_focus_on_startup: StartupFocus::Sidebar,
@@ -387,6 +391,18 @@ pub enum ThemeSetting {
     Dark,
     Mirage,
     Light,
+}
+
+/// Controls global layout density.
+///
+/// - `Default` — standard spacing, 2 px radii, font scale 11–18 px.
+/// - `Compact` — tighter spacing, square corners, font scale 12–20 px.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppStyle {
+    #[default]
+    Default,
+    Compact,
 }
 
 fn default_true() -> bool {
