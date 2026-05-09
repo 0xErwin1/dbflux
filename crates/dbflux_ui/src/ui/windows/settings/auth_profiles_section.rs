@@ -1,4 +1,3 @@
-use crate::ui::tokens::Radii;
 use super::SettingsSection;
 use super::SettingsSectionId;
 use super::form_section::{FormSection, create_blur_subscription};
@@ -7,6 +6,8 @@ use super::section_trait::SectionFocusEvent;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::primitives::focus_frame;
@@ -18,7 +19,6 @@ use dbflux_core::{
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
-use crate::ui::icons::AppIcon;
 use gpui_component::{ActiveTheme, Icon};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};

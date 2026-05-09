@@ -225,7 +225,12 @@ impl Render for ValueSourceSelector {
             .flex()
             .items_center()
             .gap_2()
-            .child(div().flex_1().min_w(px(120.0)).child(self.source_dropdown.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(120.0))
+                    .child(self.source_dropdown.clone()),
+            )
             .into_any_element()
     }
 }

@@ -1,5 +1,5 @@
-use crate::ui::tokens::Radii;
 use super::*;
+use crate::ui::tokens::Radii;
 use dbflux_components::primitives::Text;
 use gpui::prelude::FluentBuilder;
 use gpui_component::ActiveTheme;

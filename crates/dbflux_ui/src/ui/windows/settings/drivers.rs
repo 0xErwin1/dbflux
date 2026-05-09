@@ -1,4 +1,3 @@
-use crate::ui::tokens::Radii;
 use super::drivers_section::{
     DriverEditorField, DriverSettingsEntry, DriversFocus, DriversSection,
 };
@@ -8,6 +7,7 @@ use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::primitives::{Icon, Label};
