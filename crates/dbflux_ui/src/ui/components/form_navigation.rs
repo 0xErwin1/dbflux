@@ -43,7 +43,7 @@ pub(crate) trait FormNavigation: Sized + 'static {
 
     fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_edit_state(FormEditState::Navigating);
-        window.focus(self.form_focus_handle());
+        window.focus(self.form_focus_handle(), cx);
         cx.notify();
     }
 

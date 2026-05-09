@@ -1337,7 +1337,7 @@ impl ConnectionManagerWindow {
 
     pub(super) fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.edit_state = EditState::Navigating;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 

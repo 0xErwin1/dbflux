@@ -86,7 +86,7 @@ impl SsoWizard {
         self.visible = true;
         self.step = WizardStep::Start;
         self.status = None;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

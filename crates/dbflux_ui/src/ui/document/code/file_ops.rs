@@ -41,8 +41,7 @@ impl CodeDocument {
                         entity.update(cx, |doc, cx| {
                             doc.mark_clean(cx);
                         });
-                    })
-                    .ok();
+                    });
                 }
                 Err(e) => {
                     log::error!("Failed to save file: {}", e);
@@ -109,8 +108,7 @@ impl CodeDocument {
                             state.record_recent_file(path);
                             cx.emit(crate::app::AppStateChanged);
                         });
-                    })
-                    .ok();
+                    });
                 }
                 Err(e) => {
                     log::error!("Failed to save file: {}", e);
@@ -178,8 +176,7 @@ impl CodeDocument {
                         entity.update(cx, |doc, cx| {
                             doc.show_saved_label(cx);
                         });
-                    })
-                    .ok();
+                    });
                 }
                 Err(e) => {
                     log::error!("Auto-save failed for {}: {}", target.display(), e);
@@ -204,8 +201,7 @@ impl CodeDocument {
                         cx.notify();
                     });
                 }
-            })
-            .ok();
+            });
         }));
     }
 

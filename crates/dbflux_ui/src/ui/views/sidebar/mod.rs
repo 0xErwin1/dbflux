@@ -24,9 +24,10 @@ use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
     CollectionChildInfo, CollectionIndexInfo, CollectionPresentation, CollectionRef,
     ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
-    CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DropForeignKeyRequest,
-    DropIndexRequest, DropTypeRequest, EventStreamTarget, IndexData, IndexDirection, QueryLanguage,
-    DriverCapabilities, ReindexRequest, RelationRef, SchemaCacheKey, SchemaForeignKeyInfo,
+    CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DriverCapabilities,
+    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, EventStreamTarget, IndexData,
+    IndexDirection, QueryLanguage, ReindexRequest, RelationRef, SchemaCacheKey,
+    SchemaForeignKeyInfo,
     SchemaIndexInfo, SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot,
     TableInfo, TableRef, TaskId, TypeDefinition, ViewInfo,
 };

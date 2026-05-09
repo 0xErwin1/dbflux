@@ -7,7 +7,7 @@ use crate::tokens::{ChromeEdgeRole, Heights, Radii, Spacing};
 use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{
-    ClickEvent, Context, Corner, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement,
+    Anchor, ClickEvent, Context, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Pixels, Render, ScrollHandle, ScrollWheelEvent, SharedString,
     StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
 };
@@ -523,7 +523,7 @@ impl Dropdown {
 
         deferred(
             anchored()
-                .anchor(Corner::TopLeft)
+                .anchor(Anchor::TopLeft)
                 .offset(point(px(0.0), px(4.0)))
                 .snap_to_window()
                 .child(menu),

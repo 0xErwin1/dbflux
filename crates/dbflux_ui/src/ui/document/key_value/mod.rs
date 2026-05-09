@@ -429,19 +429,17 @@ impl KeyValueDocument {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
 
-                let should_stop = cx
-                    .update(|cx| {
-                        let Some(entity) = this.upgrade() else {
-                            return true;
-                        };
+                let should_stop = cx.update(|cx| {
+                    let Some(entity) = this.upgrade() else {
+                        return true;
+                    };
 
-                        entity.update(cx, |doc, cx| {
-                            doc.tick_ttl();
-                            cx.notify();
-                            doc.ttl_state == TtlState::Expired
-                        })
+                    entity.update(cx, |doc, cx| {
+                        doc.tick_ttl();
+                        cx.notify();
+                        doc.ttl_state == TtlState::Expired
                     })
-                    .unwrap_or(true);
+                });
 
                 if should_stop {
                     break;
@@ -464,7 +462,7 @@ impl KeyValueDocument {
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_mode = KeyValueFocusMode::List;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

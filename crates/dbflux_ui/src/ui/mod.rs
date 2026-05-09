@@ -46,3 +46,17 @@ impl<T> AsyncUpdateResultExt<T> for anyhow::Result<T> {
         })
     }
 }
+
+impl AsyncUpdateResultExt<()> for () {
+    fn log_if_dropped(self) {}
+
+    fn unwrap_or_log_dropped(self) {}
+}
+
+impl<T> AsyncUpdateResultExt<Option<T>> for Option<T> {
+    fn log_if_dropped(self) {}
+
+    fn unwrap_or_log_dropped(self) -> Option<T> {
+        self
+    }
+}

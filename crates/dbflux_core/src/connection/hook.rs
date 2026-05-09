@@ -2466,12 +2466,14 @@ mod tests {
         let mut command = Command::new(python);
         command.args([
             "-c",
-            "import sys, time; sys.stdout.write('partial'); sys.stdout.flush(); time.sleep(0.3); sys.stdout.write(' line\\n'); sys.stdout.flush()",
+            "import sys; sys.stdout.write('partial'); sys.stdout.flush(); sys.stdin.read(1); sys.stdout.write(' line\\n'); sys.stdout.flush()",
         ]);
+        command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
         let mut child = command.spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
         let (sender, receiver) = output_channel();
 
         let handle = thread::spawn(move || {
@@ -2486,7 +2488,9 @@ mod tests {
             .unwrap()
         });
 
-        let first_event = receiver.recv_timeout(Duration::from_millis(200)).unwrap();
+        let first_event = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        stdin.write_all(b"\n").unwrap();
+        drop(stdin);
         let result = handle.join().unwrap();
 
         assert_eq!(first_event.stream, OutputStreamKind::Stdout);

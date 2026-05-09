@@ -158,12 +158,11 @@ impl Sidebar {
                     };
                     platform::apply_window_options(&mut options, 600.0, 500.0);
 
-                    cx.open_window(options, |window, cx| {
+                    let _ = cx.open_window(options, |window, cx| {
                         let manager =
                             cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
                         cx.new(|cx| Root::new(manager, window, cx))
-                    })
-                    .ok();
+                    });
                 })
                 .child(
                     div()
@@ -345,7 +344,7 @@ impl Sidebar {
             filter_focused: false,
         });
 
-        focus_handle.focus(window);
+        focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -429,7 +428,7 @@ impl Sidebar {
 
     pub fn picker_focus_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(picker) = self.child_picker.as_ref() {
-            picker.focus_handle.focus(window);
+            picker.focus_handle.focus(window, cx);
             cx.notify();
         }
     }

@@ -10,7 +10,7 @@ use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{ConnectionHook, HookExecutionMode, ScriptLanguage};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::AlertDialog;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -658,7 +658,7 @@ impl EventEmitter<SectionFocusEvent> for HooksSection {}
 impl EventEmitter<SettingsEvent> for HooksSection {}
 
 impl Render for HooksSection {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let show_hook_delete = self.pending_delete_hook_id.is_some();
         let hook_delete_name = self.pending_delete_hook_id.clone().unwrap_or_default();
 
@@ -674,7 +674,7 @@ impl Render for HooksSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(window, cx)
+                    AlertDialog::new(cx)
                         .title("Delete Hook")
                         .confirm()
                         .on_ok(move |_, window, cx| {

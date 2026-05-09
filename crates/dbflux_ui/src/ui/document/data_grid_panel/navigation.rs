@@ -416,7 +416,7 @@ impl DataGridPanel {
     pub fn focus_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_mode = GridFocusMode::Table;
         self.edit_state = EditState::Navigating;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -471,7 +471,7 @@ impl DataGridPanel {
 
         if self.edit_state == EditState::Editing {
             self.edit_state = EditState::Navigating;
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
             cx.notify();
         }
     }

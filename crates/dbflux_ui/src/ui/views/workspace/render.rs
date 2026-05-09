@@ -37,7 +37,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(command_id) = self.pending_command.take() {
             self.handle_command(command_id, window, cx);
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         // Handle SQL generated from sidebar (e.g., SELECT * FROM table)

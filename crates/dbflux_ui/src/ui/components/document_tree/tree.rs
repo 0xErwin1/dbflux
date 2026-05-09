@@ -304,7 +304,7 @@ impl Render for DocumentTree {
                 }
             })
             .on_click(cx.listener(|this, _, window, cx| {
-                this.state.update(cx, |s, _| s.focus(window));
+                this.state.update(cx, |s, cx| s.focus(window, cx));
                 cx.emit(DocumentTreeEvent::Focused);
             }))
             // Toolbar
@@ -399,7 +399,7 @@ impl Render for DocumentTree {
                                         .collect()
                                 }
                             })
-                            .track_scroll(scroll_handle)
+                            .track_scroll(&scroll_handle)
                             .size_full()
                             .with_sizing_behavior(ListSizingBehavior::Infer),
                         )
@@ -595,7 +595,7 @@ fn render_tree_row(
             move |event, window, cx| {
                 let click_count = event.click_count();
                 row_state.update(cx, |s, cx| {
-                    s.focus(window);
+                    s.focus(window, cx);
 
                     if click_count == 1 {
                         // Single click: set cursor to this node
@@ -612,7 +612,7 @@ fn render_tree_row(
                 cx.stop_propagation();
                 let position = event.position;
                 context_menu_state.update(cx, |s, cx| {
-                    s.focus(window);
+                    s.focus(window, cx);
                     s.set_cursor(&context_menu_node_id, cx);
                     s.request_context_menu(position, cx);
                 });

@@ -454,7 +454,7 @@ impl gpui::Render for DataTable {
                         .size_full()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             cx.stop_propagation();
-                            window.focus(&focus_for_empty);
+                            window.focus(&focus_for_empty, cx);
                         })
                         .on_mouse_down(MouseButton::Right, move |event, window, cx| {
                             cx.stop_propagation();
@@ -838,7 +838,7 @@ impl DataTable {
                 .min_w(px(total_width))
                 .ml(-h_offset)
                 .with_sizing_behavior(ListSizingBehavior::Auto)
-                .track_scroll(vertical_scroll_handle),
+                .track_scroll(&vertical_scroll_handle),
             )
     }
 }

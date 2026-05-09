@@ -2,7 +2,7 @@ use crate::ui::tokens::Heights;
 use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::{
-    Corner, ElementId, EventEmitter, IntoElement, MouseButton, ParentElement, Render, ScrollHandle,
+    Anchor, ElementId, EventEmitter, IntoElement, MouseButton, ParentElement, Render, ScrollHandle,
     SharedString, StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
 };
 use gpui_component::ActiveTheme;
@@ -212,7 +212,7 @@ impl MultiSelect {
 
         deferred(
             anchored()
-                .anchor(Corner::TopLeft)
+                .anchor(Anchor::TopLeft)
                 .offset(point(px(0.0), px(4.0)))
                 .snap_to_window()
                 .child(menu),

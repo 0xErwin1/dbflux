@@ -300,6 +300,11 @@ pub struct SchemaVizDocument {
     // event.position (window-absolute) to panel-local coordinates for context
     // menu placement. Same pattern as DataGridPanel and AuditDocument.
     panel_origin: Point<Pixels>,
+    // Absolute bounds of the graph viewport in window coordinates. Mouse and
+    // scroll event positions are window-absolute, while pan/zoom math is
+    // viewport-local.
+    viewport_origin: Point<Pixels>,
+    viewport_size: Size<Pixels>,
 }
 
 impl SchemaVizDocument {
@@ -374,6 +379,8 @@ impl SchemaVizDocument {
             pending_focus_restore: false,
             last_mouse_position: Point::default(),
             panel_origin: Point::default(),
+            viewport_origin: Point::default(),
+            viewport_size: Size::default(),
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -495,7 +502,7 @@ impl SchemaVizDocument {
                 .map(|e| e == "Cancelled")
                 .unwrap_or(false);
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
                     match load_result {
                         Ok((tables, graph, layout, capped, tables_loaded)) => {
@@ -622,9 +629,7 @@ impl SchemaVizDocument {
                     }
                     cx.notify();
                 })
-            }) {
-                log::warn!("Failed to apply schema viz loading result: {:?}", error);
-            }
+            });
         })
         .detach();
     }
@@ -833,8 +838,8 @@ impl SchemaVizDocument {
         }
     }
 
-    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn set_layout_format(&mut self, format: LayoutFormat, cx: &mut Context<Self>) {
@@ -1084,9 +1089,16 @@ impl SchemaVizDocument {
             None => return,
         };
 
-        // Use viewport center (hardcoded for now, should be dynamic)
-        let viewport_width = 800.0;
-        let viewport_height = 600.0;
+        let viewport_width = if self.viewport_size.width > px(0.0) {
+            self.viewport_size.width.into()
+        } else {
+            800.0
+        };
+        let viewport_height = if self.viewport_size.height > px(0.0) {
+            self.viewport_size.height.into()
+        } else {
+            600.0
+        };
 
         // Center horizontally on the node center
         let node_center_x = node_layout.x + node_layout.width / 2.0;
@@ -1101,6 +1113,13 @@ impl SchemaVizDocument {
             px(viewport_center_x - node_center_x * self.zoom),
             px(viewport_center_y - header_y * self.zoom),
         );
+    }
+
+    fn viewport_local_position(&self, window_position: Point<Pixels>) -> Point<Pixels> {
+        Point::new(
+            window_position.x - self.viewport_origin.x,
+            window_position.y - self.viewport_origin.y,
+        )
     }
 
     /// Export the current schema graph as DBML to clipboard.
@@ -1433,7 +1452,7 @@ impl SchemaVizDocument {
             Command::Cancel => {
                 if self.context_menu.is_some() {
                     self.close_context_menu(cx);
-                    self.focus_handle.focus(window);
+                    self.focus_handle.focus(window, cx);
                     return true;
                 }
                 if self.selected_node.is_some() {
@@ -1639,16 +1658,12 @@ impl SchemaVizDocument {
         let border = theme.border;
         let muted_foreground = theme.muted_foreground;
 
-        // The canvas is a single `relative()` div that fills the viewport.
-        // All children (grid lines, edges, nodes) are `absolute()` within it.
-        // Node screen position = graph_x * zoom + pan_x. No intermediate layer.
-        // This ensures mouse event coordinates from on_scroll_wheel and on_mouse_move
-        // are always in the same coordinate space as the pan_offset.
+        let diagram_transform = ElementTransform::default()
+            .translate(pan)
+            .scale(size(zoom, zoom));
+
         let diagram_canvas = match &self.layout {
             Some(layout) => {
-                // Grid: ~14 lines per axis covers any visible window at normal sizes.
-                // Grid lines are in absolute canvas coords and do NOT move with pan/zoom —
-                // they serve as a static background texture. This is intentional.
                 let grid_size = 60.0_f32;
                 let grid_visible = 3000.0_f32;
                 let grid_count = (grid_visible / grid_size) as usize + 1;
@@ -1683,10 +1698,10 @@ impl SchemaVizDocument {
                     );
                 }
 
-                for seg in self.render_edges_overlay(layout, zoom, pan, &theme) {
+                for seg in self.render_edges_overlay(layout, &theme) {
                     canvas_children.push(seg.into_any_element());
                 }
-                for node_div in self.render_nodes(layout, zoom, pan, &theme, cx) {
+                for node_div in self.render_nodes(layout, &theme, cx) {
                     canvas_children.push(node_div.into_any_element());
                 }
 
@@ -1694,6 +1709,7 @@ impl SchemaVizDocument {
                     .relative()
                     .size_full()
                     .bg(background)
+                    .transform(diagram_transform)
                     .children(canvas_children)
             }
             None => div()
@@ -1866,8 +1882,9 @@ impl SchemaVizDocument {
                 );
 
                 if let Some(node_idx) = this.dragging_node {
-                    let screen_x: f32 = event.position.x.into();
-                    let screen_y: f32 = event.position.y.into();
+                    let local_position = this.viewport_local_position(event.position);
+                    let screen_x: f32 = local_position.x.into();
+                    let screen_y: f32 = local_position.y.into();
                     let off_x: f32 = this.drag_offset.x.into();
                     let off_y: f32 = this.drag_offset.y.into();
                     let pan_x: f32 = this.pan_offset.x.into();
@@ -1900,8 +1917,7 @@ impl SchemaVizDocument {
                 }),
             )
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                // event.position is relative to this viewport div — same space as pan_offset.
-                let mouse = event.position;
+                let mouse = this.viewport_local_position(event.position);
                 let old_zoom = this.zoom;
                 let delta = event.delta.pixel_delta(px(1.0)).y;
                 let factor = if delta > px(0.0) { 1.1_f32 } else { 0.9_f32 };
@@ -2194,6 +2210,20 @@ impl SchemaVizDocument {
                     cx.notify();
                 }
             }))
+            .child({
+                let entity_for_viewport = cx.entity().clone();
+                canvas(
+                    move |bounds: gpui::Bounds<Pixels>, _, cx| {
+                        entity_for_viewport.update(cx, |this, _cx| {
+                            this.viewport_origin = bounds.origin;
+                            this.viewport_size = bounds.size;
+                        });
+                    },
+                    |_: gpui::Bounds<Pixels>, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            })
             .child(diagram_canvas);
 
         let cap_warning = self.table_cap_warning.then(|| {
@@ -2245,8 +2275,6 @@ impl SchemaVizDocument {
     fn render_nodes(
         &self,
         layout: &LayoutResult,
-        zoom: f32,
-        pan: Point<Pixels>,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> Vec<Div> {
@@ -2268,7 +2296,7 @@ impl SchemaVizDocument {
             .nodes()
             .filter_map(|(idx, node)| {
                 let node_layout = layout.nodes.get(&idx)?;
-                Some(self.render_node(node, node_layout, zoom, pan, idx, theme, dragging_node, cx))
+                Some(self.render_node(node, node_layout, idx, theme, dragging_node, cx))
             })
             .collect()
     }
@@ -2278,8 +2306,6 @@ impl SchemaVizDocument {
         &self,
         node: &dbflux_schema_viz::graph::TableNode,
         layout: &NodeLayout,
-        zoom: f32,
-        pan: Point<Pixels>,
         node_idx: petgraph::graph::NodeIndex,
         theme: &gpui_component::theme::Theme,
         dragging_node: Option<petgraph::graph::NodeIndex>,
@@ -2287,14 +2313,11 @@ impl SchemaVizDocument {
     ) -> Div {
         let width = layout.width;
 
-        let pan_x: f32 = pan.x.into();
-        let pan_y: f32 = pan.y.into();
-
         let position_override = self.node_position_overrides.get(&node_idx);
         let (node_left, node_top) = if let Some(pos) = position_override {
-            (px(pos.x * zoom + pan_x), px(pos.y * zoom + pan_y))
+            (px(pos.x), px(pos.y))
         } else {
-            (px(layout.x * zoom + pan_x), px(layout.y * zoom + pan_y))
+            (px(layout.x), px(layout.y))
         };
 
         let is_selected = self.selected_node.as_ref() == Some(&node_idx);
@@ -2400,7 +2423,6 @@ impl SchemaVizDocument {
                         this.pending_details_panel = Some(node_idx_clone);
                         this.dragging_node = Some(node_idx_clone);
                         this.is_panning = false;
-                        this.center_on_node(node_idx_clone);
                         let zoom = this.zoom;
                         let node_x = this
                             .node_position_overrides
@@ -2428,9 +2450,10 @@ impl SchemaVizDocument {
                         let pan_y: f32 = this.pan_offset.y.into();
                         let node_screen_x = px(node_x * zoom + pan_x);
                         let node_screen_y = px(node_y * zoom + pan_y);
+                        let local_position = this.viewport_local_position(event.position);
                         this.drag_offset = Point::new(
-                            event.position.x - node_screen_x,
-                            event.position.y - node_screen_y,
+                            local_position.x - node_screen_x,
+                            local_position.y - node_screen_y,
                         );
                         this.node_position_overrides
                             .insert(node_idx_clone, Point::new(node_x, node_y));
@@ -2492,8 +2515,6 @@ impl SchemaVizDocument {
     fn render_edges_overlay(
         &self,
         layout: &LayoutResult,
-        zoom: f32,
-        pan: Point<Pixels>,
         theme: &gpui_component::theme::Theme,
     ) -> Vec<Div> {
         let edge_color = theme.muted_foreground.opacity(0.5);
@@ -2501,9 +2522,6 @@ impl SchemaVizDocument {
         let Some(graph) = &self.graph else {
             return Vec::new();
         };
-
-        let pan_x: f32 = pan.x.into();
-        let pan_y: f32 = pan.y.into();
 
         let mut segments = Vec::new();
 
@@ -2547,9 +2565,6 @@ impl SchemaVizDocument {
                 None => continue,
             };
 
-            // Column row Y offsets are fixed screen pixels — the node does NOT scale
-            // its internal size with zoom; only its origin (x_base, y_base) scales.
-            //
             // NODE_HEADER_PX, NODE_BODY_TOP_PX, NODE_ROW_PX must match render_node exactly.
             // Each column row has an explicit h(px(NODE_ROW_PX)) so the position is deterministic.
             let row_center = NODE_ROW_PX / 2.0;
@@ -2582,11 +2597,10 @@ impl SchemaVizDocument {
                 })
                 .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
 
-            // Screen position: origin scales with zoom+pan, internal offset is fixed px.
-            let from_x = from_x_base * zoom + pan_x + from_layout.width;
-            let from_y = from_y_base * zoom + pan_y + from_col_y_px;
-            let to_x = to_x_base * zoom + pan_x;
-            let to_y = to_y_base * zoom + pan_y + to_col_y_px;
+            let from_x = from_x_base + from_layout.width;
+            let from_y = from_y_base + from_col_y_px;
+            let to_x = to_x_base;
+            let to_y = to_y_base + to_col_y_px;
 
             let mid_x = (from_x + to_x) / 2.0;
 
@@ -2646,7 +2660,7 @@ impl Render for SchemaVizDocument {
         // and we restore focus here where Window is available).
         if self.pending_focus_restore && self.context_menu.is_none() {
             self.pending_focus_restore = false;
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         match &self.load_status {

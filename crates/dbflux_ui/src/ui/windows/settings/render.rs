@@ -9,7 +9,7 @@ use dbflux_components::typography::{Body, FieldLabel, SidebarGroupLabel};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::AlertDialog;
 
 use super::{
     SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
@@ -219,7 +219,7 @@ impl Render for SettingsCoordinator {
             self.pending_focus_return = false;
             self.focus_area = SettingsFocus::Content;
             self.active_section_entity.focus_in(_window, cx);
-            self.focus_handle.focus(_window);
+            self.focus_handle.focus(_window, cx);
         }
 
         let _ = self.app_state.read(cx);
@@ -264,7 +264,7 @@ impl Render for SettingsCoordinator {
                 let section_name = Self::section_display_name(target_section).to_string();
 
                 element.child(
-                    Dialog::new(_window, cx)
+                    AlertDialog::new(cx)
                         .title("Discard Unsaved Changes")
                         .confirm()
                         .on_ok(move |_, window, cx| {
