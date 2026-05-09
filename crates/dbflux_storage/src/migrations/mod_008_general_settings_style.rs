@@ -51,7 +51,7 @@ impl Migration for MigrationImpl {
 
         if !column_exists {
             tx.execute_batch(
-                "ALTER TABLE cfg_general_settings ADD COLUMN style TEXT NOT NULL DEFAULT 'default';",
+                "ALTER TABLE cfg_general_settings ADD COLUMN style TEXT NOT NULL DEFAULT 'compact';",
             )
             .map_err(|source| MigrationError::Sqlite {
                 path: std::path::PathBuf::from("<unknown>"),
