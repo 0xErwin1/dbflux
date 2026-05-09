@@ -1,7 +1,7 @@
-use crate::ui::tokens::Radii;
 use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::components::toast::ToastExt;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};

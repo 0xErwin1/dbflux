@@ -141,10 +141,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         let count = ids.len();
-        let anchor_id = ids
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        let anchor_id = ids.first().cloned().unwrap_or_default();
 
         self.delete_confirm_modal = Some(DeleteConfirmState {
             item_id: anchor_id,

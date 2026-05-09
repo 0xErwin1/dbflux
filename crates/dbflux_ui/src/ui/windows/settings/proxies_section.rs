@@ -1,4 +1,3 @@
-use crate::ui::tokens::Radii;
 use super::SettingsSection;
 use super::SettingsSectionId;
 use super::form_section::FormSection;
@@ -6,6 +5,8 @@ use super::layout;
 use super::proxies::ProxyFormNav;
 use super::section_trait::SectionFocusEvent;
 use crate::app::{AppStateChanged, AppStateEntity};
+use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::focus_frame;
@@ -16,7 +17,6 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::Dialog;
-use crate::ui::icons::AppIcon;
 use gpui_component::{ActiveTheme, Icon, Sizable};
 use uuid::Uuid;
 
@@ -216,11 +216,7 @@ impl ProxiesSection {
         toggle_id: &'static str,
         theme: &gpui_component::theme::Theme,
     ) -> Stateful<Div> {
-        let icon_name = if show {
-            AppIcon::EyeOff
-        } else {
-            AppIcon::Eye
-        };
+        let icon_name = if show { AppIcon::EyeOff } else { AppIcon::Eye };
 
         div()
             .id(toggle_id)

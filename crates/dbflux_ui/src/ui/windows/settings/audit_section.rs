@@ -1,10 +1,10 @@
-use crate::ui::tokens::Radii;
 use super::SettingsSection;
 use super::SettingsSectionId;
 use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::toast::ToastExt;
+use crate::ui::tokens::Radii;
 use crate::ui::windows::settings::layout;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;

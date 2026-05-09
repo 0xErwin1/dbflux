@@ -1,5 +1,5 @@
-use crate::ui::tokens::Radii;
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Text;
 use dbflux_components::typography::{MonoCaption, MonoLabel};

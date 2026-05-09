@@ -9,10 +9,10 @@ use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::Icon;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::Icon;
 use std::collections::HashMap;
 
 use super::layout;

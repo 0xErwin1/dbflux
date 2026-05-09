@@ -1,14 +1,14 @@
-use crate::ui::tokens::Radii;
 use crate::ui::components::dropdown::DropdownItem;
+use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use crate::ui::windows::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::primitives::{Label, Status, StatusIndicator, Text};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::Icon;
 use gpui_component::checkbox::Checkbox;
-use crate::ui::icons::AppIcon;
-use gpui_component::{Icon};
 
 use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus};
 

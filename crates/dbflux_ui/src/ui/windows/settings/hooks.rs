@@ -1,8 +1,8 @@
-use crate::ui::tokens::Radii;
 use crate::app::AppStateChanged;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::toast::ToastExt;
 use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::primitives::{Icon, Label};

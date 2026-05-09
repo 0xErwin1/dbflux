@@ -1,10 +1,10 @@
-use crate::ui::tokens::Radii;
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId, layout};
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::components::multi_select::MultiSelect;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::primitives::Label;

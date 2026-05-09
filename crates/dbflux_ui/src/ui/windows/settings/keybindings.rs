@@ -1,11 +1,11 @@
-use crate::ui::tokens::Radii;
 use crate::keymap::{ContextId, KeyChord, default_keymap};
+use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::Icon as FluxIcon;
 use dbflux_components::typography::{Body, FieldLabel, KeyHint, MonoCaption};
 use gpui::prelude::*;
 use gpui::*;
-use crate::ui::icons::AppIcon;
 use gpui_component::ActiveTheme;
 
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};

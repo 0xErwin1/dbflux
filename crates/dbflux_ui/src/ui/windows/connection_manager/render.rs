@@ -1,7 +1,7 @@
-use crate::ui::tokens::Radii;
 use crate::keymap::ContextId;
 use crate::platform;
 use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use crate::ui::windows::ssh_shared::SshAuthSelection;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
@@ -11,8 +11,8 @@ use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::Icon;
 use gpui_component::checkbox::Checkbox;
-use gpui_component::{Icon};
 
 use super::{
     ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View,
