@@ -1,6 +1,6 @@
 pub use dbflux_components::typography::AppFonts;
 use dbflux_components::typography::load_bundled_fonts;
-use dbflux_core::ThemeSetting;
+use dbflux_core::{AppStyle, ThemeSetting};
 use gpui::{App, Hsla, SharedString, Window, hsla, px};
 use gpui_component::{
     highlighter::HighlightTheme,
@@ -17,22 +17,37 @@ pub fn ghost_border_color() -> Hsla {
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     load_bundled_fonts(cx);
-    apply_theme(ThemeSetting::Dark, None, cx);
+    apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
 }
 
-pub fn apply_theme(setting: ThemeSetting, window: Option<&mut Window>, cx: &mut App) {
+/// Initialize the theme and density global from persisted settings.
+///
+/// Call this after `init` and after the config has been loaded, before
+/// the first window opens. This sets up the correct radius tokens and
+/// density global for the first frame.
+pub fn init_with_settings(setting: ThemeSetting, style: AppStyle, cx: &mut App) {
+    dbflux_components::density::init(cx, style);
+    apply_theme(setting, style, None, cx);
+}
+
+pub fn apply_theme(
+    setting: ThemeSetting,
+    style: AppStyle,
+    window: Option<&mut Window>,
+    cx: &mut App,
+) {
     match setting {
         ThemeSetting::Dark => {
             Theme::change(ThemeMode::Dark, window, cx);
-            apply_ayu_dark(cx);
+            apply_ayu_dark(style, cx);
         }
         ThemeSetting::Mirage => {
             Theme::change(ThemeMode::Dark, window, cx);
-            apply_ayu_mirage(cx);
+            apply_ayu_mirage(style, cx);
         }
         ThemeSetting::Light => {
             Theme::change(ThemeMode::Light, window, cx);
-            apply_ayu_light(cx);
+            apply_ayu_light(style, cx);
         }
     }
 }
@@ -97,12 +112,23 @@ fn persist_font_config(theme: &mut Theme) {
     theme.mono_font_family = SharedString::from(AppFonts::MONO);
 }
 
-/// DBFlux uses a flat, square chrome. Force the gpui_component theme radius to
-/// 0 so every component reading `theme.radius` (inputs, dropdowns, modals,
-/// pickers, etc.) renders square corners — matching the Settings inputs/buttons.
-fn force_square_radius(theme: &mut Theme) {
-    theme.radius = px(0.0);
-    theme.radius_lg = px(0.0);
+/// Apply border-radius values to the theme based on the active `AppStyle`.
+///
+/// - `AppStyle::Compact` — square corners (0 px), matching the previous
+///   flat chrome behaviour.
+/// - `AppStyle::Default` — subtle radii: 2 px (`radius`) and 3 px (`radius_lg`),
+///   matching the design system token values.
+fn apply_style_radius(theme: &mut Theme, style: AppStyle) {
+    match style {
+        AppStyle::Compact => {
+            theme.radius = px(0.0);
+            theme.radius_lg = px(0.0);
+        }
+        AppStyle::Default => {
+            theme.radius = px(2.0);
+            theme.radius_lg = px(3.0);
+        }
+    }
 }
 
 fn apply_editor_chrome(
@@ -124,7 +150,7 @@ fn apply_editor_chrome(
     });
 }
 
-fn apply_ayu_dark(cx: &mut App) {
+fn apply_ayu_dark(style: AppStyle, cx: &mut App) {
     let theme = Theme::global_mut(cx);
 
     // Ayu Dark base colors
@@ -144,7 +170,7 @@ fn apply_ayu_dark(cx: &mut App) {
     let info = rgb_to_hsla(0x59C2FF);
 
     persist_font_config(theme);
-    force_square_radius(theme);
+    apply_style_radius(theme, style);
 
     // Core colors
     theme.background = background;
@@ -325,7 +351,7 @@ fn apply_ayu_dark(cx: &mut App) {
     theme.cyan_light = rgb_to_hsla(0xBBF0DF);
 }
 
-fn apply_ayu_mirage(cx: &mut App) {
+fn apply_ayu_mirage(style: AppStyle, cx: &mut App) {
     let theme = Theme::global_mut(cx);
 
     let background = rgb_to_hsla(0x1F2430);
@@ -344,7 +370,7 @@ fn apply_ayu_mirage(cx: &mut App) {
     let info = rgb_to_hsla(0x73D0FF);
 
     persist_font_config(theme);
-    force_square_radius(theme);
+    apply_style_radius(theme, style);
     apply_editor_chrome(theme, background, raised, muted, foreground);
 
     theme.background = background;
@@ -486,7 +512,7 @@ fn apply_ayu_mirage(cx: &mut App) {
     theme.cyan_light = rgb_to_hsla(0xBBF0DF);
 }
 
-fn apply_ayu_light(cx: &mut App) {
+fn apply_ayu_light(style: AppStyle, cx: &mut App) {
     let theme = Theme::global_mut(cx);
 
     let background = rgb_to_hsla(0xFAFAFA);
@@ -505,7 +531,7 @@ fn apply_ayu_light(cx: &mut App) {
     let info = rgb_to_hsla(0x399EE6);
 
     persist_font_config(theme);
-    force_square_radius(theme);
+    apply_style_radius(theme, style);
 
     theme.background = background;
     theme.foreground = foreground;

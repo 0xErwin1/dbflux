@@ -243,8 +243,13 @@ fn run_gui() {
 
         emit_system_startup(&audit_service);
 
-        let theme_setting = app_state.read(cx).general_settings().theme;
-        dbflux_ui::ui::theme::apply_theme(theme_setting, None, cx);
+        let general_settings = app_state.read(cx).general_settings().clone();
+        let theme_setting = general_settings.theme;
+        let style_setting = general_settings.style;
+
+        // Set up the density global and apply the persisted theme+style so
+        // radius tokens are correct from the very first frame.
+        dbflux_ui::ui::theme::init_with_settings(theme_setting, style_setting, cx);
 
         let mut main_window_options = WindowOptions {
             app_id: Some("dbflux".into()),

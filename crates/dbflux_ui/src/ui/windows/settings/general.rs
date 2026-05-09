@@ -389,7 +389,15 @@ impl GeneralSection {
             state.update_general_settings(self.gen_settings.clone());
         });
 
-        crate::ui::theme::apply_theme(self.gen_settings.theme, Some(window), cx);
+        // Update the density global so cx-based accessors reflect the new style immediately.
+        dbflux_components::density::set_style(cx, self.gen_settings.style);
+
+        crate::ui::theme::apply_theme(
+            self.gen_settings.theme,
+            self.gen_settings.style,
+            Some(window),
+            cx,
+        );
 
         cx.toast_success(
             "Settings saved. Some changes apply on next startup.",

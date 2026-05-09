@@ -1,5 +1,5 @@
 use dbflux_components::typography::AppFonts;
-use dbflux_core::ThemeSetting;
+use dbflux_core::{AppStyle, ThemeSetting};
 use dbflux_ui::ui::theme;
 use gpui::{SharedString, TestAppContext, Window, hsla};
 use gpui_component::theme::Theme;
@@ -82,7 +82,14 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
         assert_eq!(theme.popover, rgb_to_hsla(0x151E2B));
     });
 
-    cx.update(|cx| theme::apply_theme(ThemeSetting::Light, Option::<&mut Window>::None, cx));
+    cx.update(|cx| {
+        theme::apply_theme(
+            ThemeSetting::Light,
+            AppStyle::Default,
+            Option::<&mut Window>::None,
+            cx,
+        )
+    });
 
     cx.update(|cx| {
         let theme = Theme::global_mut(cx);
@@ -104,7 +111,14 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
 #[gpui::test]
 fn mirage_theme_uses_dark_mode_palette_while_preserving_centralized_fonts(cx: &mut TestAppContext) {
     cx.update(theme::init);
-    cx.update(|cx| theme::apply_theme(ThemeSetting::Mirage, Option::<&mut Window>::None, cx));
+    cx.update(|cx| {
+        theme::apply_theme(
+            ThemeSetting::Mirage,
+            AppStyle::Default,
+            Option::<&mut Window>::None,
+            cx,
+        )
+    });
 
     cx.update(|cx| {
         let theme = Theme::global_mut(cx);
@@ -181,7 +195,7 @@ fn theme_module_keeps_palette_and_font_mapping_but_not_shared_chrome_helpers() {
     assert!(source.contains("pub use dbflux_components::typography::AppFonts;"));
     assert!(source.contains("load_bundled_fonts(cx);"));
     assert!(source.contains("ThemeSetting::Mirage"));
-    assert!(source.contains("apply_ayu_mirage(cx);"));
+    assert!(source.contains("apply_ayu_mirage(style, cx);"));
     assert!(source.contains("theme.popover = raised;"));
     assert!(!source.contains("pub fn surface_highest_color()"));
 }
