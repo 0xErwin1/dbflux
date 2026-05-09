@@ -86,9 +86,9 @@ pub struct BundledFontAsset {
 pub struct AppFonts;
 
 impl AppFonts {
-    pub const HEADLINE: &'static str = "IBM Plex Mono";
-    pub const BODY: &'static str = "IBM Plex Mono";
-    pub const MONO: &'static str = "IBM Plex Mono";
+    pub const HEADLINE: &'static str = "JetBrains Mono";
+    pub const BODY: &'static str = "JetBrains Mono";
+    pub const MONO: &'static str = "JetBrains Mono";
     pub const MONO_FALLBACK: &'static str = "monospace";
     pub const CODE: &'static str = Self::MONO;
     pub const SHORTCUT: &'static str = Self::MONO;
@@ -97,43 +97,43 @@ impl AppFonts {
 pub const BUNDLED_FONT_ASSETS: [BundledFontAsset; 8] = [
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "IBMPlexMono-Regular.ttf",
-        data: include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf"),
+        file_name: "JetBrainsMono-Regular.ttf",
+        data: include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
     },
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "IBMPlexMono-Italic.ttf",
-        data: include_bytes!("../assets/fonts/IBMPlexMono-Italic.ttf"),
+        file_name: "JetBrainsMono-Italic.ttf",
+        data: include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf"),
     },
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "IBMPlexMono-Medium.ttf",
-        data: include_bytes!("../assets/fonts/IBMPlexMono-Medium.ttf"),
+        file_name: "JetBrainsMono-Medium.ttf",
+        data: include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf"),
     },
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "IBMPlexMono-MediumItalic.ttf",
-        data: include_bytes!("../assets/fonts/IBMPlexMono-MediumItalic.ttf"),
+        file_name: "JetBrainsMono-MediumItalic.ttf",
+        data: include_bytes!("../assets/fonts/JetBrainsMono-MediumItalic.ttf"),
     },
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "IBMPlexMono-SemiBold.ttf",
-        data: include_bytes!("../assets/fonts/IBMPlexMono-SemiBold.ttf"),
+        file_name: "JetBrainsMono-SemiBold.ttf",
+        data: include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf"),
     },
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "IBMPlexMono-SemiBoldItalic.ttf",
-        data: include_bytes!("../assets/fonts/IBMPlexMono-SemiBoldItalic.ttf"),
+        file_name: "JetBrainsMono-SemiBoldItalic.ttf",
+        data: include_bytes!("../assets/fonts/JetBrainsMono-SemiBoldItalic.ttf"),
     },
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "IBMPlexMono-Bold.ttf",
-        data: include_bytes!("../assets/fonts/IBMPlexMono-Bold.ttf"),
+        file_name: "JetBrainsMono-Bold.ttf",
+        data: include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
     },
     BundledFontAsset {
         family: AppFonts::BODY,
-        file_name: "IBMPlexMono-BoldItalic.ttf",
-        data: include_bytes!("../assets/fonts/IBMPlexMono-BoldItalic.ttf"),
+        file_name: "JetBrainsMono-BoldItalic.ttf",
+        data: include_bytes!("../assets/fonts/JetBrainsMono-BoldItalic.ttf"),
     },
 ];
 
@@ -1015,17 +1015,17 @@ mod tests {
     }
 
     #[test]
-    fn mono_font_contract_stays_on_ibm_plex_mono() {
-        assert_eq!(AppFonts::BODY, "IBM Plex Mono");
-        assert_eq!(AppFonts::HEADLINE, "IBM Plex Mono");
-        assert_eq!(AppFonts::MONO, "IBM Plex Mono");
+    fn mono_font_contract_stays_on_jetbrains_mono() {
+        assert_eq!(AppFonts::BODY, "JetBrains Mono");
+        assert_eq!(AppFonts::HEADLINE, "JetBrains Mono");
+        assert_eq!(AppFonts::MONO, "JetBrains Mono");
         assert_eq!(AppFonts::MONO_FALLBACK, "monospace");
         assert_eq!(AppFonts::CODE, AppFonts::MONO);
         assert_eq!(AppFonts::SHORTCUT, AppFonts::MONO);
     }
 
     #[test]
-    fn mono_bundled_assets_use_ibm_plex_mono_files() {
+    fn mono_bundled_assets_use_jetbrains_mono_files() {
         let mono_assets: Vec<_> = BUNDLED_FONT_ASSETS
             .iter()
             .map(|asset| asset.file_name)
@@ -1034,14 +1034,14 @@ mod tests {
         assert_eq!(
             mono_assets,
             vec![
-                "IBMPlexMono-Regular.ttf",
-                "IBMPlexMono-Italic.ttf",
-                "IBMPlexMono-Medium.ttf",
-                "IBMPlexMono-MediumItalic.ttf",
-                "IBMPlexMono-SemiBold.ttf",
-                "IBMPlexMono-SemiBoldItalic.ttf",
-                "IBMPlexMono-Bold.ttf",
-                "IBMPlexMono-BoldItalic.ttf",
+                "JetBrainsMono-Regular.ttf",
+                "JetBrainsMono-Italic.ttf",
+                "JetBrainsMono-Medium.ttf",
+                "JetBrainsMono-MediumItalic.ttf",
+                "JetBrainsMono-SemiBold.ttf",
+                "JetBrainsMono-SemiBoldItalic.ttf",
+                "JetBrainsMono-Bold.ttf",
+                "JetBrainsMono-BoldItalic.ttf",
             ]
         );
     }

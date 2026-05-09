@@ -5,14 +5,14 @@ use super::tab_manager::TabManager;
 use super::types::{DocumentId, DocumentMetaSnapshot, DocumentState};
 use crate::ui::components::context_menu::MenuItem;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{Radii, Spacing};
+use crate::ui::tokens::{Heights, Radii, Spacing};
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::typography::MonoMeta;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-const TAB_BAR_HEIGHT: Pixels = px(36.0);
+const TAB_BAR_HEIGHT: Pixels = Heights::TAB;
 
 #[allow(dead_code)]
 pub struct TabBar {

@@ -357,9 +357,10 @@ impl<'a> FilterBar<'a> {
 
         div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(Spacing::SM)
-            .h(Heights::TOOLBAR)
+            .min_h(Heights::TOOLBAR)
             .px(Spacing::SM)
             .border_b_1()
             .border_color(theme.border)
@@ -390,6 +391,7 @@ fn render_item(
                 div()
                     .flex()
                     .items_center()
+                    .h(Heights::CONTROL)
                     .min_w(px(180.0))
                     .rounded(Radii::SM)
                     .when(ring_active, |d| d.border_1().border_color(theme.ring))
@@ -404,6 +406,9 @@ fn render_item(
             .child(Text::caption(label.clone()))
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .h(Heights::CONTROL)
                     .rounded(Radii::SM)
                     .when(ring_active, |d| d.border_1().border_color(theme.ring))
                     .child(dropdown.clone()),
@@ -417,6 +422,9 @@ fn render_item(
             .child(Text::caption(label.clone()))
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .h(Heights::CONTROL)
                     .min_w(px(220.0))
                     .rounded(Radii::SM)
                     .when(ring_active, |d| d.border_1().border_color(theme.ring))
@@ -430,7 +438,7 @@ fn render_item(
             div()
                 .flex()
                 .items_center()
-                .h(Heights::BUTTON)
+                .h(Heights::CONTROL)
                 .px(Spacing::SM)
                 .gap_1()
                 .rounded(Radii::SM)

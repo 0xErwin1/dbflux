@@ -282,6 +282,7 @@ impl AuditDocument {
                 .placeholder(time_range_placeholder)
                 .items(Self::time_range_items())
                 .selected_index(initial_time_range)
+                .toolbar_style(true)
         });
 
         let dropdown_timestamp_mode = cx.new(|_cx| {
@@ -289,6 +290,7 @@ impl AuditDocument {
                 .placeholder("Local")
                 .items(Self::timestamp_mode_items())
                 .selected_index(Some(0))
+                .toolbar_style(true)
         });
 
         let multi_select_level = cx.new(|cx| {
@@ -2691,11 +2693,6 @@ impl AuditDocument {
 
             items
         })
-        .h(px(64.0))
-        .items_center()
-        .justify_center()
-        .py(Spacing::XS)
-        .flex_wrap()
     }
 
     fn render_event_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

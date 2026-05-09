@@ -12,9 +12,10 @@ pub(crate) fn compact_top_bar(
 ) -> Div {
     div()
         .flex()
+        .flex_wrap()
         .items_center()
         .gap(Spacing::SM)
-        .h(Heights::TOOLBAR)
+        .min_h(Heights::TOOLBAR)
         .px(Spacing::SM)
         .border_b_1()
         .border_color(theme.border)

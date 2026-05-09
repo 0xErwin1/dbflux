@@ -1,7 +1,7 @@
 pub use dbflux_components::typography::AppFonts;
 use dbflux_components::typography::load_bundled_fonts;
 use dbflux_core::ThemeSetting;
-use gpui::{App, Hsla, SharedString, Window, hsla};
+use gpui::{App, Hsla, SharedString, Window, hsla, px};
 use gpui_component::{
     highlighter::HighlightTheme,
     theme::{Theme, ThemeMode},
@@ -97,6 +97,14 @@ fn persist_font_config(theme: &mut Theme) {
     theme.mono_font_family = SharedString::from(AppFonts::MONO);
 }
 
+/// DBFlux uses a flat, square chrome. Force the gpui_component theme radius to
+/// 0 so every component reading `theme.radius` (inputs, dropdowns, modals,
+/// pickers, etc.) renders square corners — matching the Settings inputs/buttons.
+fn force_square_radius(theme: &mut Theme) {
+    theme.radius = px(0.0);
+    theme.radius_lg = px(0.0);
+}
+
 fn apply_editor_chrome(
     theme: &mut Theme,
     background: Hsla,
@@ -136,6 +144,7 @@ fn apply_ayu_dark(cx: &mut App) {
     let info = rgb_to_hsla(0x59C2FF);
 
     persist_font_config(theme);
+    force_square_radius(theme);
 
     // Core colors
     theme.background = background;
@@ -334,6 +343,7 @@ fn apply_ayu_mirage(cx: &mut App) {
     let info = rgb_to_hsla(0x73D0FF);
 
     persist_font_config(theme);
+    force_square_radius(theme);
     apply_editor_chrome(theme, background, raised, muted, foreground);
 
     theme.background = background;
@@ -493,6 +503,7 @@ fn apply_ayu_light(cx: &mut App) {
     let info = rgb_to_hsla(0x399EE6);
 
     persist_font_config(theme);
+    force_square_radius(theme);
 
     theme.background = background;
     theme.foreground = foreground;
