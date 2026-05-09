@@ -153,10 +153,10 @@ impl Sidebar {
                 if node_kind == SchemaNodeKind::Table
                     && self.is_relational_with_fk_support(item_id, cx)
                 {
-                    items.push(ContextMenuItem {
-                        label: "View Relationships".into(),
-                        action: ContextMenuAction::ViewRelationships,
-                    });
+                    items.push(ContextMenuItem::item(
+                        "View Relationships",
+                        ContextMenuAction::ViewRelationships,
+                    ));
                 }
 
                 // Get code generators from driver (if connected)

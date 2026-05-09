@@ -135,7 +135,6 @@ impl ContextId {
             ContextId::ContextBar => "Context Bar",
             ContextId::Audit => "Audit Viewer",
             ContextId::EventStreamsPicker => "Event Streams Picker",
-            ContextId::EventStreamsPicker => "Event Streams Picker",
             ContextId::SchemaViz => "Schema Viz",
         }
     }
@@ -160,7 +159,6 @@ impl ContextId {
             ContextId::ContextBar,
             ContextId::Audit,
             ContextId::EventStreamsPicker,
-            ContextId::EventStreamsPicker,
             ContextId::SchemaViz,
         ]
     }
@@ -184,7 +182,6 @@ impl ContextId {
             ContextId::FormNavigation => "FormNavigation",
             ContextId::ContextBar => "ContextBar",
             ContextId::Audit => "Audit",
-            ContextId::EventStreamsPicker => "EventStreamsPicker",
             ContextId::EventStreamsPicker => "EventStreamsPicker",
             ContextId::SchemaViz => "SchemaViz",
         }
