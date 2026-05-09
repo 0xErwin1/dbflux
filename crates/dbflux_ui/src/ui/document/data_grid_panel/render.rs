@@ -383,9 +383,10 @@ impl DataGridPanel {
 
         div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(Spacing::SM)
-            .h(Heights::TOOLBAR)
+            .min_h(Heights::TOOLBAR)
             .px(Spacing::SM)
             .border_b_1()
             .border_color(theme.border)
@@ -408,7 +409,7 @@ impl DataGridPanel {
                         div()
                             .flex()
                             .items_center()
-                            .w(px(280.0))
+                            .w(px(420.0))
                             .rounded(Radii::SM)
                             .when(
                                 show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,

@@ -45,6 +45,7 @@ pub enum AppIcon {
     Info,
     CircleAlert,
     CircleCheck,
+    CircleX,
     TriangleAlert,
     Code,
     Table,
@@ -140,6 +141,7 @@ impl AppIcon {
             Self::Info => "icons/ui/info.svg",
             Self::CircleAlert => "icons/ui/circle-alert.svg",
             Self::CircleCheck => "icons/ui/circle-check.svg",
+            Self::CircleX => "icons/ui/circle-x.svg",
             Self::TriangleAlert => "icons/ui/triangle-alert.svg",
             Self::Code => "icons/ui/code.svg",
             Self::Table => "icons/ui/table.svg",
@@ -232,6 +234,7 @@ impl AppIcon {
             Self::CircleCheck => {
                 include_bytes!("../../../../../resources/icons/ui/circle-check.svg")
             }
+            Self::CircleX => include_bytes!("../../../../../resources/icons/ui/circle-x.svg"),
             Self::TriangleAlert => {
                 include_bytes!("../../../../../resources/icons/ui/triangle-alert.svg")
             }
@@ -383,6 +386,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Info,
     AppIcon::CircleAlert,
     AppIcon::CircleCheck,
+    AppIcon::CircleX,
     AppIcon::TriangleAlert,
     AppIcon::Code,
     AppIcon::Table,

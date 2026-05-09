@@ -17,9 +17,12 @@ impl Heights {
     pub const ROW_COMPACT: Pixels = px(24.0);
     pub const HEADER: Pixels = px(40.0);
     pub const TOOLBAR: Pixels = px(32.0);
-    pub const TAB: Pixels = px(28.0);
+    pub const TAB: Pixels = px(36.0);
     pub const INPUT: Pixels = px(32.0);
     pub const BUTTON: Pixels = px(28.0);
+    /// Standard inline control height (input, dropdown, button) when packed
+    /// into a toolbar/filter bar. Use this to keep heterogeneous controls aligned.
+    pub const CONTROL: Pixels = px(28.0);
     pub const ICON_SM: Pixels = px(16.0);
     pub const ICON_MD: Pixels = px(20.0);
     pub const ICON_LG: Pixels = px(24.0);
@@ -39,9 +42,12 @@ impl FontSizes {
 pub struct Radii;
 
 impl Radii {
-    pub const SM: Pixels = px(3.0);
-    pub const MD: Pixels = px(4.0);
-    pub const LG: Pixels = px(6.0);
+    // DBFlux uses a flat, square chrome — every named radius collapses to 0.
+    // `Radii::FULL` is reserved for explicitly pill-shaped surfaces (avatars,
+    // status dots) and stays as-is.
+    pub const SM: Pixels = px(0.0);
+    pub const MD: Pixels = px(0.0);
+    pub const LG: Pixels = px(0.0);
     pub const FULL: Pixels = px(9999.0);
 }
 
