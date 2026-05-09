@@ -80,6 +80,10 @@ pub fn save_general_settings(
         } else {
             0
         },
+        style: match settings.style {
+            dbflux_core::AppStyle::Default => "default".to_string(),
+            dbflux_core::AppStyle::Compact => "compact".to_string(),
+        },
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -946,7 +950,7 @@ fn load_general_settings(
 
     GeneralSettings {
         theme: theme_setting_from_storage(&dto.theme),
-        style: dbflux_core::AppStyle::Default,
+        style: app_style_from_storage(&dto.style),
         restore_session_on_startup: dto.restore_session_on_startup != 0,
         reopen_last_connections: dto.reopen_last_connections != 0,
         default_focus_on_startup: match dto.default_focus_on_startup.as_str() {
@@ -982,6 +986,17 @@ fn theme_setting_from_storage(theme: &str) -> dbflux_core::ThemeSetting {
         "light" => dbflux_core::ThemeSetting::Light,
         "mirage" => dbflux_core::ThemeSetting::Mirage,
         _ => dbflux_core::ThemeSetting::Dark,
+    }
+}
+
+/// Maps a storage `style` string to `AppStyle`.
+///
+/// Unknown values (including future variants from a newer binary) fall back to
+/// `AppStyle::Default` so the user always gets a usable UI.
+fn app_style_from_storage(style: &str) -> dbflux_core::AppStyle {
+    match style {
+        "compact" => dbflux_core::AppStyle::Compact,
+        _ => dbflux_core::AppStyle::Default,
     }
 }
 
@@ -1647,6 +1662,7 @@ mod tests {
             confirm_dangerous_queries: 0,
             dangerous_requires_where: 0,
             dangerous_requires_preview: 1,
+            style: "default".to_string(),
             updated_at: String::new(),
         };
 
@@ -1700,6 +1716,75 @@ mod tests {
         assert_eq!(dto.theme, "mirage");
         assert_eq!(dto.max_history_entries, 77);
         assert_eq!(dto.auto_save_interval_ms, 1234);
+    }
+
+    #[test]
+    fn app_style_round_trips_through_save_and_load() {
+        use dbflux_core::AppStyle;
+
+        // Compact round-trip
+        let mut settings = GeneralSettings::default();
+        settings.style = AppStyle::Compact;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        super::save_general_settings(&runtime, &settings).expect("save compact style");
+
+        let loaded = load_config(&runtime);
+        assert_eq!(
+            loaded.general_settings.style,
+            AppStyle::Compact,
+            "compact style should survive save/load"
+        );
+
+        // Default round-trip
+        settings.style = AppStyle::Default;
+        super::save_general_settings(&runtime, &settings).expect("save default style");
+
+        let loaded = load_config(&runtime);
+        assert_eq!(
+            loaded.general_settings.style,
+            AppStyle::Default,
+            "default style should survive save/load"
+        );
+    }
+
+    #[test]
+    fn unknown_style_string_in_db_falls_back_to_default() {
+        use dbflux_core::AppStyle;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        // Directly write an unknown style value into the DB.
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "ultracompact".to_string(), // unknown value
+            updated_at: String::new(),
+        };
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("upsert with unknown style");
+
+        let loaded = load_config(&runtime);
+        assert_eq!(
+            loaded.general_settings.style,
+            AppStyle::Default,
+            "unknown style string should fall back to Default"
+        );
     }
 
     #[test]

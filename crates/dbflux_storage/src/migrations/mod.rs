@@ -138,6 +138,7 @@ impl MigrationRegistry {
         registry.register(mod_005_rpc_service_kind::MigrationImpl);
         registry.register(mod_006_rpc_service_api_contract::MigrationImpl);
         registry.register(mod_007_session_exec_ctx_json::MigrationImpl);
+        registry.register(mod_008_general_settings_style::MigrationImpl);
         registry
     }
 
@@ -283,6 +284,7 @@ mod mod_004_audit_saved_filters;
 mod mod_005_rpc_service_kind;
 mod mod_006_rpc_service_api_contract;
 mod mod_007_session_exec_ctx_json;
+mod mod_008_general_settings_style;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -291,6 +293,7 @@ pub use mod_004_audit_saved_filters::MigrationImpl as MigrationImplAuditSavedFil
 pub use mod_005_rpc_service_kind::MigrationImpl as MigrationImplRpcServiceKind;
 pub use mod_006_rpc_service_api_contract::MigrationImpl as MigrationImplRpcServiceApiContract;
 pub use mod_007_session_exec_ctx_json::MigrationImpl as MigrationImplSessionExecCtxJson;
+pub use mod_008_general_settings_style::MigrationImpl as MigrationImplGeneralSettingsStyle;
 
 // ---------------------------------------------------------------------------
 // Database verification utilities
