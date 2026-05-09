@@ -93,27 +93,25 @@ impl CodeDocument {
                     .timer(std::time::Duration::from_millis(150))
                     .await;
 
-                let should_continue = cx
-                    .update(|cx| {
-                        let Some(entity) = this.upgrade() else {
+                let should_continue = cx.update(|cx| {
+                    let Some(entity) = this.upgrade() else {
+                        return false;
+                    };
+
+                    entity.update(cx, |doc, cx| {
+                        let Some(live_output) = doc.live_output.as_mut() else {
                             return false;
                         };
 
-                        entity.update(cx, |doc, cx| {
-                            let Some(live_output) = doc.live_output.as_mut() else {
-                                return false;
-                            };
+                        let changed = live_output.drain();
 
-                            let changed = live_output.drain();
+                        if changed {
+                            cx.notify();
+                        }
 
-                            if changed {
-                                cx.notify();
-                            }
-
-                            !live_output.is_finished()
-                        })
+                        !live_output.is_finished()
                     })
-                    .unwrap_or(false);
+                });
 
                 if !should_continue {
                     break;

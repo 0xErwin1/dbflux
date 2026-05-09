@@ -1003,12 +1003,12 @@ impl DataGridPanel {
 
         if self.view_config.mode == super::data_view::DataViewMode::Document {
             if let Some(tree_state) = &self.document_tree_state {
-                tree_state.update(cx, |state, _| state.focus(window));
+                tree_state.update(cx, |state, cx| state.focus(window, cx));
             } else {
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
             }
         } else {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         cx.emit(DataGridEvent::Focused);

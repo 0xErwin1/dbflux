@@ -77,7 +77,8 @@ mysql = "25"
 petgraph = "0.7"
 
 gpui = "0.2.2"
-gpui-component = { version = "0.5.0", features = ["tree-sitter-languages"] }
+gpui_platform = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions", features = ["wayland", "x11"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "2d2524d89efc47270e9a0ee18f10fa72cd573eff", features = ["tree-sitter-languages"] }
 core-text = ">=21.0.0, <21.1.0"
 smallvec = "1.13.2"
 rfd = "0.17"
@@ -114,3 +115,12 @@ dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
 indexing_slicing = "warn"
+
+[patch.crates-io]
+gpui = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
+
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
+gpui_platform = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
+gpui_web = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
+gpui_macros = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }

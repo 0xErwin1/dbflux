@@ -259,6 +259,8 @@ mod tests {
             foreign_keys: Some(fks),
             constraints: None,
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::default(),
+            child_items: None,
         }
     }
 

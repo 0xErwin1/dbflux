@@ -323,6 +323,8 @@ mod tests {
             foreign_keys: if fks.is_empty() { None } else { Some(fks) },
             constraints: None,
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::default(),
+            child_items: None,
         }
     }
 

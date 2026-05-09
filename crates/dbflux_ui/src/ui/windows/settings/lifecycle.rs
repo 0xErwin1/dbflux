@@ -24,7 +24,7 @@ impl SettingsCoordinator {
         sidebar_tree.select_by_id(Self::tree_id_for_section(active_section));
 
         let focus_handle = cx.focus_handle();
-        focus_handle.focus(window);
+        focus_handle.focus(window, cx);
 
         let (active_section_entity, section_subscription) =
             Self::new_section_entity(active_section, app_state.clone(), window, cx);

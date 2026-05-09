@@ -269,7 +269,7 @@ impl FilterBarState {
                 self.mode = FilterBarMode::Editing;
                 let date_picker = date_picker.clone();
                 date_picker.update(cx, |state, cx| {
-                    state.focus_handle(cx).focus(window);
+                    state.focus_handle(cx).focus(window, cx);
                 });
                 true
             }

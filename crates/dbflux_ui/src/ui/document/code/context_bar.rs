@@ -661,18 +661,17 @@ impl CodeDocument {
                             cx.emit(AppStateChanged);
                         });
 
-                        this.update(cx, |doc, cx| {
+                        let _ = this.update(cx, |doc, cx| {
                             doc.refresh_schema_dropdown_with_default(cx);
                             cx.notify();
-                        })
-                        .ok();
+                        });
                     })
                     .log_if_dropped();
                 }
                 Err(e) => {
                     log::error!("Failed to connect to database {}: {}", target_db, e);
                     cx.update(|cx| {
-                        this.update(cx, |doc, cx| {
+                        let _ = this.update(cx, |doc, cx| {
                             doc.revert_database_selection(prev_database, prev_schema, cx);
 
                             doc.pending_error = Some(format!(
@@ -680,8 +679,7 @@ impl CodeDocument {
                                 target_db, e
                             ));
                             cx.notify();
-                        })
-                        .ok();
+                        });
                     })
                     .log_if_dropped();
                 }
@@ -879,7 +877,7 @@ impl CodeDocument {
 
         self.focus_mode = SqlQueryFocus::ContextBar;
         self.context_bar_slot = visible[0];
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         self.update_context_bar_focus_rings(cx);
         cx.notify();
     }
