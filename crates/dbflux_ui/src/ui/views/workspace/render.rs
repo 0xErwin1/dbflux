@@ -764,7 +764,9 @@ impl Render for Workspace {
                     let sidebar_confirm = self.sidebar.clone();
                     let sidebar_cancel = self.sidebar.clone();
 
-                    let message = if modal_state.is_ddl {
+                    let message = if let Some(count) = modal_state.multi_count {
+                        format!("Delete {count} selected items?")
+                    } else if modal_state.is_ddl {
                         let object_type = modal_state.object_type.unwrap_or("Object");
                         format!("Drop {} \"{}\"?", object_type, modal_state.item_name)
                     } else if modal_state.is_folder {

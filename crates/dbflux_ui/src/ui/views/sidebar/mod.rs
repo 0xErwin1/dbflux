@@ -634,6 +634,10 @@ struct DeleteConfirmState {
     is_folder: bool,
     object_type: Option<String>,
     is_ddl: bool,
+    /// When set, confirm executes a batch delete over every id in the list
+    /// (each routed through `execute_delete`). `item_id`/`item_name` describe
+    /// the anchor item used as the modal's primary subject for messaging.
+    multi_item_ids: Vec<String>,
 }
 
 /// Borrowed snapshot of the delete confirmation modal state, used by the
@@ -643,6 +647,9 @@ pub struct DeleteModalState<'a> {
     pub is_folder: bool,
     pub is_ddl: bool,
     pub object_type: Option<&'a str>,
+    /// When `Some(n)`, the modal confirms a batch delete of `n` selected
+    /// sidebar items. The renderer uses this to switch the message wording.
+    pub multi_count: Option<usize>,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}

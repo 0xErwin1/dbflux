@@ -281,7 +281,7 @@ impl Sidebar {
         }
     }
 
-    fn active_selection(&self) -> &HashSet<String> {
+    pub(super) fn active_selection(&self) -> &HashSet<String> {
         match self.active_tab {
             SidebarTab::Connections => &self.multi_selection,
             SidebarTab::Scripts => &self.scripts_multi_selection,

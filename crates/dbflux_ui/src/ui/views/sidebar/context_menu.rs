@@ -89,6 +89,33 @@ impl Sidebar {
         cx.notify();
     }
 
+    /// Returns "Delete N items" when the right-clicked node is part of a
+    /// multi-selection that contains more than one deletable item, otherwise
+    /// `None`. Used to relabel the per-node "Delete" entry into a batch action
+    /// when several items are selected.
+    fn batch_delete_label(&self, item_id: &str) -> Option<String> {
+        if !self.active_selection().contains(item_id) {
+            return None;
+        }
+        let count = self.deletable_multi_selection().len();
+        (count > 1).then(|| format!("Delete {count} items"))
+    }
+
+    /// If the right-clicked item is part of a deletable multi-selection of >1
+    /// items, open the batch delete confirmation and return `true`. Returns
+    /// `false` otherwise so the caller can fall back to single-item flow.
+    fn try_dispatch_batch_delete(&mut self, item_id: &str, cx: &mut Context<Self>) -> bool {
+        if !self.active_selection().contains(item_id) {
+            return false;
+        }
+        let ids = self.deletable_multi_selection();
+        if ids.len() <= 1 {
+            return false;
+        }
+        self.show_delete_confirm_modal_for_many(ids, cx);
+        true
+    }
+
     pub(super) fn build_context_menu_items(
         &self,
         node_kind: SchemaNodeKind,
@@ -284,9 +311,15 @@ impl Sidebar {
                     );
                 }
 
+                let delete_label = self
+                    .batch_delete_label(item_id)
+                    .unwrap_or_else(|| "Delete".to_string());
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::danger("Delete", ContextMenuAction::Delete)],
+                    [ContextMenuItem::danger(
+                        delete_label,
+                        ContextMenuAction::Delete,
+                    )],
                 );
 
                 items
@@ -371,10 +404,13 @@ impl Sidebar {
                     );
                 }
 
+                let delete_label = self
+                    .batch_delete_label(item_id)
+                    .unwrap_or_else(|| "Delete".to_string());
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::danger(
-                        "Delete",
+                        delete_label,
                         ContextMenuAction::DeleteFolder,
                     )],
                 );
@@ -509,10 +545,13 @@ impl Sidebar {
                         )],
                     );
 
+                    let delete_label = self
+                        .batch_delete_label(item_id)
+                        .unwrap_or_else(|| "Delete".to_string());
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::danger(
-                            "Delete",
+                            delete_label,
                             ContextMenuAction::DeleteScript,
                         )],
                     );
@@ -559,10 +598,13 @@ impl Sidebar {
                     ],
                 );
 
+                let delete_label = self
+                    .batch_delete_label(item_id)
+                    .unwrap_or_else(|| "Delete".to_string());
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::danger(
-                        "Delete",
+                        delete_label,
                         ContextMenuAction::DeleteScript,
                     )],
                 );
@@ -928,6 +970,9 @@ impl Sidebar {
                 self.duplicate_profile(&item_id, cx);
             }
             ContextMenuAction::Delete => {
+                if self.try_dispatch_batch_delete(&item_id, cx) {
+                    return;
+                }
                 self.show_delete_confirm_modal(&item_id, cx);
             }
             ContextMenuAction::OpenDatabase => {
@@ -946,6 +991,9 @@ impl Sidebar {
                 self.pending_rename_item = Some(item_id.clone());
             }
             ContextMenuAction::DeleteFolder => {
+                if self.try_dispatch_batch_delete(&item_id, cx) {
+                    return;
+                }
                 self.show_delete_confirm_modal(&item_id, cx);
             }
             ContextMenuAction::MoveToFolder(target_folder_id) => {
@@ -970,6 +1018,9 @@ impl Sidebar {
                 self.pending_rename_item = Some(item_id.clone());
             }
             ContextMenuAction::DeleteScript => {
+                if self.try_dispatch_batch_delete(&item_id, cx) {
+                    return;
+                }
                 self.show_delete_confirm_modal(&item_id, cx);
             }
             ContextMenuAction::NewScriptFile => {
