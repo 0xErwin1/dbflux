@@ -405,6 +405,16 @@ pub enum AppStyle {
     Compact,
 }
 
+impl AppStyle {
+    /// Human-readable label for display in settings dropdowns and UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            AppStyle::Default => "Default",
+            AppStyle::Compact => "Compact",
+        }
+    }
+}
+
 fn default_true() -> bool {
     true
 }

@@ -19,6 +19,7 @@ impl GeneralSection {
         let saved = self.app_state.read(cx).general_settings();
 
         if self.gen_settings.theme != saved.theme
+            || self.gen_settings.style != saved.style
             || self.gen_settings.restore_session_on_startup != saved.restore_session_on_startup
             || self.gen_settings.reopen_last_connections != saved.reopen_last_connections
             || self.gen_settings.default_focus_on_startup != saved.default_focus_on_startup
@@ -53,6 +54,7 @@ impl GeneralSection {
     pub(super) fn gen_form_rows(&self) -> Vec<GeneralFormRow> {
         vec![
             GeneralFormRow::Theme,
+            GeneralFormRow::Style,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -103,6 +105,11 @@ impl GeneralSection {
         match self.gen_current_row() {
             Some(GeneralFormRow::Theme) => {
                 self.dropdown_theme
+                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                cx.notify();
+            }
+            Some(GeneralFormRow::Style) => {
+                self.dropdown_style
                     .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                 cx.notify();
             }
@@ -203,6 +210,7 @@ impl GeneralSection {
     fn current_dropdown(&self) -> Option<&Entity<Dropdown>> {
         match self.gen_current_row() {
             Some(GeneralFormRow::Theme) => Some(&self.dropdown_theme),
+            Some(GeneralFormRow::Style) => Some(&self.dropdown_style),
             Some(GeneralFormRow::DefaultFocus) => Some(&self.dropdown_default_focus),
             Some(GeneralFormRow::DefaultRefreshPolicy) => Some(&self.dropdown_refresh_policy),
             _ => None,
@@ -434,6 +442,14 @@ impl GeneralSection {
                     is_at(GeneralFormRow::Theme),
                     primary,
                     GeneralFormRow::Theme,
+                    cx,
+                ))
+                .child(self.render_gen_dropdown(
+                    "Style",
+                    &self.dropdown_style,
+                    is_at(GeneralFormRow::Style),
+                    primary,
+                    GeneralFormRow::Style,
                     cx,
                 ))
                 .child(self.render_gen_group_header("Startup & Session", border, muted_fg))
