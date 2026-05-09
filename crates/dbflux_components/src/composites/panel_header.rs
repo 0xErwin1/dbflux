@@ -3,6 +3,7 @@ use gpui::{App, ClickEvent, Hsla, Pixels, SharedString, Stateful, Window, div};
 use gpui_component::ActiveTheme;
 use gpui_component::IconName;
 
+use crate::density;
 use crate::icon::IconSource;
 use crate::primitives::{Icon, SurfaceRole};
 use crate::tokens::{FontSizes, Heights, Spacing};
@@ -283,7 +284,7 @@ fn panel_header_layout(
     }
 
     let title = MonoCaption::new(title)
-        .font_size(FontSizes::SM)
+        .font_size(density::font_sm(cx))
         .font_weight(if focused {
             gpui::FontWeight::BOLD
         } else {
@@ -385,7 +386,7 @@ fn panel_header_layout_stateful(
         .unwrap_or(contract.base_title_color);
 
     let title = MonoCaption::new(title)
-        .font_size(FontSizes::SM)
+        .font_size(density::font_sm(cx))
         .font_weight(if focused {
             gpui::FontWeight::BOLD
         } else {
@@ -455,7 +456,7 @@ fn panel_header_custom_stateful(
 
     left = left.child(
         MonoCaption::new(title)
-            .font_size(FontSizes::SM)
+            .font_size(density::font_sm(cx))
             .font_weight(gpui::FontWeight::MEDIUM)
             .color(theme.foreground),
     );

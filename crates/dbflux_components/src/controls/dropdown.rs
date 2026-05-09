@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::composites::control_shell_with_padding;
+use crate::density;
 use crate::primitives::focus_frame;
-use crate::tokens::{ChromeEdgeRole, FontSizes, Heights, Radii, Spacing};
+use crate::tokens::{ChromeEdgeRole, Heights, Radii, Spacing};
 use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{
@@ -460,6 +461,8 @@ impl Dropdown {
         let is_disabled = self.disabled;
         let chrome = dropdown_menu_chrome();
 
+        let menu_font_size = density::font_base(cx);
+
         let items: Vec<gpui::AnyElement> = self
             .items
             .iter()
@@ -473,7 +476,7 @@ impl Dropdown {
                     .py(Spacing::XS)
                     .font_family(AppFonts::BODY)
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_size(FontSizes::BASE)
+                    .text_size(menu_font_size)
                     .whitespace_nowrap()
                     .text_color(theme.foreground)
                     .when(is_highlighted, |el| {
@@ -510,7 +513,7 @@ impl Dropdown {
             .border_1()
             .border_color(chrome.edge.resolve(theme))
             .bg(theme.popover)
-            .rounded(chrome.radius)
+            .rounded(density::radius_md(cx))
             .overflow_scroll()
             .track_scroll(&self.menu_scroll_handle)
             .on_scroll_wheel(cx.listener(Self::handle_menu_scroll_wheel))
@@ -556,6 +559,9 @@ impl Dropdown {
                     .hover(|s| s.bg(theme.accent.opacity(0.1)))
             });
 
+        let font_sm = density::font_sm(cx);
+        let font_base = density::font_base(cx);
+
         match variant {
             DropdownTriggerVariant::Compact => {
                 trigger = trigger
@@ -564,10 +570,10 @@ impl Dropdown {
                     .px(Spacing::SM)
                     .font_family(AppFonts::BODY)
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_size(FontSizes::SM)
+                    .text_size(font_sm)
                     .child(
                         div()
-                            .text_size(FontSizes::SM)
+                            .text_size(font_sm)
                             .text_color(theme.muted_foreground)
                             .child("▾"),
                     );
@@ -579,11 +585,11 @@ impl Dropdown {
                     .px(Spacing::XS)
                     .font_family(AppFonts::BODY)
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_size(FontSizes::SM)
+                    .text_size(font_sm)
                     .child(div().flex_1().truncate().child(label))
                     .child(
                         div()
-                            .text_size(FontSizes::SM)
+                            .text_size(font_sm)
                             .text_color(theme.muted_foreground)
                             .child("▾"),
                     );
@@ -595,11 +601,11 @@ impl Dropdown {
                     .py(Spacing::XS)
                     .font_family(AppFonts::BODY)
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_size(FontSizes::BASE)
+                    .text_size(font_base)
                     .child(div().flex_1().truncate().child(label))
                     .child(
                         div()
-                            .text_size(FontSizes::SM)
+                            .text_size(font_sm)
                             .text_color(theme.muted_foreground)
                             .child("▾"),
                     );
