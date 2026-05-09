@@ -992,11 +992,12 @@ fn theme_setting_from_storage(theme: &str) -> dbflux_core::ThemeSetting {
 /// Maps a storage `style` string to `AppStyle`.
 ///
 /// Unknown values (including future variants from a newer binary) fall back to
-/// `AppStyle::Default` so the user always gets a usable UI.
+/// `AppStyle::Compact` (the project's default density) so the user always gets
+/// a usable UI.
 fn app_style_from_storage(style: &str) -> dbflux_core::AppStyle {
     match style {
-        "compact" => dbflux_core::AppStyle::Compact,
-        _ => dbflux_core::AppStyle::Default,
+        "default" => dbflux_core::AppStyle::Default,
+        _ => dbflux_core::AppStyle::Compact,
     }
 }
 
@@ -1749,7 +1750,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_style_string_in_db_falls_back_to_default() {
+    fn unknown_style_string_in_db_falls_back_to_compact() {
         use dbflux_core::AppStyle;
 
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
@@ -1782,8 +1783,8 @@ mod tests {
         let loaded = load_config(&runtime);
         assert_eq!(
             loaded.general_settings.style,
-            AppStyle::Default,
-            "unknown style string should fall back to Default"
+            AppStyle::Compact,
+            "unknown style string should fall back to Compact (project default)"
         );
     }
 

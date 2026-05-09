@@ -400,8 +400,8 @@ pub enum ThemeSetting {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppStyle {
-    #[default]
     Default,
+    #[default]
     Compact,
 }
 
