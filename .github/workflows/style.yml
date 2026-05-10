@@ -47,6 +47,7 @@ jobs:
             pkg-config \
             libssl-dev \
             libdbus-1-dev \
+            libfontconfig1-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev
 
