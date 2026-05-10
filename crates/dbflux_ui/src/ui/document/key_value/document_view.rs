@@ -1,6 +1,5 @@
 use super::parsing::{MemberEntry, parse_json_to_value, parse_members};
 use super::{KeyValueDocumentEvent, KvValueViewMode};
-use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState, NodeId,
 };
@@ -192,8 +191,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

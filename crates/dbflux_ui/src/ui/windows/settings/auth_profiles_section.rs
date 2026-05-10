@@ -642,7 +642,7 @@ impl AuthProfilesSection {
         cx.spawn(async move |_this, cx| {
             let result = fetch_task.await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(response) => {

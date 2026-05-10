@@ -289,8 +289,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -331,8 +330,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -519,8 +517,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -537,8 +534,7 @@ impl DataGridPanel {
                     }
                     panel.handle_save_result(row_idx, result, cx);
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -652,8 +648,7 @@ impl DataGridPanel {
                             });
                         }
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -670,8 +665,7 @@ impl DataGridPanel {
                     }
                     panel.handle_save_result(row_idx, result, cx);
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -811,8 +805,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -850,8 +843,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -948,8 +940,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -987,8 +978,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1149,8 +1139,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -1186,8 +1175,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1281,8 +1269,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -1318,8 +1305,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1524,8 +1510,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -1592,8 +1577,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1700,8 +1684,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -1771,8 +1754,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

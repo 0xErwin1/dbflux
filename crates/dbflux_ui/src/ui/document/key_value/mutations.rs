@@ -2,7 +2,6 @@ use super::add_member_modal::AddMemberEvent;
 use super::new_key_modal::{NewKeyCreatedEvent, NewKeyType, NewKeyValue};
 use super::parsing::{MemberEntry, parse_database_name};
 use super::{KeyValueFocusMode, PendingKeyDelete, PendingMemberDelete};
-use crate::ui::AsyncUpdateResultExt;
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     DbError, HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeyRenameRequest, KeySetRequest,
@@ -161,8 +160,7 @@ impl super::KeyValueDocument {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -259,8 +257,7 @@ impl super::KeyValueDocument {
                         this.reload_selected_value(cx);
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -375,8 +372,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
 
@@ -502,8 +498,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -701,8 +696,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
 
@@ -829,8 +823,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -977,8 +970,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

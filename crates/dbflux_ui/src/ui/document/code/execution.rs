@@ -1420,7 +1420,7 @@ impl CodeDocument {
                         cx,
                     );
                 });
-                let _outer_result = cx.update(|_| ());
+                cx.update(|_| ());
                 if inner_result.is_err() {
                     // Entity is gone (outer fails) or inner update failed; emit audit event directly
                     // so it is not silently dropped.

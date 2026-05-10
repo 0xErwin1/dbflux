@@ -1,5 +1,4 @@
 use super::*;
-use crate::ui::AsyncUpdateResultExt;
 use dbflux_components::composites::control_shell;
 use dbflux_components::primitives::{Icon, Text, focus_frame};
 
@@ -665,8 +664,7 @@ impl CodeDocument {
                             doc.refresh_schema_dropdown_with_default(cx);
                             cx.notify();
                         });
-                    })
-                    .log_if_dropped();
+                    });
                 }
                 Err(e) => {
                     log::error!("Failed to connect to database {}: {}", target_db, e);
@@ -680,8 +678,7 @@ impl CodeDocument {
                             ));
                             cx.notify();
                         });
-                    })
-                    .log_if_dropped();
+                    });
                 }
             }
         })
