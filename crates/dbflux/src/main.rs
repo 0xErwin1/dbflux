@@ -336,7 +336,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             if stopped > 0 {
                 info!("Stopped {} managed RPC host process(es)", stopped);
             }
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
             return;
         }
 
@@ -370,7 +370,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             if stopped > 0 {
                 info!("Stopped {} managed RPC host process(es)", stopped);
             }
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
             return;
         }
 
@@ -390,7 +390,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     info!("Shutdown phase: Flushing logs...");
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.shutdown().advance_phase(
                 ShutdownPhase::ClosingConnections,
@@ -404,7 +404,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         .await;
 
     info!("Shutdown complete in {:?}", start.elapsed());
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.complete_shutdown();
         });
@@ -415,7 +415,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         info!("Stopped {} managed RPC host process(es)", stopped);
     }
 
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         cx.quit();
     });
 }
