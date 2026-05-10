@@ -11,7 +11,6 @@ use gpui::prelude::*;
 use gpui::{App, Context, Entity, Global, Hsla, SharedString, Window, px, rems};
 use gpui_component::ActiveTheme;
 
-use crate::ui::AsyncUpdateResultExt;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
 
@@ -352,8 +351,7 @@ impl ToastHost {
                         host.dismiss(id, cx);
                     });
                 }
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

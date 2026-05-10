@@ -1,5 +1,4 @@
 use super::*;
-use crate::ui::AsyncUpdateResultExt;
 use dbflux_core::TaskKind;
 
 const COLLECTION_CHILDREN_PAGE_SIZE: u32 = 50;
@@ -295,8 +294,7 @@ impl Sidebar {
                 }
 
                 on_finalize(&app_state, cx);
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
 

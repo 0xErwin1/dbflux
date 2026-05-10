@@ -1011,7 +1011,7 @@ impl Workspace {
                                     stats.deleted_count
                                 ))
                                 .with_duration_ms(stats.duration_ms as i64);
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     let audit_service = app_state.read(cx).audit_service().clone();
                                     if let Err(rec_err) = audit_service.record(event) {
                                         log::warn!("Failed to record purge success audit event: {}", rec_err);
@@ -1034,7 +1034,7 @@ impl Workspace {
                                     e
                                 ));
                                 // Emit through a foreground update so we have proper context.
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     let audit_service = app_state.read(cx).audit_service().clone();
                                     if let Err(rec_err) = audit_service.record(event) {
                                         log::warn!("Failed to record purge failure audit event: {}", rec_err);
