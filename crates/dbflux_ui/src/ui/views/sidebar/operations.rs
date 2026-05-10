@@ -81,7 +81,7 @@ enum DatabaseRefreshExecutionOutcome {
 }
 
 enum SchemaObjectRefreshResult {
-    TableDetails(FetchTableDetailsResult),
+    TableDetails(Box<FetchTableDetailsResult>),
     Views {
         profile_id: Uuid,
         database: String,
@@ -4594,7 +4594,7 @@ impl Sidebar {
                         .spawn(async move {
                             params
                                 .execute()
-                                .map(SchemaObjectRefreshResult::TableDetails)
+                                .map(|r| SchemaObjectRefreshResult::TableDetails(Box::new(r)))
                         })
                         .await
                 }
@@ -4654,9 +4654,15 @@ impl Sidebar {
                                 state.complete_task(task_id);
                                 state.set_table_details(
                                     result.profile_id,
+                                    result.database.clone(),
+                                    result.table.clone(),
+                                    result.details,
+                                );
+                                state.set_dependents(
+                                    result.profile_id,
                                     result.database,
                                     result.table,
-                                    result.details,
+                                    result.dependents,
                                 );
                                 cx.emit(AppStateChanged);
                             });

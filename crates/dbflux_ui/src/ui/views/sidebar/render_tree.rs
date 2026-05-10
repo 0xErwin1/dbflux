@@ -1,5 +1,5 @@
 use super::*;
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
 use dbflux_components::typography::MonoLabel;
 use gpui::FontWeight;
 
@@ -21,6 +21,7 @@ fn sidebar_tree_label(
             | SchemaNodeKind::IndexesFolder
             | SchemaNodeKind::ForeignKeysFolder
             | SchemaNodeKind::ConstraintsFolder
+            | SchemaNodeKind::DependentsFolder
     ) {
         FontWeight::MEDIUM
     } else {
@@ -183,6 +184,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::DatabaseIndexesFolder
                 | SchemaNodeKind::CollectionFieldsFolder
                 | SchemaNodeKind::CollectionIndexesFolder
+                | SchemaNodeKind::DependentsFolder
         ));
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
@@ -373,7 +375,20 @@ pub(super) fn render_tree_item(
                                     .font_size(FontSizes::SM)
                                     .color(icon_color),
                             )
-                        }),
+                        })
+                        .when(
+                            node_icon.is_none()
+                                && unicode_icon.is_empty()
+                                && node_kind == SchemaNodeKind::Profile,
+                            |el| {
+                                let dot_variant = if is_connected {
+                                    StatusDotVariant::Success
+                                } else {
+                                    StatusDotVariant::Idle
+                                };
+                                el.child(StatusDot::new(dot_variant))
+                            },
+                        ),
                 )
                 .when(is_being_renamed, |el| {
                     let rename_input = params.rename_input.clone();
@@ -833,6 +848,12 @@ pub(super) fn render_tree_item(
                         let item_id_for_menu = item_id.clone();
                         let hover_bg = theme.secondary;
 
+                        // TODO(design-bundle): hover-only ⋯ menu — button should be invisible
+                        // until the row is hovered. GPUI does not yet expose `group_hover` /
+                        // `visible_on_hover`, and making this stateful would require an
+                        // `is_hovered` field per list row plus mouse-enter/leave handlers on the
+                        // stateless render_tree_item fn. Defer until GPUI gains opacity or group
+                        // hover support, or until rows are promoted to entities.
                         el.child(
                             div()
                                 .id(SharedString::from(format!("menu-btn-{}", item_id_for_menu)))
@@ -925,11 +946,10 @@ fn resolve_node_icon(
             } else {
                 theme.muted_foreground
             };
-            let unicode = if icon.is_none() {
-                if is_connected { "\u{25CF}" } else { "\u{25CB}" }
-            } else {
-                ""
-            };
+
+            // When no driver icon is set, signal that a StatusDot should render
+            // (the icon slot handles this via the `use_status_dot` branch).
+            let unicode = "";
             (icon, unicode, color)
         }
         SchemaNodeKind::Database => (Some(AppIcon::Database), "", params.color_orange),
@@ -984,6 +1004,8 @@ fn resolve_node_icon(
                 .unwrap_or(AppIcon::ScrollText);
             (Some(icon), "", theme.muted_foreground)
         }
+        SchemaNodeKind::DependentsFolder => (Some(AppIcon::Link2), "", params.color_gray),
+        SchemaNodeKind::DependentItem => (Some(AppIcon::ExternalLink), "", theme.muted_foreground),
         _ => (None, "", theme.muted_foreground),
     }
 }
@@ -1074,6 +1096,8 @@ fn resolve_label_color(
         SchemaNodeKind::CollectionIndex => params.color_purple,
         SchemaNodeKind::ScriptsFolder => theme.foreground,
         SchemaNodeKind::ScriptFile => theme.foreground,
+        SchemaNodeKind::DependentsFolder => params.color_gray,
+        SchemaNodeKind::DependentItem => theme.muted_foreground,
         _ => theme.muted_foreground,
     }
 }

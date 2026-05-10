@@ -910,6 +910,18 @@ impl AppState {
             .set_table_details(profile_id, database, table, details);
     }
 
+    pub fn set_dependents(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        table: String,
+        deps: Vec<dbflux_core::RelationRef>,
+    ) {
+        self.facade
+            .connections
+            .set_dependents(profile_id, database, table, deps);
+    }
+
     #[allow(dead_code)]
     pub fn needs_table_details(&self, profile_id: Uuid, database: &str, table: &str) -> bool {
         self.facade

@@ -878,6 +878,20 @@ impl Connection for SqliteConnection {
         self.get_all_foreign_keys(&conn)
     }
 
+    fn fetch_dependents(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| dbflux_core::DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        fetch_dependents(&conn, table)
+    }
+
     fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
         sqlite_code_generators()
     }
@@ -2115,4 +2129,100 @@ mod tests {
             "SELECT \"customer_id\", AVG(\"amount\") AS \"avg_amount\" FROM \"orders\" GROUP BY \"customer_id\" HAVING \"avg_amount\" > 10"
         );
     }
+}
+
+// =============================================================================
+// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// =============================================================================
+//
+// Wiring note: `table_details()` on the `RelationalConnection` trait returns
+// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
+// layer would need to call `fetch_dependents` in the same background task that
+// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
+// That wiring is deferred to a follow-up slice once the fetch task pattern is
+// extended to return both `TableInfo` and `Vec<RelationRef>`.
+
+/// Fetch objects that depend on `table` from a live SQLite connection.
+///
+/// Covers:
+///  - Views defined in `sqlite_master` that reference this table.
+///  - Triggers defined on this table in `sqlite_master`.
+///  - Tables with a foreign key referencing this table via `pragma_foreign_key_list`.
+///
+/// Note: SQLite does not support materialized views.
+pub fn fetch_dependents(
+    conn: &RusqliteConnection,
+    table: &str,
+) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
+    use dbflux_core::{DbError, RelationKind, RelationRef};
+
+    let mut deps: Vec<RelationRef> = Vec::new();
+
+    // Views and triggers in sqlite_master
+    let mut stmt = conn
+        .prepare(
+            "SELECT type, name FROM sqlite_master
+             WHERE type IN ('view', 'trigger')
+               AND sql LIKE '%' || ?1 || '%'",
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents objects: {}", e).into()))?;
+
+    let rows: Vec<(String, String)> = stmt
+        .query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents query: {}", e).into()))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for (obj_type, obj_name) in rows {
+        let kind = match obj_type.as_str() {
+            "view" => RelationKind::View,
+            "trigger" => RelationKind::Trigger,
+            _ => continue,
+        };
+        deps.push(RelationRef {
+            kind,
+            qualified_name: obj_name,
+        });
+    }
+
+    // Foreign key children via pragma_foreign_key_list on all tables
+    let all_tables: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
+            })?;
+
+        stmt.query_map([], |row| row.get(0))
+            .map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
+    };
+
+    for child_table in all_tables {
+        let has_fk = {
+            let query = format!(
+                "SELECT 1 FROM pragma_foreign_key_list('{}') WHERE \"table\" = ?1 LIMIT 1",
+                child_table.replace('\'', "''")
+            );
+            let mut fk_stmt = conn.prepare(&query).map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents fk_check: {}", e).into())
+            })?;
+
+            fk_stmt.exists([table]).map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents fk_check: {}", e).into())
+            })?
+        };
+
+        if has_fk {
+            deps.push(RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: child_table,
+            });
+        }
+    }
+
+    Ok(deps)
 }

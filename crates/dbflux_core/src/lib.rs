@@ -115,11 +115,11 @@ pub use schema::{
     ForeignKeyBuilder, ForeignKeyInfo, GraphInfo, GraphSchema, IndexBuilder, IndexData,
     IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo, KeyValueSchema, MeasurementInfo,
     MultiModelCapabilities, MultiModelSchema, NodeLabelInfo, ParseSchemaNodeIdError, PropertyInfo,
-    RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind,
-    SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo,
-    TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
-    VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
+    RelationKind, RelationRef, RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo,
+    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo,
+    SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SearchIndexInfo, SearchMappingInfo, SearchSchema,
+    TableInfo, TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField,
+    VectorMetric, VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
 };
 
 pub use sql::{

@@ -286,6 +286,7 @@ impl Sidebar {
                                     &connected.schema_types,
                                     &connected.schema_indexes,
                                     &connected.schema_foreign_keys,
+                                    &connected.dependents_cache,
                                 )
                             }
                         } else if is_pending {
@@ -311,6 +312,7 @@ impl Sidebar {
                                 &connected.schema_types,
                                 &connected.schema_indexes,
                                 &connected.schema_foreign_keys,
+                                &connected.dependents_cache,
                             )
                         } else {
                             Vec::new()
@@ -361,6 +363,7 @@ impl Sidebar {
                                 &connected.schema_types,
                                 &connected.schema_indexes,
                                 &connected.schema_foreign_keys,
+                                &connected.dependents_cache,
                             )
                         }
                     } else if is_pending {
@@ -419,6 +422,7 @@ impl Sidebar {
                     &connected.schema_types,
                     &connected.schema_indexes,
                     &connected.schema_foreign_keys,
+                    &connected.dependents_cache,
                 );
             }
 
@@ -494,6 +498,7 @@ impl Sidebar {
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
         schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
         schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+        dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
     ) -> Vec<TreeItem> {
         let mut children = Vec::new();
 
@@ -507,6 +512,7 @@ impl Sidebar {
                 schema_types,
                 schema_indexes,
                 schema_foreign_keys,
+                dependents_cache,
             );
 
             children.push(
@@ -779,6 +785,7 @@ impl Sidebar {
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
         schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
         schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+        dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
         let schema_name = &db_schema.name;
@@ -794,6 +801,7 @@ impl Sidebar {
                         schema_name,
                         table,
                         table_details,
+                        dependents_cache,
                     )
                 })
                 .collect();
@@ -1102,6 +1110,7 @@ impl Sidebar {
         schema_name: &str,
         table: &dbflux_core::TableInfo,
         table_details: &HashMap<(String, String), TableInfo>,
+        dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
     ) -> TreeItem {
         // Must match the key used by cache_database().
         let cache_db = target_database.unwrap_or(schema_name);
@@ -1238,7 +1247,60 @@ impl Sidebar {
         let fk_count = fk_children.len();
         let constraint_count = constraint_children.len();
 
-        let table_sections = vec![
+        // Lookup key must match the cache write path in populate_dependents.
+        // The cache key mirrors `table_details`: (database-or-schema, table).
+        let dep_key = (
+            target_database.unwrap_or(schema_name).to_string(),
+            table.name.clone(),
+        );
+        let deps = dependents_cache
+            .get(&dep_key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+
+        let dependents_section: Option<TreeItem> = if !deps.is_empty() {
+            let dep_items: Vec<TreeItem> = deps
+                .iter()
+                .map(|dep| {
+                    let kind_label = match dep.kind {
+                        dbflux_core::RelationKind::View => "View",
+                        dbflux_core::RelationKind::MaterializedView => "Materialized View",
+                        dbflux_core::RelationKind::ForeignKeyChild => "FK Child",
+                        dbflux_core::RelationKind::Trigger => "Trigger",
+                    };
+                    let label = format!("{} ({})", dep.qualified_name, kind_label);
+
+                    TreeItem::new(
+                        SchemaNodeId::DependentItem {
+                            profile_id,
+                            schema: schema_name.to_string(),
+                            table: table.name.clone(),
+                            name: dep.qualified_name.clone(),
+                        }
+                        .to_string(),
+                        label,
+                    )
+                })
+                .collect();
+
+            Some(
+                TreeItem::new(
+                    SchemaNodeId::DependentsFolder {
+                        profile_id,
+                        schema: schema_name.to_string(),
+                        table: table.name.clone(),
+                    }
+                    .to_string(),
+                    format!("Used by {} objects", deps.len()),
+                )
+                .expanded(false)
+                .children(dep_items),
+            )
+        } else {
+            None
+        };
+
+        let mut table_sections = vec![
             TreeItem::new(
                 SchemaNodeId::ColumnsFolder {
                     profile_id,
@@ -1284,6 +1346,10 @@ impl Sidebar {
             .expanded(false)
             .children(constraint_children),
         ];
+
+        if let Some(dep_folder) = dependents_section {
+            table_sections.push(dep_folder);
+        }
 
         TreeItem::new(
             SchemaNodeId::Table {

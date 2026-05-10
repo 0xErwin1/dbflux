@@ -3189,3 +3189,80 @@ mod tests {
         assert!(!mariadb.form_definition().tabs.is_empty());
     }
 }
+
+// =============================================================================
+// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// =============================================================================
+//
+// Wiring note: `table_details()` on the `RelationalConnection` trait returns
+// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
+// layer would need to call `fetch_dependents` in the same background task that
+// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
+// That wiring is deferred to a follow-up slice once the fetch task pattern is
+// extended to return both `TableInfo` and `Vec<RelationRef>`.
+
+/// Fetch objects that depend on `database.table` from a live MySQL/MariaDB connection.
+///
+/// Covers:
+///  - Views depending on the table via `information_schema.VIEW_TABLE_USAGE`.
+///  - Tables with a foreign key referencing this table via `information_schema.KEY_COLUMN_USAGE`.
+///
+/// Note: MySQL does not support materialized views or user-defined triggers on arbitrary tables
+/// in the same way PostgreSQL does; triggers are not included here.
+pub fn fetch_dependents(
+    conn: &mut Conn,
+    database: &str,
+    table: &str,
+) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
+    use dbflux_core::{DbError, RelationKind, RelationRef};
+    use mysql::prelude::Queryable;
+
+    let mut deps: Vec<RelationRef> = Vec::new();
+
+    // Views that use this table
+    let view_rows: Vec<(String, String)> = conn
+        .exec(
+            "SELECT TABLE_SCHEMA, TABLE_NAME
+             FROM information_schema.VIEW_TABLE_USAGE
+             WHERE VIEW_TABLE_SCHEMA = ?
+               AND VIEW_TABLE_NAME   = ?",
+            (database, table),
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
+
+    for (view_schema, view_name) in view_rows {
+        deps.push(RelationRef {
+            kind: RelationKind::View,
+            qualified_name: format!("{}.{}", view_schema, view_name),
+        });
+    }
+
+    // FK child tables
+    let fk_rows: Vec<(String, String)> = conn
+        .exec(
+            "SELECT DISTINCT kcu.TABLE_SCHEMA, kcu.TABLE_NAME
+             FROM information_schema.KEY_COLUMN_USAGE kcu
+             JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+               ON rc.CONSTRAINT_NAME   = kcu.CONSTRAINT_NAME
+              AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
+             WHERE rc.REFERENCED_TABLE_NAME = ?
+               AND kcu.REFERENCED_TABLE_SCHEMA = ?",
+            (table, database),
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
+
+    for (child_schema, child_table) in fk_rows {
+        let qualified = format!("{}.{}", child_schema, child_table);
+        if !deps
+            .iter()
+            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == qualified)
+        {
+            deps.push(RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: qualified,
+            });
+        }
+    }
+
+    Ok(deps)
+}

@@ -9,9 +9,10 @@ use crate::{
     DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
     DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest, FormValues,
     LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
-    SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect, SqlGenerationRequest,
-    SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
+    RelationRef, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect,
+    SqlGenerationRequest, SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo,
+    Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -728,6 +729,20 @@ pub trait Connection: Send + Sync {
         _database: &str,
         _schema: Option<&str>,
     ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Fetch objects that depend on `schema.table` — views, materialized views,
+    /// FK child tables, and triggers.
+    ///
+    /// Returns an empty `Vec` by default so NoSQL and other drivers that do not
+    /// support this concept degrade gracefully.
+    fn fetch_dependents(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<RelationRef>, DbError> {
         Ok(Vec::new())
     }
 

@@ -1589,6 +1589,22 @@ impl Connection for PostgresConnection {
         get_schema_foreign_keys(&mut client, schema_name)
     }
 
+    fn fetch_dependents(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+        let schema_name = schema.unwrap_or("public");
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+        fetch_dependents(&mut client, schema_name, table)
+    }
+
     fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
         postgres_code_generators()
     }
@@ -3723,4 +3739,141 @@ mod tests {
 
         assert!(generator.generate_create_type(&request).is_none());
     }
+}
+
+// =============================================================================
+// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// =============================================================================
+//
+// Wiring note: `table_details()` on the `RelationalConnection` trait returns
+// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
+// layer would need to call `fetch_dependents` in the same background task that
+// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
+// That wiring is deferred to a follow-up slice once the fetch task pattern is
+// extended to return both `TableInfo` and `Vec<RelationRef>`.
+
+/// Fetch objects that depend on `schema.table` from a live PostgreSQL client.
+///
+/// Covers:
+///  - Views (`pg_class.relkind = 'v'`) depending on the table via `pg_depend`.
+///  - Materialized views (`pg_class.relkind = 'm'`).
+///  - Tables with a foreign-key referencing this table (`information_schema`).
+///  - Triggers defined on the table.
+///
+/// Returns an error if the query fails; returns an empty `Vec` when the table
+/// has no dependents.
+pub fn fetch_dependents(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+    use dbflux_core::{RelationKind, RelationRef};
+
+    let mut deps: Vec<RelationRef> = Vec::new();
+
+    // Views and materialized views via pg_depend
+    let view_rows = client
+        .query(
+            "
+        SELECT
+            n.nspname AS dep_schema,
+            c.relname AS dep_name,
+            c.relkind  AS dep_kind
+        FROM pg_depend d
+        JOIN pg_class c  ON c.oid = d.objid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_class src ON src.oid = d.refobjid
+        JOIN pg_namespace sn ON sn.oid = src.relnamespace
+        WHERE d.deptype = 'n'
+          AND src.relname = $1
+          AND sn.nspname  = $2
+          AND c.relkind IN ('v', 'm')
+        ",
+            &[&table, &schema],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
+
+    for row in view_rows {
+        let dep_schema: &str = row.get("dep_schema");
+        let dep_name: &str = row.get("dep_name");
+        let relkind: i8 = row.get("dep_kind");
+        let kind = if relkind == b'm' as i8 {
+            RelationKind::MaterializedView
+        } else {
+            RelationKind::View
+        };
+        deps.push(RelationRef {
+            kind,
+            qualified_name: format!("{}.{}", dep_schema, dep_name),
+        });
+    }
+
+    // FK child tables via information_schema
+    let fk_rows = client
+        .query(
+            "
+        SELECT
+            kcu.table_schema AS child_schema,
+            kcu.table_name   AS child_table,
+            kcu.column_name  AS child_col
+        FROM information_schema.referential_constraints rc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_name = rc.constraint_name
+         AND kcu.constraint_schema = rc.constraint_schema
+        JOIN information_schema.key_column_usage pku
+          ON pku.constraint_name = rc.unique_constraint_name
+         AND pku.constraint_schema = rc.unique_constraint_schema
+        WHERE pku.table_schema = $1
+          AND pku.table_name   = $2
+        GROUP BY kcu.table_schema, kcu.table_name, kcu.column_name
+        ",
+            &[&schema, &table],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
+
+    for row in fk_rows {
+        let child_schema: &str = row.get("child_schema");
+        let child_table: &str = row.get("child_table");
+        let child_col: &str = row.get("child_col");
+        let qualified = format!("{}.{}.{}", child_schema, child_table, child_col);
+
+        // Deduplicate: only add the table reference once per unique table.
+        let table_qname = format!("{}.{}", child_schema, child_table);
+        if !deps
+            .iter()
+            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == table_qname)
+        {
+            let _ = child_col;
+            deps.push(RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: table_qname,
+            });
+        }
+        let _ = qualified;
+    }
+
+    // Triggers on the table
+    let trigger_rows = client
+        .query(
+            "
+        SELECT trigger_schema, trigger_name
+        FROM information_schema.triggers
+        WHERE event_object_schema = $1
+          AND event_object_table  = $2
+        GROUP BY trigger_schema, trigger_name
+        ",
+            &[&schema, &table],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents triggers: {}", e).into()))?;
+
+    for row in trigger_rows {
+        let trig_schema: &str = row.get("trigger_schema");
+        let trig_name: &str = row.get("trigger_name");
+        deps.push(RelationRef {
+            kind: RelationKind::Trigger,
+            qualified_name: format!("{}.{}", trig_schema, trig_name),
+        });
+    }
+
+    Ok(deps)
 }

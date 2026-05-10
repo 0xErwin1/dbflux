@@ -1,8 +1,10 @@
 pub(crate) mod builder;
+pub mod dependents;
 pub mod node_id;
 pub(crate) mod types;
 
 pub use builder::{ForeignKeyBuilder, IndexBuilder, SchemaForeignKeyBuilder, SchemaIndexBuilder};
+pub use dependents::{RelationKind, RelationRef};
 pub use node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use types::{
     CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,

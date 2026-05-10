@@ -490,9 +490,15 @@ impl DataGridPanel {
                 app_state.update(cx, |state, _| {
                     state.set_table_details(
                         fetch_result.profile_id,
+                        fetch_result.database.clone(),
+                        fetch_result.table.clone(),
+                        fetch_result.details,
+                    );
+                    state.set_dependents(
+                        fetch_result.profile_id,
                         fetch_result.database,
                         fetch_result.table,
-                        fetch_result.details,
+                        fetch_result.dependents,
                     );
                 });
 

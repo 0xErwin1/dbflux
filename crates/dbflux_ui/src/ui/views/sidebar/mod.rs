@@ -26,9 +26,9 @@ use dbflux_core::{
     ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
     CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DropForeignKeyRequest,
     DropIndexRequest, DropTypeRequest, EventStreamTarget, IndexData, IndexDirection, QueryLanguage,
-    ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef, TaskId, TypeDefinition,
-    ViewInfo,
+    ReindexRequest, RelationRef, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef,
+    TaskId, TypeDefinition, ViewInfo,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
