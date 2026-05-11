@@ -9,13 +9,13 @@ use dbflux_core::{
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
     ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest,
-    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    DropForeignKeyRequest, DropIndexRequest, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo,
-    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MYSQL_FORM, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
-    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
+    DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
+    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ExplainRequest, ForeignKeyBuilder,
+    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel,
+    KeyValueConnection, MYSQL_FORM, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
     RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
@@ -34,6 +34,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     display_name: "MySQL".into(),
     description: "Popular open-source relational database".into(),
     category: DatabaseCategory::Relational,
+    deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
@@ -182,6 +183,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     display_name: "MariaDB".into(),
     description: "Community-developed fork of MySQL".into(),
     category: DatabaseCategory::Relational,
+    deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()

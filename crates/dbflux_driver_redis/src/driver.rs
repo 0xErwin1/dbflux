@@ -9,11 +9,11 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DefaultSqlDialect, Diagnostic, DiagnosticSeverity, DocumentConnection,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
-    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError,
-    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
-    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    DdlCapabilities, DefaultSqlDialect, DeploymentClass, Diagnostic, DiagnosticSeverity,
+    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    EditorDiagnostic, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
+    FormattedError, HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest,
+    KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
     KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema, LanguageService,
     ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
@@ -58,6 +58,7 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     display_name: "Redis".into(),
     description: "In-memory key-value database".into(),
     category: DatabaseCategory::KeyValue,
+    deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::RedisCommands,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::KEYVALUE_BASE.bits()

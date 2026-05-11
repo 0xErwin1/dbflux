@@ -10,7 +10,7 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Radii;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Icon, Label};
+use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Label};
 use dbflux_components::typography::{
     Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel,
 };
@@ -756,11 +756,18 @@ impl DriversSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
+                                            .flex_1()
                                             .child(driver_entry_name_text(
                                                 entry.metadata.display_name.clone(),
                                             ))
                                             .child(driver_entry_key_text(entry.driver_key.clone())),
-                                    ),
+                                    )
+                                    .when_some(entry.metadata.deployment_class, |row, class| {
+                                        row.child(Badge::new(
+                                            class.display_name().to_uppercase(),
+                                            BadgeVariant::Neutral,
+                                        ))
+                                    }),
                             )
                     })),
             )

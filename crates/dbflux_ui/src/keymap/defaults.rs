@@ -495,13 +495,20 @@ fn command_palette_layer() -> KeymapLayer {
 fn connection_manager_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::ConnectionManager);
 
-    // Vertical navigation (j/k without Ctrl)
+    // Vertical navigation (j/k without Ctrl, plus arrow keys for the picker).
     layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
     layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("down", Modifiers::none()), Command::FocusDown);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::FocusUp);
 
-    // Horizontal navigation within row (h/l without Ctrl)
+    // Horizontal navigation within row (h/l without Ctrl, plus arrows).
     layer.bind(KeyChord::new("h", Modifiers::none()), Command::FocusLeft);
     layer.bind(KeyChord::new("l", Modifiers::none()), Command::FocusRight);
+    layer.bind(KeyChord::new("left", Modifiers::none()), Command::FocusLeft);
+    layer.bind(
+        KeyChord::new("right", Modifiers::none()),
+        Command::FocusRight,
+    );
 
     // Tab switching (C-h/C-l)
     layer.bind(
@@ -512,6 +519,9 @@ fn connection_manager_layer() -> KeymapLayer {
         KeyChord::new("l", Modifiers::ctrl()),
         Command::CycleFocusForward,
     );
+
+    // Filter focus shortcut used by the New-Connection picker.
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
 
     // Actions
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);

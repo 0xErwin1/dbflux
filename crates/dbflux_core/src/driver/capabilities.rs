@@ -136,6 +136,9 @@ pub enum Icon {
     Redis,
     Dynamodb,
 
+    // Generic non-database data sources
+    Logs,
+
     // Generic database icon (fallback)
     Database,
 }
@@ -169,6 +172,10 @@ pub enum DatabaseCategory {
     /// Wide-column stores with keyspaces and column families.
     /// Examples: Cassandra, ScyllaDB, HBase
     WideColumn,
+
+    /// Log streaming services with log groups and queryable log events.
+    /// Examples: AWS CloudWatch Logs
+    LogStream,
 }
 
 impl DatabaseCategory {
@@ -180,6 +187,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Graph",
             DatabaseCategory::TimeSeries => "Time Series",
             DatabaseCategory::WideColumn => "Wide Column",
+            DatabaseCategory::LogStream => "Log Stream",
         }
     }
 
@@ -193,6 +201,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Measurements",
             DatabaseCategory::WideColumn => "Tables",
+            DatabaseCategory::LogStream => "Log groups",
         }
     }
 
@@ -205,6 +214,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Measurement",
             DatabaseCategory::WideColumn => "Table",
+            DatabaseCategory::LogStream => "Log group",
         }
     }
 
@@ -217,6 +227,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Points",
             DatabaseCategory::WideColumn => "Rows",
+            DatabaseCategory::LogStream => "Log events",
         }
     }
 
@@ -229,6 +240,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Point",
             DatabaseCategory::WideColumn => "Row",
+            DatabaseCategory::LogStream => "Log event",
         }
     }
 
@@ -273,12 +285,14 @@ impl DatabaseCategory {
                     | DriverCapabilities::RETURNING.bits(),
             ),
 
-            DatabaseCategory::Document => DriverCapabilities::from_bits_truncate(
-                DriverCapabilities::INDEXES.bits()
-                    | DriverCapabilities::NESTED_DOCUMENTS.bits()
-                    | DriverCapabilities::ARRAYS.bits()
-                    | DriverCapabilities::AGGREGATION.bits(),
-            ),
+            DatabaseCategory::Document | DatabaseCategory::LogStream => {
+                DriverCapabilities::from_bits_truncate(
+                    DriverCapabilities::INDEXES.bits()
+                        | DriverCapabilities::NESTED_DOCUMENTS.bits()
+                        | DriverCapabilities::ARRAYS.bits()
+                        | DriverCapabilities::AGGREGATION.bits(),
+                )
+            }
 
             DatabaseCategory::KeyValue => DriverCapabilities::from_bits_truncate(
                 DriverCapabilities::KV_SCAN.bits()
@@ -1200,6 +1214,13 @@ pub struct DriverMetadata {
     /// Database category (Relational, Document, etc.).
     pub category: DatabaseCategory,
 
+    /// Operational deployment classification (Self-hosted, Embedded, Cloud-managed).
+    ///
+    /// `None` means the driver has not declared a deployment class — UI surfaces
+    /// that surface this chip should simply omit it rather than guessing.
+    #[serde(default)]
+    pub deployment_class: Option<DeploymentClass>,
+
     /// Query language used by this database.
     pub query_language: QueryLanguage,
 
@@ -1270,6 +1291,7 @@ impl Debug for DriverMetadata {
             .field("display_name", &self.display_name)
             .field("description", &self.description)
             .field("category", &self.category)
+            .field("deployment_class", &self.deployment_class)
             .field("query_language", &self.query_language)
             .field("capabilities", &self.capabilities)
             .field("default_port", &self.default_port)
@@ -1295,6 +1317,7 @@ impl Clone for DriverMetadata {
             display_name: self.display_name.clone(),
             description: self.description.clone(),
             category: self.category,
+            deployment_class: self.deployment_class,
             query_language: self.query_language.clone(),
             capabilities: self.capabilities,
             default_port: self.default_port,
@@ -1335,6 +1358,41 @@ impl DriverMetadata {
     pub fn is_key_value(&self) -> bool {
         self.category == DatabaseCategory::KeyValue
     }
+
+    /// Check if this is a log-stream service (e.g. CloudWatch Logs).
+    pub fn is_log_stream(&self) -> bool {
+        self.category == DatabaseCategory::LogStream
+    }
+}
+
+/// How a database is operationally deployed.
+///
+/// Used by the UI (driver picker, settings, connection cards) to surface a
+/// quick recognition cue about where a driver runs, independent of its data
+/// model (`DatabaseCategory`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DeploymentClass {
+    /// Runs as its own server process, typically administered by the user.
+    /// Examples: PostgreSQL, MySQL, MongoDB, Redis.
+    SelfHosted,
+
+    /// Embedded into the host process or backed by local files.
+    /// Examples: SQLite, DuckDB.
+    Embedded,
+
+    /// Fully managed by a cloud provider; the user only sees an API endpoint.
+    /// Examples: DynamoDB, CloudWatch Logs.
+    CloudManaged,
+}
+
+impl DeploymentClass {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            DeploymentClass::SelfHosted => "Self-hosted",
+            DeploymentClass::Embedded => "Embedded",
+            DeploymentClass::CloudManaged => "Cloud-managed",
+        }
+    }
 }
 
 // ============================================================================
@@ -1347,6 +1405,7 @@ pub struct DriverMetadataBuilder {
     display_name: String,
     description: String,
     category: DatabaseCategory,
+    deployment_class: Option<DeploymentClass>,
     query_language: QueryLanguage,
     capabilities: DriverCapabilities,
     default_port: Option<u16>,
@@ -1376,6 +1435,7 @@ impl DriverMetadataBuilder {
             display_name: display_name.into(),
             description: String::new(),
             category,
+            deployment_class: None,
             query_language,
             capabilities: DriverCapabilities::empty(),
             default_port: None,
@@ -1396,6 +1456,12 @@ impl DriverMetadataBuilder {
     /// Set the description.
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        self
+    }
+
+    /// Set the deployment class.
+    pub fn deployment_class(mut self, class: DeploymentClass) -> Self {
+        self.deployment_class = Some(class);
         self
     }
 
@@ -1490,6 +1556,7 @@ impl DriverMetadataBuilder {
             display_name: self.display_name,
             description: self.description,
             category: self.category,
+            deployment_class: self.deployment_class,
             query_language: self.query_language,
             capabilities: self.capabilities,
             default_port: self.default_port,

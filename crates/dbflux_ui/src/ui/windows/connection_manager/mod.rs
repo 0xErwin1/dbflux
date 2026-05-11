@@ -187,6 +187,9 @@ struct DriverInfo {
     icon: dbflux_core::Icon,
     name: String,
     description: String,
+    category: dbflux_core::DatabaseCategory,
+    default_port: Option<u16>,
+    uri_scheme: String,
 }
 
 pub struct ConnectionManagerWindow {
@@ -201,6 +204,14 @@ pub struct ConnectionManagerWindow {
     editing_profile_id: Option<uuid::Uuid>,
 
     input_name: Entity<InputState>,
+    /// Filter text for the driver-select picker. Bound to a text input that
+    /// is focused on `/` from anywhere within the picker. The query is read
+    /// directly off the input in `render_driver_select`, so no cached field
+    /// is needed.
+    driver_filter_input: Entity<InputState>,
+    /// Tracks whether the driver-picker filter input currently owns focus.
+    /// Used to decide whether Esc should blur the input or close the window.
+    driver_filter_focused: bool,
     /// Driver-specific field inputs, keyed by field ID.
     driver_inputs: HashMap<String, Entity<InputState>>,
     /// Password is separate due to visibility toggle and save checkbox UI.
@@ -341,15 +352,23 @@ impl ConnectionManagerWindow {
             .read(cx)
             .drivers()
             .iter()
-            .map(|(driver_id, driver)| DriverInfo {
-                id: driver_id.clone(),
-                icon: driver.metadata().icon,
-                name: driver.display_name().to_string(),
-                description: driver.description().to_string(),
+            .map(|(driver_id, driver)| {
+                let metadata = driver.metadata();
+                DriverInfo {
+                    id: driver_id.clone(),
+                    icon: metadata.icon,
+                    name: driver.display_name().to_string(),
+                    description: driver.description().to_string(),
+                    category: metadata.category,
+                    default_port: metadata.default_port,
+                    uri_scheme: metadata.uri_scheme.clone(),
+                }
             })
             .collect();
 
         let input_name = cx.new(|cx| InputState::new(window, cx).placeholder("Connection name"));
+        let driver_filter_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter by name, driver, port…"));
         let input_password = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Password")
@@ -549,7 +568,24 @@ impl ConnectionManagerWindow {
             },
         );
 
+        let driver_filter_focus_sub = cx.subscribe_in(
+            &driver_filter_input,
+            window,
+            |this, _, event: &InputEvent, _window, cx| match event {
+                InputEvent::Focus => {
+                    this.driver_filter_focused = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.driver_filter_focused = false;
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+
         let subscriptions = vec![
+            driver_filter_focus_sub,
             dropdown_subscription,
             proxy_dropdown_subscription,
             auth_profile_dropdown_sub,
@@ -584,6 +620,8 @@ impl ConnectionManagerWindow {
             form_save_ssh_secret: true,
             editing_profile_id: None,
             input_name,
+            driver_filter_input,
+            driver_filter_focused: false,
             driver_inputs: HashMap::new(),
             input_password,
             host_value_source_selector,

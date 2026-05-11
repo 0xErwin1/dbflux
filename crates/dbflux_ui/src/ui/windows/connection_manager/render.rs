@@ -1207,6 +1207,11 @@ impl Render for ConnectionManagerWindow {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
+                    // In the driver-picker view the filter input must remain
+                    // freely clickable, so don't reclaim window focus here.
+                    if this.view == View::DriverSelect {
+                        return;
+                    }
                     if this.edit_state == EditState::Navigating {
                         window.focus(&this.focus_handle);
                         cx.notify();

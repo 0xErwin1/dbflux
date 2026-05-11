@@ -15,10 +15,10 @@ use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnMeta, Connection,
     ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult, DangerousQueryKind,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DescribeRequest, Diagnostic, DiagnosticSeverity, DocumentConnection,
-    DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef,
-    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
+    DdlCapabilities, DeploymentClass, DescribeRequest, Diagnostic, DiagnosticSeverity,
+    DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
     IndexDirection, KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities,
     OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
     QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
@@ -38,6 +38,7 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     display_name: "MongoDB".into(),
     description: "Document database for modern applications".into(),
     category: DatabaseCategory::Document,
+    deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::MongoQuery,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::DOCUMENT_BASE.bits()
