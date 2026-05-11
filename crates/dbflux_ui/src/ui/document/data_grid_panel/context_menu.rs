@@ -2497,12 +2497,16 @@ impl DataGridPanel {
             _ => return,
         };
 
+        // Use the per-database connection for the database being viewed.
+        // `state.get_connection` only returns the primary connection (which
+        // for Postgres is bound to a different database), so FK lookups
+        // failed with "relation public.X does not exist".
         let connection = {
             let state = self.app_state.read(cx);
-            match state.get_connection(profile_id) {
-                Some(c) => c,
-                None => return,
-            }
+            let Some(connected) = state.connections().get(&profile_id) else {
+                return;
+            };
+            connected.connection_for_database(&database)
         };
 
         // Initialise the inspector's reference list with Loading state.

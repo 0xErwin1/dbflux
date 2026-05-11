@@ -184,11 +184,17 @@ impl Render for RowInspector {
         let close_entity = cx.entity().clone();
         let has_fk = snapshot.cells.iter().any(|c| c.is_foreign_key);
 
-        // Resize grip — same pattern as crates/dbflux_ui/src/ui/dock/
-        // sidebar_dock.rs::render_grip: all three mouse handlers live on
-        // the grip element; the panel width updates each move event so the
-        // grip stays under the cursor and mouse_move/up keep firing.
-        const GRIP_WIDTH: Pixels = px(4.0);
+        // Resize grip + fullscreen drag mask.
+        //
+        // The grip itself is a 6 px column on the inspector's left edge that
+        // captures mouse_down. While `is_resizing` is true we render a
+        // sibling div with `.absolute().inset_0()` and `.size_full()` on top
+        // of the data grid (but *behind* the inspector visually because the
+        // inspector is rendered AFTER it). That mask owns the move/up
+        // handlers, so the drag tracks the cursor everywhere — not just
+        // inside the 6 px column — and releases cleanly even if the cursor
+        // ends up outside the inspector.
+        const GRIP_WIDTH: Pixels = px(6.0);
         let content_width = self.width - GRIP_WIDTH;
         let grip = div()
             .id("inspector-grip")
@@ -206,35 +212,42 @@ impl Render for RowInspector {
                     this.resize_start_width = Some(this.width);
                     cx.notify();
                 }),
-            )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                if !this.is_resizing {
-                    return;
-                }
-                let Some(start_x) = this.resize_start_x else {
-                    return;
-                };
-                let Some(start_width) = this.resize_start_width else {
-                    return;
-                };
-                // Right-anchored panel: dragging the grip right shrinks.
-                let delta = event.position.x - start_x;
-                let new_width =
-                    (start_width - delta).clamp(INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH);
-                this.width = new_width;
-                cx.notify();
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.is_resizing = false;
-                    this.resize_start_x = None;
-                    this.resize_start_width = None;
-                    cx.notify();
-                }),
             );
 
-        div()
+        // Outer wrapper covers the entire data-grid panel so the drag mask
+        // can track the cursor anywhere (not just inside the inspector's
+        // own bounds). When not resizing, it has no handlers and clicks
+        // pass through to the grid.
+        let outer = div().absolute().inset_0().when(self.is_resizing, |el| {
+            el.cursor_col_resize()
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                    if !this.is_resizing {
+                        return;
+                    }
+                    let Some(start_x) = this.resize_start_x else {
+                        return;
+                    };
+                    let Some(start_width) = this.resize_start_width else {
+                        return;
+                    };
+                    let delta = event.position.x - start_x;
+                    let new_width =
+                        (start_width - delta).clamp(INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH);
+                    this.width = new_width;
+                    cx.notify();
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.is_resizing = false;
+                        this.resize_start_x = None;
+                        this.resize_start_width = None;
+                        cx.notify();
+                    }),
+                )
+        });
+
+        let panel = div()
             .absolute()
             .right_0()
             .top_0()
@@ -246,8 +259,6 @@ impl Render for RowInspector {
             .border_l_1()
             .border_color(theme.border)
             .track_focus(&self.focus_handle)
-            // Eat scroll events: without this the wheel scrolls the table
-            // sitting behind the overlay.
             .on_scroll_wheel(|_, _, cx| {
                 cx.stop_propagation();
             })
@@ -327,7 +338,9 @@ impl Render for RowInspector {
                                 |d, cell| d.child(render_column_metadata(cell, theme)),
                             ),
                     ),
-            )
+            );
+
+        outer.child(panel)
     }
 }
 
