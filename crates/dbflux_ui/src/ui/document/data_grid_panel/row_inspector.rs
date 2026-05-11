@@ -94,7 +94,7 @@ pub struct RowInspector {
 }
 
 const INSPECTOR_MIN_WIDTH: Pixels = px(240.0);
-const INSPECTOR_MAX_WIDTH: Pixels = px(640.0);
+const INSPECTOR_MAX_WIDTH: Pixels = px(1280.0);
 
 impl EventEmitter<RowInspectorEvent> for RowInspector {}
 
@@ -247,6 +247,11 @@ impl Render for RowInspector {
                     }
                 }),
             )
+            // Eat scroll events: without this the wheel scrolls the table
+            // sitting behind the overlay.
+            .on_scroll_wheel(|_, _, cx| {
+                cx.stop_propagation();
+            })
             .child(grip)
             .child(
                 div()
