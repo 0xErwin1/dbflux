@@ -352,7 +352,10 @@ mod tests {
         for inspection in [inactive, active, focused] {
             assert_eq!(inspection.family, Some(AppFonts::MONO));
             assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            // Tab labels use SM (13px) — the bigger size matches the
+            // design after the visual review pass; the original XS was
+            // judged too cramped against the rest of the chrome.
+            assert_eq!(inspection.size_override, Some(FontSizes::SM));
             assert!(inspection.has_custom_color_override);
         }
 
