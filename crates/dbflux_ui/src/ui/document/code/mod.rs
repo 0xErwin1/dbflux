@@ -736,6 +736,8 @@ impl CodeDocument {
             // Special handling for FocusUp to exit results
             if cmd == Command::FocusUp {
                 self.focus_mode = SqlQueryFocus::Editor;
+                self.input_state
+                    .update(cx, |state, cx| state.focus(window, cx));
                 cx.notify();
                 return true;
             }
@@ -777,6 +779,9 @@ impl CodeDocument {
                 if self.focus_mode == SqlQueryFocus::Editor && !self.result_tabs.is_empty() =>
             {
                 self.focus_mode = SqlQueryFocus::Results;
+                if let Some(grid) = self.active_result_grid() {
+                    grid.update(cx, |g, cx| g.focus_active_view(window, cx));
+                }
                 cx.notify();
                 true
             }

@@ -708,7 +708,20 @@ impl CodeDocument {
                     self.layout = SqlQueryLayout::Split;
                 }
 
-                self.focus_mode = SqlQueryFocus::Results;
+                // Only flip the internal focus_mode to Results when the user is
+                // not actively typing in the editor input. Otherwise the GPUI
+                // focus stays on the input but our key-routing thinks Results
+                // is active, so Workspace::on_key_down sends single-letter keys
+                // (l, r, o, x, …) through the Results keymap layer and steals
+                // them from the editor.
+                let input_focused = self
+                    .input_state
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window);
+                if !input_focused {
+                    self.focus_mode = SqlQueryFocus::Results;
+                }
 
                 // Emit audit event for successful execution (query or script)
                 let summary = if is_script {
