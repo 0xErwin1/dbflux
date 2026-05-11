@@ -4,7 +4,8 @@ use crate::ui::theme::ghost_border_color;
 use crate::ui::tokens::{Heights, Radii};
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Icon;
-use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
+use dbflux_components::tokens::BannerColors;
+use dbflux_components::typography::{Body, FieldLabel, SidebarGroupLabel};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -131,7 +132,7 @@ impl SettingsCoordinator {
                 let _ = this.sidebar_tree.activate();
                 cx.notify();
             }))
-            .child(SubSectionLabel::new(row.label.clone()))
+            .child(SidebarGroupLabel::new(row.label.clone()))
             .into_any_element()
     }
 
@@ -194,7 +195,7 @@ impl SettingsCoordinator {
                 transparent_black()
             })
             .when(show_active, |div| {
-                div.bg(theme.secondary)
+                div.bg(BannerColors::warning_bg(theme))
                     .border_l_2()
                     .border_color(theme.primary)
             })

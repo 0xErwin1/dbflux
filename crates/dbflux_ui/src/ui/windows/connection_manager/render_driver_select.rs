@@ -362,7 +362,7 @@ pub(super) fn visible_drivers(drivers: &[DriverInfo], query: &str) -> Vec<Driver
             .filter(|d| d.category == *category && driver_matches_query(d, &q))
             .cloned()
             .collect();
-        bucket.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        bucket.sort_by_key(|d| d.name.to_lowercase());
         out.extend(bucket);
     }
     out

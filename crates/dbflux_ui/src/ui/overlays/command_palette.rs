@@ -1,8 +1,9 @@
 use crate::keymap::ContextId;
 use crate::ui::tokens::{Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+#[cfg(test)]
 use dbflux_components::helpers::text_color_for_selected;
-use dbflux_components::primitives::{overlay_bg, surface_modal_container};
+use dbflux_components::primitives::{Chord, overlay_bg, surface_modal_container};
 use dbflux_components::typography::{Body, KeyHint, MonoCaption, MonoLabel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
@@ -302,12 +303,52 @@ fn palette_qualifier_text(
     })
 }
 
+#[cfg(test)]
 fn palette_shortcut_text(
     shortcut: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
 ) -> MonoCaption {
     MonoCaption::new(shortcut).color(text_color_for_selected(is_selected, theme))
+}
+
+/// Split a shortcut string like "ctrl-shift-k" into Chord parts.
+///
+/// Recognizes the canonical modifier tokens used in `KeyBinding` strings
+/// (`ctrl`, `shift`, `alt`, `cmd`) and capitalizes them for display. The
+/// final segment is treated as the key name and uppercased.
+fn palette_shortcut_parts(shortcut: &str) -> Vec<SharedString> {
+    let tokens: Vec<&str> = shortcut.split('-').collect();
+
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+
+    let mut parts: Vec<SharedString> = Vec::with_capacity(tokens.len());
+    let last_idx = tokens.len() - 1;
+
+    for (idx, token) in tokens.iter().enumerate() {
+        let display = if idx == last_idx {
+            token.to_uppercase()
+        } else {
+            match token.to_lowercase().as_str() {
+                "ctrl" => "Ctrl".to_string(),
+                "shift" => "Shift".to_string(),
+                "alt" => "Alt".to_string(),
+                "cmd" | "command" | "super" | "platform" => "Cmd".to_string(),
+                other => {
+                    let mut chars = other.chars();
+                    match chars.next() {
+                        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                        None => String::new(),
+                    }
+                }
+            }
+        };
+        parts.push(SharedString::from(display));
+    }
+
+    parts
 }
 
 pub struct CommandPalette {
@@ -736,14 +777,8 @@ impl CommandPalette {
 
         let right_el = match item {
             PaletteItem::Action { shortcut, .. } => shortcut.map(|s| {
-                div()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .when(is_selected, |d| d.bg(theme.primary_foreground.opacity(0.2)))
-                    .when(!is_selected, |d| d.bg(theme.secondary))
-                    .child(palette_shortcut_text(s, is_selected, theme))
-                    .into_any_element()
+                let parts = palette_shortcut_parts(s);
+                Chord::new(parts).into_any_element()
             }),
             PaletteItem::Connection { is_connected, .. } => {
                 let indicator = if *is_connected {
