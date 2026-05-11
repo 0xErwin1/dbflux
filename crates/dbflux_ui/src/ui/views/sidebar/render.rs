@@ -1,6 +1,6 @@
 use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::SyntaxColors;
 use dbflux_components::typography::{Body, MonoCaption};
 use gpui::FontWeight;
@@ -45,28 +45,31 @@ impl Sidebar {
             }
         };
 
+        // Compact tab strip: uppercase mono caption, active gets a 2px
+        // primary underline, no hover background (per design).
         div()
             .flex()
             .items_center()
             .justify_between()
-            .h(Heights::TOOLBAR)
+            .px(Spacing::SM)
+            .h(px(28.0))
             .border_b_1()
             .border_color(theme.border)
             .child(
                 div()
                     .flex()
                     .items_center()
+                    .gap(Spacing::MD)
+                    .h_full()
                     .child(
                         div()
                             .id("tab-connections")
-                            .px(Spacing::SM)
                             .h_full()
                             .flex()
                             .items_center()
                             .cursor_pointer()
                             .border_b_2()
                             .border_color(tab_border_color(active_tab == SidebarTab::Connections))
-                            .hover(|d| d.bg(theme.secondary))
                             .on_click(move |_, _, cx| {
                                 sidebar.update(cx, |this, cx| {
                                     this.set_active_tab(SidebarTab::Connections, cx);
@@ -82,14 +85,12 @@ impl Sidebar {
                     .child(
                         div()
                             .id("tab-scripts")
-                            .px(Spacing::SM)
                             .h_full()
                             .flex()
                             .items_center()
                             .cursor_pointer()
                             .border_b_2()
                             .border_color(tab_border_color(active_tab == SidebarTab::Scripts))
-                            .hover(|d| d.bg(theme.secondary))
                             .on_click(move |_, _, cx| {
                                 sidebar2.update(cx, |this, cx| {
                                     this.set_active_tab(SidebarTab::Scripts, cx);
@@ -108,8 +109,8 @@ impl Sidebar {
                 let hover_bg = theme.secondary;
                 div()
                     .id("add-button")
-                    .w(Heights::ICON_LG)
-                    .h(Heights::ICON_LG)
+                    .w(px(18.0))
+                    .h(px(18.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -156,7 +157,6 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let has_entries = self.visible_entry_count > 0;
-        let theme = cx.theme();
         let sidebar_for_root_drop = sidebar_entity.clone();
         let sidebar_for_clear_drop = sidebar_entity.clone();
         let sidebar_for_hover_clear = sidebar_entity.clone();
@@ -170,8 +170,6 @@ impl Sidebar {
                 div()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
-                    .border_b_1()
-                    .border_color(theme.border)
                     // Clear row hover when the pointer enters the search bar.
                     // Workaround for GPUI 0.2.2 lacking on_mouse_leave.
                     .on_mouse_move(move |_, _, cx| {
@@ -185,7 +183,8 @@ impl Sidebar {
                     .child(
                         Input::new(&self.connections_search_input)
                             .xsmall()
-                            .cleanable(true),
+                            .cleanable(true)
+                            .prefix(Icon::new(AppIcon::Search).size(Heights::ICON_SM)),
                     ),
             )
             .when(has_entries, |el| {
@@ -281,12 +280,12 @@ impl Sidebar {
             .overflow_hidden()
             // Search bar
             .child(
-                div()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(Input::new(&search_input).xsmall().cleanable(true)),
+                div().px(Spacing::SM).py(Spacing::XS).child(
+                    Input::new(&search_input)
+                        .xsmall()
+                        .cleanable(true)
+                        .prefix(Icon::new(AppIcon::Search).size(Heights::ICON_SM)),
+                ),
             )
             // Tree or empty state
             .when(has_entries || has_search, |el| {
@@ -424,13 +423,14 @@ impl Render for Sidebar {
         let sidebar_for_footer_hover = sidebar_entity.clone();
         let sidebar_for_tabbar_hover = sidebar_entity.clone();
 
+        // No right border here — the outer `SidebarDock` already paints
+        // `border_r_1`. A second border on this inner container produced the
+        // visible double-line between the sidebar and the workspace.
         div()
             .relative()
             .flex()
             .flex_col()
             .size_full()
-            .border_r_1()
-            .border_color(theme.border)
             .bg(theme.sidebar)
             .child(
                 // Tab bar: clear row hover when mouse enters this region.
