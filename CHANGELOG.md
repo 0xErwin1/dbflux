@@ -2,6 +2,17 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.4.7] – 2026-05-11
+
+### Fixes
+
+* Make Ctrl+Enter run the query in the code editor, taking precedence over secondary-enter bindings (#47)
+* Keep editor focus after running a query so subsequent keystrokes are not lost (#48)
+
+### Tests
+
+* Cover Ctrl+Enter precedence over secondary-enter in the code editor
+
 ## [0.4.6] – 2026-04-18
 
 ### Features
