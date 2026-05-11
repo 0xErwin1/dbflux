@@ -17,6 +17,7 @@ use dbflux_ipc::{
 use dbflux_ui::AppStateEntity;
 use dbflux_ui::assets::Assets;
 use dbflux_ui::ipc_server::IpcServer;
+use dbflux_ui::keymap::input_context_keybindings;
 use dbflux_ui::platform;
 use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
 use dbflux_ui::ui::views::workspace::Workspace;
@@ -261,6 +262,7 @@ fn run_gui() {
         let window_handle = cx
             .open_window(main_window_options, |window, cx| {
                 cx.bind_keys(command_palette_keybindings());
+                cx.bind_keys(input_context_keybindings());
 
                 let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
 
