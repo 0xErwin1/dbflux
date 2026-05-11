@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -13,10 +15,10 @@ use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnMeta, Connection,
     ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult, DangerousQueryKind,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DescribeRequest, Diagnostic, DiagnosticSeverity, DocumentConnection,
-    DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo, FormFieldDef,
-    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
+    DdlCapabilities, DeploymentClass, DescribeRequest, Diagnostic, DiagnosticSeverity,
+    DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
     IndexDirection, KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities,
     OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
     QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
@@ -36,6 +38,7 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     display_name: "MongoDB".into(),
     description: "Document database for modern applications".into(),
     category: DatabaseCategory::Document,
+    deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::MongoQuery,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::DOCUMENT_BASE.bits()
@@ -131,6 +134,24 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_columns: 0,
         max_indexes_per_table: 64,
     }),
+    ssl_modes: Some(&[
+        dbflux_core::SslModeOption {
+            id: "off",
+            label: "off",
+        },
+        dbflux_core::SslModeOption {
+            id: "on",
+            label: "on",
+        },
+        dbflux_core::SslModeOption {
+            id: "verify",
+            label: "verify",
+        },
+    ]),
+    ssl_cert_fields: Some(dbflux_core::SslCertFields {
+        root_cert: true,
+        client_cert: true,
+    }),
     classification_override: None,
 });
 
@@ -178,6 +199,7 @@ impl DbDriver for MongoDriver {
                             default_value: "100".into(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            help: None,
                         },
                         FormFieldDef {
                             id: "show_system_databases".into(),
@@ -188,6 +210,7 @@ impl DbDriver for MongoDriver {
                             default_value: "false".into(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            help: None,
                         },
                     ],
                 }],
@@ -241,6 +264,10 @@ impl DbDriver for MongoDriver {
             user,
             database,
             auth_database,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -401,6 +428,37 @@ impl DbDriver for MongoDriver {
         let password = password.map(|value| value.expose_secret());
         let ssh_secret = ssh_secret.map(|value| value.expose_secret());
 
+        // Compute the SSL URI fragment once. In URI mode we skip it entirely — the
+        // user-supplied URI owns its own `tls=` directives.
+        //
+        // When the user supplies BOTH a client cert and a separate key file, we
+        // concatenate them into a single temp PEM (mode 0600, removed on drop)
+        // because MongoDB's `tlsCertificateKeyFile` accepts only one file. The
+        // resulting guard is moved into the connection so the temp file outlives
+        // every TLS handshake performed by the underlying client.
+        let (ssl_params, pem_guard) = if config.use_uri {
+            (String::new(), None)
+        } else {
+            let pem_guard = build_combined_pem_if_needed(
+                config.ssl_client_cert_path.as_deref(),
+                config.ssl_client_key_path.as_deref(),
+            )?;
+
+            let effective_client_cert_path: Option<String> = match &pem_guard {
+                Some(guard) => Some(guard.path().to_string_lossy().into_owned()),
+                None => config.ssl_client_cert_path.clone(),
+            };
+
+            let params = mongo_ssl_mode_to_uri_params(
+                config.ssl_mode.as_deref(),
+                config.ssl_root_cert_path.as_deref(),
+                effective_client_cert_path.as_deref(),
+            )
+            .map_err(DbError::InvalidProfile)?;
+
+            (params, pem_guard)
+        };
+
         if config.use_uri {
             self.connect_with_uri(
                 config.uri.as_deref().unwrap_or(""),
@@ -419,6 +477,8 @@ impl DbDriver for MongoDriver {
                 config.database.clone(),
                 config.auth_database.as_deref(),
                 password,
+                &ssl_params,
+                pem_guard,
                 schema_settings,
             )
         } else {
@@ -429,6 +489,8 @@ impl DbDriver for MongoDriver {
                 config.database,
                 config.auth_database.as_deref(),
                 password,
+                &ssl_params,
+                pem_guard,
                 schema_settings,
             )
         }
@@ -491,6 +553,7 @@ impl MongoDriver {
             connection_uri: sanitize_uri(&uri),
             active_query: RwLock::new(None),
             cancelled: Arc::new(AtomicBool::new(false)),
+            _tls_pem_guard: None,
         }))
     }
 
@@ -503,9 +566,11 @@ impl MongoDriver {
         database: Option<String>,
         auth_database: Option<&str>,
         password: Option<&str>,
+        ssl_params: &str,
+        pem_guard: Option<CombinedPemFile>,
         schema_settings: MongoSchemaSettings,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let uri = build_mongodb_uri(host, port, user, password, auth_database);
+        let uri = build_mongodb_uri(host, port, user, password, auth_database, ssl_params);
 
         log::info!("Connecting to MongoDB at {}:{}", host, port);
 
@@ -526,6 +591,7 @@ impl MongoDriver {
             connection_uri: sanitize_uri(&uri),
             active_query: RwLock::new(None),
             cancelled: Arc::new(AtomicBool::new(false)),
+            _tls_pem_guard: pem_guard,
         }))
     }
 
@@ -540,6 +606,8 @@ impl MongoDriver {
         database: Option<String>,
         auth_database: Option<&str>,
         password: Option<&str>,
+        ssl_params: &str,
+        pem_guard: Option<CombinedPemFile>,
         schema_settings: MongoSchemaSettings,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
@@ -575,7 +643,14 @@ impl MongoDriver {
         log::info!("[DB] Connecting to MongoDB via tunnel");
         let phase_start = Instant::now();
 
-        let uri = build_mongodb_uri("127.0.0.1", local_port, user, password, auth_database);
+        let uri = build_mongodb_uri(
+            "127.0.0.1",
+            local_port,
+            user,
+            password,
+            auth_database,
+            ssl_params,
+        );
         let client = Client::with_uri_str(&uri)
             .map_err(|e| format_mongo_error(&e, "127.0.0.1", local_port))?;
 
@@ -605,7 +680,32 @@ impl MongoDriver {
             connection_uri: sanitize_uri(&uri),
             active_query: RwLock::new(None),
             cancelled: Arc::new(AtomicBool::new(false)),
+            _tls_pem_guard: pem_guard,
         }))
+    }
+}
+
+/// Returns a `CombinedPemFile` guard when the user has supplied BOTH the
+/// client certificate path AND a separate private key path. When only the
+/// cert is set, returns `None` (the cert file is assumed to already contain
+/// the key, as is standard for MongoDB's `tlsCertificateKeyFile`).
+fn build_combined_pem_if_needed(
+    cert_path: Option<&str>,
+    key_path: Option<&str>,
+) -> Result<Option<CombinedPemFile>, DbError> {
+    let cert = cert_path.and_then(non_empty_str);
+    let key = key_path.and_then(non_empty_str);
+
+    match (cert, key) {
+        (Some(cert), Some(key)) => CombinedPemFile::create(Path::new(cert), Path::new(key))
+            .map(Some)
+            .map_err(|e| {
+                DbError::InvalidProfile(format!(
+                    "Failed to assemble client certificate PEM for MongoDB TLS: {}",
+                    e
+                ))
+            }),
+        _ => Ok(None),
     }
 }
 
@@ -623,6 +723,14 @@ struct ExtractedMongoConfig {
     user: Option<String>,
     database: Option<String>,
     auth_database: Option<String>,
+    ssl_mode: Option<String>,
+    ssl_root_cert_path: Option<String>,
+    ssl_client_cert_path: Option<String>,
+    /// Optional separate private-key PEM. When set together with
+    /// `ssl_client_cert_path`, the driver concatenates both into a temp PEM
+    /// for MongoDB's `tlsCertificateKeyFile` parameter. When unset, the cert
+    /// path is assumed to already contain the key.
+    ssl_client_key_path: Option<String>,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -636,6 +744,10 @@ fn extract_mongodb_config(config: &DbConfig) -> Result<ExtractedMongoConfig, DbE
             user,
             database,
             auth_database,
+            ssl_mode,
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
             ssh_tunnel,
             ..
         } => Ok(ExtractedMongoConfig {
@@ -646,11 +758,127 @@ fn extract_mongodb_config(config: &DbConfig) -> Result<ExtractedMongoConfig, DbE
             user: user.clone(),
             database: database.clone(),
             auth_database: auth_database.clone(),
+            ssl_mode: ssl_mode.clone(),
+            ssl_root_cert_path: ssl_root_cert_path.clone(),
+            ssl_client_cert_path: ssl_client_cert_path.clone(),
+            ssl_client_key_path: ssl_client_key_path.clone(),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
             "Expected MongoDB configuration".to_string(),
         )),
+    }
+}
+
+/// Builds the URI-query fragment that encodes the selected SSL mode and cert paths
+/// for a MongoDB connection. Returns either an empty string (mode `"off"` or `None`),
+/// or a string starting with `&` such as `&tls=true&tlsCAFile=/path/to/ca.pem`.
+///
+/// The returned fragment is appended to a URI that already contains `?appName=...`
+/// (or another query parameter) so it always begins with `&` when non-empty.
+///
+/// Returns `Err` for unknown mode ids.
+pub(crate) fn mongo_ssl_mode_to_uri_params(
+    mode_id: Option<&str>,
+    root_cert_path: Option<&str>,
+    client_cert_or_combined_pem: Option<&str>,
+) -> Result<String, String> {
+    let mode = mode_id.unwrap_or("off");
+
+    match mode {
+        "" | "off" => Ok(String::new()),
+        "on" => Ok(
+            "&tls=true&tlsAllowInvalidCertificates=true&tlsAllowInvalidHostnames=true".to_string(),
+        ),
+        "verify" => {
+            let mut params = String::from("&tls=true");
+            if let Some(ca) = root_cert_path.and_then(non_empty_str) {
+                params.push_str("&tlsCAFile=");
+                params.push_str(&urlencoding::encode(ca));
+            }
+            if let Some(cert) = client_cert_or_combined_pem.and_then(non_empty_str) {
+                params.push_str("&tlsCertificateKeyFile=");
+                params.push_str(&urlencoding::encode(cert));
+            }
+            Ok(params)
+        }
+        other => Err(format!("Unknown MongoDB SSL mode: '{}'", other)),
+    }
+}
+
+fn non_empty_str(s: &str) -> Option<&str> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Owns a temporary PEM file containing a client certificate followed by its
+/// private key, formatted for MongoDB's `tlsCertificateKeyFile` option (which
+/// expects a single concatenated PEM rather than separate files).
+///
+/// The file is created with mode `0600` on Unix and exclusive-create semantics
+/// to avoid clobbering or sharing with other processes. The temp file is
+/// removed on drop; if the process exits abnormally before drop runs, the OS
+/// temp-dir cleanup eventually reclaims it (best-effort).
+#[derive(Debug)]
+pub(crate) struct CombinedPemFile {
+    path: PathBuf,
+}
+
+impl CombinedPemFile {
+    /// Reads `cert_path` and `key_path`, concatenates them (cert first, then a
+    /// newline if missing, then key), and writes the result to a freshly
+    /// created temp file with restrictive permissions.
+    pub(crate) fn create(cert_path: &Path, key_path: &Path) -> io::Result<Self> {
+        let cert_bytes = std::fs::read(cert_path)?;
+        let key_bytes = std::fs::read(key_path)?;
+
+        let mut combined = Vec::with_capacity(cert_bytes.len() + key_bytes.len() + 1);
+        combined.extend_from_slice(&cert_bytes);
+        if !cert_bytes.ends_with(b"\n") {
+            combined.push(b'\n');
+        }
+        combined.extend_from_slice(&key_bytes);
+
+        let filename = format!("dbflux-mongo-pem-{}.pem", Uuid::new_v4());
+        let path = std::env::temp_dir().join(filename);
+
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        let mut file = options.open(&path)?;
+        use std::io::Write;
+        file.write_all(&combined)?;
+        file.sync_all()?;
+        drop(file);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            std::fs::set_permissions(&path, perms)?;
+        }
+
+        Ok(Self { path })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for CombinedPemFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -660,6 +888,7 @@ fn build_mongodb_uri(
     user: Option<&str>,
     password: Option<&str>,
     auth_database: Option<&str>,
+    ssl_params: &str,
 ) -> String {
     let mut uri = String::from("mongodb://");
 
@@ -686,9 +915,15 @@ fn build_mongodb_uri(
         uri.push_str("&authSource=admin");
     }
 
+    // SSL query parameters built from the driver-level SSL mode. Skipped entirely
+    // when the user is in URI mode — pasted URIs own their own `tls=` directives.
+    uri.push_str(ssl_params);
+
     uri
 }
 
+// Only called from `parse_uri` after `starts_with("mongodb+srv://")` is verified.
+#[allow(clippy::expect_used)]
 fn parse_srv_uri(uri: &str) -> FormValues {
     let mut values = HashMap::new();
     values.insert("use_uri".to_string(), "true".to_string());
@@ -880,6 +1115,11 @@ pub struct MongoConnection {
     connection_uri: String,
     active_query: RwLock<Option<Uuid>>,
     cancelled: Arc<AtomicBool>,
+    /// Holds the temp PEM file (cert + key concatenation) for the lifetime of
+    /// the connection. Drop deletes the file. Underscore prefix indicates the
+    /// field is intentionally unused beyond its drop side effect.
+    #[allow(dead_code)]
+    _tls_pem_guard: Option<CombinedPemFile>,
 }
 
 struct MongoCancelHandle {
@@ -1550,6 +1790,8 @@ impl Connection for MongoConnection {
                     foreign_keys: None,
                     constraints: None,
                     sample_fields: None,
+                    presentation: dbflux_core::CollectionPresentation::DataGrid,
+                    child_items: None,
                 }
             })
             .collect();
@@ -1677,6 +1919,8 @@ impl Connection for MongoConnection {
             foreign_keys: None,
             constraints: None,
             sample_fields: Some(sample_fields),
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         })
     }
 
@@ -1831,6 +2075,8 @@ impl Connection for MongoConnection {
         Ok(CrudResult::new(affected, None))
     }
 
+    // The `docs.len() == 1` guard inside this function ensures `next()` is always Some.
+    #[allow(clippy::unwrap_used)]
     fn insert_document(&self, insert: &DocumentInsert) -> Result<CrudResult, DbError> {
         let client = self
             .client
@@ -3388,6 +3634,10 @@ mod tests {
             user: Some("user".to_string()),
             database: Some("app".to_string()),
             auth_database: Some("admin".to_string()),
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         };
@@ -3473,11 +3723,11 @@ mod tests {
             .expect("standard mongodb uri should parse");
 
         assert!(
-            values.get("use_uri").is_none(),
+            !values.contains_key("use_uri"),
             "standard URI should not set use_uri"
         );
         assert!(
-            values.get("uri").is_none(),
+            !values.contains_key("uri"),
             "standard URI should not set uri"
         );
         assert_eq!(values.get("host").map(String::as_str), Some("localhost"));
@@ -3567,6 +3817,10 @@ mod tests {
             user,
             database,
             auth_database,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         });
@@ -3585,8 +3839,8 @@ mod tests {
         let parsed = driver
             .parse_uri(original)
             .expect("standard URI should parse");
-        assert!(parsed.get("use_uri").is_none());
-        assert!(parsed.get("uri").is_none());
+        assert!(!parsed.contains_key("use_uri"));
+        assert!(!parsed.contains_key("uri"));
 
         // Standard URI uses host/port form, not URI mode
         let config = driver.build_config(&parsed).expect("config should build");
@@ -3621,6 +3875,10 @@ mod tests {
             user,
             database,
             auth_database,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         });
@@ -3772,8 +4030,67 @@ mod tests {
 
     #[test]
     fn build_mongodb_uri_defaults_auth_source_for_authenticated_connections() {
-        let uri = build_mongodb_uri("localhost", 27017, Some("user"), Some("pass"), None);
+        let uri = build_mongodb_uri("localhost", 27017, Some("user"), Some("pass"), None, "");
         assert!(uri.contains("authSource=admin"));
+    }
+
+    #[test]
+    fn mongo_ssl_mode_off_returns_empty_params() {
+        let params =
+            mongo_ssl_mode_to_uri_params(Some("off"), None, None).expect("off should map to empty");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn mongo_ssl_mode_none_returns_empty_params() {
+        let params =
+            mongo_ssl_mode_to_uri_params(None, None, None).expect("None should map to empty");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn mongo_ssl_mode_on_allows_invalid_certs() {
+        let params = mongo_ssl_mode_to_uri_params(Some("on"), None, None)
+            .expect("on should map to insecure TLS params");
+        assert!(params.contains("tls=true"));
+        assert!(params.contains("tlsAllowInvalidCertificates=true"));
+        assert!(params.contains("tlsAllowInvalidHostnames=true"));
+    }
+
+    #[test]
+    fn mongo_ssl_mode_verify_without_certs_only_enables_tls() {
+        let params = mongo_ssl_mode_to_uri_params(Some("verify"), None, None)
+            .expect("verify without certs is valid");
+        assert!(params.contains("tls=true"));
+        assert!(!params.contains("tlsCAFile="));
+        assert!(!params.contains("tlsAllowInvalidCertificates"));
+    }
+
+    #[test]
+    fn mongo_ssl_mode_verify_with_ca_includes_cafile() {
+        let params = mongo_ssl_mode_to_uri_params(Some("verify"), Some("/etc/ssl/ca.pem"), None)
+            .expect("verify with CA should embed tlsCAFile");
+        assert!(params.contains("tls=true"));
+        assert!(params.contains("tlsCAFile=%2Fetc%2Fssl%2Fca.pem"));
+    }
+
+    #[test]
+    fn mongo_ssl_mode_verify_with_client_cert_includes_certificate_key_file() {
+        let params = mongo_ssl_mode_to_uri_params(
+            Some("verify"),
+            Some("/etc/ssl/ca.pem"),
+            Some("/etc/ssl/client.pem"),
+        )
+        .expect("verify with client cert should embed tlsCertificateKeyFile");
+        assert!(params.contains("tlsCAFile="));
+        assert!(params.contains("tlsCertificateKeyFile=%2Fetc%2Fssl%2Fclient.pem"));
+    }
+
+    #[test]
+    fn mongo_ssl_mode_unknown_id_returns_error() {
+        let err = mongo_ssl_mode_to_uri_params(Some("bogus"), None, None)
+            .expect_err("unknown mode should fail");
+        assert!(err.contains("Unknown MongoDB SSL mode"));
     }
 
     #[test]
@@ -3824,7 +4141,7 @@ mod tests {
         assert_eq!(bson_to_value(&Bson::Boolean(true)), Value::Bool(true));
         assert_eq!(bson_to_value(&Bson::Int32(42)), Value::Int(42));
         assert_eq!(bson_to_value(&Bson::Int64(100)), Value::Int(100));
-        assert_eq!(bson_to_value(&Bson::Double(3.14)), Value::Float(3.14));
+        assert_eq!(bson_to_value(&Bson::Double(2.5)), Value::Float(2.5));
         assert_eq!(
             bson_to_value(&Bson::String("hello".to_string())),
             Value::Text("hello".to_string())
@@ -4053,5 +4370,139 @@ mod tests {
         assert_eq!(field.common_type, "Array");
         assert!(nested_fields.iter().any(|nested| nested.name == "sku"));
         assert!(nested_fields.iter().any(|nested| nested.name == "qty"));
+    }
+
+    mod combined_pem_file_tests {
+        use super::super::CombinedPemFile;
+        use std::path::PathBuf;
+
+        struct TempDir {
+            path: PathBuf,
+        }
+
+        impl TempDir {
+            fn new(label: &str) -> Self {
+                let mut path = std::env::temp_dir();
+                path.push(format!("dbflux-test-{}-{}", label, uuid::Uuid::new_v4()));
+                std::fs::create_dir_all(&path).expect("create test temp dir");
+                Self { path }
+            }
+
+            fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
+                let p = self.path.join(name);
+                std::fs::write(&p, bytes).expect("write temp file");
+                p
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.path);
+            }
+        }
+
+        #[test]
+        fn create_with_both_files_produces_combined_pem() {
+            let dir = TempDir::new("combined");
+            let cert = dir.write("client.crt", b"-----CERT-----\nBODY1\n-----END-----\n");
+            let key = dir.write("client.key", b"-----KEY-----\nBODY2\n-----END-----\n");
+
+            let combined = CombinedPemFile::create(&cert, &key).expect("combined pem creates");
+            let written = std::fs::read(combined.path()).expect("read combined");
+
+            let cert_pos = twoway_find(&written, b"-----CERT-----")
+                .expect("cert body present in combined output");
+            let key_pos = twoway_find(&written, b"-----KEY-----")
+                .expect("key body present in combined output");
+            assert!(cert_pos < key_pos, "cert must appear before key");
+        }
+
+        #[test]
+        fn create_handles_missing_trailing_newline_on_cert() {
+            let dir = TempDir::new("nonewline");
+            let cert = dir.write("client.crt", b"-----CERT-----BODY-----END-----");
+            let key = dir.write("client.key", b"-----KEY-----BODY-----END-----");
+
+            let combined = CombinedPemFile::create(&cert, &key).expect("combined pem creates");
+            let written = std::fs::read(combined.path()).expect("read combined");
+
+            let cert_end = twoway_find(&written, b"-----END-----").expect("cert end token");
+            // Byte right after the first cert end token must be a newline so the
+            // following PEM block parses correctly.
+            let separator_index = cert_end + b"-----END-----".len();
+            assert_eq!(
+                written.get(separator_index).copied(),
+                Some(b'\n'),
+                "expected newline inserted after cert when it lacks one"
+            );
+        }
+
+        #[test]
+        fn drop_removes_temp_file() {
+            let dir = TempDir::new("drop");
+            let cert = dir.write("c.crt", b"CERT\n");
+            let key = dir.write("c.key", b"KEY\n");
+
+            let combined = CombinedPemFile::create(&cert, &key).expect("combined pem creates");
+            let path = combined.path().to_path_buf();
+            assert!(path.exists(), "temp pem should exist before drop");
+
+            drop(combined);
+
+            assert!(!path.exists(), "temp pem should be removed on drop");
+        }
+
+        #[test]
+        fn create_with_nonexistent_cert_returns_error() {
+            let dir = TempDir::new("missingcert");
+            let missing = dir.path.join("does-not-exist.crt");
+            let key = dir.write("c.key", b"KEY\n");
+
+            let err = CombinedPemFile::create(&missing, &key)
+                .expect_err("missing cert should propagate io::Error");
+            assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn combined_pem_file_has_0600_permissions_on_unix() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let dir = TempDir::new("perms");
+            let cert = dir.write("c.crt", b"CERT\n");
+            let key = dir.write("c.key", b"KEY\n");
+
+            let combined = CombinedPemFile::create(&cert, &key).expect("combined pem creates");
+            let meta = std::fs::metadata(combined.path()).expect("metadata for combined pem");
+            let mode = meta.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "expected 0600 perms, got {:o}", mode);
+        }
+
+        // Tiny substring search to avoid pulling in a new dependency for tests.
+        fn twoway_find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+            if needle.is_empty() || needle.len() > haystack.len() {
+                return None;
+            }
+            haystack
+                .windows(needle.len())
+                .position(|window| window == needle)
+        }
+    }
+
+    #[test]
+    fn mongo_ssl_mode_verify_with_separate_cert_and_key_uses_combined_pem_path() {
+        // Simulates the post-concatenation hand-off: callers resolve the combined
+        // temp PEM path before invoking the URI-params helper.
+        let combined_path = "/tmp/dbflux-mongo-pem-xyz.pem";
+        let params = mongo_ssl_mode_to_uri_params(
+            Some("verify"),
+            Some("/etc/ssl/ca.pem"),
+            Some(combined_path),
+        )
+        .expect("verify with combined pem path should embed tlsCertificateKeyFile");
+
+        assert!(params.contains("tls=true"));
+        assert!(params.contains("tlsCAFile=%2Fetc%2Fssl%2Fca.pem"));
+        assert!(params.contains("tlsCertificateKeyFile=%2Ftmp%2Fdbflux-mongo-pem-xyz.pem"));
     }
 }

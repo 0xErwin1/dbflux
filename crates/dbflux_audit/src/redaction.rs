@@ -308,12 +308,10 @@ mod tests {
 
     #[test]
     fn test_redact_invalid_json_falls_back_to_pattern_matching() {
-        // This will still go through pattern-based redaction since JSON parsing fails
+        // Non-JSON input must still produce a Redacted result without panicking;
+        // whether any patterns match is a property of the regex set, not this fallback.
         let input = "password=secret123";
-        let result = redact_json(input, true);
-        // The regex patterns include hex strings, so "secret123" won't be caught
-        // but "123" might be caught by the hex_secret pattern
-        assert!(result.redaction_count >= 0);
+        let _ = redact_json(input, true);
     }
 
     #[test]

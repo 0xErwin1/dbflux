@@ -3,7 +3,7 @@
 //! Connection folders store the hierarchical folder structure for organizing
 //! connection profiles in the connection tree.
 
-use log::info;
+use log::{info, warn};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -67,6 +67,21 @@ impl ConnectionFoldersRepository {
             created_at: timestamp.clone(),
             updated_at: timestamp,
         }
+    }
+
+    fn parse_uuid(value: &str, field: &str) -> Result<Uuid, StorageError> {
+        Uuid::parse_str(value).map_err(|error| {
+            StorageError::Data(format!("invalid {} uuid '{}': {}", field, value, error))
+        })
+    }
+
+    fn parse_optional_uuid(
+        value: Option<String>,
+        field: &str,
+    ) -> Result<Option<Uuid>, StorageError> {
+        value
+            .map(|value| Self::parse_uuid(&value, field))
+            .transpose()
     }
 
     /// Checks if a profile exists in cfg_connection_profiles.
@@ -650,19 +665,44 @@ impl ConnectionFoldersRepository {
     }
 
     /// Loads a ConnectionTree from the database.
-    pub fn load_tree(&self) -> Result<dbflux_core::ConnectionTree, StorageError> {
+    pub fn load_tree(&self) -> Result<dbflux_core::TreeLoadResult, StorageError> {
         use dbflux_core::ConnectionTreeNode;
         use dbflux_core::ConnectionTreeNodeKind;
 
         let mut tree = dbflux_core::ConnectionTree::new();
+        let mut recovered_from_error = false;
 
         // Load folders as nodes
         let folders = self.all_folders()?;
         for folder in folders {
+            let folder_id = match Self::parse_uuid(&folder.id, "folder.id") {
+                Ok(folder_id) => folder_id,
+                Err(error) => {
+                    recovered_from_error = true;
+                    warn!(
+                        "Skipping invalid connection folder '{}': {}",
+                        folder.id, error
+                    );
+                    continue;
+                }
+            };
+
+            let parent_id = match Self::parse_optional_uuid(folder.parent_id, "folder.parent_id") {
+                Ok(parent_id) => parent_id,
+                Err(error) => {
+                    recovered_from_error = true;
+                    warn!(
+                        "Loading connection folder '{}' at root because its parent is invalid: {}",
+                        folder_id, error
+                    );
+                    None
+                }
+            };
+
             let node = ConnectionTreeNode {
-                id: Uuid::parse_str(&folder.id).unwrap_or_else(|_| Uuid::new_v4()),
+                id: folder_id,
                 kind: ConnectionTreeNodeKind::Folder,
-                parent_id: folder.parent_id.and_then(|p| Uuid::parse_str(&p).ok()),
+                parent_id,
                 sort_index: folder.position,
                 name: folder.name,
                 profile_id: None,
@@ -674,24 +714,217 @@ impl ConnectionFoldersRepository {
         // Load items as connection ref nodes
         let items = self.all_items()?;
         for item in items {
+            let parent_id = if item.folder_id.is_empty()
+                || Self::is_root_folder_sentinel(&item.folder_id)
+            {
+                None
+            } else {
+                match Self::parse_uuid(&item.folder_id, "folder_item.folder_id") {
+                    Ok(folder_id) => Some(folder_id),
+                    Err(error) => {
+                        recovered_from_error = true;
+                        warn!(
+                            "Loading connection folder item '{}' at root because its folder is invalid: {}",
+                            item.id, error
+                        );
+                        None
+                    }
+                }
+            };
+
+            let profile_id = match Self::parse_uuid(&item.profile_id, "folder_item.profile_id") {
+                Ok(profile_id) => profile_id,
+                Err(error) => {
+                    recovered_from_error = true;
+                    warn!(
+                        "Skipping connection folder item '{}' because its profile id is invalid: {}",
+                        item.id, error
+                    );
+                    continue;
+                }
+            };
+
             let node = ConnectionTreeNode {
                 id: Uuid::new_v4(),
                 kind: ConnectionTreeNodeKind::ConnectionRef,
-                parent_id: if item.folder_id.is_empty()
-                    || Self::is_root_folder_sentinel(&item.folder_id)
-                {
-                    None
-                } else {
-                    Uuid::parse_str(&item.folder_id).ok()
-                },
+                parent_id,
                 sort_index: item.position,
                 name: String::new(),
-                profile_id: Uuid::parse_str(&item.profile_id).ok(),
+                profile_id: Some(profile_id),
                 collapsed: false,
             };
             tree.add_node(node);
         }
 
-        Ok(tree)
+        let repaired_orphans = tree.repair_orphans();
+        if repaired_orphans > 0 {
+            recovered_from_error = true;
+            warn!(
+                "Repaired {} orphaned connection tree nodes after loading persisted folders",
+                repaired_orphans
+            );
+        }
+
+        Ok(dbflux_core::TreeLoadResult {
+            tree,
+            recovered_from_error,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bootstrap::StorageRuntime;
+
+    fn temp_repo() -> (tempfile::TempDir, ConnectionFoldersRepository) {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime = StorageRuntime::for_path(temp_dir.path().join("dbflux.db")).expect("runtime");
+
+        let repo = ConnectionFoldersRepository::new(runtime.dbflux_db());
+
+        (temp_dir, repo)
+    }
+
+    #[test]
+    fn load_tree_skips_invalid_folder_item_profile_uuid_without_failing() {
+        let (_temp_dir, repo) = temp_repo();
+        let folder_id = Uuid::new_v4().to_string();
+        let valid_profile_id = Uuid::new_v4().to_string();
+
+        repo.insert_folder(&ConnectionFolderDto {
+            id: folder_id.clone(),
+            parent_id: None,
+            name: "Work".to_string(),
+            position: 0,
+            collapsed: false,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        })
+        .expect("insert folder");
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'Valid Profile', 'postgres', 'postgres', datetime('now'), datetime('now'))
+                "#,
+                params![valid_profile_id],
+            )
+            .expect("insert valid profile id row");
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'Broken Profile', 'postgres', 'postgres', datetime('now'), datetime('now'))
+                "#,
+                params!["not-a-uuid"],
+            )
+            .expect("insert invalid profile id row");
+
+        repo.conn()
+            .execute(
+                "INSERT INTO cfg_connection_folder_items (id, folder_id, profile_id, position) VALUES (?1, ?2, ?3, 1000)",
+                params![Uuid::new_v4().to_string(), folder_id, valid_profile_id],
+            )
+            .expect("insert valid folder item");
+
+        repo.conn()
+            .execute(
+                "INSERT INTO cfg_connection_folder_items (id, folder_id, profile_id, position) VALUES (?1, ?2, ?3, 0)",
+                params![Uuid::new_v4().to_string(), folder_id, "not-a-uuid"],
+            )
+            .expect("insert invalid folder item");
+
+        let load_result = repo
+            .load_tree()
+            .expect("invalid folder item should be skipped, not fail");
+
+        assert!(load_result.recovered_from_error);
+        assert_eq!(load_result.tree.folders().len(), 1);
+        assert_eq!(
+            load_result
+                .tree
+                .nodes
+                .iter()
+                .filter(|node| node.is_connection_ref())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn load_tree_repairs_invalid_folder_references_without_failing() {
+        let (_temp_dir, repo) = temp_repo();
+        let valid_folder_id = Uuid::new_v4().to_string();
+        let valid_profile_id = Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_folders (
+                    id, parent_id, name, position, collapsed, created_at, updated_at
+                ) VALUES (?1, NULL, 'Broken Parent', 0, 0, datetime('now'), datetime('now'))
+                "#,
+                params!["not-a-uuid"],
+            )
+            .expect("insert invalid parent folder");
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_folders (
+                    id, parent_id, name, position, collapsed, created_at, updated_at
+                ) VALUES (?1, NULL, 'Valid Folder', 500, 0, datetime('now'), datetime('now'))
+                "#,
+                params![valid_folder_id],
+            )
+            .expect("insert valid folder");
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_folders (
+                    id, parent_id, name, position, collapsed, created_at, updated_at
+                ) VALUES (?1, ?2, 'Broken Child', 1000, 0, datetime('now'), datetime('now'))
+                "#,
+                params![Uuid::new_v4().to_string(), "not-a-uuid"],
+            )
+            .expect("insert invalid child folder");
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'Valid Profile', 'postgres', 'postgres', datetime('now'), datetime('now'))
+                "#,
+                params![valid_profile_id],
+            )
+            .expect("insert valid profile");
+
+        repo.conn()
+            .execute(
+                "INSERT INTO cfg_connection_folder_items (id, folder_id, profile_id, position) VALUES (?1, ?2, ?3, 0)",
+                params![Uuid::new_v4().to_string(), valid_folder_id, valid_profile_id],
+            )
+            .expect("insert valid folder item");
+
+        let load_result = repo
+            .load_tree()
+            .expect("invalid folders should be repaired, not fail");
+
+        let folders = load_result.tree.folders();
+        let repaired_child = folders
+            .iter()
+            .find(|folder| folder.name == "Broken Child")
+            .expect("broken child folder should be kept");
+
+        assert!(load_result.recovered_from_error);
+        assert_eq!(folders.len(), 2);
+        assert!(repaired_child.parent_id.is_none());
     }
 }

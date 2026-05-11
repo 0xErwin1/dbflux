@@ -1,8 +1,11 @@
 use crate::platform;
 use crate::ui::components::tree_nav::{self, FlatRow};
 use crate::ui::theme::ghost_border_color;
-use crate::ui::tokens::Heights;
+use crate::ui::tokens::{Heights, Radii};
 use dbflux_components::controls::Button;
+use dbflux_components::primitives::Icon;
+use dbflux_components::tokens::BannerColors;
+use dbflux_components::typography::{Body, FieldLabel, SidebarGroupLabel};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -10,12 +13,24 @@ use gpui_component::dialog::Dialog;
 
 use super::{
     SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
-    SettingsCoordinator, SettingsFocus,
+    SettingsCoordinator, SettingsFocus, layout,
 };
 
 const INDENT_PX: f32 = 16.0;
 
 impl SettingsCoordinator {
+    fn settings_nav_row_label(
+        label: SharedString,
+        is_active: bool,
+        text_color: Hsla,
+    ) -> AnyElement {
+        if is_active {
+            FieldLabel::new(label).color(text_color).into_any_element()
+        } else {
+            Body::new(label).color(text_color).into_any_element()
+        }
+    }
+
     fn section_display_name(section: super::SettingsSectionId) -> &'static str {
         match section {
             super::SettingsSectionId::General => "General",
@@ -30,7 +45,7 @@ impl SettingsCoordinator {
             super::SettingsSectionId::Proxies => "Proxy",
             super::SettingsSectionId::SshTunnels => "SSH Tunnels",
             super::SettingsSectionId::AuthProfiles => "Auth Profiles",
-            super::SettingsSectionId::Services => "Services",
+            super::SettingsSectionId::Services => "RPC Services",
             super::SettingsSectionId::Hooks => "Hooks",
             super::SettingsSectionId::Drivers => "Drivers",
             super::SettingsSectionId::About => "About",
@@ -38,7 +53,6 @@ impl SettingsCoordinator {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border_color = cx.theme().border;
         let sidebar_bg = cx.theme().sidebar;
         let theme = cx.theme().clone();
         let focused = self.focus_area == SettingsFocus::Sidebar;
@@ -86,8 +100,6 @@ impl SettingsCoordinator {
         div()
             .w_full()
             .h_full()
-            .border_r_1()
-            .border_color(border_color)
             .bg(sidebar_bg)
             .flex()
             .flex_col()
@@ -101,7 +113,7 @@ impl SettingsCoordinator {
         &self,
         row: &FlatRow,
         _is_cursor: bool,
-        theme: &gpui_component::Theme,
+        _theme: &gpui_component::Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let row_id = row.id.clone();
@@ -120,16 +132,7 @@ impl SettingsCoordinator {
                 let _ = this.sidebar_tree.activate();
                 cx.notify();
             }))
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.muted_foreground)
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(row.label.to_uppercase()),
-            )
+            .child(SidebarGroupLabel::new(row.label.clone()))
             .into_any_element()
     }
 
@@ -161,7 +164,7 @@ impl SettingsCoordinator {
             .items_center()
             .gap_2()
             .when_some(row.icon, |div, icon| {
-                div.child(svg().path(icon.path()).size_4().text_color(icon_color))
+                div.child(Icon::new(icon).small().color(icon_color))
             })
             .child(
                 div()
@@ -169,8 +172,11 @@ impl SettingsCoordinator {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .text_color(text_color)
-                    .child(row.label.clone()),
+                    .child(Self::settings_nav_row_label(
+                        row.label.clone(),
+                        show_active,
+                        text_color,
+                    )),
             );
 
         div()
@@ -180,8 +186,7 @@ impl SettingsCoordinator {
             .px_2()
             .flex()
             .items_center()
-            .rounded(px(4.0))
-            .text_sm()
+            .rounded(Radii::SM)
             .cursor_pointer()
             .border_1()
             .border_color(if is_cursor {
@@ -190,8 +195,7 @@ impl SettingsCoordinator {
                 transparent_black()
             })
             .when(show_active, |div| {
-                div.bg(theme.secondary)
-                    .font_weight(FontWeight::MEDIUM)
+                div.bg(BannerColors::warning_bg(theme))
                     .border_l_2()
                     .border_color(theme.primary)
             })
@@ -247,19 +251,13 @@ impl Render for SettingsCoordinator {
                             .child(self.render_sidebar_grip(cx)),
                     )
                     .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
+                        layout::section_container(self.active_section_view.clone())
                             .h_full()
-                            .flex()
-                            .flex_col()
-                            .overflow_hidden()
-                            .bg(cx.theme().background)
-                            .child(self.active_section_view.clone()),
+                            .bg(cx.theme().tab_bar),
                     ),
             )
             // Settings status footer
-            .child(self.render_settings_footer(cx))
+            .child(self.render_settings_footer(_window, cx))
             .when_some(self.pending_section_confirm, |element, target_section| {
                 let confirm_entity = cx.entity().clone();
                 let cancel_entity = confirm_entity.clone();
@@ -281,7 +279,7 @@ impl Render for SettingsCoordinator {
                             });
                             true
                         })
-                        .child(div().text_sm().child(format!(
+                        .child(Body::new(format!(
                             "You have unsaved changes. Discard them and switch to {}?",
                             section_name
                         ))),
@@ -336,35 +334,50 @@ impl SettingsCoordinator {
             )
     }
 
-    fn render_settings_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        const VERSION: &str = env!("CARGO_PKG_VERSION");
+    fn render_settings_footer(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let section_actions = self.active_section_entity.render_footer_actions(window, cx);
 
         div()
             .flex_shrink_0()
-            .h(px(36.0))
+            .min_h(px(56.0))
             .px_4()
+            .py_2()
             .flex()
             .items_center()
             .justify_between()
+            .gap_4()
             .border_t_1()
             .border_color(ghost_border_color())
             .bg(cx.theme().background)
             .child(
                 div()
-                    .text_xs()
-                    .font_family("monospace")
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("v{} | UTF-8", VERSION)),
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(layout::footer_action_frame(
+                        false,
+                        cx.theme().primary,
+                        Button::new("settings-close", "Close")
+                            .small()
+                            .ghost()
+                            .w_full()
+                            .on_click(cx.listener(|this, _, window, _cx| {
+                                this.try_close(window);
+                            })),
+                    )),
             )
             .child(
-                div().flex().items_center().gap_2().child(
-                    Button::new("settings-close", "Close")
-                        .ghost()
-                        .small()
-                        .on_click(cx.listener(|this, _, window, _cx| {
-                            this.try_close(window);
-                        })),
-                ),
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_3()
+                    .min_w(px(120.0))
+                    .when_some(section_actions, |div, actions| div.child(actions)),
             )
     }
 }

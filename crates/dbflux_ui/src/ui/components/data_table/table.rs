@@ -1,6 +1,10 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
+use crate::ui::tokens::FontSizes;
+use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::primitives::Text;
+use dbflux_components::tokens::RowColors;
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -8,7 +12,6 @@ use gpui::{
     ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement,
     Styled, Window, actions, canvas, div, px, uniform_list,
 };
-use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::Scrollbar;
 use gpui_component::{ActiveTheme, Sizable};
 
@@ -634,6 +637,9 @@ impl DataTable {
         let state_entity = self.state.clone();
         let resize_drag = self.resize_drag.clone();
 
+        let pk_cols = state.pk_columns().to_vec();
+        let fk_cols = state.fk_columns().clone();
+
         let header_cells: Vec<_> = model
             .columns
             .iter()
@@ -649,6 +655,11 @@ impl DataTable {
                 } else {
                     ""
                 };
+
+                let is_pk = pk_cols.contains(&col_ix);
+                let is_fk = fk_cols.contains(&col_ix);
+
+                let type_label: String = col_spec.type_name.as_ref().to_string();
 
                 let state_for_click = state_entity.clone();
                 let resize_drag_for_down = resize_drag.clone();
@@ -681,31 +692,56 @@ impl DataTable {
                             .items_center()
                             .gap_1()
                             .overflow_hidden()
+                            // PK badge — shown as a small "PK" label in accent color
+                            .when(is_pk, |d| {
+                                d.child(
+                                    Text::body("PK")
+                                        .font_size(FontSizes::XS)
+                                        .color(theme.accent),
+                                )
+                            })
+                            // FK badge — shown as a small "FK" label in muted color
+                            .when(is_fk, |d| {
+                                d.child(
+                                    Text::body("FK")
+                                        .font_size(FontSizes::XS)
+                                        .color(theme.muted_foreground),
+                                )
+                            })
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(if is_sorted {
-                                        theme.primary
-                                    } else {
-                                        theme.table_head_foreground
-                                    })
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .whitespace_nowrap()
-                                    .child(col_spec.title.to_string()),
+                                    .child(Text::label_sm(col_spec.title.to_string()).color(
+                                        if is_sorted {
+                                            theme.primary
+                                        } else {
+                                            theme.table_head_foreground
+                                        },
+                                    )),
+                            )
+                            // Type label — dimmed suffix showing the real SQL type.
+                            .when_some(
+                                (!type_label.is_empty()).then_some(type_label),
+                                |d, label| {
+                                    d.child(
+                                        Text::body(label)
+                                            .font_size(FontSizes::XS)
+                                            .color(theme.muted_foreground.opacity(0.6)),
+                                    )
+                                },
                             ),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(if is_sorted {
-                                theme.primary
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .child(sort_indicator),
-                    )
+                    .child(div().child(if is_sorted {
+                        Text::body(sort_indicator)
+                            .font_size(FontSizes::SM)
+                            .color(theme.primary)
+                    } else {
+                        Text::body(sort_indicator)
+                            .font_size(FontSizes::SM)
+                            .color(theme.muted_foreground)
+                    }))
                     // Resize handle: mouse-down starts the drag; move/up are
                     // handled on the DataTable root div so the drag survives
                     // the cursor leaving this 6px strip.
@@ -861,12 +897,12 @@ fn render_rows(
             // - PendingInsert: green-ish to indicate new row
             // - PendingDelete: red-ish with visual indication of deletion
             let row_bg = match row_state {
-                dbflux_core::RowState::Dirty => None, // Cell-level only
-                dbflux_core::RowState::Saving => Some(theme.warning.opacity(0.1)),
-                dbflux_core::RowState::Error(_) => Some(theme.danger.opacity(0.15)),
+                dbflux_core::RowState::Dirty => None, // Cell-level only — see dirty cell highlight below
+                dbflux_core::RowState::Saving => Some(RowColors::saving(theme)),
+                dbflux_core::RowState::Error(_) => Some(RowColors::error(theme)),
                 dbflux_core::RowState::Clean => None,
-                dbflux_core::RowState::PendingInsert => Some(theme.success.opacity(0.15)),
-                dbflux_core::RowState::PendingDelete => Some(theme.danger.opacity(0.1)),
+                dbflux_core::RowState::PendingInsert => Some(RowColors::insert(theme)),
+                dbflux_core::RowState::PendingDelete => Some(RowColors::delete(theme)),
             };
 
             let is_pending_delete = row_state.is_pending_delete();
@@ -953,9 +989,11 @@ fn render_rows(
                         .border_r_1()
                         .border_color(theme.border)
                         .cursor_pointer()
-                        // Highlight individual dirty cells (like DBeaver)
+                        // Highlight individual dirty cells (like DBeaver).
+                        // Uses RowColors::dirty for the background and the
+                        // theme warning for the 2px left accent stroke.
                         .when(is_cell_dirty, |d| {
-                            d.bg(theme.warning.opacity(0.2))
+                            d.bg(RowColors::dirty(theme))
                                 .border_l_2()
                                 .border_color(theme.warning)
                         })
@@ -964,12 +1002,6 @@ fn render_rows(
                                 .border_color(theme.table_active_border)
                         })
                         .when(is_active, |d| d.border_1().border_color(theme.ring))
-                        .text_sm()
-                        .text_color(if is_pending_delete || is_null || is_auto_generated {
-                            theme.muted_foreground
-                        } else {
-                            theme.foreground
-                        })
                         .when(is_null || is_auto_generated, |d| d.italic())
                         .when(is_pending_delete, |d| d.line_through())
                         .on_click(move |event: &ClickEvent, window, cx| {
@@ -1009,7 +1041,15 @@ fn render_rows(
                                 });
                             },
                         )
-                        .child(display_text.to_string())
+                        .child(
+                            Text::body(display_text.to_string())
+                                .font_size(FontSizes::SM)
+                                .color(if is_pending_delete || is_null || is_auto_generated {
+                                    theme.muted_foreground
+                                } else {
+                                    theme.foreground
+                                }),
+                        )
                         .into_any_element()
                 })
                 .collect();

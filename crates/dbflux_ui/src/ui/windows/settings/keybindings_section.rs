@@ -1,9 +1,9 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
 use crate::keymap::{ContextId, KeyChord, Modifiers, key_chord_from_gpui};
+use dbflux_components::controls::InputState;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::InputState;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -35,6 +35,12 @@ pub(super) enum KeybindingsListItem {
         is_selected: bool,
         ctx_idx: usize,
         binding_idx: usize,
+    },
+    /// Inline warning rendered above the first binding that shares a chord
+    /// with another binding in the same context.
+    ConflictWarning {
+        chord: KeyChord,
+        other_cmd_names: Vec<String>,
     },
 }
 

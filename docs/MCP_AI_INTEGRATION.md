@@ -21,7 +21,7 @@ AI Client (Claude Desktop / Cursor / any MCP client)
         +--  dbflux_audit        audit trail (SQLite)
 ```
 
-The MCP server and the DBFlux GUI app are independent processes. They share the same on-disk config files under `~/.config/dbflux/` and the same profile store. Governance configured in the GUI (trusted clients, roles, policies, per-connection settings) is read by the server on startup.
+The MCP server and the DBFlux GUI app are independent processes. They share the same unified SQLite database at `~/.local/share/dbflux/dbflux.db` (profiles, governance, audit, history, sessions). Governance configured in the GUI (trusted clients, roles, policies, per-connection settings) is read by the server from that database on startup. The `--config-dir` flag is accepted for CLI compatibility but does not relocate the unified database; governance and audit always read from `~/.local/share/dbflux/dbflux.db`.
 
 ## 2. Running the MCP Server
 
@@ -49,7 +49,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | Flag | Description |
 |------|-------------|
 | `--client-id <id>` | Identity of this AI client. Must match a registered trusted client in governance settings. **Required.** |
-| `--config-dir <path>` | Override the default config directory (`~/.config/dbflux`). Useful for isolated test environments. |
+| `--config-dir <path>` | Accepted for CLI compatibility. The governance/audit database is always resolved to the unified `~/.local/share/dbflux/dbflux.db`; this flag does not relocate it. For isolated test environments, override `HOME`/`XDG_DATA_HOME` instead. |
 
 ### Claude Desktop config
 
@@ -85,33 +85,48 @@ All six layers run inside the server process on every `tools/call` request. None
 
 ## 4. Canonical Tool Surface (v1)
 
-| Group | Tool ID | What it does |
-|-------|---------|--------------|
-| Discovery | `list_connections` | Enumerate all configured database connections |
-| Discovery | `get_connection` | Retrieve details of a specific connection |
-| Discovery | `get_connection_metadata` | Fetch driver capabilities and metadata |
-| Schema | `list_databases` | List all databases accessible on a connection |
-| Schema | `list_schemas` | List schemas within a database |
-| Schema | `list_tables` | List tables and views within a schema |
-| Schema | `list_collections` | List MongoDB collections |
-| Schema | `describe_object` | Get column/field definitions and indexes for a table |
-| Query | `read_query` | Execute a SELECT or equivalent read-only query |
-| Query | `explain_query` | Show the query execution plan without executing the target mutation |
-| Query | `preview_mutation` | Return a read-only preview/plan for a write query; the mutation is never executed |
-| Scripts | `list_scripts` | List saved scripts in the scripts directory |
-| Scripts | `get_script` | Retrieve the source of a specific saved script |
-| Scripts | `create_script` | Save a new script to the scripts directory |
-| Scripts | `update_script` | Overwrite an existing saved script |
-| Scripts | `delete_script` | Permanently remove a script |
-| Scripts | `run_script` | Execute a saved script against a connection |
-| Approval | `request_execution` | Submit a mutation for human approval before it runs |
-| Approval | `list_pending_executions` | View all executions awaiting approval |
-| Approval | `get_pending_execution` | Retrieve details of a specific pending execution |
-| Approval | `approve_execution` | Approve a pending mutation (admin only) |
-| Approval | `reject_execution` | Reject and discard a pending mutation (admin only) |
-| Audit | `query_audit_logs` | Search and filter the audit trail |
-| Audit | `get_audit_entry` | Retrieve a single audit log entry by ID |
-| Audit | `export_audit_logs` | Download audit log entries as CSV or JSON |
+| Group | Tool ID | Class | What it does |
+|-------|---------|-------|--------------|
+| Connection | `list_connections` | metadata | Enumerate all configured database connections |
+| Connection | `connect` | metadata | Open a session against a configured connection |
+| Connection | `disconnect` | metadata | Close an open session |
+| Connection | `get_connection_info` | metadata | Fetch driver capabilities and connection metadata |
+| Schema | `list_databases` | metadata | List all databases accessible on a connection |
+| Schema | `list_schemas` | metadata | List schemas within a database |
+| Schema | `list_tables` | metadata | List tables and views within a schema |
+| Schema | `list_collections` | metadata | List MongoDB collections |
+| Schema | `describe_object` | metadata | Get column/field definitions and indexes for a table |
+| Read | `select_data` | read | Execute a structured SELECT against a table or collection. Unsupported `joins` are rejected explicitly |
+| Read | `count_records` | read | Return a row/document count for a target |
+| Read | `aggregate_data` | read | Run a read-only aggregation pipeline |
+| Read | `explain_query` | read | Show the query execution plan without executing the target mutation |
+| Read | `preview_mutation` | read | Return a read-only preview/plan for a write query. Always read-only; the mutation is never executed |
+| Write | `insert_record` | write | Insert a single record |
+| Write | `update_records` | write | Update records matching a filter |
+| Write | `upsert_record` | write | Insert or update a single record by key |
+| Write | `delete_records` | destructive | Delete records matching a filter |
+| Destructive | `truncate_table` | destructive | Remove all rows from a table |
+| DDL | `create_table` | admin | Create a table |
+| DDL | `alter_table` | admin_safe / admin / admin_destructive | Alter a table; classification is computed per change kind |
+| DDL | `create_index` | admin | Create an index |
+| DDL | `drop_index` | admin | Drop an index |
+| DDL | `create_type` | admin | Create a user-defined type |
+| DDL Destructive | `drop_table` | admin_destructive | Drop a table |
+| DDL Destructive | `drop_database` | admin_destructive | Drop a database |
+| Scripts | `list_scripts` | metadata | List saved scripts in the scripts directory |
+| Scripts | `get_script` | read | Retrieve the source of a specific saved script |
+| Scripts | `create_script` | write | Save a new script to the scripts directory |
+| Scripts | `update_script` | write | Overwrite an existing saved script |
+| Scripts | `delete_script` | admin | Permanently remove a script |
+| Scripts | `execute_script` | computed | Execute a saved script against a connection. Classification is derived from the script body |
+| Approval | `request_execution` | admin | Submit a mutation for human approval before it runs |
+| Approval | `list_pending_executions` | read | View all executions awaiting approval |
+| Approval | `get_pending_execution` | read | Retrieve details of a specific pending execution |
+| Approval | `approve_execution` | admin | Approve a pending mutation (admin only) |
+| Approval | `reject_execution` | admin | Reject and discard a pending mutation (admin only) |
+| Audit | `query_audit_logs` | read | Search and filter the audit trail |
+| Audit | `get_audit_entry` | read | Retrieve a single audit log entry by ID |
+| Audit | `export_audit_logs` | read | Download audit log entries as CSV or JSON |
 
 Deferred tools (explicitly rejected at request time in v1):
 

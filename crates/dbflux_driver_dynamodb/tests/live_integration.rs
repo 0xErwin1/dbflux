@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::result_large_err
+)]
+
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_dynamodb::Client;
 use aws_sdk_dynamodb::config::Credentials;

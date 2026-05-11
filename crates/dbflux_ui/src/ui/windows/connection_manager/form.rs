@@ -1,5 +1,5 @@
 use crate::ui::components::form_renderer;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, now_hms};
 use crate::ui::windows::ssh_shared;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::values::ValueRef;
@@ -300,6 +300,67 @@ impl ConnectionManagerWindow {
             }
         };
 
+        // Persist the SSL mode id string selected in the UI. Drivers hardcode a default; we
+        // overwrite here so the user's selection is saved without each driver reading form values.
+        if !self.selected_ssl_mode.is_empty() {
+            let selected = self.selected_ssl_mode.clone();
+            match &mut config {
+                DbConfig::Postgres { ssl_mode, .. }
+                | DbConfig::MySQL { ssl_mode, .. }
+                | DbConfig::MongoDB { ssl_mode, .. }
+                | DbConfig::Redis { ssl_mode, .. } => {
+                    *ssl_mode = Some(selected);
+                }
+                _ => {}
+            }
+        }
+
+        // Apply SSL cert path inputs.
+        let ssl_root_cert = {
+            let v = self.ssl_ca_cert_input.read(cx).value().to_string();
+            if v.trim().is_empty() { None } else { Some(v) }
+        };
+        let ssl_client_cert = {
+            let v = self.ssl_client_cert_input.read(cx).value().to_string();
+            if v.trim().is_empty() { None } else { Some(v) }
+        };
+        let ssl_client_key = {
+            let v = self.ssl_client_key_input.read(cx).value().to_string();
+            if v.trim().is_empty() { None } else { Some(v) }
+        };
+
+        match &mut config {
+            DbConfig::Postgres {
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ..
+            }
+            | DbConfig::MySQL {
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ..
+            }
+            | DbConfig::MongoDB {
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ..
+            }
+            | DbConfig::Redis {
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ..
+            } => {
+                *ssl_root_cert_path = ssl_root_cert;
+                *ssl_client_cert_path = ssl_client_cert;
+                *ssl_client_key_path = ssl_client_key;
+            }
+            _ => {}
+        }
+
         let ssh_tunnel_profile_id = self.selected_ssh_tunnel_id;
         let ssh_tunnel = if ssh_tunnel_profile_id.is_some() {
             None
@@ -331,7 +392,10 @@ impl ConnectionManagerWindow {
                 *tunnel = ssh_tunnel;
                 *profile_id = ssh_tunnel_profile_id;
             }
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {}
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => {}
         }
 
         Some(config)
@@ -447,10 +511,9 @@ impl ConnectionManagerWindow {
                 .as_ref()
                 .is_none_or(|ov| ov.refresh_interval_secs.is_none())
         {
-            cx.toast_warning(
-                "Refresh interval override ignored: value must be a positive number".to_string(),
-                window,
-            );
+            Toast::warning("Refresh interval override ignored: value must be a positive number")
+                .meta_right(now_hms())
+                .push(cx);
         }
 
         if let Some(ref conn_settings) = profile.connection_settings
@@ -459,7 +522,7 @@ impl ConnectionManagerWindow {
         {
             let warnings = form_renderer::validate_values(&schema, conn_settings);
             for warning in warnings {
-                cx.toast_warning(warning, window);
+                Toast::warning(warning).meta_right(now_hms()).push(cx);
             }
         }
 
@@ -553,6 +616,7 @@ impl ConnectionManagerWindow {
 
         self.test_status = TestStatus::Testing;
         self.test_error = None;
+        self.test_result = None;
         cx.notify();
 
         let Some(profile) = self.build_profile(cx) else {
@@ -609,23 +673,34 @@ impl ConnectionManagerWindow {
 
                 drop(connection);
 
-                Ok::<(), String>(())
+                Ok::<dbflux_core::TestConnectionResult, String>(
+                    dbflux_core::TestConnectionResult::default(),
+                )
             })
         } else {
             let password = self.input_password.read(cx).value().to_string();
-            let password_opt = if password.is_empty() {
+            let _password_opt = if password.is_empty() {
                 None
             } else {
                 Some(SecretString::from(password))
             };
 
-            let ssh_secret = self.get_ssh_secret(cx).map(SecretString::from);
+            let _ssh_secret = self.get_ssh_secret(cx).map(SecretString::from);
 
             cx.background_executor().spawn(async move {
-                driver
-                    .connect_with_secrets(&profile, password_opt.as_ref(), ssh_secret.as_ref())
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
+                let start = std::time::Instant::now();
+                let rich = driver
+                    .test_connection_rich(&profile)
+                    .map(|mut result| {
+                        // Fill in RTT from wall time if the driver didn't supply it.
+                        if result.rtt_ms.is_none() {
+                            result.rtt_ms = Some(start.elapsed().as_millis() as u64);
+                        }
+                        result
+                    })
+                    .map_err(|error| error.to_string())?;
+
+                Ok::<dbflux_core::TestConnectionResult, String>(rich)
             })
         };
 
@@ -635,15 +710,17 @@ impl ConnectionManagerWindow {
             if let Err(error) = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
-                        Ok(()) => {
+                        Ok(rich) => {
                             info!("Test connection successful for {}", profile_name);
                             this.test_status = TestStatus::Success;
                             this.test_error = None;
+                            this.test_result = Some(rich);
                         }
                         Err(error) => {
                             info!("Test connection failed: {}", error);
                             this.test_status = TestStatus::Failed;
                             this.test_error = Some(error);
+                            this.test_result = None;
                         }
                     }
                     cx.notify();

@@ -335,7 +335,7 @@ impl DbFluxServer {
         };
 
         match connection.metadata().category {
-            DatabaseCategory::Document => {
+            DatabaseCategory::Document | DatabaseCategory::LogStream => {
                 Self::select_data_document(
                     &connection,
                     table,
@@ -476,7 +476,7 @@ impl DbFluxServer {
         };
 
         match connection.metadata().category {
-            DatabaseCategory::Document => {
+            DatabaseCategory::Document | DatabaseCategory::LogStream => {
                 #[allow(clippy::unnecessary_lazy_evaluations)]
                 let db_name = database.ok_or_else(|| {
                     "Database parameter is required for document databases. Use: count_records(connection_id, table, database=\"db_name\", ...)"
@@ -744,6 +744,7 @@ mod tests {
         display_name: "Test".into(),
         description: "Test driver".into(),
         category: DatabaseCategory::Relational,
+        deployment_class: None,
         query_language: QueryLanguage::Sql,
         capabilities: DriverCapabilities::empty(),
         default_port: None,
@@ -762,6 +763,8 @@ mod tests {
         ddl: None,
         transactions: Some(TransactionCapabilities::default()),
         limits: None,
+        ssl_modes: None,
+        ssl_cert_fields: None,
         classification_override: None,
     });
 

@@ -19,6 +19,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(form_navigation_layer());
     stack.add_layer(context_bar_layer());
     stack.add_layer(audit_layer());
+    stack.add_layer(event_streams_picker_layer());
 
     stack
 });
@@ -121,6 +122,7 @@ fn sidebar_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Sidebar);
 
     layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
     layer.bind(
         KeyChord::new("q", Modifiers::none()),
         Command::SidebarNextTab,
@@ -249,6 +251,32 @@ fn editor_layer() -> KeymapLayer {
         KeyChord::new("s", Modifiers::ctrl_shift()),
         Command::SaveFileAs,
     );
+
+    layer
+}
+
+fn event_streams_picker_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::EventStreamsPicker);
+
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+
+    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
+    layer.bind(
+        KeyChord::new("home", Modifiers::none()),
+        Command::SelectFirst,
+    );
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
 
     layer
 }
@@ -463,13 +491,20 @@ fn command_palette_layer() -> KeymapLayer {
 fn connection_manager_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::ConnectionManager);
 
-    // Vertical navigation (j/k without Ctrl)
+    // Vertical navigation (j/k without Ctrl, plus arrow keys for the picker).
     layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
     layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("down", Modifiers::none()), Command::FocusDown);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::FocusUp);
 
-    // Horizontal navigation within row (h/l without Ctrl)
+    // Horizontal navigation within row (h/l without Ctrl, plus arrows).
     layer.bind(KeyChord::new("h", Modifiers::none()), Command::FocusLeft);
     layer.bind(KeyChord::new("l", Modifiers::none()), Command::FocusRight);
+    layer.bind(KeyChord::new("left", Modifiers::none()), Command::FocusLeft);
+    layer.bind(
+        KeyChord::new("right", Modifiers::none()),
+        Command::FocusRight,
+    );
 
     // Tab switching (C-h/C-l)
     layer.bind(
@@ -480,6 +515,9 @@ fn connection_manager_layer() -> KeymapLayer {
         KeyChord::new("l", Modifiers::ctrl()),
         Command::CycleFocusForward,
     );
+
+    // Filter focus shortcut used by the New-Connection picker.
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
 
     // Actions
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);

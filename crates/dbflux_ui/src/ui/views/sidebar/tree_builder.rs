@@ -3,7 +3,13 @@ use super::*;
 impl Sidebar {
     pub(super) fn build_tree_items_with_overrides(&self, cx: &Context<Self>) -> Vec<TreeItem> {
         let items = Self::build_tree_items(self.app_state.read(cx));
-        self.apply_expansion_overrides(items)
+        let items = self.apply_expansion_overrides(items);
+
+        if self.connections_search_query.trim().is_empty() {
+            return items;
+        }
+
+        Self::apply_tree_filter(items, self.connections_search_query.trim())
     }
 
     pub(super) fn extract_active_databases(state: &AppState) -> HashMap<Uuid, String> {
@@ -17,6 +23,46 @@ impl Sidebar {
                     .map(|db| (*profile_id, db))
             })
             .collect()
+    }
+
+    pub(crate) fn apply_tree_filter(items: Vec<TreeItem>, query: &str) -> Vec<TreeItem> {
+        let query = query.to_ascii_lowercase();
+
+        items
+            .into_iter()
+            .filter_map(|item| Self::filter_tree_item(item, &query))
+            .collect()
+    }
+
+    fn filter_tree_item(item: TreeItem, query: &str) -> Option<TreeItem> {
+        let item_id = item.id.to_string();
+        let item_label = item.label.clone();
+        let item_expanded = item.is_expanded();
+        let item_matches = item_label.to_string().to_ascii_lowercase().contains(query);
+        let original_children = item.children;
+
+        if item_matches {
+            return Some(
+                TreeItem::new(item_id, item_label)
+                    .expanded(item_expanded)
+                    .children(original_children),
+            );
+        }
+
+        let children: Vec<TreeItem> = original_children
+            .into_iter()
+            .filter_map(|child| Self::filter_tree_item(child, query))
+            .collect();
+
+        if children.is_empty() {
+            return None;
+        }
+
+        Some(
+            TreeItem::new(item_id, item_label)
+                .expanded(true)
+                .children(children),
+        )
     }
 
     fn apply_expansion_overrides(&self, items: Vec<TreeItem>) -> Vec<TreeItem> {
@@ -228,6 +274,7 @@ impl Sidebar {
                                     &db.name,
                                     db_schema,
                                     &connected.table_details,
+                                    &connected.collection_children,
                                 )
                             } else {
                                 Self::build_db_schema_content(
@@ -239,6 +286,7 @@ impl Sidebar {
                                     &connected.schema_types,
                                     &connected.schema_indexes,
                                     &connected.schema_foreign_keys,
+                                    &connected.dependents_cache,
                                 )
                             }
                         } else if is_pending {
@@ -264,6 +312,7 @@ impl Sidebar {
                                 &connected.schema_types,
                                 &connected.schema_indexes,
                                 &connected.schema_foreign_keys,
+                                &connected.dependents_cache,
                             )
                         } else {
                             Vec::new()
@@ -285,6 +334,8 @@ impl Sidebar {
                                     foreign_keys: None,
                                     constraints: None,
                                     sample_fields: collection.sample_fields.clone(),
+                                    presentation: collection.presentation,
+                                    child_items: collection.child_items.clone(),
                                 })
                                 .collect::<Vec<_>>();
 
@@ -300,6 +351,7 @@ impl Sidebar {
                                 &db.name,
                                 &db_schema,
                                 &connected.table_details,
+                                &connected.collection_children,
                             )
                         } else {
                             Self::build_schema_children(
@@ -311,6 +363,7 @@ impl Sidebar {
                                 &connected.schema_types,
                                 &connected.schema_indexes,
                                 &connected.schema_foreign_keys,
+                                &connected.dependents_cache,
                             )
                         }
                     } else if is_pending {
@@ -369,6 +422,7 @@ impl Sidebar {
                     &connected.schema_types,
                     &connected.schema_indexes,
                     &connected.schema_foreign_keys,
+                    &connected.dependents_cache,
                 );
             }
 
@@ -444,6 +498,7 @@ impl Sidebar {
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
         schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
         schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+        dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
     ) -> Vec<TreeItem> {
         let mut children = Vec::new();
 
@@ -457,6 +512,7 @@ impl Sidebar {
                 schema_types,
                 schema_indexes,
                 schema_foreign_keys,
+                dependents_cache,
             );
 
             children.push(
@@ -481,6 +537,7 @@ impl Sidebar {
         database_name: &str,
         db_schema: &dbflux_core::DbSchemaInfo,
         table_details: &HashMap<(String, String), TableInfo>,
+        collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
 
@@ -489,7 +546,13 @@ impl Sidebar {
                 .tables
                 .iter()
                 .map(|coll| {
-                    Self::build_collection_item(profile_id, database_name, coll, table_details)
+                    Self::build_collection_item(
+                        profile_id,
+                        database_name,
+                        coll,
+                        table_details,
+                        collection_children_cache,
+                    )
                 })
                 .collect();
 
@@ -586,11 +649,20 @@ impl Sidebar {
         database_name: &str,
         collection: &dbflux_core::TableInfo,
         table_details: &HashMap<(String, String), TableInfo>,
+        collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
     ) -> TreeItem {
         let coll_name = &collection.name;
         let cache_key = (database_name.to_string(), coll_name.clone());
         let effective = table_details.get(&cache_key).unwrap_or(collection);
-        let details_loaded = effective.sample_fields.is_some();
+        let paged_children = collection_children_cache.get(&cache_key);
+        let child_items = paged_children
+            .map(|cache| cache.items.clone())
+            .or_else(|| effective.child_items.clone());
+        let has_more_children = paged_children
+            .and_then(|cache| cache.next_page_token.as_ref())
+            .is_some();
+        let details_loaded = effective.sample_fields.is_some()
+            || child_items.as_ref().is_some_and(|items| !items.is_empty());
 
         let (field_children, field_count) = if let Some(fields) = effective.sample_fields.as_ref() {
             (
@@ -657,30 +729,38 @@ impl Sidebar {
             (Vec::new(), 0)
         };
 
-        let collection_children = vec![
-            TreeItem::new(
-                SchemaNodeId::CollectionFieldsFolder {
-                    profile_id,
-                    database: database_name.to_string(),
-                    collection: coll_name.to_string(),
-                }
-                .to_string(),
-                format!("Fields ({})", field_count),
-            )
-            .expanded(false)
-            .children(field_children),
-            TreeItem::new(
-                SchemaNodeId::CollectionIndexesFolder {
-                    profile_id,
-                    database: database_name.to_string(),
-                    collection: coll_name.to_string(),
-                }
-                .to_string(),
-                format!("Indexes ({})", index_count),
-            )
-            .expanded(false)
-            .children(index_children),
-        ];
+        let collection_children = if effective.presentation == CollectionPresentation::EventStream {
+            // Event-stream collections are leaves in the tree: streams are
+            // browsed exclusively through the dedicated picker modal, never
+            // inline. Suppressing children also removes the expand chevron.
+            let _ = (child_items, has_more_children);
+            Vec::new()
+        } else {
+            vec![
+                TreeItem::new(
+                    SchemaNodeId::CollectionFieldsFolder {
+                        profile_id,
+                        database: database_name.to_string(),
+                        collection: coll_name.to_string(),
+                    }
+                    .to_string(),
+                    format!("Fields ({})", field_count),
+                )
+                .expanded(false)
+                .children(field_children),
+                TreeItem::new(
+                    SchemaNodeId::CollectionIndexesFolder {
+                        profile_id,
+                        database: database_name.to_string(),
+                        collection: coll_name.to_string(),
+                    }
+                    .to_string(),
+                    format!("Indexes ({})", index_count),
+                )
+                .expanded(false)
+                .children(index_children),
+            ]
+        };
 
         TreeItem::new(
             SchemaNodeId::Collection {
@@ -705,6 +785,7 @@ impl Sidebar {
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
         schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
         schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+        dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
         let schema_name = &db_schema.name;
@@ -720,6 +801,7 @@ impl Sidebar {
                         schema_name,
                         table,
                         table_details,
+                        dependents_cache,
                     )
                 })
                 .collect();
@@ -1028,6 +1110,7 @@ impl Sidebar {
         schema_name: &str,
         table: &dbflux_core::TableInfo,
         table_details: &HashMap<(String, String), TableInfo>,
+        dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
     ) -> TreeItem {
         // Must match the key used by cache_database().
         let cache_db = target_database.unwrap_or(schema_name);
@@ -1164,52 +1247,115 @@ impl Sidebar {
         let fk_count = fk_children.len();
         let constraint_count = constraint_children.len();
 
-        let table_sections = vec![
-            TreeItem::new(
-                SchemaNodeId::ColumnsFolder {
-                    profile_id,
-                    schema: schema_name.to_string(),
-                    table: table.name.clone(),
-                }
-                .to_string(),
-                format!("Columns ({})", column_count),
+        // Lookup key must match the cache write path in populate_dependents.
+        // The cache key mirrors `table_details`: (database-or-schema, table).
+        let dep_key = (
+            target_database.unwrap_or(schema_name).to_string(),
+            table.name.clone(),
+        );
+        let deps = dependents_cache
+            .get(&dep_key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+
+        let dependents_section: Option<TreeItem> = if !deps.is_empty() {
+            let dep_items: Vec<TreeItem> = deps
+                .iter()
+                .map(|dep| {
+                    let kind_label = match dep.kind {
+                        dbflux_core::RelationKind::View => "View",
+                        dbflux_core::RelationKind::MaterializedView => "Materialized View",
+                        dbflux_core::RelationKind::ForeignKeyChild => "FK Child",
+                        dbflux_core::RelationKind::Trigger => "Trigger",
+                    };
+                    let label = format!("{} ({})", dep.qualified_name, kind_label);
+
+                    TreeItem::new(
+                        SchemaNodeId::DependentItem {
+                            profile_id,
+                            schema: schema_name.to_string(),
+                            table: table.name.clone(),
+                            name: dep.qualified_name.clone(),
+                        }
+                        .to_string(),
+                        label,
+                    )
+                })
+                .collect();
+
+            Some(
+                TreeItem::new(
+                    SchemaNodeId::DependentsFolder {
+                        profile_id,
+                        schema: schema_name.to_string(),
+                        table: table.name.clone(),
+                    }
+                    .to_string(),
+                    format!("Used by {} objects", deps.len()),
+                )
+                .expanded(false)
+                .children(dep_items),
             )
-            .expanded(false)
-            .children(column_children),
-            TreeItem::new(
-                SchemaNodeId::IndexesFolder {
-                    profile_id,
-                    schema: schema_name.to_string(),
-                    table: table.name.clone(),
-                }
-                .to_string(),
-                format!("Indexes ({})", index_count),
-            )
-            .expanded(false)
-            .children(index_children),
-            TreeItem::new(
-                SchemaNodeId::ForeignKeysFolder {
-                    profile_id,
-                    schema: schema_name.to_string(),
-                    table: table.name.clone(),
-                }
-                .to_string(),
-                format!("Foreign Keys ({})", fk_count),
-            )
-            .expanded(false)
-            .children(fk_children),
-            TreeItem::new(
-                SchemaNodeId::ConstraintsFolder {
-                    profile_id,
-                    schema: schema_name.to_string(),
-                    table: table.name.clone(),
-                }
-                .to_string(),
-                format!("Constraints ({})", constraint_count),
-            )
-            .expanded(false)
-            .children(constraint_children),
-        ];
+        } else {
+            None
+        };
+
+        let columns_folder_id = SchemaNodeId::ColumnsFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table.name.clone(),
+        }
+        .to_string();
+        let indexes_folder_id = SchemaNodeId::IndexesFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table.name.clone(),
+        }
+        .to_string();
+        let fks_folder_id = SchemaNodeId::ForeignKeysFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table.name.clone(),
+        }
+        .to_string();
+        let constraints_folder_id = SchemaNodeId::ConstraintsFolder {
+            profile_id,
+            schema: schema_name.to_string(),
+            table: table.name.clone(),
+        }
+        .to_string();
+
+        // While table details are still loading we render a single Loading row
+        // directly under the table instead of four section folders with stale
+        // "(0)" counts. Once details land, the four sections appear with their
+        // real counts and children.
+        let mut table_sections = if details_loaded {
+            vec![
+                TreeItem::new(columns_folder_id, format!("Columns ({})", column_count))
+                    .expanded(false)
+                    .children(column_children),
+                TreeItem::new(indexes_folder_id, format!("Indexes ({})", index_count))
+                    .expanded(false)
+                    .children(index_children),
+                TreeItem::new(fks_folder_id, format!("Foreign Keys ({})", fk_count))
+                    .expanded(false)
+                    .children(fk_children),
+                TreeItem::new(
+                    constraints_folder_id,
+                    format!("Constraints ({})", constraint_count),
+                )
+                .expanded(false)
+                .children(constraint_children),
+            ]
+        } else {
+            let table_loading_id =
+                format!("T|{}|{}|{}_loading", profile_id, schema_name, table.name);
+            vec![TreeItem::new(table_loading_id, "Loading…".to_string())]
+        };
+
+        if let Some(dep_folder) = dependents_section {
+            table_sections.push(dep_folder);
+        }
 
         TreeItem::new(
             SchemaNodeId::Table {
@@ -1223,6 +1369,119 @@ impl Sidebar {
         )
         .expanded(false)
         .children(table_sections)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Sidebar;
+    use dbflux_core::{
+        CollectionChildInfo, CollectionChildrenCache, CollectionPresentation, FieldInfo, TableInfo,
+    };
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    #[test]
+    fn collection_item_builds_default_field_and_index_sections() {
+        let item = Sidebar::build_collection_item(
+            Uuid::new_v4(),
+            "logs",
+            &TableInfo {
+                name: "/aws/lambda/app".to_string(),
+                schema: None,
+                columns: None,
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: CollectionPresentation::DataGrid,
+                child_items: None,
+            },
+            &Default::default(),
+            &Default::default(),
+        );
+
+        assert_eq!(item.label.as_ref(), "/aws/lambda/app");
+        assert_eq!(item.children.len(), 2);
+        assert!(item.children[0].label.as_ref().starts_with("Fields"));
+        assert!(item.children[1].label.as_ref().starts_with("Indexes"));
+    }
+
+    #[test]
+    fn event_stream_collections_are_leaves_regardless_of_driver_child_items() {
+        // Event-stream collections are now leaves in the tree; their streams
+        // are reached exclusively through the picker modal so the row never
+        // shows an expand chevron.
+        let item = Sidebar::build_collection_item(
+            Uuid::new_v4(),
+            "logs",
+            &TableInfo {
+                name: "/aws/lambda/app".to_string(),
+                schema: None,
+                columns: None,
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: Some(vec![FieldInfo {
+                    name: "2026/04/25/[$LATEST]abc".to_string(),
+                    common_type: "text".to_string(),
+                    occurrence_rate: None,
+                    nested_fields: None,
+                }]),
+                presentation: CollectionPresentation::EventStream,
+                child_items: Some(vec![CollectionChildInfo {
+                    id: "stream-1".to_string(),
+                    label: "2026/04/25/[$LATEST]abc".to_string(),
+                    last_event_ts_ms: Some(1_776_777_600_000),
+                    presentation: CollectionPresentation::EventStream,
+                }]),
+            },
+            &Default::default(),
+            &Default::default(),
+        );
+
+        assert!(item.children.is_empty());
+    }
+
+    #[test]
+    fn event_stream_collections_stay_leaves_even_with_pending_pagination() {
+        // The presence of a `next_page_token` from the driver must not
+        // promote an event-stream collection to an expandable folder.
+        let profile_id = Uuid::new_v4();
+        let collection = "/aws/lambda/app".to_string();
+        let mut child_cache = HashMap::new();
+        child_cache.insert(
+            ("logs".to_string(), collection.clone()),
+            CollectionChildrenCache {
+                items: vec![CollectionChildInfo {
+                    id: "stream-1".to_string(),
+                    label: "stream-1".to_string(),
+                    last_event_ts_ms: Some(1),
+                    presentation: CollectionPresentation::EventStream,
+                }],
+                next_page_token: Some("next".to_string()),
+            },
+        );
+
+        let item = Sidebar::build_collection_item(
+            profile_id,
+            "logs",
+            &TableInfo {
+                name: collection.clone(),
+                schema: None,
+                columns: None,
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: CollectionPresentation::EventStream,
+                child_items: None,
+            },
+            &Default::default(),
+            &child_cache,
+        );
+
+        assert!(item.children.is_empty());
     }
 }
 

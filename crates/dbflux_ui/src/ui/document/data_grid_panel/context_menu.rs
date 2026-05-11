@@ -7,10 +7,10 @@ use crate::keymap::{Command, ContextId};
 use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::data_table::{ContextMenuAction, FilterOperator};
 use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
     RowIdentity, RowInsert, RowPatch, Value,
@@ -559,6 +559,11 @@ impl DataGridPanel {
             .as_ref()
             .map(|m| m.is_document_view)
             .unwrap_or(false);
+        let has_row_target = self
+            .context_menu
+            .as_ref()
+            .map(|m| self.has_context_menu_row_target(m.row, m.is_document_view, cx))
+            .unwrap_or(false);
 
         let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
         let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
@@ -571,7 +576,8 @@ impl DataGridPanel {
         //   [Order trigger]?          (if has_order, shares separator with filter)
         //   [sep + GenSQL trigger]?   (if has_generate_sql)
         //   [sep + CopyQuery trigger]?(if has_copy_query)
-        let base_items = Self::build_context_menu_items(is_editable, is_document_view);
+        let base_items =
+            Self::build_context_menu_items(is_editable, is_document_view, has_row_target);
         let base_count = base_items.len();
 
         // Filter: sep(1) + filter(1) = 2; Order adds 1 more
@@ -803,6 +809,41 @@ impl DataGridPanel {
         }
     }
 
+    fn has_context_menu_row_target(&self, row: usize, is_document_view: bool, cx: &App) -> bool {
+        if is_document_view {
+            return self
+                .document_tree_state
+                .as_ref()
+                .and_then(|state| state.read(cx).get_raw_document(row))
+                .is_some();
+        }
+
+        self.table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).edit_buffer().visual_row_source(row))
+            .is_some()
+    }
+
+    fn context_menu_action_requires_row_target(action: ContextMenuAction) -> bool {
+        matches!(
+            action,
+            ContextMenuAction::Edit
+                | ContextMenuAction::EditInModal
+                | ContextMenuAction::SetDefault
+                | ContextMenuAction::SetNull
+                | ContextMenuAction::DuplicateRow
+                | ContextMenuAction::DeleteRow
+                | ContextMenuAction::GenerateSelectWhere
+                | ContextMenuAction::GenerateInsert
+                | ContextMenuAction::GenerateUpdate
+                | ContextMenuAction::GenerateDelete
+                | ContextMenuAction::CopyAsInsert
+                | ContextMenuAction::CopyAsUpdate
+                | ContextMenuAction::CopyAsDelete
+                | ContextMenuAction::FilterByValue(_)
+        )
+    }
+
     // === Export ===
 
     pub fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -810,7 +851,10 @@ impl DataGridPanel {
             && self.result.text_body.is_none()
             && self.result.raw_bytes.is_none()
         {
-            cx.toast_error("No results to export", window);
+            Toast::error("No results to export")
+                .meta_right(now_hms())
+                .action(copy_action("No results to export"))
+                .push(cx);
             return;
         }
 
@@ -895,57 +939,68 @@ impl DataGridPanel {
     pub(super) fn build_context_menu_items(
         is_editable: bool,
         is_document_view: bool,
+        has_row_target: bool,
     ) -> Vec<ContextMenuItem> {
         if is_document_view {
             // Document view menu: Copy, View/Edit Document, CRUD operations
-            let mut items = vec![
-                ContextMenuItem {
-                    label: "Copy",
-                    action: Some(ContextMenuAction::Copy),
-                    icon: Some(AppIcon::Layers),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "View Document",
-                    action: Some(ContextMenuAction::EditInModal),
-                    icon: Some(AppIcon::Maximize2),
-                    is_separator: false,
-                    is_danger: false,
-                },
-            ];
+            let mut items = Vec::new();
 
-            if is_editable {
+            if has_row_target {
                 items.extend([
                     ContextMenuItem {
-                        label: "",
-                        action: None,
-                        icon: None,
-                        is_separator: true,
-                        is_danger: false,
-                    },
-                    ContextMenuItem {
-                        label: "Add Document",
-                        action: Some(ContextMenuAction::AddRow),
-                        icon: Some(AppIcon::Plus),
-                        is_separator: false,
-                        is_danger: false,
-                    },
-                    ContextMenuItem {
-                        label: "Duplicate Document",
-                        action: Some(ContextMenuAction::DuplicateRow),
+                        label: "Copy",
+                        action: Some(ContextMenuAction::Copy),
                         icon: Some(AppIcon::Layers),
                         is_separator: false,
                         is_danger: false,
                     },
                     ContextMenuItem {
-                        label: "Delete Document",
-                        action: Some(ContextMenuAction::DeleteRow),
-                        icon: Some(AppIcon::Delete),
+                        label: "View Document",
+                        action: Some(ContextMenuAction::EditInModal),
+                        icon: Some(AppIcon::Maximize2),
                         is_separator: false,
-                        is_danger: true,
+                        is_danger: false,
                     },
                 ]);
+            }
+
+            if is_editable {
+                if !items.is_empty() {
+                    items.push(ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    });
+                }
+
+                items.push(ContextMenuItem {
+                    label: "Add Document",
+                    action: Some(ContextMenuAction::AddRow),
+                    icon: Some(AppIcon::Plus),
+                    is_separator: false,
+                    is_danger: false,
+                });
+
+                if has_row_target {
+                    items.extend([
+                        ContextMenuItem {
+                            label: "Duplicate Document",
+                            action: Some(ContextMenuAction::DuplicateRow),
+                            icon: Some(AppIcon::Layers),
+                            is_separator: false,
+                            is_danger: false,
+                        },
+                        ContextMenuItem {
+                            label: "Delete Document",
+                            action: Some(ContextMenuAction::DeleteRow),
+                            icon: Some(AppIcon::Delete),
+                            is_separator: false,
+                            is_danger: true,
+                        },
+                    ]);
+                }
             }
 
             return items;
@@ -961,78 +1016,93 @@ impl DataGridPanel {
         }];
 
         if is_editable {
-            items.extend([
-                ContextMenuItem {
-                    label: "Paste",
-                    action: Some(ContextMenuAction::Paste),
-                    icon: Some(AppIcon::Download),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Edit",
-                    action: Some(ContextMenuAction::Edit),
-                    icon: Some(AppIcon::Pencil),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Edit in Modal",
-                    action: Some(ContextMenuAction::EditInModal),
-                    icon: Some(AppIcon::Maximize2),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "",
-                    action: None,
-                    icon: None,
-                    is_separator: true,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Set to Default",
-                    action: Some(ContextMenuAction::SetDefault),
-                    icon: Some(AppIcon::RotateCcw),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Set to NULL",
-                    action: Some(ContextMenuAction::SetNull),
-                    icon: Some(AppIcon::X),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "",
-                    action: None,
-                    icon: None,
-                    is_separator: true,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Add Row",
-                    action: Some(ContextMenuAction::AddRow),
-                    icon: Some(AppIcon::Plus),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Duplicate Row",
-                    action: Some(ContextMenuAction::DuplicateRow),
-                    icon: Some(AppIcon::Layers),
-                    is_separator: false,
-                    is_danger: false,
-                },
-                ContextMenuItem {
-                    label: "Delete Row",
-                    action: Some(ContextMenuAction::DeleteRow),
-                    icon: Some(AppIcon::Delete),
-                    is_separator: false,
-                    is_danger: true,
-                },
-            ]);
+            if has_row_target {
+                items.extend([
+                    ContextMenuItem {
+                        label: "Paste",
+                        action: Some(ContextMenuAction::Paste),
+                        icon: Some(AppIcon::Download),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Edit",
+                        action: Some(ContextMenuAction::Edit),
+                        icon: Some(AppIcon::Pencil),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Edit in Modal",
+                        action: Some(ContextMenuAction::EditInModal),
+                        icon: Some(AppIcon::Maximize2),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Set to Default",
+                        action: Some(ContextMenuAction::SetDefault),
+                        icon: Some(AppIcon::RotateCcw),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Set to NULL",
+                        action: Some(ContextMenuAction::SetNull),
+                        icon: Some(AppIcon::X),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    },
+                ]);
+            }
+
+            items.push(ContextMenuItem {
+                label: "Add Row",
+                action: Some(ContextMenuAction::AddRow),
+                icon: Some(AppIcon::Plus),
+                is_separator: false,
+                is_danger: false,
+            });
+
+            if has_row_target {
+                items.extend([
+                    ContextMenuItem {
+                        label: "Inspect Row",
+                        action: Some(ContextMenuAction::InspectRow),
+                        icon: Some(AppIcon::Info),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Duplicate Row",
+                        action: Some(ContextMenuAction::DuplicateRow),
+                        icon: Some(AppIcon::Layers),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Delete Row",
+                        action: Some(ContextMenuAction::DeleteRow),
+                        icon: Some(AppIcon::Delete),
+                        is_separator: false,
+                        is_danger: true,
+                    },
+                ]);
+            }
         }
 
         items
@@ -1042,7 +1112,7 @@ impl DataGridPanel {
     /// This includes all visible items plus the Generate SQL trigger (for table view).
     #[allow(dead_code)]
     pub(super) fn context_menu_item_count(is_editable: bool, is_document_view: bool) -> usize {
-        let base_items = Self::build_context_menu_items(is_editable, is_document_view);
+        let base_items = Self::build_context_menu_items(is_editable, is_document_view, true);
         let base_count = base_items.iter().filter(|i| !i.is_separator).count();
         // Add 1 for Generate SQL only in table view
         if is_document_view {
@@ -1085,7 +1155,7 @@ impl DataGridPanel {
             .id("delete-modal-overlay")
             .absolute()
             .inset_0()
-            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+            .bg(overlay_bg(theme))
             .flex()
             .items_center()
             .justify_center()
@@ -1093,16 +1163,13 @@ impl DataGridPanel {
                 cx.stop_propagation();
             })
             .child(
-                div()
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
+                surface_panel(cx)
                     .rounded(Radii::MD)
-                    .p(Spacing::MD)
                     .min_w(px(300.0))
                     .flex()
                     .flex_col()
                     .gap(Spacing::MD)
+                    .p(Spacing::MD)
                     .child(
                         div()
                             .flex()
@@ -1159,7 +1226,7 @@ impl DataGridPanel {
                                     .child(
                                         Icon::new(AppIcon::Delete).small().color(theme.background),
                                     )
-                                    .child(Text::caption("Delete").text_color(theme.background)),
+                                    .child(Text::caption("Delete").color(theme.background)),
                             ),
                     ),
             )
@@ -1179,7 +1246,9 @@ impl DataGridPanel {
         let menu_y = menu.position.y - self.panel_origin.y;
 
         // Build visible menu items list for keyboard navigation
-        let visible_items = Self::build_context_menu_items(is_editable, menu.is_document_view);
+        let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
+        let visible_items =
+            Self::build_context_menu_items(is_editable, menu.is_document_view, has_row_target);
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
 
@@ -1267,7 +1336,7 @@ impl DataGridPanel {
                         }))
                     })
                     .when(icon.is_none(), |d| d.pl(px(20.0)))
-                    .child(Text::caption(label).text_color(if is_selected {
+                    .child(Text::caption(label).color(if is_selected {
                         if is_danger {
                             theme.danger
                         } else {
@@ -1365,7 +1434,7 @@ impl DataGridPanel {
                                     .small()
                                     .color(filter_label_color),
                             )
-                            .child(Text::caption("Filter").text_color(filter_label_color)),
+                            .child(Text::caption("Filter").color(filter_label_color)),
                     )
                     .child(Icon::new(AppIcon::ChevronRight).small().color(
                         if filter_selected && !filter_submenu_open {
@@ -1487,7 +1556,7 @@ impl DataGridPanel {
                                                     ))
                                                     .child(
                                                         Text::caption(label.clone())
-                                                            .text_color(item_color),
+                                                            .color(item_color),
                                                     )
                                                     .into_any_element(),
                                             );
@@ -1576,7 +1645,7 @@ impl DataGridPanel {
                                     .small()
                                     .color(order_label_color),
                             )
-                            .child(Text::caption("Order").text_color(order_label_color)),
+                            .child(Text::caption("Order").color(order_label_color)),
                     )
                     .child(Icon::new(AppIcon::ChevronRight).small().color(
                         if order_selected && !order_submenu_open {
@@ -1705,7 +1774,7 @@ impl DataGridPanel {
                                                     ))
                                                     .child(
                                                         Text::caption(label)
-                                                            .text_color(order_item_color),
+                                                            .color(order_item_color),
                                                     )
                                                     .into_any_element(),
                                             );
@@ -1793,7 +1862,7 @@ impl DataGridPanel {
                             .items_center()
                             .gap(Spacing::SM)
                             .child(Icon::new(AppIcon::Code).small().color(gen_sql_label_color))
-                            .child(Text::caption("Generate SQL").text_color(gen_sql_label_color)),
+                            .child(Text::caption("Generate SQL").color(gen_sql_label_color)),
                     )
                     .child(Icon::new(AppIcon::ChevronRight).small().color(
                         if gen_sql_selected && !sql_submenu_open {
@@ -1872,7 +1941,7 @@ impl DataGridPanel {
                                                     theme.muted_foreground
                                                 },
                                             ))
-                                            .child(Text::caption(label).text_color(sql_item_color))
+                                            .child(Text::caption(label).color(sql_item_color))
                                     })
                                     .collect::<Vec<_>>(),
                                 ),
@@ -2027,7 +2096,7 @@ impl DataGridPanel {
                                                     theme.muted_foreground
                                                 },
                                             ))
-                                            .child(Text::caption(label).text_color(copy_item_color))
+                                            .child(Text::caption(label).color(copy_item_color))
                                     })
                                     .collect::<Vec<_>>(),
                                 ),
@@ -2087,16 +2156,12 @@ impl DataGridPanel {
                     }),
                 )
                 .child(
-                    div()
+                    surface_raised(cx)
                         .id("context-menu")
                         .absolute()
                         .left(menu_x)
                         .top(menu_y)
                         .w(menu_width)
-                        .bg(theme.popover)
-                        .border_1()
-                        .border_color(theme.border)
-                        .rounded(Radii::MD)
                         .shadow_lg()
                         .py(Spacing::XS)
                         .occlude()
@@ -2122,6 +2187,13 @@ impl DataGridPanel {
 
         let is_document_view = menu.is_document_view;
         let backend = self.filter_backend(cx);
+        let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
+
+        if Self::context_menu_action_requires_row_target(action) && !has_row_target {
+            self.restore_focus_after_context_menu(is_document_view, window, cx);
+            cx.notify();
+            return;
+        }
 
         match action {
             ContextMenuAction::Copy => {
@@ -2213,11 +2285,311 @@ impl DataGridPanel {
             ContextMenuAction::RemoveOrdering => {
                 self.handle_sort_clear(cx);
             }
+            ContextMenuAction::InspectRow => {
+                self.open_row_inspector(menu.row, menu.col, cx);
+            }
         }
 
         // Restore focus to the active view after action
         self.restore_focus_after_context_menu(is_document_view, window, cx);
         cx.notify();
+    }
+
+    /// Build an `InspectorSnapshot` from the given row/col and open or update
+    /// the `RowInspector` overlay.
+    pub(super) fn open_row_inspector(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        use super::row_inspector::{InspectorCell, InspectorSnapshot, RowInspector};
+        use crate::ui::components::data_table::model::ColumnKind;
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+        let model = state.model();
+
+        let pk_cols: std::collections::HashSet<usize> =
+            state.pk_columns().iter().copied().collect();
+        let fk_cols = state.fk_columns().clone();
+
+        // Build cell values first so we can cross-reference with FK info below.
+        let cells: Vec<InspectorCell> = model
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(ix, spec)| {
+                let value = model
+                    .cell(row, ix)
+                    .map(|c| self.cell_to_value(c))
+                    .unwrap_or(dbflux_core::Value::Null);
+
+                let type_label = match spec.kind {
+                    ColumnKind::Text => "text",
+                    ColumnKind::Integer => "integer",
+                    ColumnKind::Float => "float",
+                    ColumnKind::Bool => "boolean",
+                    ColumnKind::Bytes => "bytes",
+                    ColumnKind::Json => "json",
+                    ColumnKind::Unknown => "unknown",
+                }
+                .to_string();
+
+                InspectorCell {
+                    name: spec.title.to_string(),
+                    value,
+                    is_primary_key: pk_cols.contains(&ix),
+                    is_foreign_key: fk_cols.contains(&ix),
+                    type_label,
+                    nullable: true, // conservative default; refined when column details are cached
+                }
+            })
+            .collect();
+
+        let row_label = format!("Row {}", row + 1);
+        let snapshot = InspectorSnapshot {
+            cells: cells.clone(),
+            focused_col: col,
+            row_label,
+        };
+
+        // Build per-FK reference entries from the cached TableInfo.foreign_keys.
+        let fk_references = self.build_fk_references(&cells, cx);
+        let has_fk_lookups = !fk_references.is_empty();
+
+        if let Some(inspector) = &self.row_inspector {
+            inspector.update(cx, |insp, cx| {
+                insp.open(snapshot, cx);
+            });
+            let inspector_entity = inspector.clone();
+            self.fire_fk_resolution(fk_references, inspector_entity, cx);
+        } else {
+            let inspector = cx.new(|cx| RowInspector::new(snapshot, cx));
+
+            if !has_fk_lookups {
+                // No FK columns: mark references as ready (empty).
+                inspector.update(cx, |insp, cx| {
+                    insp.set_references(Vec::new(), cx);
+                });
+            }
+            // When has_fk_lookups, fire_fk_resolution below sets references.
+
+            let close_subscription = cx.subscribe(
+                &inspector,
+                |this, _, event: &super::row_inspector::RowInspectorEvent, cx| match event {
+                    super::row_inspector::RowInspectorEvent::CloseRequested => {
+                        this.row_inspector = None;
+                        this.row_inspector_subscription = None;
+                        cx.notify();
+                    }
+                },
+            );
+
+            let inspector_entity = inspector.clone();
+            self.row_inspector = Some(inspector);
+            self.row_inspector_subscription = Some(close_subscription);
+            self.fire_fk_resolution(fk_references, inspector_entity, cx);
+            cx.notify();
+        }
+    }
+
+    /// Build the list of FK lookups for the current row from the schema cache.
+    ///
+    /// Returns one entry per FK constraint whose local columns all have
+    /// non-null values in the current row. Multi-column FKs are skipped
+    /// (not supported by `fetch_row_by_pk`).
+    fn build_fk_references(
+        &self,
+        cells: &[super::row_inspector::InspectorCell],
+        cx: &Context<Self>,
+    ) -> Vec<super::row_inspector::FkReference> {
+        use super::row_inspector::FkReference;
+        use dbflux_components::primitives::LoadingState;
+
+        let (profile_id, table_ref) = match &self.source {
+            super::DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            _ => return Vec::new(),
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = match state.connections().get(&profile_id) {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (database.to_string(), table_ref.name.clone());
+        let table_info = match connected.table_details.get(&cache_key) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let fk_list = match table_info.foreign_keys.as_deref() {
+            Some(fks) if !fks.is_empty() => fks,
+            _ => return Vec::new(),
+        };
+
+        let mut references = Vec::new();
+
+        for fk in fk_list {
+            // Only handle single-column FKs.
+            if fk.columns.len() != 1 || fk.referenced_columns.len() != 1 {
+                continue;
+            }
+
+            let local_col = &fk.columns[0];
+            let ref_col = &fk.referenced_columns[0];
+
+            // Find the value in the current row.
+            let Some(cell) = cells.iter().find(|c| &c.name == local_col) else {
+                continue;
+            };
+
+            // Skip null FK values.
+            if cell.value.is_null() {
+                continue;
+            }
+
+            references.push(FkReference {
+                column: local_col.clone(),
+                target_schema: fk.referenced_schema.clone(),
+                target_table: fk.referenced_table.clone(),
+                target_pk: ref_col.clone(),
+                value: cell.value.clone(),
+                row: LoadingState::Loading,
+            });
+        }
+
+        references
+    }
+
+    /// Spawn one background task per FK reference and resolve them into the inspector.
+    fn fire_fk_resolution(
+        &self,
+        references: Vec<super::row_inspector::FkReference>,
+        inspector_entity: Entity<super::row_inspector::RowInspector>,
+        cx: &mut Context<Self>,
+    ) {
+        use super::row_inspector::FkReference;
+        use dbflux_components::primitives::LoadingState;
+
+        if references.is_empty() {
+            return;
+        }
+
+        let (profile_id, database, schema) = match &self.source {
+            super::DataSource::Table {
+                profile_id,
+                database,
+                table,
+                ..
+            } => {
+                let db = {
+                    let state = self.app_state.read(cx);
+                    let db = database.clone().or_else(|| {
+                        state
+                            .connections()
+                            .get(profile_id)
+                            .and_then(|c| c.active_database.clone())
+                    });
+                    db.unwrap_or_else(|| "default".to_string())
+                };
+                let schema = table.schema.clone().unwrap_or_else(|| "public".to_string());
+                (*profile_id, db, schema)
+            }
+            _ => return,
+        };
+
+        // Use the per-database connection for the database being viewed.
+        // `state.get_connection` only returns the primary connection (which
+        // for Postgres is bound to a different database), so FK lookups
+        // failed with "relation public.X does not exist".
+        let connection = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                return;
+            };
+            connected.connection_for_database(&database)
+        };
+
+        // Initialise the inspector's reference list with Loading state.
+        let loading_refs: Vec<FkReference> = references
+            .iter()
+            .map(|r| FkReference {
+                column: r.column.clone(),
+                target_schema: r.target_schema.clone(),
+                target_table: r.target_table.clone(),
+                target_pk: r.target_pk.clone(),
+                value: r.value.clone(),
+                row: LoadingState::Loading,
+            })
+            .collect();
+
+        inspector_entity.update(cx, |insp, cx| {
+            insp.set_references(loading_refs, cx);
+        });
+
+        // Spawn one task per FK reference.
+        for (index, fk_ref) in references.into_iter().enumerate() {
+            let connection = connection.clone();
+            let inspector = inspector_entity.clone();
+            let database = database.clone();
+            let default_schema = schema.clone();
+
+            cx.spawn(async move |_this, cx| {
+                // Use the FK's own schema if known, otherwise fall back to
+                // the current table's schema (for same-schema FKs).
+                let resolved_schema = fk_ref
+                    .target_schema
+                    .clone()
+                    .unwrap_or(default_schema.clone());
+
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        connection.fetch_row_by_pk(
+                            &database,
+                            &resolved_schema,
+                            &fk_ref.target_table,
+                            &fk_ref.target_pk,
+                            &fk_ref.value,
+                        )
+                    })
+                    .await;
+
+                cx.update(|cx| {
+                    inspector.update(cx, |insp, cx| match result {
+                        Ok(row_opt) => {
+                            insp.resolve_reference(index, Ok(row_opt), cx);
+                        }
+                        Err(e) => {
+                            insp.resolve_reference(index, Err(e.to_string()), cx);
+                        }
+                    })
+                })
+                .ok();
+            })
+            .detach();
+        }
+    }
+
+    /// Convert a `CellValue` to a `dbflux_core::Value` for the inspector.
+    fn cell_to_value(
+        &self,
+        cell: &crate::ui::components::data_table::model::CellValue,
+    ) -> dbflux_core::Value {
+        use crate::ui::components::data_table::model::CellKind;
+
+        match &cell.kind {
+            CellKind::Null => dbflux_core::Value::Null,
+            CellKind::Bool(b) => dbflux_core::Value::Bool(*b),
+            CellKind::Int(i) => dbflux_core::Value::Int(*i),
+            CellKind::Float(f) => dbflux_core::Value::Float(*f),
+            CellKind::Text(s) | CellKind::Json(s) => dbflux_core::Value::Text(s.to_string()),
+            CellKind::Bytes(len) => dbflux_core::Value::Bytes(vec![0u8; *len]),
+            CellKind::AutoGenerated(s) => dbflux_core::Value::Text(s.to_string()),
+            CellKind::Unsupported(s) => dbflux_core::Value::Text(s.to_string()),
+        }
     }
 
     pub(super) fn handle_copy(&self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2499,7 +2871,7 @@ impl DataGridPanel {
         &mut self,
         doc_index: usize,
         document_json: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         use crate::ui::overlays::document_preview_modal::DOC_INDEX_NEW;
@@ -2507,7 +2879,12 @@ impl DataGridPanel {
         let new_doc: serde_json::Value = match serde_json::from_str(document_json) {
             Ok(v) => v,
             Err(e) => {
-                cx.toast_error(format!("Invalid JSON: {}", e), window);
+                let toast_body = e.to_string();
+                Toast::error("Invalid JSON")
+                    .meta_right(now_hms())
+                    .body(toast_body.clone())
+                    .action(copy_action(format!("Invalid JSON: {}", toast_body)))
+                    .push(cx);
                 return;
             }
         };
@@ -2532,14 +2909,20 @@ impl DataGridPanel {
             };
 
             let Some(conn) = conn else {
-                cx.toast_error("Connection not available", window);
+                Toast::error("Connection not available")
+                    .meta_right(now_hms())
+                    .action(copy_action("Connection not available"))
+                    .push(cx);
                 return;
             };
 
             let doc_map = match new_doc {
                 serde_json::Value::Object(m) => m,
                 _ => {
-                    cx.toast_error("Document must be a JSON object", window);
+                    Toast::error("Document must be a JSON object")
+                        .meta_right(now_hms())
+                        .action(copy_action("Document must be a JSON object"))
+                        .push(cx);
                     return;
                 }
             };
@@ -2591,14 +2974,20 @@ impl DataGridPanel {
             match new_doc.get("_id") {
                 Some(id) => DocumentFilter::new(serde_json::json!({"_id": id})),
                 None => {
-                    cx.toast_error("Document must have an _id field", window);
+                    Toast::error("Document must have an _id field")
+                        .meta_right(now_hms())
+                        .action(copy_action("Document must have an _id field"))
+                        .push(cx);
                     return;
                 }
             }
         } else {
             // Extract PK values from the current row
             let Some(table_state) = &self.table_state else {
-                cx.toast_error("Table state not available", window);
+                Toast::error("Table state not available")
+                    .meta_right(now_hms())
+                    .action(copy_action("Table state not available"))
+                    .push(cx);
                 return;
             };
 
@@ -2613,7 +3002,10 @@ impl DataGridPanel {
             }
 
             if filter_obj.is_empty() {
-                cx.toast_error("Could not determine document primary key", window);
+                Toast::error("Could not determine document primary key")
+                    .meta_right(now_hms())
+                    .action(copy_action("Could not determine document primary key"))
+                    .push(cx);
                 return;
             }
 
@@ -2644,7 +3036,10 @@ impl DataGridPanel {
         };
 
         let Some(conn) = conn else {
-            cx.toast_error("Connection not available", window);
+            Toast::error("Connection not available")
+                .meta_right(now_hms())
+                .action(copy_action("Connection not available"))
+                .push(cx);
             return;
         };
 
@@ -3820,5 +4215,49 @@ impl DataGridPanel {
             CellKind::Unsupported(type_name) => Value::Unsupported(type_name.to_string()),
             CellKind::AutoGenerated(expr) => Value::Text(format!("DEFAULT({})", expr)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DataGridPanel;
+
+    fn labels(items: &[super::ContextMenuItem]) -> Vec<&'static str> {
+        items
+            .iter()
+            .filter(|item| !item.is_separator)
+            .map(|item| item.label)
+            .collect()
+    }
+
+    #[test]
+    fn empty_table_menu_keeps_insert_actions_but_hides_row_actions() {
+        let items = DataGridPanel::build_context_menu_items(true, false, false);
+        let labels = labels(&items);
+
+        assert!(labels.contains(&"Add Row"));
+        assert!(!labels.contains(&"Edit"));
+        assert!(!labels.contains(&"Edit in Modal"));
+        assert!(!labels.contains(&"Duplicate Row"));
+        assert!(!labels.contains(&"Delete Row"));
+    }
+
+    #[test]
+    fn non_editable_table_menu_stays_unchanged_without_row_target() {
+        let items = DataGridPanel::build_context_menu_items(false, false, false);
+
+        assert_eq!(labels(&items), vec!["Copy"]);
+    }
+
+    #[test]
+    fn editable_table_menu_with_row_target_keeps_row_actions() {
+        let items = DataGridPanel::build_context_menu_items(true, false, true);
+        let labels = labels(&items);
+
+        assert!(labels.contains(&"Edit"));
+        assert!(labels.contains(&"Edit in Modal"));
+        assert!(labels.contains(&"Add Row"));
+        assert!(labels.contains(&"Duplicate Row"));
+        assert!(labels.contains(&"Delete Row"));
     }
 }

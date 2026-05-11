@@ -1,7 +1,15 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::result_large_err
+)]
+
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, DescribeRequest, ExplainRequest,
     OrderByColumn, Pagination, QueryRequest, RecordIdentity, RowDelete, RowInsert, RowPatch,
-    SchemaLoadingStrategy, SslMode, TableBrowseRequest, TableCountRequest, TableRef, Value,
+    SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef, Value,
 };
 use dbflux_driver_mysql::MysqlDriver;
 use dbflux_test_support::containers;
@@ -18,7 +26,10 @@ fn connect_mysql(uri: String) -> Result<(Box<dyn dbflux_core::Connection>, Mysql
             port: 3306,
             user: String::new(),
             database: None,
-            ssl_mode: SslMode::Disable,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         },

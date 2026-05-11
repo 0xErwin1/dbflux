@@ -5,12 +5,12 @@ use crate::ui::components::form_navigation::{
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::primitives::Text;
+use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_core::KeyType;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_component::input::{Input, InputState};
 use gpui_component::{ActiveTheme, Sizable};
 
 // ---------------------------------------------------------------------------
@@ -515,19 +515,14 @@ impl Render for AddMemberModal {
                         .justify_center()
                         .rounded(Radii::SM)
                         .cursor_pointer()
-                        .hover(|d| d.bg(gpui::red()))
+                        .hover(|d| d.bg(theme.danger.opacity(0.15)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, _, cx| {
                                 this.remove_value_row(index, cx);
                             }),
                         )
-                        .child(
-                            svg()
-                                .path(AppIcon::Delete.path())
-                                .size(Heights::ICON_SM)
-                                .text_color(theme.muted_foreground),
-                        ),
+                        .child(Icon::new(AppIcon::Delete).size(Heights::ICON_SM).muted()),
                 ),
             );
 
@@ -557,10 +552,9 @@ impl Render for AddMemberModal {
                             }),
                         )
                         .child(
-                            svg()
-                                .path(AppIcon::Plus.path())
+                            Icon::new(AppIcon::Plus)
                                 .size(Heights::ICON_SM)
-                                .text_color(theme.primary_foreground),
+                                .color(theme.primary_foreground),
                         ),
                 ),
             ),

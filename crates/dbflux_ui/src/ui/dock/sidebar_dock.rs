@@ -1,6 +1,7 @@
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Radii, Spacing};
 use crate::ui::views::sidebar::Sidebar;
+use dbflux_components::primitives::Icon;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -303,11 +304,6 @@ impl SidebarDock {
             .rounded(Radii::MD)
             .cursor_pointer()
             .hover(|el| el.bg(cx.theme().secondary_hover))
-            .child(
-                svg()
-                    .path(icon.path())
-                    .size(ICON_SIZE)
-                    .text_color(cx.theme().muted_foreground),
-            )
+            .child(Icon::new(icon).size(ICON_SIZE).muted())
     }
 }

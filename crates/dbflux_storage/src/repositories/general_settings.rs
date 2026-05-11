@@ -36,7 +36,8 @@ impl GeneralSettingsRepository {
                        default_refresh_policy, default_refresh_interval_secs,
                        max_concurrent_background_tasks, auto_refresh_pause_on_error,
                        auto_refresh_only_if_visible, confirm_dangerous_queries,
-                       dangerous_requires_where, dangerous_requires_preview, updated_at
+                       dangerous_requires_where, dangerous_requires_preview,
+                       style, updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -62,7 +63,8 @@ impl GeneralSettingsRepository {
                 confirm_dangerous_queries: row.get(12)?,
                 dangerous_requires_where: row.get(13)?,
                 dangerous_requires_preview: row.get(14)?,
-                updated_at: row.get(15)?,
+                style: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         });
 
@@ -87,8 +89,9 @@ impl GeneralSettingsRepository {
                     default_refresh_policy, default_refresh_interval_secs,
                     max_concurrent_background_tasks, auto_refresh_pause_on_error,
                     auto_refresh_only_if_visible, confirm_dangerous_queries,
-                    dangerous_requires_where, dangerous_requires_preview, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))
+                    dangerous_requires_where, dangerous_requires_preview,
+                    style, updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -104,6 +107,7 @@ impl GeneralSettingsRepository {
                     confirm_dangerous_queries = excluded.confirm_dangerous_queries,
                     dangerous_requires_where = excluded.dangerous_requires_where,
                     dangerous_requires_preview = excluded.dangerous_requires_preview,
+                    style = excluded.style,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -121,6 +125,7 @@ impl GeneralSettingsRepository {
                     settings.confirm_dangerous_queries,
                     settings.dangerous_requires_where,
                     settings.dangerous_requires_preview,
+                    settings.style,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -151,6 +156,9 @@ pub struct GeneralSettingsDto {
     pub confirm_dangerous_queries: i32,
     pub dangerous_requires_where: i32,
     pub dangerous_requires_preview: i32,
+    /// Serialized `AppStyle` value: `"default"` or `"compact"`.
+    /// Unknown values fall back to `"default"` at the loader layer.
+    pub style: String,
     pub updated_at: String,
 }
 
@@ -199,6 +207,7 @@ mod tests {
             confirm_dangerous_queries: 0,
             dangerous_requires_where: 0,
             dangerous_requires_preview: 1,
+            style: "compact".to_string(),
             updated_at: String::new(),
         };
 
@@ -208,6 +217,72 @@ mod tests {
         assert_eq!(fetched.theme, "light");
         assert_eq!(fetched.restore_session_on_startup, 0);
         assert_eq!(fetched.max_history_entries, 500);
+        assert_eq!(fetched.style, "compact");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn style_round_trips_for_default_and_compact() {
+        for (style_str, label) in [("default", "default"), ("compact", "compact")] {
+            let path = temp_db(&format!("style_roundtrip_{}", label));
+            let conn = open_database(&path).expect("should open");
+            MigrationRegistry::new()
+                .run_all(&conn)
+                .expect("migration should run");
+
+            let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+            let dto = GeneralSettingsDto {
+                id: 1,
+                theme: "dark".to_string(),
+                restore_session_on_startup: 1,
+                reopen_last_connections: 0,
+                default_focus_on_startup: "sidebar".to_string(),
+                max_history_entries: 1000,
+                auto_save_interval_ms: 2000,
+                default_refresh_policy: "manual".to_string(),
+                default_refresh_interval_secs: 5,
+                max_concurrent_background_tasks: 8,
+                auto_refresh_pause_on_error: 1,
+                auto_refresh_only_if_visible: 0,
+                confirm_dangerous_queries: 1,
+                dangerous_requires_where: 1,
+                dangerous_requires_preview: 0,
+                style: style_str.to_string(),
+                updated_at: String::new(),
+            };
+
+            repo.upsert(&dto).expect("should upsert");
+            let fetched = repo.get().expect("should get").expect("should exist");
+            assert_eq!(
+                fetched.style, style_str,
+                "style round-trip failed for '{}'",
+                label
+            );
+
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    #[test]
+    fn style_defaults_to_default_string_when_column_has_default_value() {
+        // Simulate a pre-migration row where 'style' column is absent (DEFAULT kicks in).
+        // After migration 008 runs, existing rows get the column with 'default' value.
+        let path = temp_db("style_column_default");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        // The singleton row is inserted by the initial migration with id=1.
+        // The style column should have defaulted to 'default'.
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(
+            fetched.style, "default",
+            "style column default should be 'default'"
+        );
 
         let _ = std::fs::remove_file(&path);
     }

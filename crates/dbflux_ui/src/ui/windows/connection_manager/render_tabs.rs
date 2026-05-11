@@ -1,18 +1,23 @@
 use crate::ui::components::form_renderer;
 use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::Input;
-use dbflux_components::primitives::{Icon, Label, Text};
+use dbflux_components::primitives::{
+    FilePicker, Icon as AppIconElement, Label, SegmentedControl, SegmentedItem, Text,
+};
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
 
+use dbflux_components::typography::SubSectionLabel;
+
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus};
 
 impl ConnectionManagerWindow {
     pub(super) fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let border_color = cx.theme().border;
         let active_tab = self.active_tab;
         let show_access_tab = !self.uses_file_form();
 
@@ -20,144 +25,82 @@ impl ConnectionManagerWindow {
             .flex()
             .items_center()
             .border_b_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .id("tab-main")
-                    .px_4()
-                    .py_2()
-                    .cursor_pointer()
-                    .border_b_2()
-                    .when(active_tab == ActiveTab::Main, |d| {
-                        d.border_color(theme.primary).text_color(theme.foreground)
-                    })
-                    .when(active_tab != ActiveTab::Main, |d| {
-                        d.border_color(gpui::transparent_black())
-                            .text_color(theme.muted_foreground)
-                    })
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = ActiveTab::Main;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(Icon::new(AppIcon::Plug).small().color(
-                                if active_tab == ActiveTab::Main {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(div().text_sm().child("Main")),
-                    ),
-            )
+            .border_color(border_color)
+            .child(self.render_tab_trigger(
+                "tab-main",
+                "Main",
+                AppIcon::Plug,
+                ActiveTab::Main,
+                active_tab == ActiveTab::Main,
+                cx,
+            ))
             .when(show_access_tab, |d| {
-                d.child(
-                    div()
-                        .id("tab-access")
-                        .px_4()
-                        .py_2()
-                        .cursor_pointer()
-                        .border_b_2()
-                        .when(active_tab == ActiveTab::Access, |dd| {
-                            dd.border_color(theme.primary).text_color(theme.foreground)
-                        })
-                        .when(active_tab != ActiveTab::Access, |dd| {
-                            dd.border_color(gpui::transparent_black())
-                                .text_color(theme.muted_foreground)
-                        })
-                        .hover(|dd| dd.bg(theme.secondary))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.active_tab = ActiveTab::Access;
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(Icon::new(AppIcon::FingerprintPattern).small().color(
-                                    if active_tab == ActiveTab::Access {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    },
-                                ))
-                                .child(div().text_sm().child("Access")),
-                        ),
-                )
+                d.child(self.render_tab_trigger(
+                    "tab-access",
+                    "Access",
+                    AppIcon::FingerprintPattern,
+                    ActiveTab::Access,
+                    active_tab == ActiveTab::Access,
+                    cx,
+                ))
             })
+            .child(self.render_tab_trigger(
+                "tab-settings",
+                "Settings",
+                AppIcon::Settings,
+                ActiveTab::Settings,
+                active_tab == ActiveTab::Settings,
+                cx,
+            ))
+            .child(self.render_tab_trigger(
+                "tab-mcp",
+                "MCP",
+                AppIcon::Lock,
+                ActiveTab::Mcp,
+                active_tab == ActiveTab::Mcp,
+                cx,
+            ))
+    }
+
+    fn render_tab_trigger(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        icon: AppIcon,
+        tab: ActiveTab,
+        is_active: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let color = if is_active {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        };
+
+        div()
+            .id(id)
+            .px_4()
+            .py_2()
+            .cursor_pointer()
+            .border_b_2()
+            .border_color(if is_active {
+                theme.primary
+            } else {
+                gpui::transparent_black()
+            })
+            .hover(|d| d.bg(theme.secondary))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.active_tab = tab;
+                cx.notify();
+            }))
             .child(
                 div()
-                    .id("tab-settings")
-                    .px_4()
-                    .py_2()
-                    .cursor_pointer()
-                    .border_b_2()
-                    .when(active_tab == ActiveTab::Settings, |d| {
-                        d.border_color(theme.primary).text_color(theme.foreground)
-                    })
-                    .when(active_tab != ActiveTab::Settings, |d| {
-                        d.border_color(gpui::transparent_black())
-                            .text_color(theme.muted_foreground)
-                    })
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = ActiveTab::Settings;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(Icon::new(AppIcon::Settings).small().color(
-                                if active_tab == ActiveTab::Settings {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(div().text_sm().child("Settings")),
-                    ),
-            )
-            .child(
-                div()
-                    .id("tab-mcp")
-                    .px_4()
-                    .py_2()
-                    .cursor_pointer()
-                    .border_b_2()
-                    .when(active_tab == ActiveTab::Mcp, |d| {
-                        d.border_color(theme.primary).text_color(theme.foreground)
-                    })
-                    .when(active_tab != ActiveTab::Mcp, |d| {
-                        d.border_color(gpui::transparent_black())
-                            .text_color(theme.muted_foreground)
-                    })
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active_tab = ActiveTab::Mcp;
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(Icon::new(AppIcon::Lock).small().color(
-                                if active_tab == ActiveTab::Mcp {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(div().text_sm().child("MCP")),
-                    ),
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(AppIconElement::new(icon).small().color(color))
+                    .child(Text::caption(label).color(color)),
             )
     }
 
@@ -169,6 +112,7 @@ impl ConnectionManagerWindow {
         let keyring_available = self.app_state.read(cx).secret_store_available();
         let requires_password = driver.requires_password();
         let save_password = self.form_save_password;
+        let ssl_modes = driver.metadata().ssl_modes;
 
         let show_focus =
             self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
@@ -179,6 +123,14 @@ impl ConnectionManagerWindow {
         let Some(main_tab) = form_def.main_tab().cloned() else {
             return Vec::new();
         };
+
+        // Extract the help text from the driver's password field definition, if any.
+        let password_help = main_tab
+            .sections
+            .iter()
+            .flat_map(|s| s.fields.iter())
+            .find(|f| f.id == "password")
+            .and_then(|f| f.help.clone());
 
         let mut sections = Vec::new();
 
@@ -191,13 +143,162 @@ impl ConnectionManagerWindow {
                 keyring_available,
                 save_password,
                 ring_color,
+                password_help,
                 cx,
             );
 
             sections.push(password_field);
         }
 
+        // TRANSPORT section — SSL mode + SSH tunnel (only when the driver supports SSL).
+        if let Some(modes) = ssl_modes {
+            let transport_section = self.render_transport_section(modes, cx);
+            sections.push(transport_section);
+        }
+
         sections
+    }
+
+    fn render_transport_section(
+        &mut self,
+        ssl_modes: &'static [dbflux_core::SslModeOption],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let current_ssl_mode = self.selected_ssl_mode.clone();
+
+        let ssl_items: Vec<SegmentedItem> = ssl_modes
+            .iter()
+            .map(|m| SegmentedItem::new(m.id, m.label))
+            .collect();
+
+        let entity = cx.entity().clone();
+
+        let ssl_control = SegmentedControl::new(
+            ssl_items,
+            current_ssl_mode.clone(),
+            move |selected: &SharedString, _window, cx| {
+                let mode = selected.to_string();
+                entity.update(cx, |this, cx| {
+                    this.selected_ssl_mode = mode;
+                    cx.notify();
+                });
+            },
+        );
+
+        // Wrap the segmented control in a content-width row with a trailing flex filler so
+        // its segments hug their labels instead of stretching to fill the field column.
+        let ssl_control_row = div()
+            .flex()
+            .items_center()
+            .child(ssl_control)
+            .child(div().flex_1());
+
+        let ssl_row = Self::field_row_cm("SSL mode", false, ssl_control_row, None::<&str>, cx);
+
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(SubSectionLabel::new("TRANSPORT"))
+            .child(ssl_row);
+
+        // Cert path inputs — shown only when the driver declares ssl_cert_fields and the
+        // selected mode requires certificate verification.
+        if let Some(driver) = &self.selected_driver {
+            let metadata = driver.metadata();
+            if let Some(cert_fields) = &metadata.ssl_cert_fields {
+                let mode_requires_root =
+                    dbflux_core::ssl_mode_id_requires_root_cert(&current_ssl_mode);
+
+                if mode_requires_root {
+                    let ca_row = self.render_ssl_cert_picker_row(
+                        "CA certificate",
+                        super::SslCertSlot::CaCert,
+                        cx,
+                    );
+                    section = section.child(ca_row);
+                }
+
+                if cert_fields.client_cert {
+                    let mode_is_cert_active =
+                        dbflux_core::ssl_mode_id_is_cert_active(&current_ssl_mode);
+
+                    if mode_is_cert_active {
+                        let cert_row = self.render_ssl_cert_picker_row(
+                            "Client cert",
+                            super::SslCertSlot::ClientCert,
+                            cx,
+                        );
+                        let key_row = self.render_ssl_cert_picker_row(
+                            "Client key",
+                            super::SslCertSlot::ClientKey,
+                            cx,
+                        );
+                        section = section.child(cert_row).child(key_row);
+                    }
+                }
+            }
+        }
+
+        section.into_any_element()
+    }
+
+    /// Render an SSL cert-path row as a file-picker button (folder icon + filename or
+    /// "Browse…" placeholder, with a trailing clear button when a value is set).
+    /// The whole control is keyboard-focusable: Enter/Space opens the picker,
+    /// Backspace clears the selection.
+    fn render_ssl_cert_picker_row(
+        &self,
+        label: &'static str,
+        slot: super::SslCertSlot,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let input_entity = match slot {
+            super::SslCertSlot::CaCert => &self.ssl_ca_cert_input,
+            super::SslCertSlot::ClientCert => &self.ssl_client_cert_input,
+            super::SslCertSlot::ClientKey => &self.ssl_client_key_input,
+        };
+
+        let current_value = input_entity.read(cx).value().to_string();
+        let has_value = !current_value.trim().is_empty();
+        let current_value_for_browse = has_value.then(|| current_value.clone());
+
+        let button_id: SharedString = match slot {
+            super::SslCertSlot::CaCert => "ssl-cert-picker-ca".into(),
+            super::SslCertSlot::ClientCert => "ssl-cert-picker-client-cert".into(),
+            super::SslCertSlot::ClientKey => "ssl-cert-picker-client-key".into(),
+        };
+
+        let entity = cx.entity().clone();
+        let browse_entity = entity.clone();
+        let clear_entity = entity;
+
+        let picker = FilePicker::new(
+            button_id,
+            current_value.clone(),
+            AppIcon::Folder,
+            AppIcon::X,
+        )
+        .on_browse(move |_event, window, cx| {
+            let starting_value = current_value_for_browse.clone();
+            browse_entity.update(cx, |this, cx| {
+                this.browse_ssl_cert(slot, starting_value.clone(), window, cx);
+            });
+        })
+        .on_clear(move |_event, window, cx| {
+            clear_entity.update(cx, |this, cx| {
+                this.clear_ssl_cert(slot, window, cx);
+            });
+        });
+
+        let control = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(picker)
+            .child(div().flex_1());
+
+        Self::field_row_cm(label, false, control, None::<&str>, cx).into_any_element()
     }
 
     pub(super) fn render_settings_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -237,7 +338,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsRefreshPolicy,
@@ -286,7 +387,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsRefreshInterval,
@@ -331,7 +432,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsConfirmDangerous,
@@ -368,7 +469,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsRequiresWhere,
@@ -400,7 +501,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_2()
                     .when(
                         show_focus && focus == FormFocus::SettingsRequiresPreview,
@@ -481,7 +582,7 @@ impl ConnectionManagerWindow {
                                         .flex()
                                         .items_center()
                                         .gap_3()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(field_focused, |d| d.border_color(ring_color))
                                         .when(!field_focused, |d| {
@@ -527,7 +628,7 @@ impl ConnectionManagerWindow {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(field_focused, |d| d.border_color(ring_color))
                                         .when(!field_focused, |d| {
@@ -564,7 +665,7 @@ impl ConnectionManagerWindow {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_2()
                                         .when(field_focused, |d| d.border_color(ring_color))
                                         .when(!field_focused, |d| {
@@ -689,7 +790,7 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .opacity(opacity)
-                    .child(Text::body("Policy").font_weight(FontWeight::MEDIUM))
+                    .child(Text::label("Policy"))
                     .child(Text::caption(
                         "Configure policies in Settings \u{2192} MCP \u{2192} Policies",
                     ))
@@ -706,3 +807,7 @@ impl ConnectionManagerWindow {
         ]
     }
 }
+
+// The `file_picker_label` helper and its tests moved to
+// `dbflux_components::primitives::file_picker` together with the `FilePicker`
+// primitive itself.

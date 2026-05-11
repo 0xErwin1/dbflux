@@ -1,6 +1,6 @@
 use crate::keymap::{Modifiers, key_chord_from_gpui};
+use dbflux_components::controls::{InputEvent, InputState};
 use gpui::{Context, Entity, EventEmitter, KeyDownEvent, Subscription, Window};
-use gpui_component::input::{InputEvent, InputState};
 
 use super::section_trait::SectionFocusEvent;
 

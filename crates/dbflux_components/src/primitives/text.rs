@@ -1,22 +1,117 @@
 use gpui::prelude::*;
-use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
+use gpui::{App, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font};
 use gpui_component::ActiveTheme;
 
+use crate::density;
 use crate::tokens::FontSizes;
+use crate::typography::AppFonts;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TextColorOverride {
+    Custom(Hsla),
+    Danger,
+    Warning,
+    Success,
+    Primary,
+    Link,
+    MutedForeground,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TextColorSelection {
+    RoleDefault(TextDefaultColor),
+    Custom(Hsla),
+    Danger,
+    Warning,
+    Success,
+    Primary,
+    Link,
+    MutedForeground,
+}
+
+impl TextColorOverride {
+    fn resolve(self, theme: &gpui_component::Theme) -> Hsla {
+        match self {
+            Self::Custom(color) => color,
+            Self::Danger => theme.danger,
+            Self::Warning => theme.warning,
+            Self::Success => theme.success,
+            Self::Primary => theme.primary,
+            Self::Link => theme.link,
+            Self::MutedForeground => theme.muted_foreground,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextDefaultColor {
+    Foreground,
+    MutedForeground,
+    MutedForegroundDim,
+    MutedForegroundSecondary,
+}
+
+impl TextDefaultColor {
+    fn resolve(self, theme: &gpui_component::Theme) -> Hsla {
+        match self {
+            Self::Foreground => theme.foreground,
+            Self::MutedForeground => theme.muted_foreground,
+            Self::MutedForegroundDim => theme.muted_foreground.opacity(0.5),
+            Self::MutedForegroundSecondary => theme.muted_foreground.opacity(0.7),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TextRoleContract {
+    pub(crate) family: Option<&'static str>,
+    pub(crate) fallbacks: &'static [&'static str],
+    pub(crate) size: gpui::Pixels,
+    pub(crate) weight: FontWeight,
+    pub(crate) color: TextDefaultColor,
+}
 
 /// Visual variant controlling font size, weight, and default color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextVariant {
     /// Section headings — XL, semibold, foreground.
     Heading,
-    /// Body text — BASE, default weight, foreground.
+    /// Body text — BASE, medium, foreground.
     Body,
-    /// Small labels — SM, default weight, muted foreground.
+    /// Emphasized labels — BASE, medium, foreground.
+    Label,
+    /// Small emphasized labels — SM, medium, foreground.
+    LabelSm,
+    /// Page titles and brand names — TITLE, bold, foreground.
+    Title,
+    /// Small labels — SM, medium, muted foreground.
     Caption,
-    /// De-emphasized text — SM, default weight, muted foreground.
+    /// De-emphasized text — SM, medium, muted foreground.
     Muted,
-    /// Inline code — SM, monospace, foreground.
+    /// Very subtle text — SM, medium, muted foreground at 0.5 opacity.
+    Dim,
+    /// Slightly de-emphasized text — SM, medium, muted foreground at 0.7 opacity.
+    DimSecondary,
+    /// Inline code — SM, monospace, medium, foreground.
     Code,
+    /// Shared headline role — TITLE, bold, headline font, foreground.
+    Headline3,
+    /// Shared headline role — XL, bold, headline font, foreground.
+    Headline2,
+    /// Shared headline role — LG, bold, headline font, foreground.
+    Headline1,
+    /// Shared section label role — SM, medium, body font, muted foreground.
+    SubSectionLabel,
+    /// Shared sidebar label role — XS, bold, mono font, muted foreground.
+    SidebarGroupLabel,
+    /// Shared small body role — SM, medium, body font, foreground.
+    BodySm,
+    /// Shared caption role — XS, medium, body font, muted foreground.
+    CaptionXs,
+    /// Shared key hint role — XS, bold, mono font, muted foreground.
+    KeyHint,
+    /// Shared field label role — BASE, medium, body font, foreground.
+    FieldLabel,
 }
 
 /// Stateless text primitive. Picks font size, weight, and color from the
@@ -26,65 +121,136 @@ pub enum TextVariant {
 pub struct Text {
     variant: TextVariant,
     content: SharedString,
-    color_override: Option<Hsla>,
+    color_override: Option<TextColorOverride>,
     size_override: Option<gpui::Pixels>,
     weight_override: Option<FontWeight>,
 }
 
 impl Text {
-    pub fn heading(content: impl Into<SharedString>) -> Self {
+    fn from_variant(variant: TextVariant, content: impl Into<SharedString>) -> Self {
         Self {
-            variant: TextVariant::Heading,
+            variant,
             content: content.into(),
             color_override: None,
             size_override: None,
             weight_override: None,
         }
+    }
+
+    pub fn heading(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::Heading, content)
     }
 
     pub fn body(content: impl Into<SharedString>) -> Self {
-        Self {
-            variant: TextVariant::Body,
-            content: content.into(),
-            color_override: None,
-            size_override: None,
-            weight_override: None,
-        }
+        Self::from_variant(TextVariant::Body, content)
+    }
+
+    pub fn label(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::Label, content)
+    }
+
+    pub fn label_sm(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::LabelSm, content)
+    }
+
+    pub fn title(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::Title, content)
     }
 
     pub fn caption(content: impl Into<SharedString>) -> Self {
-        Self {
-            variant: TextVariant::Caption,
-            content: content.into(),
-            color_override: None,
-            size_override: None,
-            weight_override: None,
-        }
+        Self::from_variant(TextVariant::Caption, content)
     }
 
     pub fn muted(content: impl Into<SharedString>) -> Self {
-        Self {
-            variant: TextVariant::Muted,
-            content: content.into(),
-            color_override: None,
-            size_override: None,
-            weight_override: None,
-        }
+        Self::from_variant(TextVariant::Muted, content)
+    }
+
+    pub fn dim(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::Dim, content)
+    }
+
+    pub fn dim_secondary(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::DimSecondary, content)
     }
 
     pub fn code(content: impl Into<SharedString>) -> Self {
-        Self {
-            variant: TextVariant::Code,
-            content: content.into(),
-            color_override: None,
-            size_override: None,
-            weight_override: None,
-        }
+        Self::from_variant(TextVariant::Code, content)
+    }
+
+    pub fn headline_3(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::Headline3, content)
+    }
+
+    pub fn headline_2(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::Headline2, content)
+    }
+
+    pub fn headline_1(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::Headline1, content)
+    }
+
+    pub fn subsection_label(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::SubSectionLabel, content)
+    }
+
+    pub fn sidebar_group_label(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::SidebarGroupLabel, content)
+    }
+
+    pub fn body_sm(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::BodySm, content)
+    }
+
+    pub fn caption_xs(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::CaptionXs, content)
+    }
+
+    pub fn key_hint(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::KeyHint, content)
+    }
+
+    pub fn field_label(content: impl Into<SharedString>) -> Self {
+        Self::from_variant(TextVariant::FieldLabel, content)
     }
 
     /// Override the text color (replaces the variant default).
     pub fn text_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.color_override = Some(color.into());
+        self.color_override = Some(TextColorOverride::Custom(color.into()));
+        self
+    }
+
+    /// Override the text color (replaces the variant default).
+    pub fn color(self, color: impl Into<Hsla>) -> Self {
+        self.text_color(color)
+    }
+
+    pub fn danger(mut self) -> Self {
+        self.color_override = Some(TextColorOverride::Danger);
+        self
+    }
+
+    pub fn warning(mut self) -> Self {
+        self.color_override = Some(TextColorOverride::Warning);
+        self
+    }
+
+    pub fn success(mut self) -> Self {
+        self.color_override = Some(TextColorOverride::Success);
+        self
+    }
+
+    pub fn primary(mut self) -> Self {
+        self.color_override = Some(TextColorOverride::Primary);
+        self
+    }
+
+    pub fn link(mut self) -> Self {
+        self.color_override = Some(TextColorOverride::Link);
+        self
+    }
+
+    pub fn muted_foreground(mut self) -> Self {
+        self.color_override = Some(TextColorOverride::MutedForeground);
         self
     }
 
@@ -99,23 +265,228 @@ impl Text {
         self.weight_override = Some(weight);
         self
     }
+
+    pub(crate) fn role_contract(&self) -> TextRoleContract {
+        self.variant.role_contract()
+    }
+
+    pub(crate) fn uses_role_default_color(&self) -> bool {
+        self.color_override.is_none()
+    }
+
+    pub(crate) fn color_selection(&self) -> TextColorSelection {
+        match self.color_override {
+            Some(TextColorOverride::Custom(color)) => TextColorSelection::Custom(color),
+            Some(TextColorOverride::Danger) => TextColorSelection::Danger,
+            Some(TextColorOverride::Warning) => TextColorSelection::Warning,
+            Some(TextColorOverride::Success) => TextColorSelection::Success,
+            Some(TextColorOverride::Primary) => TextColorSelection::Primary,
+            Some(TextColorOverride::Link) => TextColorSelection::Link,
+            Some(TextColorOverride::MutedForeground) => TextColorSelection::MutedForeground,
+            None => TextColorSelection::RoleDefault(self.variant.role_contract().color),
+        }
+    }
+
+    pub(crate) fn uses_muted_foreground_override(&self) -> bool {
+        matches!(
+            self.color_override,
+            Some(TextColorOverride::MutedForeground)
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn uses_danger_override(&self) -> bool {
+        matches!(self.color_override, Some(TextColorOverride::Danger))
+    }
+
+    pub(crate) fn font_size_override(&self) -> Option<gpui::Pixels> {
+        self.size_override
+    }
+
+    pub(crate) fn font_weight_override(&self) -> Option<FontWeight> {
+        self.weight_override
+    }
+
+    pub(crate) fn has_custom_color_override(&self) -> bool {
+        matches!(self.color_override, Some(TextColorOverride::Custom(_)))
+    }
+}
+
+impl TextVariant {
+    /// Resolve the font size for this variant using the active density tier.
+    ///
+    /// Unlike `role_contract().size` (which always returns the Default-tier constant),
+    /// this reads the density global and returns the Compact-tier value when active.
+    pub(crate) fn density_size(self, cx: &App) -> gpui::Pixels {
+        match self {
+            Self::Heading | Self::Headline2 => density::font_xl(cx),
+            Self::Body | Self::Label | Self::FieldLabel => density::font_base(cx),
+            Self::LabelSm
+            | Self::Caption
+            | Self::Muted
+            | Self::Dim
+            | Self::DimSecondary
+            | Self::Code
+            | Self::SubSectionLabel
+            | Self::BodySm => density::font_sm(cx),
+            Self::Title | Self::Headline3 => density::font_title(cx),
+            Self::Headline1 => density::font_lg(cx),
+            Self::SidebarGroupLabel | Self::CaptionXs | Self::KeyHint => density::font_xs(cx),
+        }
+    }
+
+    pub(crate) fn role_contract(self) -> TextRoleContract {
+        match self {
+            Self::Heading => TextRoleContract {
+                family: None,
+                fallbacks: &[],
+                size: FontSizes::XL,
+                weight: FontWeight::BOLD,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::Body => TextRoleContract {
+                family: None,
+                fallbacks: &[],
+                size: FontSizes::BASE,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::Label => TextRoleContract {
+                family: None,
+                fallbacks: &[],
+                size: FontSizes::BASE,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::LabelSm => TextRoleContract {
+                family: None,
+                fallbacks: &[],
+                size: FontSizes::SM,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::Title => TextRoleContract {
+                family: None,
+                fallbacks: &[],
+                size: FontSizes::TITLE,
+                weight: FontWeight::BOLD,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::Caption => TextRoleContract {
+                family: None,
+                fallbacks: &[],
+                size: FontSizes::SM,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::MutedForeground,
+            },
+            Self::Muted => TextRoleContract {
+                family: None,
+                fallbacks: &[],
+                size: FontSizes::SM,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::MutedForeground,
+            },
+            Self::Dim => TextRoleContract {
+                family: None,
+                fallbacks: &[],
+                size: FontSizes::SM,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::MutedForegroundDim,
+            },
+            Self::DimSecondary => TextRoleContract {
+                family: None,
+                fallbacks: &[],
+                size: FontSizes::SM,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::MutedForegroundSecondary,
+            },
+            Self::Code => TextRoleContract {
+                family: Some(AppFonts::MONO),
+                fallbacks: &[AppFonts::MONO_FALLBACK],
+                size: FontSizes::SM,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::Headline3 => TextRoleContract {
+                family: Some(AppFonts::HEADLINE),
+                fallbacks: &[],
+                size: FontSizes::TITLE,
+                weight: FontWeight::BOLD,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::Headline2 => TextRoleContract {
+                family: Some(AppFonts::HEADLINE),
+                fallbacks: &[],
+                size: FontSizes::XL,
+                weight: FontWeight::BOLD,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::Headline1 => TextRoleContract {
+                family: Some(AppFonts::HEADLINE),
+                fallbacks: &[],
+                size: FontSizes::LG,
+                weight: FontWeight::BOLD,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::SubSectionLabel => TextRoleContract {
+                family: Some(AppFonts::BODY),
+                fallbacks: &[],
+                size: FontSizes::SM,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::MutedForeground,
+            },
+            Self::SidebarGroupLabel => TextRoleContract {
+                family: Some(AppFonts::SHORTCUT),
+                fallbacks: &[AppFonts::MONO_FALLBACK],
+                size: FontSizes::XS,
+                weight: FontWeight::BOLD,
+                color: TextDefaultColor::MutedForeground,
+            },
+            Self::BodySm => TextRoleContract {
+                family: Some(AppFonts::BODY),
+                fallbacks: &[],
+                size: FontSizes::SM,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::Foreground,
+            },
+            Self::CaptionXs => TextRoleContract {
+                family: Some(AppFonts::BODY),
+                fallbacks: &[],
+                size: FontSizes::XS,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::MutedForeground,
+            },
+            Self::KeyHint => TextRoleContract {
+                family: Some(AppFonts::SHORTCUT),
+                fallbacks: &[AppFonts::MONO_FALLBACK],
+                size: FontSizes::XS,
+                weight: FontWeight::BOLD,
+                color: TextDefaultColor::MutedForeground,
+            },
+            Self::FieldLabel => TextRoleContract {
+                family: Some(AppFonts::BODY),
+                fallbacks: &[],
+                size: FontSizes::BASE,
+                weight: FontWeight::MEDIUM,
+                color: TextDefaultColor::Foreground,
+            },
+        }
+    }
 }
 
 impl RenderOnce for Text {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
+        let contract = self.variant.role_contract();
 
-        let (default_size, default_weight, default_color) = match self.variant {
-            TextVariant::Heading => (FontSizes::XL, FontWeight::SEMIBOLD, theme.foreground),
-            TextVariant::Body => (FontSizes::BASE, FontWeight::default(), theme.foreground),
-            TextVariant::Caption => (FontSizes::SM, FontWeight::default(), theme.muted_foreground),
-            TextVariant::Muted => (FontSizes::SM, FontWeight::default(), theme.muted_foreground),
-            TextVariant::Code => (FontSizes::SM, FontWeight::default(), theme.foreground),
-        };
-
-        let size = self.size_override.unwrap_or(default_size);
-        let weight = self.weight_override.unwrap_or(default_weight);
-        let color = self.color_override.unwrap_or(default_color);
+        let size = self
+            .size_override
+            .unwrap_or_else(|| self.variant.density_size(cx));
+        let weight = self.weight_override.unwrap_or(contract.weight);
+        let color = self
+            .color_override
+            .map(|override_color| override_color.resolve(theme))
+            .unwrap_or_else(|| contract.color.resolve(theme));
 
         let el = div()
             .text_size(size)
@@ -123,10 +494,102 @@ impl RenderOnce for Text {
             .text_color(color)
             .child(self.content);
 
-        if matches!(self.variant, TextVariant::Code) {
-            el.font_family("monospace")
+        if let Some(family) = contract.family {
+            if contract.fallbacks.is_empty() {
+                el.font_family(family)
+            } else {
+                let mut text_font = font(family);
+                text_font.fallbacks = Some(FontFallbacks::from_fonts(
+                    contract
+                        .fallbacks
+                        .iter()
+                        .map(|fallback| (*fallback).to_owned())
+                        .collect(),
+                ));
+
+                el.font(text_font)
+            }
         } else {
             el
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TextVariant;
+    use crate::tokens::FontSizes;
+    use crate::typography::AppFonts;
+    use gpui::FontWeight;
+
+    const NO_FALLBACKS: &[&str] = &[];
+
+    #[test]
+    fn shared_typography_roles_expose_expected_font_contracts() {
+        let headline = TextVariant::Headline3.role_contract();
+        assert_eq!(headline.family, Some(AppFonts::HEADLINE));
+        assert_eq!(headline.fallbacks, NO_FALLBACKS);
+        assert_eq!(headline.size, FontSizes::TITLE);
+        assert_eq!(headline.weight, FontWeight::BOLD);
+
+        let subsection = TextVariant::SubSectionLabel.role_contract();
+        assert_eq!(subsection.family, Some(AppFonts::BODY));
+        assert_eq!(subsection.fallbacks, NO_FALLBACKS);
+        assert_eq!(subsection.size, FontSizes::SM);
+        assert_eq!(subsection.weight, FontWeight::MEDIUM);
+
+        let sidebar = TextVariant::SidebarGroupLabel.role_contract();
+        assert_eq!(sidebar.family, Some(AppFonts::SHORTCUT));
+        assert_eq!(sidebar.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(sidebar.size, FontSizes::XS);
+        assert_eq!(sidebar.weight, FontWeight::BOLD);
+    }
+
+    #[test]
+    fn shared_body_and_mono_roles_keep_expected_defaults() {
+        let body = TextVariant::BodySm.role_contract();
+        assert_eq!(body.family, Some(AppFonts::BODY));
+        assert_eq!(body.fallbacks, NO_FALLBACKS);
+        assert_eq!(body.size, FontSizes::SM);
+        assert_eq!(body.weight, FontWeight::MEDIUM);
+
+        let body_base = TextVariant::Body.role_contract();
+        assert_eq!(body_base.family, None);
+        assert_eq!(body_base.fallbacks, NO_FALLBACKS);
+        assert_eq!(body_base.size, FontSizes::BASE);
+        assert_eq!(body_base.weight, FontWeight::MEDIUM);
+
+        let key_hint = TextVariant::KeyHint.role_contract();
+        assert_eq!(key_hint.family, Some(AppFonts::SHORTCUT));
+        assert_eq!(key_hint.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(key_hint.size, FontSizes::XS);
+        assert_eq!(key_hint.weight, FontWeight::BOLD);
+
+        let code = TextVariant::Code.role_contract();
+        assert_eq!(code.family, Some(AppFonts::MONO));
+        assert_eq!(code.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(code.size, FontSizes::SM);
+        assert_eq!(code.weight, FontWeight::MEDIUM);
+
+        let field_label = TextVariant::FieldLabel.role_contract();
+        assert_eq!(field_label.family, Some(AppFonts::BODY));
+        assert_eq!(field_label.fallbacks, NO_FALLBACKS);
+        assert_eq!(field_label.size, FontSizes::BASE);
+        assert_eq!(field_label.weight, FontWeight::MEDIUM);
+    }
+
+    #[test]
+    fn shared_header_and_modal_roles_keep_expected_semantic_defaults() {
+        let section_title = TextVariant::Headline1.role_contract();
+        assert_eq!(section_title.family, Some(AppFonts::HEADLINE));
+        assert_eq!(section_title.fallbacks, NO_FALLBACKS);
+        assert_eq!(section_title.size, FontSizes::LG);
+        assert_eq!(section_title.weight, FontWeight::BOLD);
+
+        let modal_title = TextVariant::LabelSm.role_contract();
+        assert_eq!(modal_title.family, None);
+        assert_eq!(modal_title.fallbacks, NO_FALLBACKS);
+        assert_eq!(modal_title.size, FontSizes::SM);
+        assert_eq!(modal_title.weight, FontWeight::MEDIUM);
     }
 }

@@ -5,10 +5,17 @@ use super::types::{DocumentId, DocumentState};
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Command, ContextId};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::history_modal::{HistoryModal, HistoryModalClosed, HistoryQuerySelected};
+use crate::ui::overlays::modals::schema_drift::{
+    ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
+};
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::{
+    CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
+};
 use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
     AuditAction, AuditContext, EventActorType, EventCategory, EventOrigin, EventOutcome,
@@ -16,18 +23,16 @@ use dbflux_core::observability::{
 };
 use dbflux_core::{
     DangerousAction, DangerousQueryKind, DbError, DiagnosticSeverity as CoreDiagnosticSeverity,
-    DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext, HistoryEntry,
-    OutputReceiver, QueryLanguage, QueryRequest, QueryResult, RefreshPolicy, SchemaLoadingStrategy,
-    TaskTarget, ValidationResult, detect_dangerous_query,
+    DriftOutcome, DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext,
+    ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
+    RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget, ValidationResult,
+    check_schema_drift, detect_dangerous_query,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
-};
-use gpui_component::input::{
-    CompletionProvider, Input, InputEvent, InputState, Position as InputPosition, Rope,
 };
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use lsp_types::{
@@ -80,6 +85,96 @@ pub enum SqlQueryFocus {
     ContextBar,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum ContextBarSlot {
+    #[default]
+    Connection,
+    Database,
+    Schema,
+    SourceQueryMode,
+    SourceTargets,
+    SourceStart,
+    SourceEnd,
+}
+
+/// Counts lines added and removed between two text strings using a set-based
+/// line delta. Lines in `current` not in `original` are "added"; lines in
+/// `original` not in `current` are "removed". Reorderings are counted as both
+/// an add and a remove — good enough for a change-summary label.
+pub(crate) fn diff_stats_from_pair(original: &str, current: &str) -> (usize, usize) {
+    if original == current {
+        return (0, 0);
+    }
+
+    let original_lines: std::collections::HashSet<&str> = original.lines().collect();
+    let current_lines: std::collections::HashSet<&str> = current.lines().collect();
+
+    let added = current_lines.difference(&original_lines).count();
+    let removed = original_lines.difference(&current_lines).count();
+
+    (added, removed)
+}
+
+fn build_source_window_context(
+    query_mode: Option<String>,
+    targets: &[String],
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+) -> Result<ExecutionSourceContext, &'static str> {
+    let query_mode = query_mode.filter(|value| !value.trim().is_empty());
+    let requires_targets = query_mode.as_deref() != Some("sql");
+
+    if requires_targets && targets.is_empty() {
+        return Err("Select at least one source");
+    }
+
+    let Some(start_ms) = start_ms else {
+        return Err("Start time is required");
+    };
+
+    let Some(end_ms) = end_ms else {
+        return Err("End time is required");
+    };
+
+    if start_ms > end_ms {
+        return Err("Start time must be earlier than end time");
+    }
+
+    Ok(ExecutionSourceContext::CollectionWindow {
+        targets: targets.to_vec(),
+        start_ms,
+        end_ms,
+        query_mode,
+    })
+}
+
+fn format_source_datetime_input(timestamp_ms: i64) -> String {
+    dbflux_core::chrono::DateTime::from_timestamp_millis(timestamp_ms)
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_default()
+}
+
+fn source_input_values_from_context(source: &ExecutionSourceContext) -> Option<(String, String)> {
+    match source {
+        ExecutionSourceContext::CollectionWindow {
+            start_ms, end_ms, ..
+        } => Some((
+            format_source_datetime_input(*start_ms),
+            format_source_datetime_input(*end_ms),
+        )),
+    }
+}
+
+fn query_request_for_execution(
+    query: String,
+    active_database: Option<String>,
+    exec_ctx: &ExecutionContext,
+) -> QueryRequest {
+    QueryRequest::new(query)
+        .with_database(active_database)
+        .with_execution_context(Some(exec_ctx.clone()))
+}
+
 pub struct CodeDocument {
     // Identity
     id: DocumentId,
@@ -107,6 +202,11 @@ pub struct CodeDocument {
     connection_dropdown: Entity<Dropdown>,
     database_dropdown: Entity<Dropdown>,
     schema_dropdown: Entity<Dropdown>,
+    source_query_mode_dropdown: Entity<Dropdown>,
+    source_targets: Entity<MultiSelect>,
+    source_start_input: Entity<InputState>,
+    source_end_input: Entity<InputState>,
+    pending_source_input_values: Option<(String, String)>,
     _context_subscriptions: Vec<Subscription>,
 
     // Execution
@@ -133,7 +233,7 @@ pub struct CodeDocument {
     layout: SqlQueryLayout,
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
-    context_bar_index: usize,
+    context_bar_slot: ContextBarSlot,
     results_maximized: bool,
 
     // Task runner (query execution)
@@ -148,6 +248,15 @@ pub struct CodeDocument {
 
     // Dangerous query confirmation
     pending_dangerous_query: Option<PendingDangerousQuery>,
+
+    // Schema drift detection
+    schema_drift_modal: Entity<ModalSchemaDrift>,
+    _schema_drift_subscriptions: Vec<Subscription>,
+    /// Query paused while the drift preflight background task is running or
+    /// while the user is responding to the drift modal.
+    pending_drift_query: Option<PendingDriftQuery>,
+    /// True while the drift preflight I/O task is in flight.
+    drift_preflight_running: bool,
 
     // Diagnostic debounce: incremental request id to discard stale results.
     diagnostic_request_id: u64,
@@ -187,6 +296,28 @@ struct PendingDangerousQuery {
     query: String,
     kind: DangerousQueryKind,
     in_new_tab: bool,
+}
+
+/// Action resolved by the schema-drift modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DriftAction {
+    /// Waiting for user response — do not execute yet.
+    Pending,
+    /// No drift (or driver doesn't support parsing) — execute immediately and
+    /// apply transparent cache refreshes first.
+    ExecuteNow,
+    /// User chose "Continue with stale schema" — proceed without touching the cache.
+    ContinueStale,
+}
+
+/// A query paused by the schema-drift preflight or drift modal awaiting execution.
+struct PendingDriftQuery {
+    query: String,
+    in_new_tab: bool,
+    action: DriftAction,
+    /// Cache updates to apply before execution when action is `ExecuteNow` or
+    /// after "Refresh & re-run". Each entry is `(database, table, TableInfo)`.
+    cache_updates: Vec<(String, String, dbflux_core::TableInfo)>,
 }
 
 /// Record of a query execution.
@@ -287,6 +418,31 @@ impl CodeDocument {
                 cx.notify();
             });
 
+        // Create schema drift modal and wire up action subscriptions.
+        let schema_drift_modal = cx.new(ModalSchemaDrift::new);
+
+        let drift_refresh_sub = cx.subscribe(
+            &schema_drift_modal,
+            |this, _, _event: &SchemaDriftRefresh, cx| {
+                this.on_schema_drift_refresh(cx);
+            },
+        );
+
+        let drift_continue_sub = cx.subscribe(
+            &schema_drift_modal,
+            |this, _, _event: &SchemaDriftContinue, cx| {
+                this.on_schema_drift_continue(cx);
+            },
+        );
+
+        let drift_dismissed_sub = cx.subscribe(
+            &schema_drift_modal,
+            |this, _, _event: &SchemaDriftDismissed, cx| {
+                this.pending_drift_query = None;
+                cx.notify();
+            },
+        );
+
         let runner = {
             let mut r = DocumentTaskRunner::new(app_state.clone());
             if let Some(pid) = connection_id {
@@ -315,14 +471,16 @@ impl CodeDocument {
         let refresh_policy_sub = cx.subscribe_in(
             &refresh_dropdown,
             window,
-            |this, _, event: &DropdownSelectionChanged, window, cx| {
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
                 let policy = RefreshPolicy::from_index(event.index);
 
                 if policy.is_auto() && !this.can_auto_refresh(cx) {
                     this.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
-                    cx.toast_warning("Auto-refresh blocked: query modifies data", window);
+                    Toast::warning("Auto-refresh blocked: query modifies data")
+                        .meta_right(now_hms())
+                        .push(cx);
                     return;
                 }
 
@@ -371,13 +529,62 @@ impl CodeDocument {
             Self::create_database_dropdown(&app_state, &exec_ctx, window, cx);
         let (schema_dropdown, schema_sub) =
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
+        let source_query_mode_dropdown = cx.new(|_cx| {
+            Dropdown::new("ctx-source-query-mode")
+                .placeholder("Syntax")
+                .toolbar_style(true)
+        });
+        let source_targets =
+            cx.new(|_cx| MultiSelect::new("ctx-source-targets").placeholder("Sources"));
+        let source_start_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
+        let source_end_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T01:00:00Z"));
+        let source_query_mode_sub = cx.subscribe_in(
+            &source_query_mode_dropdown,
+            window,
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                this.on_source_query_mode_changed(&event.item, cx);
+            },
+        );
+        let source_targets_sub = cx.subscribe(
+            &source_targets,
+            |this, entity, _event: &MultiSelectChanged, cx| {
+                let selected_targets = entity
+                    .read(cx)
+                    .selected_values()
+                    .iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>();
+
+                this.on_source_targets_changed(selected_targets, cx);
+            },
+        );
+        let source_start_sub = cx.subscribe_in(
+            &source_start_input,
+            window,
+            |this, _input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.on_source_time_range_changed(cx);
+                }
+            },
+        );
+        let source_end_sub = cx.subscribe_in(
+            &source_end_input,
+            window,
+            |this, _input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.on_source_time_range_changed(cx);
+                }
+            },
+        );
         let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
             this.sync_context_dropdowns(cx);
         });
 
         let refresh_policy = default_refresh;
 
-        Self {
+        let mut document = Self {
             id: doc_id,
             title: "Query 1".to_string(),
             state: DocumentState::Clean,
@@ -395,7 +602,21 @@ impl CodeDocument {
             connection_dropdown,
             database_dropdown,
             schema_dropdown,
-            _context_subscriptions: vec![conn_sub, db_sub, schema_sub, app_state_sub],
+            source_query_mode_dropdown,
+            source_targets,
+            source_start_input,
+            source_end_input,
+            pending_source_input_values: None,
+            _context_subscriptions: vec![
+                conn_sub,
+                db_sub,
+                schema_sub,
+                source_query_mode_sub,
+                source_targets_sub,
+                source_start_sub,
+                source_end_sub,
+                app_state_sub,
+            ],
             execution_history: Vec::new(),
             active_execution_index: None,
             pending_result: None,
@@ -413,7 +634,7 @@ impl CodeDocument {
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
-            context_bar_index: 0,
+            context_bar_slot: ContextBarSlot::Connection,
             results_maximized: false,
             runner,
             refresh_policy,
@@ -423,6 +644,14 @@ impl CodeDocument {
             _refresh_subscriptions: vec![refresh_policy_sub],
             is_active_tab: true,
             pending_dangerous_query: None,
+            schema_drift_modal,
+            _schema_drift_subscriptions: vec![
+                drift_refresh_sub,
+                drift_continue_sub,
+                drift_dismissed_sub,
+            ],
+            pending_drift_query: None,
+            drift_preflight_running: false,
             diagnostic_request_id: 0,
             _diagnostic_debounce: None,
             _pending_save: None,
@@ -432,7 +661,10 @@ impl CodeDocument {
             show_saved_label: false,
             _saved_label_timer: None,
             pending_error: None,
-        }
+        };
+
+        document.sync_context_dropdowns(cx);
+        document
     }
 
     pub fn can_auto_refresh(&self, cx: &App) -> bool {
@@ -518,6 +750,10 @@ impl CodeDocument {
 
     /// Set the execution context (e.g. parsed from file header).
     pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
+        self.pending_source_input_values = ctx
+            .source
+            .as_ref()
+            .and_then(source_input_values_from_context);
         self.connection_id = ctx.connection_id;
         self.exec_ctx = ctx;
         self.sync_context_dropdowns(cx);
@@ -648,6 +884,25 @@ impl CodeDocument {
 
         let current = self.input_state.read(cx).value();
         current != self.original_content
+    }
+
+    /// Counts lines added and removed relative to `original_content`.
+    pub fn diff_stats(&self, cx: &App) -> (usize, usize) {
+        let current = self.input_state.read(cx).value().to_string();
+        diff_stats_from_pair(&self.original_content, &current)
+    }
+
+    /// Short summary of pending edits for the dirty-dot tooltip.
+    ///
+    /// Returns `None` when the document has no unsaved changes.
+    pub fn change_summary(&self, cx: &App) -> Option<String> {
+        let (added, removed) = self.diff_stats(cx);
+
+        if added == 0 && removed == 0 {
+            None
+        } else {
+            Some(format!("+{}/−{} lines", added, removed))
+        }
     }
 
     // === Command Dispatch ===
@@ -966,6 +1221,60 @@ impl CodeDocument {
         if let Err(err) = self.app_state.read(cx).audit_service().record(e) {
             log::warn!("Failed to emit dangerous query audit event: {}", err);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{diff_stats_from_pair, source_input_values_from_context};
+    use dbflux_core::ExecutionSourceContext;
+
+    #[test]
+    fn diff_stats_identical_text_returns_zero() {
+        let (added, removed) = diff_stats_from_pair("SELECT 1", "SELECT 1");
+        assert_eq!(added, 0);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn diff_stats_pure_addition() {
+        let original = "SELECT 1";
+        let current = "SELECT 1\nSELECT 2\nSELECT 3";
+        let (added, removed) = diff_stats_from_pair(original, current);
+        assert_eq!(added, 2);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn diff_stats_pure_removal() {
+        let original = "SELECT 1\nSELECT 2\nSELECT 3";
+        let current = "SELECT 1";
+        let (added, removed) = diff_stats_from_pair(original, current);
+        assert_eq!(added, 0);
+        assert_eq!(removed, 2);
+    }
+
+    #[test]
+    fn diff_stats_mixed_edits() {
+        let original = "SELECT a\nSELECT b\nSELECT c";
+        let current = "SELECT a\nSELECT x\nSELECT y";
+        let (added, removed) = diff_stats_from_pair(original, current);
+        assert_eq!(added, 2);
+        assert_eq!(removed, 2);
+    }
+
+    #[test]
+    fn source_input_values_restore_start_and_end_strings() {
+        let values = source_input_values_from_context(&ExecutionSourceContext::CollectionWindow {
+            targets: vec!["/aws/lambda/app".to_string()],
+            start_ms: 1_704_067_200_000,
+            end_ms: 1_704_070_800_000,
+            query_mode: Some("cwli".to_string()),
+        })
+        .expect("source input values");
+
+        assert_eq!(values.0, "2024-01-01T00:00:00Z");
+        assert_eq!(values.1, "2024-01-01T01:00:00Z");
     }
 }
 

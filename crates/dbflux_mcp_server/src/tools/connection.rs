@@ -197,6 +197,7 @@ impl DbFluxServer {
                                 offset: None,
                                 statement_timeout: None,
                                 database: None,
+                                execution_context: None,
                             });
 
                             result.ok().and_then(|r| {

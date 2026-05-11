@@ -24,6 +24,19 @@ impl SelectOption {
     }
 }
 
+/// Controls when a `DynamicSelect` field re-fetches its options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefreshTrigger {
+    /// User must explicitly click a refresh button.
+    Manual,
+    /// Options are re-fetched whenever a field listed in `depends_on` changes.
+    OnDependencyChange,
+    /// Options are re-fetched when the field gains focus.
+    OnFocus,
+    /// Options are re-fetched after each successful login.
+    OnLoginComplete,
+}
+
 /// Type of form field input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FormFieldKind {
@@ -32,7 +45,25 @@ pub enum FormFieldKind {
     Number,
     FilePath,
     Checkbox,
-    Select { options: Vec<SelectOption> },
+    Select {
+        options: Vec<SelectOption>,
+    },
+    /// A dropdown whose options are fetched at runtime via the provider's
+    /// `fetch_dynamic_options` method. Older clients that do not recognize this
+    /// variant will fail loudly at parse time (no silent fallback).
+    DynamicSelect {
+        /// Field ids whose current values are forwarded to the provider when
+        /// fetching options for this field.
+        depends_on: Vec<String>,
+        /// When and how the options are refreshed.
+        refresh: RefreshTrigger,
+        /// When `true`, the field is not fetched until an active session exists.
+        #[serde(default)]
+        requires_session: bool,
+        /// When `true`, the user may type a value not present in the options list.
+        #[serde(default)]
+        allow_freeform: bool,
+    },
 }
 
 /// Definition of a single form field.
@@ -51,6 +82,9 @@ pub struct FormFieldDef {
     pub enabled_when_checked: Option<String>,
     /// Field is enabled only when this checkbox field is unchecked.
     pub enabled_when_unchecked: Option<String>,
+    /// Optional hint displayed below the input (FontSizes::XS, muted_foreground).
+    #[serde(default)]
+    pub help: Option<String>,
 }
 
 /// A section of related form fields.
@@ -91,6 +125,7 @@ fn field(id: &str, label: &str, kind: FormFieldKind, placeholder: &str) -> FormF
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
+        help: None,
     }
 }
 
@@ -99,6 +134,11 @@ fn field_required(id: &str, label: &str, kind: FormFieldKind, placeholder: &str)
         required: true,
         ..field(id, label, kind, placeholder)
     }
+}
+
+pub fn with_help(mut f: FormFieldDef, help: &str) -> FormFieldDef {
+    f.help = Some(help.to_string());
+    f
 }
 
 fn with_default(mut f: FormFieldDef, default: &str) -> FormFieldDef {
@@ -263,7 +303,10 @@ pub static POSTGRES_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
                             ),
                             "use_uri",
                         ),
-                        field_password(),
+                        with_help(
+                            field_password(),
+                            "via Auth Profile · resolved at runtime, never persisted on disk",
+                        ),
                     ],
                 },
             ],
@@ -449,10 +492,6 @@ pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
                             ),
                             "use_uri",
                         ),
-                        when_unchecked(
-                            field("tls", "Use TLS", FormFieldKind::Checkbox, ""),
-                            "use_uri",
-                        ),
                     ],
                 },
                 FormSection {
@@ -504,6 +543,31 @@ pub static DYNAMODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
     }],
 });
 
+pub static CLOUDWATCH_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![FormSection {
+            title: "AWS".into(),
+            fields: vec![
+                field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
+                field(
+                    "profile",
+                    "Profile",
+                    FormFieldKind::Text,
+                    "optional AWS profile",
+                ),
+                field(
+                    "endpoint",
+                    "Endpoint Override",
+                    FormFieldKind::Text,
+                    "http://localhost:4566",
+                ),
+            ],
+        }],
+    }],
+});
+
 // ---------------------------------------------------------------------------
 // Impl blocks
 // ---------------------------------------------------------------------------
@@ -535,5 +599,92 @@ impl DriverFormDef {
             .flat_map(|t| t.sections.iter())
             .flat_map(|s| s.fields.iter())
             .find(|f| f.id == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_select_round_trips_via_serde() {
+        let kind = FormFieldKind::DynamicSelect {
+            depends_on: vec!["region".to_string()],
+            refresh: RefreshTrigger::OnDependencyChange,
+            requires_session: true,
+            allow_freeform: false,
+        };
+
+        let serialized = serde_json::to_string(&kind).unwrap();
+        let deserialized: FormFieldKind = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(kind, deserialized);
+    }
+
+    #[test]
+    fn dynamic_select_defaults_requires_session_and_allow_freeform_to_false() {
+        // JSON that omits the optional bool fields to verify #[serde(default)] behavior.
+        let json = r#"{
+            "DynamicSelect": {
+                "depends_on": [],
+                "refresh": "OnFocus"
+            }
+        }"#;
+
+        let kind: FormFieldKind = serde_json::from_str(json).unwrap();
+
+        let FormFieldKind::DynamicSelect {
+            requires_session,
+            allow_freeform,
+            refresh,
+            ..
+        } = kind
+        else {
+            panic!("expected DynamicSelect variant");
+        };
+
+        assert!(!requires_session);
+        assert!(!allow_freeform);
+        assert_eq!(refresh, RefreshTrigger::OnFocus);
+    }
+
+    #[test]
+    fn unknown_form_field_kind_variant_is_rejected() {
+        // A future variant unknown to this binary must NOT silently deserialize.
+        let json = r#"{"QuantumField": {"some": "data"}}"#;
+        let result = serde_json::from_str::<FormFieldKind>(json);
+        assert!(
+            result.is_err(),
+            "expected deserialization to fail for unknown variant"
+        );
+    }
+
+    #[test]
+    fn refresh_trigger_all_variants_round_trip() {
+        for trigger in [
+            RefreshTrigger::Manual,
+            RefreshTrigger::OnDependencyChange,
+            RefreshTrigger::OnFocus,
+            RefreshTrigger::OnLoginComplete,
+        ] {
+            let serialized = serde_json::to_string(&trigger).unwrap();
+            let deserialized: RefreshTrigger = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(trigger, deserialized);
+        }
+    }
+
+    #[test]
+    fn cloudwatch_form_exposes_aws_region_profile_and_endpoint_fields() {
+        let main_tab = CLOUDWATCH_FORM.main_tab().expect("main tab");
+
+        assert!(
+            main_tab
+                .sections
+                .iter()
+                .flat_map(|section| section.fields.iter())
+                .any(|field| field.id == "region" && field.required)
+        );
+        assert!(CLOUDWATCH_FORM.field("profile").is_some());
+        assert!(CLOUDWATCH_FORM.field("endpoint").is_some());
     }
 }

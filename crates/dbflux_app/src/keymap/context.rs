@@ -54,6 +54,9 @@ pub enum ContextId {
 
     /// Audit event viewer row list.
     Audit,
+
+    /// Event-stream picker modal (collection child picker).
+    EventStreamsPicker,
 }
 
 impl ContextId {
@@ -74,6 +77,7 @@ impl ContextId {
             ContextId::ConfirmModal => None,
             ContextId::FormNavigation => None,
             ContextId::ContextBar => None,
+            ContextId::EventStreamsPicker => None,
             ContextId::Sidebar => Some(ContextId::Global),
             ContextId::Editor => Some(ContextId::Global),
             ContextId::Results => Some(ContextId::Global),
@@ -97,6 +101,7 @@ impl ContextId {
                 | ContextId::ConfirmModal
                 | ContextId::FormNavigation
                 | ContextId::ContextBar
+                | ContextId::EventStreamsPicker
         )
     }
 
@@ -125,6 +130,7 @@ impl ContextId {
             ContextId::FormNavigation => "Form Navigation",
             ContextId::ContextBar => "Context Bar",
             ContextId::Audit => "Audit Viewer",
+            ContextId::EventStreamsPicker => "Event Streams Picker",
         }
     }
 
@@ -147,6 +153,7 @@ impl ContextId {
             ContextId::FormNavigation,
             ContextId::ContextBar,
             ContextId::Audit,
+            ContextId::EventStreamsPicker,
         ]
     }
 
@@ -169,6 +176,7 @@ impl ContextId {
             ContextId::FormNavigation => "FormNavigation",
             ContextId::ContextBar => "ContextBar",
             ContextId::Audit => "Audit",
+            ContextId::EventStreamsPicker => "EventStreamsPicker",
         }
     }
 }

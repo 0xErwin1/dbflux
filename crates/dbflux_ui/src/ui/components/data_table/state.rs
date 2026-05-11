@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use dbflux_components::controls::{InputEvent, InputState};
 use gpui::{
     AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
     Size, UniformListScrollHandle, Window, px,
 };
-use gpui_component::input::{InputEvent, InputState};
 
 use super::clipboard;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
@@ -64,6 +65,9 @@ pub struct DataTableState {
     /// Column indices that form the primary key (for row identification).
     pk_columns: Vec<usize>,
 
+    /// Column indices that are foreign-key source columns.
+    fk_columns: HashSet<usize>,
+
     /// Whether this table is editable (requires PK for row identification).
     is_editable: bool,
 
@@ -103,6 +107,7 @@ impl DataTableState {
             enum_dropdown: None,
             edit_buffer,
             pk_columns: Vec::new(),
+            fk_columns: HashSet::new(),
             is_editable: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
@@ -437,6 +442,16 @@ impl DataTableState {
     /// Get the primary key column indices.
     pub fn pk_columns(&self) -> &[usize] {
         &self.pk_columns
+    }
+
+    /// Set the foreign-key source column indices.
+    pub fn set_fk_columns(&mut self, fk_columns: HashSet<usize>) {
+        self.fk_columns = fk_columns;
+    }
+
+    /// Get the foreign-key source column indices.
+    pub fn fk_columns(&self) -> &HashSet<usize> {
+        &self.fk_columns
     }
 
     /// Check if the table supports INSERT operations (add/duplicate rows).

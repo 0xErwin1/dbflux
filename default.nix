@@ -192,16 +192,34 @@ in
   package = buildWithRustPlatform;
 
   # Development shell
-  shell = pkgs.mkShell {
-    nativeBuildInputs =
-      nativeBuildInputs
-      ++ (with pkgs; [
-        rustup
-        rust-analyzer
-        python3
-      ]);
+  shell =
+    let
+      rustToolchainInputs =
+        if pkgs ? rust-bin then
+          [
+            (pkgs.rust-bin.stable.latest.default.override {
+              extensions = [
+                "rust-src"
+                "rust-analyzer"
+              ];
+            })
+          ]
+        else
+          [
+            pkgs.rustc
+            pkgs.cargo
+          ];
+    in
+    pkgs.mkShell {
+      nativeBuildInputs =
+        nativeBuildInputs
+        ++ rustToolchainInputs
+        ++ [
+          pkgs.rust-analyzer
+          pkgs.python3
+        ];
 
-    inherit buildInputs;
+      inherit buildInputs;
 
     # Include system GPU driver paths for non-NixOS systems
     LD_LIBRARY_PATH = pkgs.lib.concatStringsSep ":" [
@@ -213,10 +231,10 @@ in
     ];
     ZSTD_SYS_USE_PKG_CONFIG = "1";
 
-    shellHook = ''
-      echo "DBFlux development environment loaded"
-      echo "Run 'cargo build' to build the project"
-      echo "Run 'nix-build' to build the package"
-    '';
-  };
+      shellHook = ''
+        echo "DBFlux development environment loaded"
+        echo "Run 'cargo build' to build the project"
+        echo "Run 'nix-build' to build the package"
+      '';
+    };
 }

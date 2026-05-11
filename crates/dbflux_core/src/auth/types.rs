@@ -6,6 +6,20 @@ use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthProviderCapabilities {
+    #[serde(default)]
+    pub login: AuthProviderLoginCapabilities,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthProviderLoginCapabilities {
+    #[serde(default)]
+    pub supported: bool,
+    #[serde(default)]
+    pub verification_url_progress: bool,
+}
+
 /// `AuthProfile` uses a custom `Deserialize` impl to handle migration from
 /// the legacy `"config"` format (see impl below). `Serialize` is derived
 /// normally and always writes the new `"fields"` format.

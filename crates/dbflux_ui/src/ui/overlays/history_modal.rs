@@ -1,15 +1,16 @@
 use crate::app::AppStateEntity;
 use crate::keymap::ContextId;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::primitives::Text;
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::helpers::text_color_for_active;
+use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_modal_container};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -369,14 +370,16 @@ impl HistoryModal {
         cx.notify();
     }
 
-    fn confirm_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let ModalMode::Save { ref sql } = self.mode else {
             return;
         };
 
         let name = self.save_name_input.read(cx).value();
         if name.trim().is_empty() {
-            cx.toast_warning("Enter a name for the query", window);
+            Toast::warning("Enter a name for the query")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         }
 
@@ -387,7 +390,7 @@ impl HistoryModal {
             state.add_saved_query(query);
         });
         cx.emit(QuerySaved { id, name });
-        cx.toast_success("Saved query", window);
+        Toast::success("Saved query").meta_right(now_hms()).push(cx);
         self.close(cx);
     }
 
@@ -421,7 +424,7 @@ impl HistoryModal {
             .key_context(ContextId::HistoryModal.as_gpui_context())
             .absolute()
             .inset_0()
-            .bg(gpui::black().opacity(0.5))
+            .bg(overlay_bg(theme))
             .flex()
             .justify_center()
             .items_start()
@@ -466,13 +469,10 @@ impl HistoryModal {
                 this.close(cx);
             }))
             .child(
-                div()
-                    .w(px(620.0))
+                surface_modal_container(cx)
+                    .w_full()
+                    .max_w(px(620.0))
                     .max_h(px(520.0))
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(Radii::LG)
                     .shadow_lg()
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -498,17 +498,6 @@ impl HistoryModal {
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        let recent_color = if self.active_tab == HistoryTab::Recent {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        };
-        let saved_color = if self.active_tab == HistoryTab::Saved {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        };
-
         div()
             .flex()
             .gap(Spacing::XS)
@@ -522,21 +511,23 @@ impl HistoryModal {
                     .py(Spacing::XS)
                     .rounded(Radii::MD)
                     .cursor_pointer()
-                    .text_size(FontSizes::SM)
                     .when(self.active_tab == HistoryTab::Recent, |this| {
-                        this.bg(theme.secondary).text_color(theme.foreground)
+                        this.bg(theme.secondary)
                     })
                     .when(self.active_tab != HistoryTab::Recent, |this| {
-                        this.text_color(theme.muted_foreground)
-                            .hover(|d| d.bg(theme.secondary))
+                        this.hover(|d| d.bg(theme.secondary))
                     })
                     .child(
-                        svg()
-                            .path(AppIcon::Clock.path())
-                            .size_3()
-                            .text_color(recent_color),
+                        Icon::new(AppIcon::Clock)
+                            .size(px(12.0))
+                            .color(text_color_for_active(
+                                self.active_tab == HistoryTab::Recent,
+                                theme,
+                            )),
                     )
-                    .child("Recent")
+                    .child(Text::body("Recent").font_size(FontSizes::SM).color(
+                        text_color_for_active(self.active_tab == HistoryTab::Recent, theme),
+                    ))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -556,21 +547,23 @@ impl HistoryModal {
                     .py(Spacing::XS)
                     .rounded(Radii::MD)
                     .cursor_pointer()
-                    .text_size(FontSizes::SM)
                     .when(self.active_tab == HistoryTab::Saved, |this| {
-                        this.bg(theme.secondary).text_color(theme.foreground)
+                        this.bg(theme.secondary)
                     })
                     .when(self.active_tab != HistoryTab::Saved, |this| {
-                        this.text_color(theme.muted_foreground)
-                            .hover(|d| d.bg(theme.secondary))
+                        this.hover(|d| d.bg(theme.secondary))
                     })
                     .child(
-                        svg()
-                            .path(AppIcon::Star.path())
-                            .size_3()
-                            .text_color(saved_color),
+                        Icon::new(AppIcon::Star)
+                            .size(px(12.0))
+                            .color(text_color_for_active(
+                                self.active_tab == HistoryTab::Saved,
+                                theme,
+                            )),
                     )
-                    .child("Saved")
+                    .child(Text::body("Saved").font_size(FontSizes::SM).color(
+                        text_color_for_active(self.active_tab == HistoryTab::Saved, theme),
+                    ))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -724,13 +717,6 @@ impl HistoryModal {
                                                 .items_center()
                                                 .justify_center()
                                                 .rounded(Radii::SM)
-                                                .text_size(FontSizes::SM)
-                                                .when(is_favorite, |d| {
-                                                    d.text_color(cx.theme().warning)
-                                                })
-                                                .when(!is_favorite, |d| {
-                                                    d.text_color(theme.muted_foreground)
-                                                })
                                                 .hover(|d| d.bg(theme.secondary))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.app_state.update(cx, |state, _| {
@@ -738,7 +724,19 @@ impl HistoryModal {
                                                     });
                                                     cx.notify();
                                                 }))
-                                                .child(if is_favorite { "★" } else { "☆" }),
+                                                .child(
+                                                    Text::body(if is_favorite {
+                                                        "★"
+                                                    } else {
+                                                        "☆"
+                                                    })
+                                                    .font_size(FontSizes::SM)
+                                                    .color(if is_favorite {
+                                                        cx.theme().warning
+                                                    } else {
+                                                        theme.muted_foreground
+                                                    }),
+                                                ),
                                         ),
                                     ),
                             )
@@ -796,7 +794,7 @@ impl HistoryModal {
             .key_context(ContextId::HistoryModal.as_gpui_context())
             .absolute()
             .inset_0()
-            .bg(gpui::black().opacity(0.5))
+            .bg(overlay_bg(theme))
             .flex()
             .justify_center()
             .items_start()
@@ -814,12 +812,9 @@ impl HistoryModal {
                 this.close(cx);
             }))
             .child(
-                div()
-                    .w(px(420.0))
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(Radii::LG)
+                surface_modal_container(cx)
+                    .w_full()
+                    .max_w(px(420.0))
                     .shadow_lg()
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -863,6 +858,71 @@ impl Render for HistoryModal {
 impl EventEmitter<HistoryQuerySelected> for HistoryModal {}
 impl EventEmitter<HistoryModalClosed> for HistoryModal {}
 impl EventEmitter<QuerySaved> for HistoryModal {}
+
+#[cfg(test)]
+mod source_contract_tests {
+    use std::fs;
+
+    fn history_modal_source() -> String {
+        fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/ui/overlays/history_modal.rs"
+        ))
+        .unwrap_or_else(|error| panic!("failed to read history_modal.rs: {error}"))
+        .split("#[cfg(test)]")
+        .next()
+        .expect("history_modal.rs should contain production code before tests")
+        .to_string()
+    }
+
+    fn history_modal_render_source(function_name: &str) -> String {
+        let source = history_modal_source();
+        let function_marker = format!("fn {function_name}(");
+        let start = source
+            .find(&function_marker)
+            .unwrap_or_else(|| panic!("history_modal.rs should contain {function_marker}"));
+
+        let remaining = &source[start..];
+        let end = remaining.find("\n    fn ").unwrap_or(remaining.len());
+
+        remaining[..end].to_string()
+    }
+
+    #[test]
+    fn browse_modal_uses_canonical_scrim_and_modal_container_contracts() {
+        let source = history_modal_source();
+
+        assert!(source.contains(".bg(overlay_bg(theme))"));
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
+    }
+
+    #[test]
+    fn save_modal_stops_reusing_panel_surface_for_modal_chrome() {
+        let source = history_modal_source();
+
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn browse_modal_contracts_are_scoped_to_the_browse_render_path() {
+        let source = history_modal_render_source("render_browse");
+
+        assert!(source.contains(".bg(overlay_bg(theme))"));
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn save_modal_contracts_are_scoped_to_the_save_render_path() {
+        let source = history_modal_render_source("render_save");
+
+        assert!(source.contains(".bg(overlay_bg(theme))"));
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+}
 
 fn filter_history_entries(
     entries: &[HistoryEntry],

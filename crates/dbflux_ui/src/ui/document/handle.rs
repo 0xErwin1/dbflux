@@ -328,6 +328,17 @@ impl DocumentHandle {
         }
     }
 
+    /// Short summary of pending changes for the dirty-dot tooltip.
+    ///
+    /// Returns `None` when the document has no pending edits or does not track them.
+    pub fn change_summary(&self, cx: &App) -> Option<String> {
+        match self {
+            Self::Code { entity, .. } => entity.read(cx).change_summary(cx),
+            Self::Data { entity, .. } => entity.read(cx).change_summary(cx),
+            Self::KeyValue { .. } | Self::Audit { .. } => None,
+        }
+    }
+
     /// Subscribe to document events (returns Subscription).
     /// Note: For Data documents, events are converted to DocumentEvent.
     pub fn subscribe<F>(&self, cx: &mut App, callback: F) -> Subscription

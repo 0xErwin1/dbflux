@@ -6,11 +6,11 @@ use super::section_trait::SectionFocusEvent;
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{ConnectionHook, HookExecutionMode, ScriptLanguage};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::InputState;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,24 +118,20 @@ fn notify_on_input_change(
     window: &mut Window,
     cx: &mut Context<HooksSection>,
 ) -> Subscription {
-    cx.subscribe_in(
-        input,
-        window,
-        |this, _, event: &gpui_component::input::InputEvent, _window, cx| {
-            if matches!(event, gpui_component::input::InputEvent::Change) {
-                cx.notify();
+    cx.subscribe_in(input, window, |this, _, event: &InputEvent, _window, cx| {
+        if matches!(event, InputEvent::Change) {
+            cx.notify();
+        }
+
+        if matches!(event, InputEvent::Blur) {
+            if this.switching_input {
+                this.switching_input = false;
+                return;
             }
 
-            if matches!(event, gpui_component::input::InputEvent::Blur) {
-                if this.switching_input {
-                    this.switching_input = false;
-                    return;
-                }
-
-                cx.emit(SectionFocusEvent::RequestFocusReturn);
-            }
-        },
-    )
+            cx.emit(SectionFocusEvent::RequestFocusReturn);
+        }
+    })
 }
 
 impl HooksSection {
@@ -647,6 +643,14 @@ impl SettingsSection for HooksSection {
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_hook_changes(cx)
     }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_hook_footer_actions(cx))
+    }
 }
 
 impl EventEmitter<SectionFocusEvent> for HooksSection {}
@@ -660,6 +664,10 @@ impl Render for HooksSection {
 
         div()
             .size_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
             .child(self.render_hooks_section(cx))
             .when(show_hook_delete, |element| {
                 let entity = cx.entity().clone();

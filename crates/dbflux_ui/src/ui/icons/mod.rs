@@ -8,7 +8,7 @@ use dbflux_core::Icon;
 ///
 /// Usage:
 /// ```rust,ignore
-/// svg().path(AppIcon::Folder.path()).size_4().text_color(theme.foreground)
+/// Icon::new(AppIcon::Folder).size_4().color(theme.foreground)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -43,9 +43,13 @@ pub enum AppIcon {
     EyeOff,
     Loader,
     Info,
+    Check,
     CircleAlert,
     CircleCheck,
+    CircleX,
     TriangleAlert,
+    ExternalLink,
+    Globe,
     Code,
     Table,
     Columns,
@@ -89,6 +93,9 @@ pub enum AppIcon {
 
     // Database generic
     Database,
+
+    // Generic non-database data sources
+    Logs,
 
     // Database brands (SimpleIcons)
     BrandPostgres,
@@ -138,9 +145,13 @@ impl AppIcon {
             Self::EyeOff => "icons/ui/eye-off.svg",
             Self::Loader => "icons/ui/loader.svg",
             Self::Info => "icons/ui/info.svg",
+            Self::Check => "icons/ui/check.svg",
             Self::CircleAlert => "icons/ui/circle-alert.svg",
             Self::CircleCheck => "icons/ui/circle-check.svg",
+            Self::CircleX => "icons/ui/circle-x.svg",
             Self::TriangleAlert => "icons/ui/triangle-alert.svg",
+            Self::ExternalLink => "icons/ui/external-link.svg",
+            Self::Globe => "icons/ui/globe.svg",
             Self::Code => "icons/ui/code.svg",
             Self::Table => "icons/ui/table.svg",
             Self::Columns => "icons/ui/columns.svg",
@@ -176,6 +187,7 @@ impl AppIcon {
             Self::Braces => "icons/ui/braces.svg",
             Self::SquareTerminal => "icons/ui/square-terminal.svg",
             Self::Database => "icons/ui/database.svg",
+            Self::Logs => "icons/ui/logs.svg",
             Self::BrandPostgres => "icons/brand/postgresql.svg",
             Self::BrandMysql => "icons/brand/mysql.svg",
             Self::BrandMariadb => "icons/brand/mariadb.svg",
@@ -232,6 +244,12 @@ impl AppIcon {
             Self::CircleCheck => {
                 include_bytes!("../../../../../resources/icons/ui/circle-check.svg")
             }
+            Self::CircleX => include_bytes!("../../../../../resources/icons/ui/circle-x.svg"),
+            Self::Check => include_bytes!("../../../../../resources/icons/ui/check.svg"),
+            Self::ExternalLink => {
+                include_bytes!("../../../../../resources/icons/ui/external-link.svg")
+            }
+            Self::Globe => include_bytes!("../../../../../resources/icons/ui/globe.svg"),
             Self::TriangleAlert => {
                 include_bytes!("../../../../../resources/icons/ui/triangle-alert.svg")
             }
@@ -286,6 +304,7 @@ impl AppIcon {
                 include_bytes!("../../../../../resources/icons/ui/square-terminal.svg")
             }
             Self::Database => include_bytes!("../../../../../resources/icons/ui/database.svg"),
+            Self::Logs => include_bytes!("../../../../../resources/icons/ui/logs.svg"),
             Self::BrandPostgres => {
                 include_bytes!("../../../../../resources/icons/brand/postgresql.svg")
             }
@@ -330,7 +349,11 @@ impl AppIcon {
             QueryLanguage::MongoQuery => Self::BrandMongodb,
             QueryLanguage::RedisCommands => Self::BrandRedis,
             QueryLanguage::InfluxQuery => Self::BrandInfluxDb,
-            QueryLanguage::Sql | QueryLanguage::Cql => Self::Database,
+            QueryLanguage::Sql
+            | QueryLanguage::CloudWatchLogsInsightsQl
+            | QueryLanguage::OpenSearchPpl
+            | QueryLanguage::OpenSearchSql
+            | QueryLanguage::Cql => Self::Database,
             QueryLanguage::Cypher => Self::Database,
             QueryLanguage::Custom(_) => Self::FileCode,
         }
@@ -346,6 +369,7 @@ impl AppIcon {
             Icon::Mongodb => Self::BrandMongodb,
             Icon::Redis => Self::BrandRedis,
             Icon::Dynamodb => Self::Database,
+            Icon::Logs => Self::Logs,
             Icon::Database => Self::Database,
         }
     }
@@ -377,9 +401,13 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::EyeOff,
     AppIcon::Loader,
     AppIcon::Info,
+    AppIcon::Check,
     AppIcon::CircleAlert,
     AppIcon::CircleCheck,
+    AppIcon::CircleX,
     AppIcon::TriangleAlert,
+    AppIcon::ExternalLink,
+    AppIcon::Globe,
     AppIcon::Code,
     AppIcon::Table,
     AppIcon::Columns,
@@ -415,6 +443,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Braces,
     AppIcon::SquareTerminal,
     AppIcon::Database,
+    AppIcon::Logs,
     AppIcon::BrainCircuit,
     AppIcon::Bot,
     AppIcon::BrandPostgres,
@@ -434,5 +463,11 @@ pub const ALL_ICONS: &[AppIcon] = &[
 impl From<AppIcon> for IconSource {
     fn from(icon: AppIcon) -> Self {
         IconSource::Svg(icon.path().into())
+    }
+}
+
+impl From<AppIcon> for gpui_component::Icon {
+    fn from(icon: AppIcon) -> Self {
+        gpui_component::Icon::default().path(icon.path())
     }
 }

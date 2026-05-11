@@ -264,10 +264,6 @@ impl Render for MultiSelect {
             .w_full()
             .flex()
             .flex_col()
-            .rounded(px(4.0))
-            .border_2()
-            .border_color(gpui::transparent_black())
-            .p(px(2.0))
             .child(trigger)
             .child(self.render_menu(cx));
 

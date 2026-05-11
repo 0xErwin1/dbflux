@@ -5,17 +5,21 @@ use super::form_section::FormSection;
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
+use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Label};
+use dbflux_components::typography::{
+    Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel,
+};
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::InputEvent;
 
 const CAPABILITY_CATALOG: &[(DriverCapabilities, &str)] = &[
     (DriverCapabilities::MULTIPLE_DATABASES, "Multiple Databases"),
@@ -80,6 +84,14 @@ fn bool_override_index(value: Option<bool>) -> usize {
         Some(true) => 1,
         Some(false) => 2,
     }
+}
+
+fn driver_entry_name_text(text: impl Into<SharedString>) -> MonoLabel {
+    MonoLabel::new(text)
+}
+
+fn driver_entry_key_text(text: impl Into<SharedString>) -> MonoMeta {
+    MonoMeta::new(text)
 }
 
 impl DriversSection {
@@ -578,11 +590,15 @@ impl DriversSection {
         Ok(())
     }
 
-    pub(super) fn save_driver_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn save_driver_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.drv_editor_dirty
             && let Err(message) = self.drv_sync_selected_editor(cx, true)
         {
-            cx.toast_error(message, window);
+            let toast_msg = message.to_string();
+            Toast::error(toast_msg.clone())
+                .meta_right(now_hms())
+                .action(copy_action(toast_msg))
+                .push(cx);
             return;
         }
 
@@ -597,7 +613,12 @@ impl DriversSection {
             &self.drv_settings,
         ) {
             log::error!("Failed to save driver settings to SQLite: {}", e);
-            cx.toast_error(format!("Failed to save: {}", e), window);
+            let toast_body = e.to_string();
+            Toast::error("Failed to save")
+                .meta_right(now_hms())
+                .body(toast_body.clone())
+                .action(copy_action(format!("Failed to save: {}", toast_body)))
+                .push(cx);
             return;
         }
 
@@ -645,46 +666,32 @@ impl DriversSection {
         }
 
         if all_warnings.is_empty() {
-            cx.toast_success("Driver settings saved.", window);
+            Toast::success("Driver settings saved.")
+                .meta_right(now_hms())
+                .push(cx);
         } else {
-            cx.toast_warning(
-                format!(
-                    "Driver settings saved with warnings:\n{}",
-                    all_warnings.join("\n")
-                ),
-                window,
-            );
+            let body = all_warnings.join("\n");
+            Toast::warning("Driver settings saved with warnings")
+                .meta_right(now_hms())
+                .body(body)
+                .collapsible()
+                .push(cx);
         }
     }
 
     pub(super) fn render_drivers_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        layout::section_container(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .child(layout::section_header(
-                    "Drivers",
-                    "Configure per-driver overrides and driver-defined settings",
-                    theme,
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .overflow_hidden()
-                        .child(self.render_driver_list(cx))
-                        .child(self.render_driver_editor(cx)),
-                ),
-        )
+        layout::section_container(layout::split_section_shell(
+            dbflux_components::composites::section_header(
+                "Drivers",
+                "Configure per-driver overrides and driver-defined settings",
+                cx,
+            ),
+            self.render_driver_list(cx),
+            self.render_driver_editor(cx),
+        ))
     }
 
-    fn render_driver_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_driver_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let list_focused = self.content_focused && self.drv_focus == DriversFocus::List;
 
@@ -713,7 +720,9 @@ impl DriversSection {
                     .flex_col()
                     .gap_1()
                     .when(self.drv_entries.is_empty(), |d| {
-                        d.child(div().p_3().child(Text::muted("No registered drivers")))
+                        d.child(div().p_3().child(
+                            Body::new("No registered drivers").color(theme.muted_foreground),
+                        ))
                     })
                     .children(self.drv_entries.iter().enumerate().map(|(idx, entry)| {
                         let selected = self.drv_selected_idx == Some(idx);
@@ -726,7 +735,8 @@ impl DriversSection {
                             )))
                             .px_3()
                             .py_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
+                            .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if focused {
@@ -745,20 +755,29 @@ impl DriversSection {
                                     .items_start()
                                     .gap_2()
                                     .child(
-                                        svg()
-                                            .path(AppIcon::from_icon(entry.metadata.icon).path())
-                                            .size_4()
-                                            .mt(px(2.0))
-                                            .text_color(theme.muted_foreground),
+                                        div().mt(px(2.0)).child(
+                                            Icon::new(AppIcon::from_icon(entry.metadata.icon))
+                                                .size(px(16.0))
+                                                .muted(),
+                                        ),
                                     )
                                     .child(
                                         div()
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(Label::new(entry.metadata.display_name.clone()))
-                                            .child(Text::caption(entry.driver_key.clone())),
-                                    ),
+                                            .flex_1()
+                                            .child(driver_entry_name_text(
+                                                entry.metadata.display_name.clone(),
+                                            ))
+                                            .child(driver_entry_key_text(entry.driver_key.clone())),
+                                    )
+                                    .when_some(entry.metadata.deployment_class, |row, class| {
+                                        row.child(Badge::new(
+                                            class.display_name().to_uppercase(),
+                                            BadgeVariant::Neutral,
+                                        ))
+                                    }),
                             )
                     })),
             )
@@ -773,7 +792,10 @@ impl DriversSection {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(Text::muted("Select a driver to configure settings"));
+                .child(
+                    Body::new("Select a driver to configure settings")
+                        .color(theme.muted_foreground),
+                );
         };
 
         let global = &self.gen_settings;
@@ -789,19 +811,21 @@ impl DriversSection {
                     .items_start()
                     .gap_3()
                     .child(
-                        svg()
-                            .path(AppIcon::from_icon(entry.metadata.icon).path())
-                            .size_8()
-                            .text_color(theme.foreground),
+                        Icon::new(AppIcon::from_icon(entry.metadata.icon))
+                            .size(px(32.0))
+                            .color(theme.foreground),
                     )
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(Text::heading(entry.metadata.display_name.clone()))
-                            .child(Text::caption(entry.driver_key.clone()))
-                            .child(Text::caption(entry.metadata.description.clone())),
+                            .child(PanelTitle::new(entry.metadata.display_name.clone()))
+                            .child(MonoMeta::new(entry.driver_key.clone()))
+                            .child(
+                                Body::new(entry.metadata.description.clone())
+                                    .color(theme.muted_foreground),
+                            ),
                     ),
             )
             .child(
@@ -810,52 +834,54 @@ impl DriversSection {
                     .gap_2()
                     .child(
                         div()
-                            .text_xs()
                             .px_2()
                             .py_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .bg(theme.secondary)
-                            .child(entry.metadata.category.display_name()),
+                            .child(MonoCaption::new(entry.metadata.category.display_name())),
                     )
                     .child(
                         div()
-                            .text_xs()
                             .px_2()
                             .py_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .bg(theme.secondary)
-                            .child(entry.metadata.query_language.display_name().to_string()),
+                            .child(MonoCaption::new(
+                                entry.metadata.query_language.display_name().to_string(),
+                            )),
                     ),
             );
 
         let body = div()
+            .flex()
+            .flex_col()
+            .gap_5()
             .child(self.render_capabilities(entry, cx))
             .child(self.render_global_overrides(global, cx))
             .child(self.render_driver_schema(entry, cx));
 
-        let footer = {
-            let editor_focused = self.content_focused && self.drv_focus == DriversFocus::Editor;
-            div()
-                .rounded(px(4.0))
-                .border_1()
-                .border_color(
-                    if editor_focused && self.drv_editor_field == DriverEditorField::Save {
-                        theme.primary
-                    } else {
-                        gpui::transparent_black()
-                    },
-                )
-                .child(
-                    Button::new("save-driver-settings", "Save")
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.save_driver_settings(window, cx);
-                        })),
-                )
-        };
+        layout::sticky_form_shell(header, body, None, &theme)
+    }
 
-        layout::sticky_form_shell(header, body, footer, &theme)
+    pub(super) fn render_driver_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let editor_focused = self.content_focused && self.drv_focus == DriversFocus::Editor;
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(layout::footer_action_frame(
+                editor_focused && self.drv_editor_field == DriverEditorField::Save,
+                cx.theme().primary,
+                Button::new("save-driver-settings", "Save")
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_driver_settings(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     fn render_capabilities(
@@ -871,7 +897,7 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Text::heading("Capabilities"))
+            .child(FieldLabel::new("Capabilities"))
             .child(
                 div().flex().flex_wrap().gap_2().children(
                     CAPABILITY_CATALOG
@@ -882,7 +908,7 @@ impl DriversSection {
                             div()
                                 .px_2()
                                 .py_1()
-                                .rounded(px(4.0))
+                                .rounded(Radii::SM)
                                 .border_1()
                                 .border_color(theme.border)
                                 .bg(if supported {
@@ -890,8 +916,11 @@ impl DriversSection {
                                 } else {
                                     gpui::transparent_black()
                                 })
-                                .text_xs()
-                                .child(format!("{} {}", if supported { "✓" } else { "-" }, label))
+                                .child(Body::new(format!(
+                                    "{} {}",
+                                    if supported { "✓" } else { "-" },
+                                    label
+                                )))
                         }),
                 ),
             )
@@ -909,10 +938,11 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_3()
-            .child(Text::heading("Global Overrides"))
-            .child(Text::caption(
-                "Enable override to replace the global default for this driver.",
-            ))
+            .child(FieldLabel::new("Global Overrides"))
+            .child(
+                Body::new("Enable override to replace the global default for this driver.")
+                    .color(theme.muted_foreground),
+            )
             .child(
                 div()
                     .flex()
@@ -926,7 +956,7 @@ impl DriversSection {
                             .items_center()
                             .gap_3()
                             .child(div().w(px(220.0)))
-                            .child(div().w(px(160.0)).child(Text::caption("Override Value"))),
+                            .child(div().w(px(160.0)).child(FieldLabel::new("Override Value"))),
                     )
                     .child(
                         div()
@@ -937,7 +967,7 @@ impl DriversSection {
                             .gap_3()
                             .child(
                                 div()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -982,7 +1012,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .min_w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1011,7 +1041,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_refresh_policy_dropdown.clone()),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 policy_label(global.default_refresh_policy)
                             ))),
@@ -1025,7 +1055,7 @@ impl DriversSection {
                             .gap_3()
                             .child(
                                 div()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1074,7 +1104,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1107,7 +1137,7 @@ impl DriversSection {
                                             .disabled(!self.drv_override_refresh_interval),
                                     ),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 global.default_refresh_interval_secs
                             ))),
@@ -1127,7 +1157,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1151,7 +1181,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_confirm_dangerous_dropdown.clone()),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 bool_label(global.confirm_dangerous_queries)
                             ))),
@@ -1167,7 +1197,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1191,7 +1221,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_where_dropdown.clone()),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 bool_label(global.dangerous_requires_where)
                             ))),
@@ -1207,7 +1237,7 @@ impl DriversSection {
                             .child(
                                 div()
                                     .w(px(160.0))
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(
                                         if editor_focused
@@ -1231,7 +1261,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_preview_dropdown.clone()),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "Default: {}",
                                 bool_label(global.dangerous_requires_preview)
                             ))),
@@ -1244,21 +1274,23 @@ impl DriversSection {
         entry: &DriverSettingsEntry,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let Some(schema) = &entry.settings_schema else {
             return div()
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(Text::heading("Driver Settings"))
-                .child(Text::caption("No custom settings for this driver."));
+                .child(FieldLabel::new("Driver Settings"))
+                .child(
+                    Body::new("No custom settings for this driver.")
+                        .color(cx.theme().muted_foreground),
+                );
         };
 
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(Text::heading("Driver Settings"))
+            .child(FieldLabel::new("Driver Settings"))
             .children(
                 schema
                     .tabs
@@ -1269,13 +1301,7 @@ impl DriversSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.muted_foreground)
-                                    .child(section.title.to_uppercase()),
-                            )
+                            .child(SubSectionLabel::new(section.title.to_uppercase()))
                             .children(section.fields.iter().filter_map(|field| {
                                 let enabled = form_renderer::is_field_enabled(
                                     field,
@@ -1295,7 +1321,7 @@ impl DriversSection {
                                             div()
                                                 .px_2()
                                                 .py_1()
-                                                .rounded(px(4.0))
+                                                .rounded(Radii::SM)
                                                 .opacity(if enabled { 1.0 } else { 0.6 })
                                                 .child(
                                                     Checkbox::new(SharedString::from(format!(
@@ -1355,5 +1381,37 @@ impl DriversSection {
                             }))
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{driver_entry_key_text, driver_entry_name_text};
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::{AppFonts, MonoColorSelection, MonoDefaultColor};
+
+    #[test]
+    fn driver_list_preserves_prominent_names_and_deemphasized_keys() {
+        let name = driver_entry_name_text("PostgreSQL").inspect();
+        let key = driver_entry_key_text("postgres").inspect();
+
+        assert_eq!(name.family, Some(AppFonts::MONO));
+        assert_eq!(name.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(name.size_override, Some(FontSizes::BASE));
+        assert_eq!(name.weight_override, None);
+        assert_eq!(
+            name.color_selection,
+            MonoColorSelection::RoleDefault(MonoDefaultColor::Foreground)
+        );
+        assert!(name.uses_role_default_color);
+        assert!(!name.has_custom_color_override);
+
+        assert_eq!(key.family, Some(AppFonts::MONO));
+        assert_eq!(key.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(key.size_override, Some(FontSizes::SM));
+        assert_eq!(key.weight_override, None);
+        assert_eq!(key.color_selection, MonoColorSelection::MutedForeground);
+        assert!(key.uses_muted_foreground_override);
+        assert!(!key.has_custom_color_override);
     }
 }

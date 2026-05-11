@@ -27,3 +27,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 dbflux_test_support.workspace = true
+
+[lints]
+workspace = true

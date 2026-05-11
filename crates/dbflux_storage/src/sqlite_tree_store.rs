@@ -4,7 +4,7 @@
 use crate::error::StorageError;
 use crate::repositories::connection_folders::ConnectionFoldersRepository;
 use crate::sqlite;
-use dbflux_core::{ConnectionTree, DbError, TreeStore};
+use dbflux_core::{ConnectionTree, DbError, TreeLoadResult, TreeStore};
 use std::path::PathBuf;
 
 /// SQLite-backed tree store for connection tree persistence.
@@ -37,7 +37,7 @@ impl SqliteTreeStore {
 }
 
 impl TreeStore for SqliteTreeStore {
-    fn load(&self) -> Result<ConnectionTree, DbError> {
+    fn load(&self) -> Result<TreeLoadResult, DbError> {
         self.with_repo(|repo| repo.load_tree()).map_err(Into::into)
     }
 

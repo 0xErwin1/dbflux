@@ -1,6 +1,7 @@
 use super::*;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
 use crate::ui::components::tree_nav::TreeNavAction;
+use auth_profiles_section::AuthProfilesSectionEvent;
 use section_trait::SectionFocusEvent;
 
 impl SettingsCoordinator {
@@ -129,15 +130,37 @@ impl SettingsCoordinator {
             }
             SettingsSectionId::AuthProfiles => {
                 let section = cx.new(|cx| AuthProfilesSection::new(app_state, window, cx));
+
                 let focus_sub = cx.subscribe(&section, |this, _, event: &SectionFocusEvent, cx| {
                     if matches!(event, SectionFocusEvent::RequestFocusReturn) {
                         this.pending_focus_return = true;
                         cx.notify();
                     }
                 });
+
+                // Forward login-URL events from the auth profiles section up to
+                // the workspace, which owns the login modal.
+                let login_sub =
+                    cx.subscribe(&section, |this, _, event: &AuthProfilesSectionEvent, cx| {
+                        match event {
+                            AuthProfilesSectionEvent::OpenLoginModal {
+                                provider_name,
+                                profile_name,
+                                url,
+                            } => {
+                                cx.emit(SettingsEvent::OpenLoginModal {
+                                    provider_name: provider_name.clone(),
+                                    profile_name: profile_name.clone(),
+                                    url: url.clone(),
+                                });
+                                let _ = this;
+                            }
+                        }
+                    });
+
                 (
                     ActiveSettingsSection::AuthProfiles(section),
-                    vec![focus_sub],
+                    vec![focus_sub, login_sub],
                 )
             }
             SettingsSectionId::SshTunnels => {

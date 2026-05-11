@@ -8,7 +8,7 @@ use dbflux_core::{
     AccessKind, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionMcpGovernance,
     ConnectionMcpPolicyBinding, ConnectionProfile, DbKind, DriverKey, FormValues, GeneralSettings,
     GlobalOverrides, HookExecutionMode, HookFailureMode, HookKind, HookPhase, ProxyProfile,
-    ScriptLanguage, ScriptSource, ServiceConfig, SshTunnelProfile, ValueRef,
+    RpcServiceKind, ScriptLanguage, ScriptSource, ServiceConfig, SshTunnelProfile, ValueRef,
 };
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::repositories::connection_driver_configs::ConnectionDriverConfigDto;
@@ -32,10 +32,7 @@ pub fn save_general_settings(
     let repo = runtime.general_settings();
     let dto = GeneralSettingsDto {
         id: 1,
-        theme: match settings.theme {
-            dbflux_core::ThemeSetting::Light => "light".to_string(),
-            dbflux_core::ThemeSetting::Dark => "dark".to_string(),
-        },
+        theme: general_settings_theme_to_storage(settings.theme).to_string(),
         restore_session_on_startup: if settings.restore_session_on_startup {
             1
         } else {
@@ -82,6 +79,10 @@ pub fn save_general_settings(
             1
         } else {
             0
+        },
+        style: match settings.style {
+            dbflux_core::AppStyle::Default => "default".to_string(),
+            dbflux_core::AppStyle::Compact => "compact".to_string(),
         },
         updated_at: String::new(),
     };
@@ -244,11 +245,18 @@ pub fn save_services(
 
     // Upsert all services that are in the desired state.
     for svc in services {
+        let api_contract = svc.api_contract.clone();
         let dto = dbflux_storage::repositories::services::ServiceDto {
             socket_id: svc.socket_id.clone(),
             enabled: svc.enabled,
             command: svc.command.clone(),
             startup_timeout_ms: svc.startup_timeout_ms.map(|v| v as i64),
+            service_kind: rpc_service_kind_to_storage(svc.kind).to_string(),
+            api_family: api_contract
+                .as_ref()
+                .map(|contract| contract.family.clone()),
+            api_major: api_contract.as_ref().map(|contract| contract.major as i64),
+            api_minor: api_contract.as_ref().map(|contract| contract.minor as i64),
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -416,6 +424,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::MongoDB => "MongoDB",
         DbKind::Redis => "Redis",
         DbKind::DynamoDB => "DynamoDB",
+        DbKind::CloudWatchLogs => "CloudWatchLogs",
     }
     .to_string()
 }
@@ -429,6 +438,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "MongoDB" => Some(DbKind::MongoDB),
         "Redis" => Some(DbKind::Redis),
         "DynamoDB" => Some(DbKind::DynamoDB),
+        "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
         _ => None,
     }
 }
@@ -441,6 +451,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::MongoDB => dbflux_core::DbConfig::default_mongodb(),
         DbKind::Redis => dbflux_core::DbConfig::default_redis(),
         DbKind::DynamoDB => dbflux_core::DbConfig::default_dynamodb(),
+        DbKind::CloudWatchLogs => dbflux_core::DbConfig::default_cloudwatch_logs(),
         _ => dbflux_core::DbConfig::default_postgres(),
     }
 }
@@ -893,15 +904,13 @@ pub fn load_config(runtime: &StorageRuntime) -> LoadedConfig {
     let proxy_repo = runtime.proxy_profiles();
     let ssh_repo = runtime.ssh_tunnels();
     let hooks_repo = runtime.hook_definitions();
-    let services_repo = runtime.services();
-
     let general_settings = load_general_settings(&runtime.general_settings());
     let (driver_overrides, driver_settings) = load_driver_maps(
         &runtime.driver_overrides(),
         &runtime.driver_setting_values(),
     );
     let hook_definitions = load_hook_definitions(&hooks_repo);
-    let services = load_services(&services_repo);
+    let services = dbflux_storage::load_service_configs(runtime);
     let profiles = load_profiles(&profiles_repo);
     let auth_profiles = load_auth_profiles(&auth_repo);
     let proxy_profiles = load_proxy_profiles(&proxy_repo, &proxy_repo.auth_repo());
@@ -940,10 +949,8 @@ fn load_general_settings(
     };
 
     GeneralSettings {
-        theme: match dto.theme.as_str() {
-            "light" => dbflux_core::ThemeSetting::Light,
-            _ => dbflux_core::ThemeSetting::Dark,
-        },
+        theme: theme_setting_from_storage(&dto.theme),
+        style: app_style_from_storage(&dto.style),
         restore_session_on_startup: dto.restore_session_on_startup != 0,
         reopen_last_connections: dto.reopen_last_connections != 0,
         default_focus_on_startup: match dto.default_focus_on_startup.as_str() {
@@ -963,6 +970,33 @@ fn load_general_settings(
         confirm_dangerous_queries: dto.confirm_dangerous_queries != 0,
         dangerous_requires_where: dto.dangerous_requires_where != 0,
         dangerous_requires_preview: dto.dangerous_requires_preview != 0,
+    }
+}
+
+fn general_settings_theme_to_storage(theme: dbflux_core::ThemeSetting) -> &'static str {
+    match theme {
+        dbflux_core::ThemeSetting::Dark => "dark",
+        dbflux_core::ThemeSetting::Mirage => "mirage",
+        dbflux_core::ThemeSetting::Light => "light",
+    }
+}
+
+fn theme_setting_from_storage(theme: &str) -> dbflux_core::ThemeSetting {
+    match theme {
+        "light" => dbflux_core::ThemeSetting::Light,
+        "mirage" => dbflux_core::ThemeSetting::Mirage,
+        _ => dbflux_core::ThemeSetting::Dark,
+    }
+}
+
+/// Maps a storage `style` string to `AppStyle`.
+///
+/// Unknown values (including future variants from a newer binary) fall back to
+/// `AppStyle::Default` so the user always gets a usable UI.
+fn app_style_from_storage(style: &str) -> dbflux_core::AppStyle {
+    match style {
+        "compact" => dbflux_core::AppStyle::Compact,
+        _ => dbflux_core::AppStyle::Default,
     }
 }
 
@@ -1075,28 +1109,10 @@ fn load_hook_definitions(
 // Services helpers
 // ---------------------------------------------------------------------------
 
-fn load_services(
-    repo: &dbflux_storage::repositories::services::ServiceRepository,
-) -> Vec<ServiceConfig> {
-    if let Ok(entries) = repo.all() {
-        entries
-            .into_iter()
-            .map(|dto| {
-                let args = repo.get_args(&dto.socket_id).unwrap_or_default();
-                let env = repo.get_env(&dto.socket_id).unwrap_or_default();
-
-                ServiceConfig {
-                    socket_id: dto.socket_id,
-                    enabled: dto.enabled,
-                    command: dto.command,
-                    args,
-                    env,
-                    startup_timeout_ms: dto.startup_timeout_ms.map(|v| v as u64),
-                }
-            })
-            .collect()
-    } else {
-        Vec::new()
+fn rpc_service_kind_to_storage(kind: RpcServiceKind) -> &'static str {
+    match kind {
+        RpcServiceKind::Driver => "driver",
+        RpcServiceKind::AuthProvider => "auth_provider",
     }
 }
 
@@ -1596,12 +1612,180 @@ fn load_ssh_tunnels(
 
 #[cfg(test)]
 mod tests {
-    use super::{load_config, save_profiles, save_ssh_tunnels};
+    use super::{
+        general_settings_theme_to_storage, load_config, save_profiles, save_services,
+        save_ssh_tunnels, theme_setting_from_storage,
+    };
     use dbflux_core::{
-        AccessKind, ConnectionProfile, DbConfig, SshAuthMethod, SshTunnelConfig, SshTunnelProfile,
+        AccessKind, ConnectionProfile, DbConfig, GeneralSettings, RpcServiceKind, ServiceConfig,
+        SshAuthMethod, SshTunnelConfig, SshTunnelProfile, ThemeSetting,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
     use uuid::Uuid;
+
+    #[test]
+    fn theme_setting_storage_round_trip_supports_exactly_three_ayu_values() {
+        assert_eq!(
+            general_settings_theme_to_storage(ThemeSetting::Dark),
+            "dark"
+        );
+        assert_eq!(
+            general_settings_theme_to_storage(ThemeSetting::Mirage),
+            "mirage"
+        );
+        assert_eq!(
+            general_settings_theme_to_storage(ThemeSetting::Light),
+            "light"
+        );
+
+        assert_eq!(theme_setting_from_storage("dark"), ThemeSetting::Dark);
+        assert_eq!(theme_setting_from_storage("mirage"), ThemeSetting::Mirage);
+        assert_eq!(theme_setting_from_storage("light"), ThemeSetting::Light);
+    }
+
+    #[test]
+    fn invalid_theme_storage_value_falls_back_to_dark_without_touching_other_settings() {
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "twilight".to_string(),
+            restore_session_on_startup: 0,
+            reopen_last_connections: 1,
+            default_focus_on_startup: "last_tab".to_string(),
+            max_history_entries: 222,
+            auto_save_interval_ms: 999,
+            default_refresh_policy: "interval".to_string(),
+            default_refresh_interval_secs: 15,
+            max_concurrent_background_tasks: 4,
+            auto_refresh_pause_on_error: 0,
+            auto_refresh_only_if_visible: 1,
+            confirm_dangerous_queries: 0,
+            dangerous_requires_where: 0,
+            dangerous_requires_preview: 1,
+            style: "default".to_string(),
+            updated_at: String::new(),
+        };
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("save general settings dto");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.general_settings.theme, ThemeSetting::Dark);
+        assert_eq!(loaded.general_settings.restore_session_on_startup, false);
+        assert_eq!(loaded.general_settings.reopen_last_connections, true);
+        assert_eq!(
+            loaded.general_settings.default_focus_on_startup,
+            dbflux_core::StartupFocus::LastTab
+        );
+        assert_eq!(loaded.general_settings.max_history_entries, 222);
+        assert_eq!(loaded.general_settings.auto_save_interval_ms, 999);
+        assert_eq!(
+            loaded.general_settings.default_refresh_policy,
+            dbflux_core::RefreshPolicySetting::Interval
+        );
+        assert_eq!(loaded.general_settings.default_refresh_interval_secs, 15);
+        assert_eq!(loaded.general_settings.max_concurrent_background_tasks, 4);
+        assert_eq!(loaded.general_settings.auto_refresh_pause_on_error, false);
+        assert_eq!(loaded.general_settings.auto_refresh_only_if_visible, true);
+        assert_eq!(loaded.general_settings.confirm_dangerous_queries, false);
+        assert_eq!(loaded.general_settings.dangerous_requires_where, false);
+        assert_eq!(loaded.general_settings.dangerous_requires_preview, true);
+    }
+
+    #[test]
+    fn save_general_settings_persists_mirage_without_mutating_fonts_or_other_fields() {
+        let mut settings = GeneralSettings::default();
+        settings.theme = ThemeSetting::Mirage;
+        settings.max_history_entries = 77;
+        settings.auto_save_interval_ms = 1234;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        super::save_general_settings(&runtime, &settings).expect("save general settings");
+
+        let dto = runtime
+            .general_settings()
+            .get()
+            .expect("load saved dto")
+            .expect("general settings row");
+
+        assert_eq!(dto.theme, "mirage");
+        assert_eq!(dto.max_history_entries, 77);
+        assert_eq!(dto.auto_save_interval_ms, 1234);
+    }
+
+    #[test]
+    fn app_style_round_trips_through_save_and_load() {
+        use dbflux_core::AppStyle;
+
+        // Compact round-trip
+        let mut settings = GeneralSettings::default();
+        settings.style = AppStyle::Compact;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        super::save_general_settings(&runtime, &settings).expect("save compact style");
+
+        let loaded = load_config(&runtime);
+        assert_eq!(
+            loaded.general_settings.style,
+            AppStyle::Compact,
+            "compact style should survive save/load"
+        );
+
+        // Default round-trip
+        settings.style = AppStyle::Default;
+        super::save_general_settings(&runtime, &settings).expect("save default style");
+
+        let loaded = load_config(&runtime);
+        assert_eq!(
+            loaded.general_settings.style,
+            AppStyle::Default,
+            "default style should survive save/load"
+        );
+    }
+
+    #[test]
+    fn unknown_style_string_in_db_falls_back_to_default() {
+        use dbflux_core::AppStyle;
+
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        // Directly write an unknown style value into the DB.
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "ultracompact".to_string(), // unknown value
+            updated_at: String::new(),
+        };
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("upsert with unknown style");
+
+        let loaded = load_config(&runtime);
+        assert_eq!(
+            loaded.general_settings.style,
+            AppStyle::Default,
+            "unknown style string should fall back to Default"
+        );
+    }
 
     #[test]
     fn save_and_reload_preserves_ssh_tunnel_profile_reference() {
@@ -1671,5 +1855,141 @@ mod tests {
             }
             other => panic!("expected postgres config, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn load_config_defaults_legacy_service_rows_to_driver_kind() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+
+        conn.execute(
+            "INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms) VALUES (?1, ?2, ?3, ?4)",
+            [
+                "legacy-socket",
+                "1",
+                "dbflux-driver-host",
+                "5000",
+            ],
+        )
+            .expect("insert legacy service row");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].socket_id, "legacy-socket");
+        assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
+    }
+
+    #[test]
+    fn save_services_persists_service_kind_for_roundtrip() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let services = vec![ServiceConfig {
+            socket_id: "auth-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-driver-host".to_string()),
+            args: vec!["--stdio".to_string()],
+            env: std::collections::HashMap::new(),
+            startup_timeout_ms: Some(5_000),
+            kind: RpcServiceKind::AuthProvider,
+            api_contract: Some(dbflux_core::ServiceRpcApiContract::new(
+                "auth_provider_rpc",
+                1,
+                0,
+            )),
+        }];
+
+        save_services(&runtime, &services).expect("save services");
+
+        let dto = runtime
+            .services()
+            .get("auth-socket")
+            .expect("load service dto")
+            .expect("service row");
+
+        assert_eq!(dto.service_kind, "auth_provider");
+        assert_eq!(dto.api_family.as_deref(), Some("auth_provider_rpc"));
+        assert_eq!(dto.api_major, Some(1));
+        assert_eq!(dto.api_minor, Some(0));
+
+        let loaded = load_config(&runtime);
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].kind, RpcServiceKind::AuthProvider);
+        assert_eq!(
+            loaded.services[0].resolved_api_contract(),
+            dbflux_core::ServiceRpcApiContract::new("auth_provider_rpc", 1, 0)
+        );
+    }
+
+    #[test]
+    fn load_config_defaults_unknown_service_kind_to_driver() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+
+        conn.execute(
+            "INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms, service_kind) VALUES (?1, ?2, ?3, ?4, ?5)",
+            [
+                "unknown-socket",
+                "1",
+                "dbflux-driver-host",
+                "5000",
+                "mystery_kind",
+            ],
+        )
+        .expect("insert unknown-kind service row");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].kind, RpcServiceKind::Driver);
+    }
+
+    #[test]
+    fn load_config_defaults_missing_api_contract_to_driver_rpc_baseline() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+
+        conn.execute(
+            "INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms, service_kind) VALUES (?1, ?2, ?3, ?4, ?5)",
+            [
+                "driver-socket",
+                "1",
+                "dbflux-driver-host",
+                "5000",
+                "driver",
+            ],
+        )
+        .expect("insert driver service row");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(
+            loaded.services[0].resolved_api_contract(),
+            dbflux_core::ServiceRpcApiContract::new("driver_rpc", 1, 1)
+        );
+    }
+
+    #[test]
+    fn load_config_ignores_out_of_range_api_contract_versions() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let conn = runtime.open_dbflux_db().expect("open runtime database");
+
+        conn.execute(
+            &format!(
+                "INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms, service_kind, api_family, api_major, api_minor) VALUES ('driver-socket', 1, 'dbflux-driver-host', 5000, 'driver', 'driver_rpc', {}, -1)",
+                i64::from(u16::MAX) + 1,
+            ),
+            [],
+        )
+        .expect("insert malformed api contract row");
+
+        let loaded = load_config(&runtime);
+
+        assert_eq!(loaded.services.len(), 1);
+        assert_eq!(loaded.services[0].api_contract, None);
+        assert_eq!(
+            loaded.services[0].resolved_api_contract(),
+            dbflux_core::ServiceRpcApiContract::new("driver_rpc", 1, 1)
+        );
     }
 }

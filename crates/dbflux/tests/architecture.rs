@@ -28,6 +28,10 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn read_workspace_file(relative_path: &str) -> String {
+    fs::read_to_string(workspace_root().join(relative_path)).expect("workspace file")
+}
+
 #[test]
 fn ui_does_not_compare_driver_id_directly() {
     let ui_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ui");
@@ -134,4 +138,58 @@ fn postgres_config_pattern_is_confined_to_core_and_driver() {
         "Found postgres config variant outside allowed modules: {:?}",
         violations
     );
+}
+
+#[test]
+fn external_driver_docs_use_only_canonical_services_key() {
+    let docs = [
+        read_workspace_file("docs/RPC_SERVICES_CONFIG.md"),
+        read_workspace_file("docs/DRIVER_RPC_PROTOCOL.md"),
+        read_workspace_file("examples/custom_driver/README.md"),
+        read_workspace_file("examples/custom_auth_provider/README.md"),
+    ];
+
+    for content in docs {
+        assert!(!content.contains("rpc_services"));
+        assert!(!content.contains("config.json"));
+    }
+}
+
+#[test]
+fn custom_driver_example_json_was_removed() {
+    assert!(
+        !workspace_root()
+            .join("examples/custom_driver/config.example.json")
+            .exists(),
+        "legacy JSON example must not exist"
+    );
+}
+
+#[test]
+fn custom_driver_readme_points_to_settings_backed_rpc_services_flow() {
+    let readme = read_workspace_file("examples/custom_driver/README.md");
+
+    assert!(readme.contains("Settings → RPC Services"));
+    assert!(!readme.contains("config.json"));
+}
+
+#[test]
+fn custom_driver_module_docs_match_manual_and_managed_launch_contract() {
+    let source = read_workspace_file("examples/custom_driver/src/main.rs");
+
+    assert!(source.contains("Settings → RPC Services"));
+    assert!(source.contains("leave both `command` and `args` empty"));
+}
+
+#[test]
+fn custom_auth_provider_docs_point_to_ui_only_flow() {
+    let readme = read_workspace_file("examples/custom_auth_provider/README.md");
+    let source = read_workspace_file("examples/custom_auth_provider/src/main.rs");
+
+    assert!(readme.contains("Settings → RPC Services"));
+    assert!(readme.contains("Settings → Auth Profiles"));
+    assert!(!readme.contains("config.json"));
+
+    assert!(source.contains("Settings → RPC Services"));
+    assert!(source.contains("Settings → Auth Profiles"));
 }

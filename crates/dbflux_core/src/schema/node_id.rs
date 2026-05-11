@@ -94,6 +94,18 @@ pub enum SchemaNodeId {
         database: String,
         name: String,
     },
+    CollectionChild {
+        profile_id: Uuid,
+        database: String,
+        collection: String,
+        child_id: String,
+        name: String,
+    },
+    CollectionChildrenMore {
+        profile_id: Uuid,
+        database: String,
+        collection: String,
+    },
     CustomType {
         profile_id: Uuid,
         schema: String,
@@ -200,6 +212,20 @@ pub enum SchemaNodeId {
         table: String,
     },
 
+    // Dependents disclosure (views, FK children, triggers that use a table)
+    DependentsFolder {
+        profile_id: Uuid,
+        schema: String,
+        table: String,
+    },
+    DependentItem {
+        profile_id: Uuid,
+        schema: String,
+        table: String,
+        /// The `qualified_name` of the `RelationRef`.
+        name: String,
+    },
+
     // Scripts section (not connection-bound)
     ScriptsFolder {
         path: Option<String>,
@@ -229,6 +255,8 @@ pub enum SchemaNodeKind {
     Table,
     View,
     Collection,
+    CollectionChild,
+    CollectionChildrenMore,
     CustomType,
     ColumnsFolder,
     IndexesFolder,
@@ -248,6 +276,8 @@ pub enum SchemaNodeKind {
     EnumValue,
     BaseType,
     Placeholder,
+    DependentsFolder,
+    DependentItem,
     ScriptsFolder,
     ScriptFile,
 }
@@ -274,6 +304,8 @@ impl SchemaNodeId {
             Self::Table { .. } => SchemaNodeKind::Table,
             Self::View { .. } => SchemaNodeKind::View,
             Self::Collection { .. } => SchemaNodeKind::Collection,
+            Self::CollectionChild { .. } => SchemaNodeKind::CollectionChild,
+            Self::CollectionChildrenMore { .. } => SchemaNodeKind::CollectionChildrenMore,
             Self::CustomType { .. } => SchemaNodeKind::CustomType,
             Self::ColumnsFolder { .. } => SchemaNodeKind::ColumnsFolder,
             Self::IndexesFolder { .. } => SchemaNodeKind::IndexesFolder,
@@ -293,6 +325,8 @@ impl SchemaNodeId {
             Self::EnumValue { .. } => SchemaNodeKind::EnumValue,
             Self::BaseType { .. } => SchemaNodeKind::BaseType,
             Self::Placeholder { .. } => SchemaNodeKind::Placeholder,
+            Self::DependentsFolder { .. } => SchemaNodeKind::DependentsFolder,
+            Self::DependentItem { .. } => SchemaNodeKind::DependentItem,
             Self::ScriptsFolder { .. } => SchemaNodeKind::ScriptsFolder,
             Self::ScriptFile { .. } => SchemaNodeKind::ScriptFile,
         }
@@ -319,6 +353,8 @@ impl SchemaNodeId {
             | Self::Table { profile_id, .. }
             | Self::View { profile_id, .. }
             | Self::Collection { profile_id, .. }
+            | Self::CollectionChild { profile_id, .. }
+            | Self::CollectionChildrenMore { profile_id, .. }
             | Self::CustomType { profile_id, .. }
             | Self::ColumnsFolder { profile_id, .. }
             | Self::IndexesFolder { profile_id, .. }
@@ -337,7 +373,9 @@ impl SchemaNodeId {
             | Self::CollectionIndex { profile_id, .. }
             | Self::EnumValue { profile_id, .. }
             | Self::BaseType { profile_id, .. }
-            | Self::Placeholder { profile_id, .. } => Some(*profile_id),
+            | Self::Placeholder { profile_id, .. }
+            | Self::DependentsFolder { profile_id, .. }
+            | Self::DependentItem { profile_id, .. } => Some(*profile_id),
         }
     }
 }
@@ -361,6 +399,8 @@ const P_COLLECTIONS_FOLDER: &str = "CF2";
 const P_TABLE: &str = "T";
 const P_VIEW: &str = "V";
 const P_COLLECTION: &str = "C";
+const P_COLLECTION_CHILD: &str = "CCH";
+const P_COLLECTION_CHILDREN_MORE: &str = "CCM";
 const P_CUSTOM_TYPE: &str = "Y";
 const P_COLUMNS_FOLDER: &str = "CLF";
 const P_INDEXES_FOLDER: &str = "IXF";
@@ -382,6 +422,8 @@ const P_BASE_TYPE: &str = "BT";
 const P_PLACEHOLDER: &str = "PH";
 const P_SCRIPTS_FOLDER: &str = "SCF";
 const P_SCRIPT_FILE: &str = "SCR";
+const P_DEPENDENTS_FOLDER: &str = "DEPF";
+const P_DEPENDENT_ITEM: &str = "DEP";
 
 impl fmt::Display for SchemaNodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -506,6 +548,30 @@ impl fmt::Display for SchemaNodeId {
                 name,
             } => {
                 write!(f, "{}|{}|{}|{}", P_COLLECTION, profile_id, database, name)
+            }
+            Self::CollectionChild {
+                profile_id,
+                database,
+                collection,
+                child_id,
+                name,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}|{}|{}",
+                    P_COLLECTION_CHILD, profile_id, database, collection, child_id, name
+                )
+            }
+            Self::CollectionChildrenMore {
+                profile_id,
+                database,
+                collection,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_COLLECTION_CHILDREN_MORE, profile_id, database, collection
+                )
             }
             Self::CustomType {
                 profile_id,
@@ -663,6 +729,29 @@ impl fmt::Display for SchemaNodeId {
                 table,
             } => {
                 write!(f, "{}|{}|{}|{}", P_PLACEHOLDER, profile_id, schema, table)
+            }
+            Self::DependentsFolder {
+                profile_id,
+                schema,
+                table,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_DEPENDENTS_FOLDER, profile_id, schema, table
+                )
+            }
+            Self::DependentItem {
+                profile_id,
+                schema,
+                table,
+                name,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}|{}",
+                    P_DEPENDENT_ITEM, profile_id, schema, table, name
+                )
             }
             Self::ScriptsFolder { path } => match path {
                 Some(p) => write!(f, "{}|{}", P_SCRIPTS_FOLDER, p),
@@ -888,6 +977,34 @@ impl FromStr for SchemaNodeId {
                     profile_id,
                     database,
                     name,
+                })
+            }
+
+            P_COLLECTION_CHILD => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                let collection = parts.get(3).ok_or_else(err)?.to_string();
+                let child_id = parts.get(4).ok_or_else(err)?.to_string();
+                let name = parts.get(5).ok_or_else(err)?.to_string();
+                Ok(Self::CollectionChild {
+                    profile_id,
+                    database,
+                    collection,
+                    child_id,
+                    name,
+                })
+            }
+
+            P_COLLECTION_CHILDREN_MORE => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                let collection = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::CollectionChildrenMore {
+                    profile_id,
+                    database,
+                    collection,
                 })
             }
 
@@ -1119,6 +1236,32 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_DEPENDENTS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let schema = parts.get(2).ok_or_else(err)?.to_string();
+                let table = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::DependentsFolder {
+                    profile_id,
+                    schema,
+                    table,
+                })
+            }
+
+            P_DEPENDENT_ITEM => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let schema = parts.get(2).ok_or_else(err)?.to_string();
+                let table = parts.get(3).ok_or_else(err)?.to_string();
+                let name = parts.get(4).ok_or_else(err)?.to_string();
+                Ok(Self::DependentItem {
+                    profile_id,
+                    schema,
+                    table,
+                    name,
+                })
+            }
+
             P_SCRIPT_FILE => {
                 // Path may contain pipe characters, so rejoin everything after the prefix
                 let path = parts[1..].join("|");
@@ -1142,6 +1285,8 @@ impl SchemaNodeKind {
                 | Self::Table
                 | Self::View
                 | Self::Collection
+                | Self::CollectionChild
+                | Self::CollectionChildrenMore
                 | Self::ConnectionFolder
                 | Self::Schema
                 | Self::TablesFolder
@@ -1158,6 +1303,7 @@ impl SchemaNodeKind {
                 | Self::CustomType
                 | Self::ScriptsFolder
                 | Self::ScriptFile
+                | Self::DependentsFolder
         )
     }
 
@@ -1180,13 +1326,19 @@ impl SchemaNodeKind {
                 | Self::Database
                 | Self::CustomType
                 | Self::ScriptsFolder
+                | Self::DependentsFolder
         )
     }
 
     pub fn shows_pointer_cursor(&self) -> bool {
         matches!(
             self,
-            Self::Profile | Self::Database | Self::ConnectionFolder | Self::ScriptFile
+            Self::Profile
+                | Self::Database
+                | Self::ConnectionFolder
+                | Self::CollectionChild
+                | Self::CollectionChildrenMore
+                | Self::ScriptFile
         )
     }
 }
@@ -1291,6 +1443,18 @@ mod tests {
             profile_id: uuid,
             database: "mydb".into(),
             name: "orders".into(),
+        });
+        roundtrip(SchemaNodeId::CollectionChild {
+            profile_id: uuid,
+            database: "logs".into(),
+            collection: "/aws/lambda/app".into(),
+            child_id: "stream-2026-04-25".into(),
+            name: "2026/04/25/[$LATEST]abc".into(),
+        });
+        roundtrip(SchemaNodeId::CollectionChildrenMore {
+            profile_id: uuid,
+            database: "logs".into(),
+            collection: "/aws/lambda/app".into(),
         });
         roundtrip(SchemaNodeId::CustomType {
             profile_id: uuid,

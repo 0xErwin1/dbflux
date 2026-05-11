@@ -285,6 +285,16 @@ impl TabManager {
         self.documents.iter().find(|d| d.id() == id)
     }
 
+    /// Returns `(DocumentId, summary)` for every document that reports pending changes.
+    ///
+    /// Used for dirty-dot tooltips and the unsaved-changes modal.
+    pub fn dirty_summaries(&self, cx: &App) -> Vec<(DocumentId, String)> {
+        self.documents
+            .iter()
+            .filter_map(|doc| doc.change_summary(cx).map(|summary| (doc.id(), summary)))
+            .collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.documents.is_empty()
     }

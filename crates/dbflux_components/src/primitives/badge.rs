@@ -2,7 +2,8 @@ use gpui::prelude::*;
 use gpui::{App, Hsla, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
 
-use crate::tokens::{FontSizes, Radii, Spacing};
+use crate::density;
+use crate::tokens::Spacing;
 
 /// Semantic badge variant controlling the color scheme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,9 +76,9 @@ impl RenderOnce for Badge {
             div()
                 .px(Spacing::XS)
                 .py(px(2.0))
-                .rounded(Radii::SM)
+                .rounded(density::radius_sm(cx))
                 .bg(bg)
-                .text_size(FontSizes::XS)
+                .text_size(density::font_xs(cx))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(text_color)
                 .child(self.label)

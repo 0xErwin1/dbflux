@@ -20,6 +20,7 @@ pub enum DbKind {
     MongoDB,
     Redis,
     DynamoDB,
+    CloudWatchLogs,
 }
 
 impl DbKind {
@@ -32,22 +33,154 @@ impl DbKind {
             DbKind::MongoDB => "MongoDB",
             DbKind::Redis => "Redis",
             DbKind::DynamoDB => "DynamoDB",
+            DbKind::CloudWatchLogs => "CloudWatch Logs",
         }
     }
 }
 
-/// SSL/TLS mode for PostgreSQL connections.
+/// Returns `true` when the given SSL mode id string requires a root CA certificate.
+///
+/// Covers all known cert-requiring ids across every driver (Postgres, MySQL, MongoDB, Redis).
+/// The UI uses this to decide whether to reveal the CA certificate path input.
+pub fn ssl_mode_id_requires_root_cert(id: &str) -> bool {
+    matches!(
+        id,
+        "verify-ca" | "verify-full" | "VERIFY_CA" | "VERIFY_IDENTITY" | "verify"
+    )
+}
+
+/// Returns `true` when the given SSL mode id string indicates an active (non-disabled,
+/// non-preferred) SSL connection that warrants showing client certificate inputs.
+///
+/// Used by the UI to decide whether to show client cert / key path inputs.
+pub fn ssl_mode_id_is_cert_active(id: &str) -> bool {
+    !matches!(
+        id,
+        "disable" | "DISABLED" | "off" | "prefer" | "PREFERRED" | "allow" | ""
+    )
+}
+
+/// Deserializes an SSL mode field that may be stored in either the new format
+/// (`Option<String>` with a driver-native id like `"prefer"`) or the legacy format
+/// (a bare enum variant name like `"Disable"`, `"VerifyCa"`, etc.).
+///
+/// On load, legacy enum variant names are normalised to the canonical Postgres id strings
+/// so that subsequent saves write the new format.
+/// Serde helper for the legacy Redis `tls` field. Used as `skip_serializing_if` so new
+/// saves never include `tls: false` in the output.
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn deserialize_ssl_mode_option<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+
+    let s = match &value {
+        serde_json::Value::String(s) => s.clone(),
+        // Numeric or boolean — shouldn't happen but be defensive.
+        other => {
+            return Err(serde::de::Error::custom(format!(
+                "unexpected ssl_mode value: {other}"
+            )));
+        }
+    };
+
+    // Normalise legacy PascalCase enum variant names → canonical Postgres id strings.
+    let normalised = match s.as_str() {
+        "Disable" => "disable",
+        "Allow" => "allow",
+        "Prefer" => "prefer",
+        "Require" => "require",
+        "VerifyCa" => "verify-ca",
+        "VerifyFull" => "verify-full",
+        other => other,
+    };
+
+    Ok(Some(normalised.to_string()))
+}
+
+/// SSL/TLS mode for database connections.
+///
+/// Deprecated: new code should store SSL mode as `Option<String>` using the driver's native
+/// id strings and use `ssl_mode_id_requires_root_cert` for cert-visibility decisions.
+/// This enum is retained only for tests that were written against the old API.
+#[deprecated(
+    since = "0.0.0",
+    note = "Use Option<String> ssl_mode with driver-native ids"
+)]
+#[allow(deprecated)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SslMode {
     /// No SSL (unencrypted connection).
     Disable,
 
+    /// Try SSL but also allow plain connections if the server doesn't support it.
+    Allow,
+
     /// Try SSL, fall back to unencrypted if unavailable.
     #[default]
     Prefer,
 
-    /// Require SSL (fail if server doesn't support it).
+    /// Require SSL (fail if server doesn't support it), but do not verify the certificate.
     Require,
+
+    /// Require SSL and verify that the server certificate is signed by a trusted CA.
+    VerifyCa,
+
+    /// Require SSL, verify the CA, and also verify that the server hostname matches the certificate.
+    VerifyFull,
+}
+
+#[allow(deprecated)]
+impl SslMode {
+    /// Returns the lowercase string id used in driver metadata and the UI segmented control.
+    pub fn as_id(&self) -> &'static str {
+        match self {
+            SslMode::Disable => "disable",
+            SslMode::Allow => "allow",
+            SslMode::Prefer => "prefer",
+            SslMode::Require => "require",
+            SslMode::VerifyCa => "verify-ca",
+            SslMode::VerifyFull => "verify-full",
+        }
+    }
+}
+
+/// Returns `true` when the given mode requires a root CA certificate to be provided.
+///
+/// Deprecated: use `ssl_mode_id_requires_root_cert` with string ids instead.
+#[deprecated(
+    since = "0.0.0",
+    note = "Use ssl_mode_id_requires_root_cert(&str) instead"
+)]
+#[allow(deprecated)]
+pub fn ssl_mode_requires_root_cert(mode: SslMode) -> bool {
+    matches!(mode, SslMode::VerifyCa | SslMode::VerifyFull)
+}
+
+/// Maps a lowercase SSL mode id string to `SslMode`.
+///
+/// Deprecated: drivers now use `Option<String>` for ssl_mode; this helper is retained only
+/// for backwards-compatible callers.
+#[deprecated(since = "0.0.0", note = "Drivers now use Option<String> ssl_mode")]
+#[allow(deprecated)]
+pub fn ssl_mode_from_id(id: &str) -> Option<SslMode> {
+    match id {
+        "disable" => Some(SslMode::Disable),
+        "allow" => Some(SslMode::Allow),
+        "prefer" => Some(SslMode::Prefer),
+        "require" => Some(SslMode::Require),
+        "verify-ca" => Some(SslMode::VerifyCa),
+        "verify-full" => Some(SslMode::VerifyFull),
+        _ => None,
+    }
 }
 
 /// SSH authentication method.
@@ -142,7 +275,25 @@ pub enum DbConfig {
         port: u16,
         user: String,
         database: String,
-        ssl_mode: SslMode,
+        /// SSL mode using the Postgres native sslmode identifier (e.g. `"prefer"`, `"verify-ca"`).
+        ///
+        /// Accepts both the new `Option<String>` format and legacy bare enum variant names
+        /// (`"Prefer"`, `"VerifyCa"`) written by older versions.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_ssl_mode_option"
+        )]
+        ssl_mode: Option<String>,
+        /// Path to the root CA certificate file for `verify-ca` / `verify-full` modes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_root_cert_path: Option<String>,
+        /// Path to the client certificate file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_cert_path: Option<String>,
+        /// Path to the client private key file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_key_path: Option<String>,
         ssh_tunnel: Option<SshTunnelConfig>,
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
@@ -164,7 +315,25 @@ pub enum DbConfig {
         port: u16,
         user: String,
         database: Option<String>,
-        ssl_mode: SslMode,
+        /// SSL mode using the MySQL native ssl-mode identifier (e.g. `"PREFERRED"`, `"VERIFY_CA"`).
+        ///
+        /// Accepts both the new `Option<String>` format and legacy bare enum variant names
+        /// (`"Prefer"`, `"VerifyCa"`) written by older versions.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_ssl_mode_option"
+        )]
+        ssl_mode: Option<String>,
+        /// Path to the root CA certificate file for `VERIFY_CA` / `VERIFY_IDENTITY` modes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_root_cert_path: Option<String>,
+        /// Path to the client certificate file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_cert_path: Option<String>,
+        /// Path to the client private key file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_key_path: Option<String>,
         ssh_tunnel: Option<SshTunnelConfig>,
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
@@ -185,6 +354,22 @@ pub enum DbConfig {
         /// Authentication database (defaults to "admin" if user is specified).
         #[serde(default)]
         auth_database: Option<String>,
+        /// SSL mode id: `"off"`, `"on"` (TLS without verification), or `"verify"` (TLS with cert verification).
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_ssl_mode_option"
+        )]
+        ssl_mode: Option<String>,
+        /// Path to the root CA certificate file for `verify` mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_root_cert_path: Option<String>,
+        /// Path to the client certificate file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_cert_path: Option<String>,
+        /// Path to the client private key file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_key_path: Option<String>,
         ssh_tunnel: Option<SshTunnelConfig>,
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
@@ -200,8 +385,27 @@ pub enum DbConfig {
         /// Redis logical database index.
         #[serde(default)]
         database: Option<u32>,
-        #[serde(default)]
+        /// Legacy TLS toggle from older versions. Read-only migration field: on load,
+        /// when `ssl_mode` is `None`, `tls=true` is interpreted as `"on"` and `tls=false`
+        /// as `"off"`. Never written by new saves (`skip_serializing_if`).
+        #[serde(default, skip_serializing_if = "is_false")]
         tls: bool,
+        /// SSL mode id: `"off"`, `"on"` (TLS without verification), or `"verify"` (TLS with cert verification).
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_ssl_mode_option"
+        )]
+        ssl_mode: Option<String>,
+        /// Path to the root CA certificate file for `verify` mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_root_cert_path: Option<String>,
+        /// Path to the client certificate file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_cert_path: Option<String>,
+        /// Path to the client private key file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_key_path: Option<String>,
         ssh_tunnel: Option<SshTunnelConfig>,
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
@@ -214,6 +418,13 @@ pub enum DbConfig {
         endpoint: Option<String>,
         #[serde(default)]
         table: Option<String>,
+    },
+    CloudWatchLogs {
+        region: String,
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        endpoint: Option<String>,
     },
     /// Generic config for external RPC drivers.
     External {
@@ -236,6 +447,7 @@ impl DbConfig {
             DbConfig::MongoDB { .. } => DbKind::MongoDB,
             DbConfig::Redis { .. } => DbKind::Redis,
             DbConfig::DynamoDB { .. } => DbKind::DynamoDB,
+            DbConfig::CloudWatchLogs { .. } => DbKind::CloudWatchLogs,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -248,7 +460,10 @@ impl DbConfig {
             port: 5432,
             user: "postgres".to_string(),
             database: "postgres".to_string(),
-            ssl_mode: SslMode::default(),
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         }
@@ -269,7 +484,10 @@ impl DbConfig {
             port: 3306,
             user: "root".to_string(),
             database: None,
-            ssl_mode: SslMode::default(),
+            ssl_mode: Some("PREFERRED".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         }
@@ -284,6 +502,10 @@ impl DbConfig {
             user: None,
             database: None,
             auth_database: None,
+            ssl_mode: Some("off".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         }
@@ -298,6 +520,10 @@ impl DbConfig {
             user: None,
             database: Some(0),
             tls: false,
+            ssl_mode: Some("off".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         }
@@ -312,13 +538,50 @@ impl DbConfig {
         }
     }
 
+    pub fn default_cloudwatch_logs() -> Self {
+        DbConfig::CloudWatchLogs {
+            region: "us-east-1".to_string(),
+            profile: None,
+            endpoint: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
             | DbConfig::MySQL { ssh_tunnel, .. }
             | DbConfig::MongoDB { ssh_tunnel, .. }
             | DbConfig::Redis { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => None,
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => None,
+        }
+    }
+
+    /// Returns the SSH tunnel profile ID referenced by this config, if any.
+    pub fn ssh_tunnel_profile_id(&self) -> Option<Uuid> {
+        match self {
+            DbConfig::Postgres {
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::MySQL {
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::MongoDB {
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::Redis {
+                ssh_tunnel_profile_id,
+                ..
+            } => *ssh_tunnel_profile_id,
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => None,
         }
     }
 
@@ -345,9 +608,10 @@ impl DbConfig {
                 ssh_tunnel_profile_id,
                 ..
             } => ssh_tunnel.is_some() || ssh_tunnel_profile_id.is_some(),
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
-                false
-            }
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => false,
         }
     }
 
@@ -358,7 +622,10 @@ impl DbConfig {
             | DbConfig::MySQL { host, port, .. }
             | DbConfig::MongoDB { host, port, .. }
             | DbConfig::Redis { host, port, .. } => Some((host, *port)),
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => None,
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => None,
         }
     }
 
@@ -393,7 +660,10 @@ impl DbConfig {
                 *port = tunnel_port;
                 *use_uri = false;
             }
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {}
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => {}
         }
     }
 
@@ -407,7 +677,10 @@ impl DbConfig {
             | DbConfig::MySQL { use_uri, uri, .. }
             | DbConfig::MongoDB { use_uri, uri, .. }
             | DbConfig::Redis { use_uri, uri, .. } => (use_uri, uri),
-            DbConfig::SQLite { .. } | DbConfig::DynamoDB { .. } | DbConfig::External { .. } => {
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => {
                 return None;
             }
         };
@@ -436,7 +709,7 @@ impl DbConfig {
             DbConfig::MongoDB { database, .. } => database.clone(),
             DbConfig::Redis { database, .. } => database.map(|d| d.to_string()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
-            DbConfig::DynamoDB { .. } => None,
+            DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::External { .. } => None,
         }
     }
@@ -452,6 +725,9 @@ impl DbConfig {
                 port,
                 user,
                 ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
@@ -463,6 +739,9 @@ impl DbConfig {
                 user,
                 database: database.to_string(),
                 ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
             }),
@@ -473,6 +752,9 @@ impl DbConfig {
                 port,
                 user,
                 ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
@@ -484,6 +766,9 @@ impl DbConfig {
                 user,
                 database: Some(database.to_string()),
                 ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
             }),
@@ -494,6 +779,10 @@ impl DbConfig {
                 port,
                 user,
                 auth_database,
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
@@ -505,6 +794,10 @@ impl DbConfig {
                 user,
                 database: Some(database.to_string()),
                 auth_database,
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
             }),
@@ -515,6 +808,10 @@ impl DbConfig {
                 port,
                 user,
                 tls,
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
@@ -530,6 +827,10 @@ impl DbConfig {
                     user,
                     database: Some(db_index),
                     tls,
+                    ssl_mode,
+                    ssl_root_cert_path,
+                    ssl_client_cert_path,
+                    ssl_client_key_path,
                     ssh_tunnel,
                     ssh_tunnel_profile_id,
                 })
@@ -818,6 +1119,7 @@ impl ConnectionProfile {
             DbKind::MongoDB => "mongodb",
             DbKind::Redis => "redis",
             DbKind::DynamoDB => "dynamodb",
+            DbKind::CloudWatchLogs => "cloudwatch",
         }
     }
 
@@ -833,6 +1135,24 @@ impl ConnectionProfile {
     /// (has auth profile, value refs, or unified access method).
     pub fn uses_pipeline(&self) -> bool {
         self.auth_profile_id.is_some() || !self.value_refs.is_empty() || self.access_kind.is_some()
+    }
+
+    /// Returns an external auth profile name embedded in the driver config.
+    ///
+    /// This lets app-layer connection orchestration route profiles through the
+    /// generic auth pipeline without matching on concrete driver names.
+    pub fn external_auth_profile_name(&self) -> Option<&str> {
+        match &self.config {
+            DbConfig::CloudWatchLogs {
+                profile: Some(profile),
+                ..
+            }
+            | DbConfig::DynamoDB {
+                profile: Some(profile),
+                ..
+            } => Some(profile.as_str()),
+            _ => None,
+        }
     }
 
     /// Derives an AccessKind from legacy fields (proxy_profile_id, ssh_tunnel_profile_id)
@@ -868,7 +1188,67 @@ impl ConnectionProfile {
     }
 }
 
+/// SSL info captured during a successful connection test.
+#[derive(Debug, Clone, Default)]
+pub struct SslInfo {
+    /// `true` when the connection is TLS-encrypted.
+    pub active: bool,
+    /// TLS cipher suite name (e.g. `"TLS_AES_256_GCM_SHA384"`), when known.
+    pub cipher: Option<String>,
+}
+
+/// Enriched result returned by `DbDriver::test_connection_rich`.
+///
+/// All fields except `rtt_ms` are optional — drivers populate only what they
+/// can observe. The UI collapses `None` fields and omits them from the banner.
+#[derive(Debug, Clone, Default)]
+pub struct TestConnectionResult {
+    /// Engine display string (e.g. `"postgres 16.2"`, `"MySQL 8.0.35"`).
+    pub engine: Option<String>,
+    /// Round-trip time of the test ping in milliseconds.
+    pub rtt_ms: Option<u64>,
+    /// Server-side timestamp at the moment of the test (ISO-8601 string).
+    pub server_time: Option<String>,
+    /// SSL/TLS status of the connection.
+    pub ssl: Option<SslInfo>,
+}
+
+impl TestConnectionResult {
+    /// Format the banner body line that appears below "Connection successful".
+    ///
+    /// Fields are joined with ` · `. Returns an empty string when no optional
+    /// fields are populated.
+    pub fn format_body(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        if let Some(engine) = &self.engine {
+            parts.push(engine.clone());
+        }
+
+        if let Some(rtt) = self.rtt_ms {
+            parts.push(format!("{rtt} ms RTT"));
+        }
+
+        if let Some(server_time) = &self.server_time {
+            parts.push(format!("server time {server_time}"));
+        }
+
+        if let Some(ssl) = &self.ssl
+            && ssl.active
+        {
+            if let Some(cipher) = &ssl.cipher {
+                parts.push(format!("SSL \u{00B7} {cipher}"));
+            } else {
+                parts.push("SSL".to_string());
+            }
+        }
+
+        parts.join(" \u{00B7} ")
+    }
+}
+
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::RefreshPolicySetting;
@@ -1098,8 +1478,119 @@ mod tests {
     }
 
     #[test]
+    fn cloudwatch_config_kind_and_driver_id_fallback_work() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000100",
+            "name": "legacy-cloudwatch",
+            "config": {
+                "CloudWatchLogs": {
+                    "region": "us-east-1"
+                }
+            }
+        }"#;
+
+        let profile: ConnectionProfile =
+            serde_json::from_str(json).expect("cloudwatch profile should deserialize");
+
+        assert_eq!(profile.kind(), DbKind::CloudWatchLogs);
+        assert_eq!(profile.driver_id(), "cloudwatch");
+    }
+
+    #[test]
+    fn cloudwatch_profile_serde_roundtrip_preserves_optional_fields() {
+        let profile = ConnectionProfile::new(
+            "cloudwatch",
+            DbConfig::CloudWatchLogs {
+                region: "us-west-2".to_string(),
+                profile: Some("dev".to_string()),
+                endpoint: Some("http://localhost:4566".to_string()),
+            },
+        );
+
+        let json = serde_json::to_string(&profile).expect("serialize should succeed");
+        let restored: ConnectionProfile =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+
+        match restored.config {
+            DbConfig::CloudWatchLogs {
+                region,
+                profile,
+                endpoint,
+            } => {
+                assert_eq!(region, "us-west-2");
+                assert_eq!(profile.as_deref(), Some("dev"));
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:4566"));
+            }
+            _ => panic!("expected CloudWatch Logs config variant"),
+        }
+    }
+
+    #[test]
     fn ssl_mode_defaults_to_prefer() {
         assert_eq!(SslMode::default(), SslMode::Prefer);
+    }
+
+    #[test]
+    fn ssl_mode_from_id_maps_all_known_ids() {
+        use super::ssl_mode_from_id;
+
+        assert_eq!(ssl_mode_from_id("disable"), Some(SslMode::Disable));
+        assert_eq!(ssl_mode_from_id("allow"), Some(SslMode::Allow));
+        assert_eq!(ssl_mode_from_id("prefer"), Some(SslMode::Prefer));
+        assert_eq!(ssl_mode_from_id("require"), Some(SslMode::Require));
+        assert_eq!(ssl_mode_from_id("verify-ca"), Some(SslMode::VerifyCa));
+        assert_eq!(ssl_mode_from_id("verify-full"), Some(SslMode::VerifyFull));
+    }
+
+    #[test]
+    fn ssl_mode_from_id_returns_none_for_unknown() {
+        use super::ssl_mode_from_id;
+
+        assert_eq!(ssl_mode_from_id(""), None);
+        assert_eq!(ssl_mode_from_id("DISABLE"), None);
+        assert_eq!(ssl_mode_from_id("unknown"), None);
+    }
+
+    #[test]
+    fn ssl_mode_as_id_round_trips_all_variants() {
+        assert_eq!(SslMode::Disable.as_id(), "disable");
+        assert_eq!(SslMode::Allow.as_id(), "allow");
+        assert_eq!(SslMode::Prefer.as_id(), "prefer");
+        assert_eq!(SslMode::Require.as_id(), "require");
+        assert_eq!(SslMode::VerifyCa.as_id(), "verify-ca");
+        assert_eq!(SslMode::VerifyFull.as_id(), "verify-full");
+    }
+
+    #[test]
+    fn ssl_mode_from_id_round_trips_all_variants() {
+        use super::ssl_mode_from_id;
+
+        for mode in [
+            SslMode::Disable,
+            SslMode::Allow,
+            SslMode::Prefer,
+            SslMode::Require,
+            SslMode::VerifyCa,
+            SslMode::VerifyFull,
+        ] {
+            assert_eq!(
+                ssl_mode_from_id(mode.as_id()),
+                Some(mode),
+                "round-trip failed for {mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ssl_mode_requires_root_cert_is_true_for_verify_modes_only() {
+        use super::ssl_mode_requires_root_cert;
+
+        assert!(!ssl_mode_requires_root_cert(SslMode::Disable));
+        assert!(!ssl_mode_requires_root_cert(SslMode::Allow));
+        assert!(!ssl_mode_requires_root_cert(SslMode::Prefer));
+        assert!(!ssl_mode_requires_root_cert(SslMode::Require));
+        assert!(ssl_mode_requires_root_cert(SslMode::VerifyCa));
+        assert!(ssl_mode_requires_root_cert(SslMode::VerifyFull));
     }
 
     #[test]
@@ -1133,6 +1624,10 @@ mod tests {
             user: None,
             database: Some(0),
             tls: false,
+            ssl_mode: Some("off".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         };
@@ -1189,5 +1684,67 @@ mod tests {
         assert!(governance.enabled);
         assert_eq!(governance.policy_bindings.len(), 1);
         assert_eq!(governance.policy_bindings[0].actor_id, "agent-a");
+    }
+
+    // --- TestConnectionResult::format_body tests ---
+
+    #[test]
+    fn format_body_all_fields_present() {
+        let result = super::TestConnectionResult {
+            engine: Some("postgres 16.2".to_string()),
+            rtt_ms: Some(4),
+            server_time: Some("2026-05-09 12:21:34 UTC".to_string()),
+            ssl: Some(super::SslInfo {
+                active: true,
+                cipher: Some("TLS_AES_256_GCM_SHA384".to_string()),
+            }),
+        };
+        let body = result.format_body();
+        assert!(body.contains("postgres 16.2"), "engine missing: {body}");
+        assert!(body.contains("4 ms RTT"), "rtt missing: {body}");
+        assert!(
+            body.contains("2026-05-09 12:21:34 UTC"),
+            "server_time missing: {body}"
+        );
+        assert!(
+            body.contains("TLS_AES_256_GCM_SHA384"),
+            "cipher missing: {body}"
+        );
+    }
+
+    #[test]
+    fn format_body_only_engine() {
+        let result = super::TestConnectionResult {
+            engine: Some("sqlite 3.45.0".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(result.format_body(), "sqlite 3.45.0");
+    }
+
+    #[test]
+    fn format_body_only_rtt() {
+        let result = super::TestConnectionResult {
+            rtt_ms: Some(12),
+            ..Default::default()
+        };
+        assert_eq!(result.format_body(), "12 ms RTT");
+    }
+
+    #[test]
+    fn format_body_no_optional_fields_returns_empty() {
+        let result = super::TestConnectionResult::default();
+        assert_eq!(result.format_body(), "");
+    }
+
+    #[test]
+    fn format_body_ssl_without_cipher() {
+        let result = super::TestConnectionResult {
+            ssl: Some(super::SslInfo {
+                active: true,
+                cipher: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(result.format_body(), "SSL");
     }
 }

@@ -1,22 +1,209 @@
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
-use dbflux_components::primitives::{Label, Text};
-use dbflux_core::ServiceConfig;
+use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::primitives::{Icon as PrimitiveIcon, Label};
+use dbflux_components::typography::{Body, MonoCaption, MonoLabel, MonoMeta, PanelTitle};
+use dbflux_core::{RpcServiceKind, ServiceConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::Icon;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputState};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::{Icon, IconName};
 use std::collections::HashMap;
 
 use super::layout;
 use super::services_section::{ServiceFocus, ServiceFormRow, ServicesSection};
+
+fn services_section_title() -> &'static str {
+    "RPC Services"
+}
+
+fn services_section_description() -> &'static str {
+    "Manage configured RPC services. Changes require restart."
+}
+
+fn empty_services_message() -> &'static str {
+    "No RPC services configured"
+}
+
+fn service_editor_title(is_editing: bool) -> &'static str {
+    if is_editing {
+        "Edit RPC Service"
+    } else {
+        "New RPC Service"
+    }
+}
+
+fn new_service_button_label() -> &'static str {
+    "New RPC Service"
+}
+
+fn editable_service_kind(service: &ServiceConfig) -> RpcServiceKind {
+    service.kind
+}
+
+fn build_service_config(
+    socket_id: String,
+    enabled: bool,
+    command: Option<String>,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    startup_timeout_ms: Option<u64>,
+    kind: RpcServiceKind,
+) -> ServiceConfig {
+    ServiceConfig {
+        socket_id,
+        enabled,
+        command,
+        args,
+        env,
+        startup_timeout_ms,
+        kind,
+        api_contract: None,
+    }
+}
+
+fn preserved_api_contract_for_edit(
+    services: &[ServiceConfig],
+    editing_svc_idx: Option<usize>,
+) -> Option<dbflux_core::ServiceRpcApiContract> {
+    editing_svc_idx
+        .and_then(|idx| services.get(idx))
+        .and_then(|service| service.api_contract.clone())
+}
+
+fn service_form_rows(
+    arg_count: usize,
+    env_count: usize,
+    editing_service: bool,
+) -> Vec<ServiceFormRow> {
+    let mut rows = vec![
+        ServiceFormRow::SocketId,
+        ServiceFormRow::Command,
+        ServiceFormRow::Timeout,
+        ServiceFormRow::Kind,
+        ServiceFormRow::Enabled,
+    ];
+
+    for index in 0..arg_count {
+        rows.push(ServiceFormRow::Arg(index));
+    }
+    rows.push(ServiceFormRow::AddArg);
+
+    for index in 0..env_count {
+        rows.push(ServiceFormRow::EnvKey(index));
+    }
+    rows.push(ServiceFormRow::AddEnv);
+
+    if editing_service {
+        rows.push(ServiceFormRow::DeleteButton);
+    }
+
+    rows.push(ServiceFormRow::SaveButton);
+    rows
+}
+
+fn service_row_max_col(row: ServiceFormRow) -> usize {
+    match row {
+        ServiceFormRow::Kind | ServiceFormRow::Arg(_) => 1,
+        ServiceFormRow::EnvKey(_) => 2,
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ServiceFormRow, build_service_config, editable_service_kind,
+        preserved_api_contract_for_edit, service_form_rows, service_row_max_col,
+    };
+    use dbflux_core::{RpcServiceKind, ServiceConfig, ServiceRpcApiContract};
+    use std::collections::HashMap;
+
+    #[test]
+    fn service_form_rows_include_kind_selector_before_enabled_toggle() {
+        let rows = service_form_rows(0, 0, false);
+
+        assert_eq!(
+            rows,
+            vec![
+                ServiceFormRow::SocketId,
+                ServiceFormRow::Command,
+                ServiceFormRow::Timeout,
+                ServiceFormRow::Kind,
+                ServiceFormRow::Enabled,
+                ServiceFormRow::AddArg,
+                ServiceFormRow::AddEnv,
+                ServiceFormRow::SaveButton,
+            ]
+        );
+    }
+
+    #[test]
+    fn service_row_max_col_allows_driver_and_auth_provider_selection() {
+        assert_eq!(service_row_max_col(ServiceFormRow::Kind), 1);
+        assert_eq!(service_row_max_col(ServiceFormRow::Enabled), 0);
+    }
+
+    #[test]
+    fn editable_service_kind_preserves_saved_auth_provider_kind() {
+        let service = ServiceConfig {
+            socket_id: "auth.sock".into(),
+            enabled: true,
+            command: Some("dbflux-auth".into()),
+            args: vec!["--serve".into()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(5000),
+            kind: RpcServiceKind::AuthProvider,
+            api_contract: None,
+        };
+
+        assert_eq!(
+            editable_service_kind(&service),
+            RpcServiceKind::AuthProvider
+        );
+    }
+
+    #[test]
+    fn build_service_config_preserves_selected_service_kind() {
+        let service = build_service_config(
+            "auth.sock".into(),
+            true,
+            Some("dbflux-auth".into()),
+            vec!["--serve".into()],
+            HashMap::from([("MODE".into(), "auth".into())]),
+            Some(5000),
+            RpcServiceKind::AuthProvider,
+        );
+
+        assert_eq!(service.kind, RpcServiceKind::AuthProvider);
+        assert_eq!(service.socket_id, "auth.sock");
+    }
+
+    #[test]
+    fn preserved_api_contract_for_edit_returns_saved_metadata() {
+        let api_contract = ServiceRpcApiContract::new("auth_provider_rpc", 1, 0);
+        let services = vec![ServiceConfig {
+            socket_id: "auth.sock".into(),
+            enabled: true,
+            command: Some("dbflux-auth".into()),
+            args: vec!["--serve".into()],
+            env: HashMap::from([("MODE".into(), "auth".into())]),
+            startup_timeout_ms: Some(5000),
+            kind: RpcServiceKind::AuthProvider,
+            api_contract: Some(api_contract.clone()),
+        }];
+
+        assert_eq!(
+            preserved_api_contract_for_edit(&services, Some(0)),
+            Some(api_contract)
+        );
+    }
+}
 
 impl ServicesSection {
     pub(super) fn has_unsaved_svc_changes(&self, cx: &App) -> bool {
@@ -38,6 +225,7 @@ impl ServicesSection {
             if socket_id != saved.socket_id
                 || command != saved_command
                 || timeout != saved_timeout
+                || self.svc_kind != saved.kind
                 || self.svc_enabled != saved.enabled
             {
                 return true;
@@ -84,6 +272,7 @@ impl ServicesSection {
             || !self.svc_arg_inputs.is_empty()
             || !self.svc_env_key_inputs.is_empty()
             || !self.svc_env_value_inputs.is_empty()
+            || self.svc_kind != RpcServiceKind::Driver
             || !self.svc_enabled
     }
 
@@ -96,6 +285,7 @@ impl ServicesSection {
 
     pub(super) fn clear_svc_form(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
         self.editing_svc_idx = None;
+        self.svc_kind = RpcServiceKind::Driver;
         self.svc_enabled = true;
         self.svc_form_cursor = 0;
         self.svc_env_col = 0;
@@ -120,6 +310,7 @@ impl ServicesSection {
         };
 
         self.editing_svc_idx = Some(idx);
+        self.svc_kind = editable_service_kind(&service);
         self.svc_enabled = service.enabled;
         self.svc_form_cursor = 0;
         self.svc_env_col = 0;
@@ -178,7 +369,10 @@ impl ServicesSection {
     pub(super) fn save_service(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let socket_id = self.input_socket_id.read(cx).value().trim().to_string();
         if socket_id.is_empty() {
-            cx.toast_error("Socket ID is required", window);
+            Toast::error("Socket ID is required")
+                .meta_right(now_hms())
+                .action(copy_action("Socket ID is required"))
+                .push(cx);
             return;
         }
 
@@ -188,10 +382,11 @@ impl ServicesSection {
             .enumerate()
             .any(|(i, s)| s.socket_id == socket_id && Some(i) != self.editing_svc_idx);
         if is_duplicate {
-            cx.toast_error(
-                format!("A service with socket ID \"{}\" already exists", socket_id),
-                window,
-            );
+            let msg = format!("A service with socket ID \"{}\" already exists", socket_id);
+            Toast::error(msg.clone())
+                .meta_right(now_hms())
+                .action(copy_action(msg))
+                .push(cx);
             return;
         }
 
@@ -202,7 +397,10 @@ impl ServicesSection {
             match timeout_str.parse::<u64>() {
                 Ok(v) => Some(v),
                 Err(_) => {
-                    cx.toast_error("Timeout must be a valid number (milliseconds)", window);
+                    Toast::error("Timeout must be a valid number (milliseconds)")
+                        .meta_right(now_hms())
+                        .action(copy_action("Timeout must be a valid number (milliseconds)"))
+                        .push(cx);
                     return;
                 }
             }
@@ -236,14 +434,18 @@ impl ServicesSection {
             })
             .collect();
 
-        let service = ServiceConfig {
+        let mut service = build_service_config(
             socket_id,
-            enabled: self.svc_enabled,
+            self.svc_enabled,
             command,
             args,
             env,
             startup_timeout_ms,
-        };
+            self.svc_kind,
+        );
+
+        service.api_contract =
+            preserved_api_contract_for_edit(&self.svc_services, self.editing_svc_idx);
 
         let saved_idx = if let Some(idx) = self.editing_svc_idx {
             if idx < self.svc_services.len() {
@@ -258,10 +460,20 @@ impl ServicesSection {
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) = dbflux_app::config_loader::save_services(runtime, &self.svc_services) {
             log::error!("Failed to save services to SQLite: {}", e);
-            cx.toast_error(format!("Failed to save config: {}", e), window);
+            let toast_body = e.to_string();
+            Toast::error("Failed to save config")
+                .meta_right(now_hms())
+                .body(toast_body.clone())
+                .action(copy_action(format!(
+                    "Failed to save config: {}",
+                    toast_body
+                )))
+                .push(cx);
             return;
         }
-        cx.toast_info("Service saved. Restart required to apply changes.", window);
+        Toast::info("RPC service saved. Restart required to apply changes.")
+            .meta_right(now_hms())
+            .push(cx);
 
         self.svc_selected_idx = Some(saved_idx);
         self.edit_service(saved_idx, window, cx);
@@ -307,13 +519,17 @@ impl ServicesSection {
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) = dbflux_app::config_loader::save_services(runtime, &self.svc_services) {
             log::error!("Failed to save services to SQLite: {}", e);
-            cx.toast_error(format!("Failed to save config: {}", e), window);
+            let body = e.to_string();
+            Toast::error("Failed to save config")
+                .meta_right(now_hms())
+                .body(body.clone())
+                .action(copy_action(format!("Failed to save config: {}", body)))
+                .push(cx);
             return;
         }
-        cx.toast_info(
-            "Service deleted. Restart required to apply changes.",
-            window,
-        );
+        Toast::info("RPC service deleted. Restart required to apply changes.")
+            .meta_right(now_hms())
+            .push(cx);
         cx.notify();
     }
 
@@ -455,29 +671,11 @@ impl ServicesSection {
     // --- Form navigation (linear cursor) ---
 
     pub(super) fn svc_form_rows(&self) -> Vec<ServiceFormRow> {
-        let mut rows = vec![
-            ServiceFormRow::SocketId,
-            ServiceFormRow::Command,
-            ServiceFormRow::Timeout,
-            ServiceFormRow::Enabled,
-        ];
-
-        for i in 0..self.svc_arg_inputs.len() {
-            rows.push(ServiceFormRow::Arg(i));
-        }
-        rows.push(ServiceFormRow::AddArg);
-
-        for i in 0..self.svc_env_key_inputs.len() {
-            rows.push(ServiceFormRow::EnvKey(i));
-        }
-        rows.push(ServiceFormRow::AddEnv);
-
-        if self.editing_svc_idx.is_some() {
-            rows.push(ServiceFormRow::DeleteButton);
-        }
-        rows.push(ServiceFormRow::SaveButton);
-
-        rows
+        service_form_rows(
+            self.svc_arg_inputs.len(),
+            self.svc_env_key_inputs.len(),
+            self.editing_svc_idx.is_some(),
+        )
     }
 
     pub(super) fn current_form_row(&self) -> Option<ServiceFormRow> {
@@ -503,10 +701,7 @@ impl ServicesSection {
     pub(super) fn svc_move_right(&mut self) {
         if let Some(row) = self.current_form_row() {
             match row {
-                ServiceFormRow::EnvKey(_) if self.svc_env_col < 2 => {
-                    self.svc_env_col += 1;
-                }
-                ServiceFormRow::Arg(_) if self.svc_env_col < 1 => {
+                row if self.svc_env_col < service_row_max_col(row) => {
                     self.svc_env_col += 1;
                 }
                 _ => {}
@@ -536,11 +731,7 @@ impl ServicesSection {
     pub(super) fn svc_tab_next(&mut self) {
         let rows = self.svc_form_rows();
         if let Some(row) = rows.get(self.svc_form_cursor) {
-            let max_col = match row {
-                ServiceFormRow::EnvKey(_) => 2,
-                ServiceFormRow::Arg(_) => 1,
-                _ => 0,
-            };
+            let max_col = service_row_max_col(*row);
 
             if self.svc_env_col < max_col {
                 self.svc_env_col += 1;
@@ -564,11 +755,7 @@ impl ServicesSection {
             self.svc_form_cursor -= 1;
             let rows = self.svc_form_rows();
             if let Some(row) = rows.get(self.svc_form_cursor) {
-                self.svc_env_col = match row {
-                    ServiceFormRow::EnvKey(_) => 2,
-                    ServiceFormRow::Arg(_) => 1,
-                    _ => 0,
-                };
+                self.svc_env_col = service_row_max_col(*row);
             }
         }
     }
@@ -587,6 +774,9 @@ impl ServicesSection {
             Some(ServiceFormRow::Timeout) => {
                 self.input_svc_timeout
                     .update(cx, |s, cx| s.focus(window, cx));
+            }
+            Some(ServiceFormRow::Kind) => {
+                self.svc_editing_field = false;
             }
             Some(ServiceFormRow::Arg(i)) if self.svc_env_col == 0 => {
                 if let Some(input) = self.svc_arg_inputs.get(i) {
@@ -626,6 +816,15 @@ impl ServicesSection {
             | Some(ServiceFormRow::Timeout)
             | Some(ServiceFormRow::EnvValue(_)) => {
                 self.svc_focus_current_field(window, cx);
+            }
+
+            Some(ServiceFormRow::Kind) => {
+                self.svc_kind = if self.svc_env_col == 0 {
+                    RpcServiceKind::Driver
+                } else {
+                    RpcServiceKind::AuthProvider
+                };
+                cx.notify();
             }
 
             Some(ServiceFormRow::Arg(i)) => {
@@ -690,30 +889,18 @@ impl ServicesSection {
 
 impl ServicesSection {
     pub(super) fn render_services_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let services = self.svc_services.clone();
         let editing_idx = self.editing_svc_idx;
 
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(layout::section_header(
-                "Services",
-                "Manage external driver services. Changes require restart.",
-                theme,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .overflow_hidden()
-                    .child(self.render_service_list(&services, editing_idx, cx))
-                    .child(self.render_service_form(editing_idx, cx)),
-            )
+        layout::split_section_shell(
+            dbflux_components::composites::section_header(
+                services_section_title(),
+                services_section_description(),
+                cx,
+            ),
+            self.render_service_list(&services, editing_idx, cx),
+            self.render_service_form(editing_idx, cx),
+        )
     }
 
     fn render_service_list(
@@ -741,7 +928,7 @@ impl ServicesSection {
             .child(
                 div().p_2().border_b_1().border_color(theme.border).child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_new_button_focused {
                             theme.primary
@@ -750,8 +937,8 @@ impl ServicesSection {
                         })
                         .child(
                             Button::new("new-service")
-                                .icon(Icon::new(IconName::Plus))
-                                .label("New Service")
+                                .icon(Icon::new(AppIcon::Plus))
+                                .label(new_service_button_label())
                                 .small()
                                 .w_full()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -773,7 +960,9 @@ impl ServicesSection {
                     .flex_col()
                     .gap_1()
                     .when(services.is_empty(), |container| {
-                        container.child(div().p_4().child(Text::muted("No services configured")))
+                        container.child(div().p_4().child(
+                            Body::new(empty_services_message()).color(theme.muted_foreground),
+                        ))
                     })
                     .children(services.iter().enumerate().map(|(idx, service)| {
                         let is_selected = editing_idx == Some(idx);
@@ -790,7 +979,8 @@ impl ServicesSection {
                             .id(SharedString::from(format!("svc-item-{}", idx)))
                             .px_3()
                             .py_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
+                            .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused && !is_selected {
@@ -809,13 +999,9 @@ impl ServicesSection {
                                     .flex()
                                     .items_start()
                                     .gap_2()
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::Plug.path())
-                                            .size_4()
-                                            .text_color(theme.muted_foreground)
-                                            .mt(px(2.0)),
-                                    )
+                                    .child(div().mt(px(2.0)).child(
+                                        PrimitiveIcon::new(AppIcon::Plug).size(px(16.0)).muted(),
+                                    ))
                                     .child(
                                         div()
                                             .flex()
@@ -826,30 +1012,27 @@ impl ServicesSection {
                                                     .flex()
                                                     .items_center()
                                                     .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .font_weight(FontWeight::MEDIUM)
-                                                            .when(is_disabled, |div| {
-                                                                div.text_color(
-                                                                    theme.muted_foreground,
-                                                                )
-                                                            })
-                                                            .child(service.socket_id.clone()),
-                                                    )
+                                                    .child(if is_disabled {
+                                                        MonoLabel::new(service.socket_id.clone())
+                                                            .color(theme.muted_foreground)
+                                                            .into_any_element()
+                                                    } else {
+                                                        MonoLabel::new(service.socket_id.clone())
+                                                            .into_any_element()
+                                                    })
                                                     .when(is_disabled, |container| {
                                                         container.child(
                                                             div()
-                                                                .text_xs()
                                                                 .px_1()
                                                                 .rounded(px(3.0))
                                                                 .bg(theme.secondary)
-                                                                .text_color(theme.muted_foreground)
-                                                                .child("Disabled"),
+                                                                .child(MonoCaption::new(
+                                                                    "Disabled",
+                                                                )),
                                                         )
                                                     }),
                                             )
-                                            .child(Text::caption(subtitle.to_string())),
+                                            .child(MonoMeta::new(subtitle.to_string())),
                                     ),
                             )
                     })),
@@ -861,148 +1044,107 @@ impl ServicesSection {
         editing_idx: Option<usize>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let primary = theme.primary;
-        let border = theme.border;
-
         let is_form_focused = self.content_focused && self.svc_focus == ServiceFocus::Form;
         let cursor = self.svc_form_cursor;
         let rows = self.svc_form_rows();
 
-        let title = if editing_idx.is_some() {
-            "Edit Service"
-        } else {
-            "New Service"
-        };
+        let title = service_editor_title(editing_idx.is_some());
 
         let is_row_focused = |row: ServiceFormRow| -> bool {
             is_form_focused && rows.get(cursor).copied() == Some(row)
         };
 
+        layout::sticky_form_shell(
+            PanelTitle::new(title),
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(self.render_svc_input_field(
+                    "Socket ID",
+                    &self.input_socket_id,
+                    is_row_focused(ServiceFormRow::SocketId),
+                    primary,
+                    ServiceFormRow::SocketId,
+                    cx,
+                ))
+                .child(self.render_svc_input_field(
+                    "Command",
+                    &self.input_svc_command,
+                    is_row_focused(ServiceFormRow::Command),
+                    primary,
+                    ServiceFormRow::Command,
+                    cx,
+                ))
+                .child(self.render_svc_input_field(
+                    "Startup Timeout (ms)",
+                    &self.input_svc_timeout,
+                    is_row_focused(ServiceFormRow::Timeout),
+                    primary,
+                    ServiceFormRow::Timeout,
+                    cx,
+                ))
+                .child(self.render_svc_kind_selector(is_form_focused, cursor, &rows, primary, cx))
+                .child(self.render_svc_enabled_checkbox(
+                    is_row_focused(ServiceFormRow::Enabled),
+                    primary,
+                    cx,
+                ))
+                .child(self.render_svc_args_section(is_form_focused, cursor, &rows, primary, cx))
+                .child(self.render_svc_env_section(is_form_focused, cursor, &rows, primary, cx)),
+            None,
+            &theme,
+        )
+    }
+
+    pub(super) fn render_service_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let is_form_focused = self.content_focused && self.svc_focus == ServiceFocus::Form;
+        let cursor = self.svc_form_cursor;
+        let rows = self.svc_form_rows();
+        let is_row_focused = |row: ServiceFormRow| -> bool {
+            is_form_focused && rows.get(cursor).copied() == Some(row)
+        };
+
         div()
-            .flex_1()
-            .h_full()
             .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div()
-                    .p_4()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(Text::body(title).font_weight(FontWeight::MEDIUM)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(self.render_svc_input_field(
-                        "Socket ID",
-                        &self.input_socket_id,
-                        is_row_focused(ServiceFormRow::SocketId),
-                        primary,
-                        ServiceFormRow::SocketId,
-                        cx,
-                    ))
-                    .child(self.render_svc_input_field(
-                        "Command",
-                        &self.input_svc_command,
-                        is_row_focused(ServiceFormRow::Command),
-                        primary,
-                        ServiceFormRow::Command,
-                        cx,
-                    ))
-                    .child(self.render_svc_input_field(
-                        "Startup Timeout (ms)",
-                        &self.input_svc_timeout,
-                        is_row_focused(ServiceFormRow::Timeout),
-                        primary,
-                        ServiceFormRow::Timeout,
-                        cx,
-                    ))
-                    .child(self.render_svc_enabled_checkbox(
-                        is_row_focused(ServiceFormRow::Enabled),
-                        primary,
-                        cx,
-                    ))
-                    .child(self.render_svc_args_section(
-                        is_form_focused,
-                        cursor,
-                        &rows,
-                        primary,
-                        cx,
-                    ))
-                    .child(self.render_svc_env_section(
-                        is_form_focused,
-                        cursor,
-                        &rows,
-                        primary,
-                        cx,
-                    )),
-            )
-            .child(
-                div()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(border)
-                    .flex()
-                    .gap_2()
-                    .justify_end()
-                    .when(editing_idx.is_some(), |container| {
-                        let is_delete_focused = is_row_focused(ServiceFormRow::DeleteButton);
-                        container.child(
-                            div()
-                                .rounded(px(4.0))
-                                .border_1()
-                                .border_color(if is_delete_focused {
-                                    primary
-                                } else {
-                                    transparent_black()
-                                })
-                                .child(
-                                    Button::new("delete-service")
-                                        .label("Delete")
-                                        .small()
-                                        .danger()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            if let Some(idx) = this.editing_svc_idx {
-                                                this.request_delete_service(idx, cx);
-                                            }
-                                        })),
-                                ),
-                        )
+            .items_center()
+            .gap_3()
+            .when(self.editing_svc_idx.is_some(), |container| {
+                container.child(layout::footer_action_frame(
+                    is_row_focused(ServiceFormRow::DeleteButton),
+                    theme.primary,
+                    Button::new("delete-service")
+                        .label("Delete")
+                        .small()
+                        .danger()
+                        .w_full()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(idx) = this.editing_svc_idx {
+                                this.request_delete_service(idx, cx);
+                            }
+                        })),
+                ))
+            })
+            .child(layout::footer_action_frame(
+                is_row_focused(ServiceFormRow::SaveButton),
+                theme.primary,
+                Button::new("save-service")
+                    .label(if self.editing_svc_idx.is_some() {
+                        "Update"
+                    } else {
+                        "Create"
                     })
-                    .child(div().flex_1())
-                    .child({
-                        let is_save_focused = is_row_focused(ServiceFormRow::SaveButton);
-                        div()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_save_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .child(
-                                Button::new("save-service")
-                                    .label(if editing_idx.is_some() {
-                                        "Update"
-                                    } else {
-                                        "Create"
-                                    })
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.save_service(window, cx);
-                                    })),
-                            )
-                    }),
-            )
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_service(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     fn render_svc_input_field(
@@ -1021,7 +1163,7 @@ impl ServicesSection {
             .child(Label::new(label.to_string()))
             .child(
                 div()
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_focused {
                         primary
@@ -1057,7 +1199,7 @@ impl ServicesSection {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
                 primary
@@ -1072,7 +1214,92 @@ impl ServicesSection {
                         cx.notify();
                     })),
             )
-            .child(div().text_sm().child("Enable this service"))
+            .child(Body::new("Enable this service"))
+    }
+
+    fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> Div {
+        div()
+            .size_4()
+            .rounded_full()
+            .border_1()
+            .border_color(if selected { primary } else { border })
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(div().size_2().rounded_full().bg(if selected {
+                primary
+            } else {
+                transparent_black()
+            }))
+    }
+
+    fn render_svc_kind_selector(
+        &self,
+        is_form_focused: bool,
+        cursor: usize,
+        rows: &[ServiceFormRow],
+        primary: Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let border = theme.border;
+        let is_row_focused =
+            is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::Kind);
+
+        let kinds = [
+            (RpcServiceKind::Driver, 0usize, "Driver"),
+            (RpcServiceKind::AuthProvider, 1usize, "Auth Provider"),
+        ];
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(Label::new("Service Type"))
+            .child(
+                div()
+                    .flex()
+                    .gap_4()
+                    .children(kinds.into_iter().map(|(kind, column, label)| {
+                        let is_focused = is_row_focused && self.svc_env_col == column;
+
+                        div()
+                            .id(SharedString::from(format!("service-kind-{}", label)))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(if is_focused {
+                                primary
+                            } else {
+                                transparent_black()
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.svc_focus = ServiceFocus::Form;
+                                if let Some(position) = this
+                                    .svc_form_rows()
+                                    .iter()
+                                    .position(|candidate| *candidate == ServiceFormRow::Kind)
+                                {
+                                    this.svc_form_cursor = position;
+                                }
+                                this.svc_env_col = column;
+                                this.svc_kind = kind;
+                                this.svc_editing_field = false;
+                                cx.notify();
+                            }))
+                            .child(Self::render_radio_button(
+                                self.svc_kind == kind,
+                                primary,
+                                border,
+                            ))
+                            .child(div().text_sm().child(label))
+                    })),
+            )
     }
 
     fn render_svc_args_section(
@@ -1106,7 +1333,7 @@ impl ServicesSection {
                     .child(
                         div()
                             .flex_1()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if input_focused {
                                 primary
@@ -1132,7 +1359,7 @@ impl ServicesSection {
                     )
                     .child(
                         div()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if remove_focused {
                                 primary
@@ -1153,7 +1380,7 @@ impl ServicesSection {
             .child(
                 div().flex().justify_center().child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_add_focused {
                             primary
@@ -1179,10 +1406,9 @@ impl ServicesSection {
                                     }),
                                 )
                                 .child(
-                                    svg()
-                                        .path(AppIcon::Plus.path())
+                                    PrimitiveIcon::new(AppIcon::Plus)
                                         .size(Heights::ICON_SM)
-                                        .text_color(theme.primary_foreground),
+                                        .color(theme.primary_foreground),
                                 ),
                         ),
                 ),
@@ -1226,7 +1452,7 @@ impl ServicesSection {
                             .child(
                                 div()
                                     .flex_1()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if key_focused {
                                         primary
@@ -1250,11 +1476,11 @@ impl ServicesSection {
                                     )
                                     .child(Input::new(key_input).small()),
                             )
-                            .child(Text::caption("="))
+                            .child(MonoCaption::new("="))
                             .child(
                                 div()
                                     .flex_1()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if value_focused {
                                         primary
@@ -1280,7 +1506,7 @@ impl ServicesSection {
                             )
                             .child(
                                 div()
-                                    .rounded(px(4.0))
+                                    .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if remove_focused {
                                         primary
@@ -1302,7 +1528,7 @@ impl ServicesSection {
             .child(
                 div().flex().justify_center().child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_add_focused {
                             primary
@@ -1328,10 +1554,9 @@ impl ServicesSection {
                                     }),
                                 )
                                 .child(
-                                    svg()
-                                        .path(AppIcon::Plus.path())
+                                    PrimitiveIcon::new(AppIcon::Plus)
                                         .size(Heights::ICON_SM)
-                                        .text_color(theme.primary_foreground),
+                                        .color(theme.primary_foreground),
                                 ),
                         ),
                 ),

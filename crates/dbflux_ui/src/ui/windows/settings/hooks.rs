@@ -1,17 +1,18 @@
 use crate::app::AppStateChanged;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::primitives::{Icon, Label};
+use dbflux_components::typography::{Body, MonoCaption, MonoLabel, PanelTitle};
 use dbflux_core::{
     ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::InputState;
-use gpui_component::scroll::ScrollableElement;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -53,15 +54,11 @@ impl HooksSection {
             state
         });
 
-        let sub = cx.subscribe_in(
-            &input,
-            window,
-            |_, _, event: &gpui_component::input::InputEvent, _window, cx| {
-                if matches!(event, gpui_component::input::InputEvent::Change) {
-                    cx.notify();
-                }
-            },
-        );
+        let sub = cx.subscribe_in(&input, window, |_, _, event: &InputEvent, _window, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
 
         self.input_hook_script_content = input;
         self.hook_script_content_subscription = Some(sub);
@@ -292,7 +289,11 @@ impl HooksSection {
         };
 
         if let Err(error) = open::that(&path) {
-            cx.toast_error(format!("Failed to open script: {error}"), window);
+            let toast_msg = (format!("Failed to open script: {error}")).to_string();
+            Toast::error(toast_msg.clone())
+                .meta_right(now_hms())
+                .action(copy_action(toast_msg))
+                .push(cx);
         }
     }
 
@@ -328,7 +329,10 @@ impl HooksSection {
         let hook_id = self.input_hook_id.read(cx).value().trim().to_string();
 
         if hook_id.is_empty() {
-            cx.toast_error("Hook ID is required", window);
+            Toast::error("Hook ID is required")
+                .meta_right(now_hms())
+                .action(copy_action("Hook ID is required"))
+                .push(cx);
             return None;
         }
 
@@ -342,7 +346,9 @@ impl HooksSection {
                 self.input_hook_script_content.read(cx).value().to_string(),
             ),
             HookKindSelection::Command => {
-                cx.toast_warning("Commands do not open in the script editor", window);
+                Toast::warning("Commands do not open in the script editor")
+                    .meta_right(now_hms())
+                    .push(cx);
                 return None;
             }
         };
@@ -351,7 +357,11 @@ impl HooksSection {
             if !path.exists()
                 && let Err(error) = std::fs::write(&path, &content)
             {
-                cx.toast_error(format!("Failed to write script file: {error}"), window);
+                let toast_msg = (format!("Failed to write script file: {error}")).to_string();
+                Toast::error(toast_msg.clone())
+                    .meta_right(now_hms())
+                    .action(copy_action(toast_msg))
+                    .push(cx);
                 return None;
             }
 
@@ -383,7 +393,11 @@ impl HooksSection {
         }) {
             Ok(path) => path,
             Err(error) => {
-                cx.toast_error(error, window);
+                let toast_msg = error.to_string();
+                Toast::error(toast_msg.clone())
+                    .meta_right(now_hms())
+                    .action(copy_action(toast_msg))
+                    .push(cx);
                 return None;
             }
         };
@@ -664,13 +678,18 @@ impl HooksSection {
         Ok(Some((hook_id, hook)))
     }
 
-    fn persist_hooks(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn persist_hooks(&self, _window: &mut Window, cx: &mut Context<Self>) {
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) =
             dbflux_app::config_loader::save_hook_definitions(runtime, &self.hook_definitions)
         {
             log::error!("Failed to save hooks to SQLite: {}", e);
-            cx.toast_error(format!("Failed to save hooks: {}", e), window);
+            let toast_body = e.to_string();
+            Toast::error("Failed to save hooks")
+                .meta_right(now_hms())
+                .body(toast_body.clone())
+                .action(copy_action(format!("Failed to save hooks: {}", toast_body)))
+                .push(cx);
             return;
         }
 
@@ -1065,7 +1084,11 @@ impl HooksSection {
             Ok(Some(hook)) => hook,
             Ok(None) => return,
             Err(error) => {
-                cx.toast_error(error, window);
+                let toast_msg = error.to_string();
+                Toast::error(toast_msg.clone())
+                    .meta_right(now_hms())
+                    .action(copy_action(toast_msg))
+                    .push(cx);
                 return;
             }
         };
@@ -1074,10 +1097,11 @@ impl HooksSection {
             && self.editing_hook_id.as_deref() != Some(hook_id.as_str());
 
         if duplicate {
-            cx.toast_error(
-                format!("A hook with ID '{}' already exists", hook_id),
-                window,
-            );
+            let msg = format!("A hook with ID '{}' already exists", hook_id);
+            Toast::error(msg.clone())
+                .meta_right(now_hms())
+                .action(copy_action(msg))
+                .push(cx);
             return;
         }
 
@@ -1092,7 +1116,7 @@ impl HooksSection {
 
         self.load_hook_into_form(&hook_id, window, cx);
         self.hook_focus = HookFocus::Form;
-        cx.toast_success("Hook saved", window);
+        Toast::success("Hook saved").meta_right(now_hms()).push(cx);
     }
 
     pub(super) fn request_delete_hook(&mut self, hook_id: String, cx: &mut Context<Self>) {
@@ -1117,7 +1141,9 @@ impl HooksSection {
         }
 
         self.persist_hooks(window, cx);
-        cx.toast_success("Hook deleted", window);
+        Toast::success("Hook deleted")
+            .meta_right(now_hms())
+            .push(cx);
         cx.notify();
     }
 
@@ -1160,34 +1186,19 @@ impl HooksSection {
     }
 
     pub(super) fn render_hooks_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        layout::section_container(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .child(layout::section_header(
-                    "Hooks",
-                    "Create reusable hooks and associate them from connection settings",
-                    theme,
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .overflow_hidden()
-                        .child(self.render_hooks_list(cx))
-                        .child(self.render_hook_form(cx)),
-                ),
+        layout::split_section_shell(
+            dbflux_components::composites::section_header(
+                "Hooks",
+                "Create reusable hooks and associate them from connection settings",
+                cx,
+            ),
+            self.render_hooks_list(cx),
+            self.render_hook_form(cx),
         )
     }
 
-    fn render_hooks_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+    fn render_hooks_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
         let hook_ids = self.hook_sorted_ids();
         let list_focused = self.content_focused && self.hook_focus == HookFocus::List;
         let is_new_button_focused = list_focused && self.hook_list_idx.is_none();
@@ -1207,7 +1218,7 @@ impl HooksSection {
             .child(
                 div().p_2().border_b_1().border_color(theme.border).child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_new_button_focused {
                             theme.primary
@@ -1237,7 +1248,7 @@ impl HooksSection {
                     .flex_col()
                     .gap_1()
                     .when(hook_ids.is_empty(), |container| {
-                        container.child(Text::muted("No hooks defined"))
+                        container.child(Body::new("No hooks defined").color(theme.muted_foreground))
                     })
                     .children(hook_ids.into_iter().enumerate().map(|(idx, hook_id)| {
                         let selected = self.editing_hook_id.as_deref() == Some(hook_id.as_str());
@@ -1249,7 +1260,8 @@ impl HooksSection {
                             .id(SharedString::from(format!("hook-item-{}", hook_id)))
                             .px_3()
                             .py_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
+                            .bg(theme.list_even)
                             .cursor_pointer()
                             .border_1()
                             .border_color(if focused && !selected {
@@ -1268,21 +1280,20 @@ impl HooksSection {
                                     .flex()
                                     .items_start()
                                     .gap_2()
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::SquareTerminal.path())
-                                            .size_4()
-                                            .text_color(theme.muted_foreground)
-                                            .mt(px(2.0)),
-                                    )
+                                    .child(div().mt(px(2.0)).child(
+                                        Icon::new(AppIcon::SquareTerminal).size(px(16.0)).muted(),
+                                    ))
                                     .child(
                                         div()
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(Label::new(hook_id.clone()))
+                                            .child(MonoLabel::new(hook_id.clone()))
                                             .when_some(hook, |container, hook| {
-                                                container.child(Text::caption(hook.summary()))
+                                                container.child(
+                                                    Body::new(hook.summary())
+                                                        .color(theme.muted_foreground),
+                                                )
                                             }),
                                     ),
                             )
@@ -1303,13 +1314,9 @@ impl HooksSection {
         let preview = self.hook_form_preview(cx);
         let default_interpreter = self.default_script_interpreter_label(cx);
 
-        div()
-            .flex_1()
-            .min_h_0()
-            .h_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
+        layout::sticky_form_shell(
+            PanelTitle::new(title),
+            div()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| {
@@ -1317,16 +1324,7 @@ impl HooksSection {
                 }),
             )
             .child(
-                div().p_4().border_b_1().border_color(theme.border).child(
-                    Label::new(title),
-                ),
-            )
-            .child(
                 div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
                     .flex()
                     .flex_col()
                     .gap_4()
@@ -1366,7 +1364,9 @@ impl HooksSection {
                                         .flex_col()
                                         .gap_1()
                                         .child(Label::new("Arguments"))
-                                        .child(Text::caption("Arguments separated by spaces"))
+                                        .child(Body::new("Arguments separated by spaces").color(
+                                            theme.muted_foreground,
+                                        ))
                                         .child(Input::new(&self.input_hook_args).small()),
                                 ),
                         )
@@ -1403,7 +1403,7 @@ impl HooksSection {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(Text::caption("Scripts are edited in the app editor and stored under hooks/ by default"))
+                                        .child(Body::new("Scripts are edited in the app editor and stored under hooks/ by default").color(theme.muted_foreground))
                                         .child(
                                             Input::new(&self.input_hook_script_file_path).small(),
                                         )
@@ -1434,7 +1434,7 @@ impl HooksSection {
                                             .flex_col()
                                             .gap_1()
                                             .child(Label::new("Interpreter"))
-                                            .child(Text::caption(format!("Leave empty for {default_interpreter}")))
+                                            .child(Body::new(format!("Leave empty for {default_interpreter}")).color(theme.muted_foreground))
                                             .child(Input::new(&self.input_hook_interpreter).small()),
                                     )
                                 })
@@ -1458,7 +1458,7 @@ impl HooksSection {
                                                                 cx.notify();
                                                             })),
                                                     )
-                                                    .child(Text::body("Logging")),
+                                                    .child(Body::new("Logging")),
                                             )
                                             .child(
                                                 div()
@@ -1473,7 +1473,7 @@ impl HooksSection {
                                                                 cx.notify();
                                                             })),
                                                     )
-                                                    .child(Text::body("Environment read")),
+                                                    .child(Body::new("Environment read")),
                                             )
                                             .child(
                                                 div()
@@ -1488,7 +1488,7 @@ impl HooksSection {
                                                                 cx.notify();
                                                             })),
                                                     )
-                                                    .child(Text::body("Connection metadata")),
+                                                    .child(Body::new("Connection metadata")),
                                             )
                                             .child(
                                                 div()
@@ -1503,11 +1503,12 @@ impl HooksSection {
                                                                 cx.notify();
                                                             })),
                                                     )
-                                                    .child(Text::body("Controlled process run")),
+                                                    .child(Body::new("Controlled process run")),
                                             )
-                                            .child(Text::caption(
+                                            .child(Body::new(
                                                 "Enables `dbflux.process.run(...)` without exposing the Lua `os` library",
-                                            )),
+                                            )
+                                            .color(theme.muted_foreground)),
                                     )
                                 }),
                         )
@@ -1519,7 +1520,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new("Execution Mode"))
-                            .child(Text::caption("Detached runs in background and does not block connect/disconnect"))
+                            .child(Body::new("Detached runs in background and does not block connect/disconnect").color(theme.muted_foreground))
                             .child(div().w(px(220.0)).child(self.hook_execution_mode_dropdown.clone())),
                     )
                     })
@@ -1530,7 +1531,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new("Ready Signal"))
-                            .child(Text::caption("DBFlux waits for this text in hook output before continuing. Required for detached pre-connect hooks."))
+                            .child(Body::new("DBFlux waits for this text in hook output before continuing. Required for detached pre-connect hooks.").color(theme.muted_foreground))
                             .child(Input::new(&self.input_hook_ready_signal).small()),
                     )
                     })
@@ -1551,7 +1552,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new("Environment"))
-                            .child(Text::caption("Comma-separated KEY=value pairs"))
+                            .child(Body::new("Comma-separated KEY=value pairs").color(theme.muted_foreground))
                             .child(Input::new(&self.input_hook_env).small()),
                     )
                     })
@@ -1569,7 +1570,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new("Resolved Command"))
-                            .child(Text::caption(preview)),
+                            .child(MonoCaption::new(preview)),
                     )
                     .when(!warnings.is_empty(), |container| {
                         container.child(
@@ -1585,15 +1586,14 @@ impl HooksSection {
                                     .border_1()
                                     .border_color(theme.warning.opacity(0.3))
                                     .child(
-                                        svg()
-                                            .path(AppIcon::TriangleAlert.path())
-                                            .size_4()
-                                            .text_color(theme.warning)
-                                            .mt(px(1.0)),
+                                        div().mt(px(1.0)).child(
+                                            Icon::new(AppIcon::TriangleAlert)
+                                                .size(px(16.0))
+                                                .warning(),
+                                        ),
                                     )
                                     .child(
-                                        Text::body(warning.clone())
-                                            .text_color(theme.warning),
+                                        Body::new(warning.clone()).color(theme.warning),
                                     )
                             })),
                         )
@@ -1611,7 +1611,7 @@ impl HooksSection {
                                         cx.notify();
                                     })),
                             )
-                            .child(Text::body("Enabled")),
+                            .child(Body::new("Enabled")),
                     )
                     .when(!is_lua, |container| {
                         container.child(
@@ -1627,7 +1627,7 @@ impl HooksSection {
                                             cx.notify();
                                         })),
                                 )
-                                .child(Text::body("Inherit parent environment")),
+                                .child(Body::new("Inherit parent environment")),
                         )
                     })
                     .child(
@@ -1637,38 +1637,48 @@ impl HooksSection {
                             .gap_1()
                             .child(Label::new("On Failure"))
                             .child(div().w(px(220.0)).child(self.hook_failure_dropdown.clone())),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .gap_2()
-                    .justify_end()
-                    .when(editing, |container| {
-                        let hook_id = self.editing_hook_id.clone().unwrap_or_default();
-                        container.child(
-                            Button::new("delete-hook", "Delete")
-                                .small()
-                                .danger()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.request_delete_hook(hook_id.clone(), cx);
-                                })),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("save-hook", if editing { "Update" } else { "Create" })
-                            .small()
-                            .primary()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_hook(window, cx);
-                            })),
-                    ),
-            )
+                    )),
+            None,
+            theme,
+        )
+    }
+
+    pub(super) fn render_hook_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_form_focused = self.content_focused && self.hook_focus == HookFocus::Form;
+        let primary = cx.theme().primary;
+        let editing = self.editing_hook_id.is_some();
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .when(editing, |container| {
+                let hook_id = self.editing_hook_id.clone().unwrap_or_default();
+
+                container.child(layout::footer_action_frame(
+                    is_form_focused && self.hook_form_field == HookFormField::DeleteButton,
+                    primary,
+                    Button::new("delete-hook", "Delete")
+                        .small()
+                        .danger()
+                        .w_full()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.request_delete_hook(hook_id.clone(), cx);
+                        })),
+                ))
+            })
+            .child(layout::footer_action_frame(
+                is_form_focused && self.hook_form_field == HookFormField::SaveButton,
+                primary,
+                Button::new("save-hook", if editing { "Update" } else { "Create" })
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_hook(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     pub(super) fn handle_key_event(

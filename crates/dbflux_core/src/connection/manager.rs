@@ -1,8 +1,9 @@
 use crate::{
+    CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
     Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
-    HookContext, ProxyProfile, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo,
-    TaskTarget,
+    HookContext, ProxyProfile, RelationRef, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase,
+    SshTunnelProfile, TableInfo, TaskTarget,
 };
 use log::{error, info};
 use secrecy::SecretString;
@@ -25,6 +26,10 @@ pub enum CacheKey {
     TableDetails {
         database: String,
         table: String,
+    },
+    CollectionChildren {
+        database: String,
+        collection: String,
     },
     SchemaTypes {
         database: String,
@@ -51,6 +56,13 @@ impl CacheKey {
         Self::TableDetails {
             database: database.into(),
             table: table.into(),
+        }
+    }
+
+    pub fn collection_children(database: impl Into<String>, collection: impl Into<String>) -> Self {
+        Self::CollectionChildren {
+            database: database.into(),
+            collection: collection.into(),
         }
     }
 
@@ -84,6 +96,7 @@ impl CacheKey {
 pub enum CacheEntry<'a> {
     DatabaseSchema(&'a DbSchemaInfo),
     TableDetails(&'a TableInfo),
+    CollectionChildren(&'a CollectionChildrenCache),
     SchemaTypes(&'a Vec<CustomTypeInfo>),
     SchemaIndexes(&'a Vec<SchemaIndexInfo>),
     SchemaForeignKeys(&'a Vec<SchemaForeignKeyInfo>),
@@ -99,6 +112,11 @@ pub enum OwnedCacheEntry {
         database: String,
         table: String,
         details: TableInfo,
+    },
+    CollectionChildren {
+        database: String,
+        collection: String,
+        page: CollectionChildrenPage,
     },
     SchemaTypes {
         database: String,
@@ -196,6 +214,48 @@ pub enum ConnectionResolutionError {
     PendingDatabaseConnection { database: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrepareConnectError {
+    ProfileNotFound,
+    AlreadyConnected,
+    DriverNotRegistered {
+        driver_id: String,
+    },
+    ExternalDriverUnavailable {
+        driver_id: String,
+        socket_id: String,
+    },
+}
+
+impl PrepareConnectError {
+    pub fn socket_id(&self) -> Option<&str> {
+        match self {
+            Self::ExternalDriverUnavailable { socket_id, .. } => Some(socket_id),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for PrepareConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProfileNotFound => write!(f, "Profile not found"),
+            Self::AlreadyConnected => write!(f, "Already connected"),
+            Self::DriverNotRegistered { driver_id } => {
+                write!(f, "No driver registered for '{}'", driver_id)
+            }
+            Self::ExternalDriverUnavailable {
+                driver_id,
+                socket_id,
+            } => write!(
+                f,
+                "External driver '{}' is unavailable because service '{}' was not registered",
+                driver_id, socket_id
+            ),
+        }
+    }
+}
+
 pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
@@ -203,9 +263,12 @@ pub struct ConnectedProfile {
     /// Lazy-loaded schemas per database (MySQL/MariaDB).
     pub database_schemas: HashMap<String, DbSchemaInfo>,
     pub table_details: HashMap<(String, String), TableInfo>,
+    pub collection_children: HashMap<(String, String), CollectionChildrenCache>,
     pub schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
     pub schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
     pub schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+    /// Dependent objects (views, FK children, triggers) per table, keyed by `(database, table)`.
+    pub dependents_cache: HashMap<(String, String), Vec<RelationRef>>,
     /// Active database for query context (MySQL/MariaDB USE).
     pub active_database: Option<String>,
     pub redis_key_cache: RedisKeyCache,
@@ -231,6 +294,14 @@ impl ConnectedProfile {
                 .table_details
                 .get(&(database.clone(), table.clone()))
                 .map(CacheEntry::TableDetails),
+
+            CacheKey::CollectionChildren {
+                database,
+                collection,
+            } => self
+                .collection_children
+                .get(&(database.clone(), collection.clone()))
+                .map(CacheEntry::CollectionChildren),
 
             CacheKey::SchemaTypes { database, schema } => {
                 let sk = SchemaCacheKey::new(database.as_str(), schema.as_deref());
@@ -269,6 +340,20 @@ impl ConnectedProfile {
                 details,
             } => {
                 self.table_details.insert((database, table), details);
+            }
+
+            OwnedCacheEntry::CollectionChildren {
+                database,
+                collection,
+                page,
+            } => {
+                let cache = self
+                    .collection_children
+                    .entry((database, collection))
+                    .or_default();
+
+                cache.items.extend(page.items);
+                cache.next_page_token = page.next_page_token;
             }
 
             OwnedCacheEntry::SchemaTypes {
@@ -321,6 +406,28 @@ impl ConnectedProfile {
             .get(database)
             .map(|dc| dc.connection.clone())
             .unwrap_or_else(|| self.connection.clone())
+    }
+
+    /// Return all cached dependents for the given `(database, table)` pair.
+    ///
+    /// Returns an empty `Vec` when nothing has been populated yet, which is
+    /// correct for drivers that have not called `populate_dependents`.
+    pub fn dependents(&self, database: &str, table: &str) -> Vec<RelationRef> {
+        self.dependents_cache
+            .get(&(database.to_string(), table.to_string()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Store the dependent objects for a specific `(database, table)` pair.
+    pub fn populate_dependents(
+        &mut self,
+        database: impl Into<String>,
+        table: impl Into<String>,
+        deps: Vec<RelationRef>,
+    ) {
+        self.dependents_cache
+            .insert((database.into(), table.into()), deps);
     }
 
     /// Resolve the effective connection for query execution.
@@ -472,9 +579,11 @@ impl ConnectionManager {
                 schema,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
+                collection_children: HashMap::new(),
                 schema_types: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
+                dependents_cache: HashMap::new(),
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
                 database_connections: HashMap::new(),
@@ -564,11 +673,76 @@ impl ConnectionManager {
         }
     }
 
+    pub fn set_dependents(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        table: String,
+        deps: Vec<RelationRef>,
+    ) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.populate_dependents(database, table, deps);
+        }
+    }
+
     pub fn needs_table_details(&self, profile_id: Uuid, database: &str, table: &str) -> bool {
         let key = CacheKey::table_details(database, table);
         self.connections
             .get(&profile_id)
             .is_some_and(|c| !c.cache_contains(&key))
+    }
+
+    pub fn set_collection_children_page(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        collection: String,
+        page: CollectionChildrenPage,
+    ) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.cache_set(OwnedCacheEntry::CollectionChildren {
+                database,
+                collection,
+                page,
+            });
+        }
+    }
+
+    pub fn collection_children_cache(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> Option<&CollectionChildrenCache> {
+        self.connections.get(&profile_id).and_then(|connection| {
+            connection
+                .collection_children
+                .get(&(database.to_string(), collection.to_string()))
+        })
+    }
+
+    pub fn needs_initial_collection_children(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> bool {
+        let key = CacheKey::collection_children(database, collection);
+
+        self.connections
+            .get(&profile_id)
+            .is_some_and(|connection| !connection.cache_contains(&key))
+    }
+
+    pub fn has_more_collection_children(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+    ) -> bool {
+        self.collection_children_cache(profile_id, database, collection)
+            .and_then(|cache| cache.next_page_token.as_ref())
+            .is_some()
     }
 
     #[allow(dead_code)]
@@ -748,24 +922,30 @@ impl ConnectionManager {
         secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
         get_ssh_secret: impl FnOnce(&ConnectionProfile, &[SshTunnelProfile]) -> Option<SecretString>,
         proxy_secret: Option<SecretString>,
-    ) -> Result<ConnectProfileParams, String> {
+    ) -> Result<ConnectProfileParams, PrepareConnectError> {
         let profile = profiles
             .iter()
             .find(|p| p.id == profile_id)
             .cloned()
-            .ok_or_else(|| "Profile not found".to_string())?;
+            .ok_or(PrepareConnectError::ProfileNotFound)?;
 
         if self.connections.contains_key(&profile_id) {
-            return Err("Already connected".to_string());
+            return Err(PrepareConnectError::AlreadyConnected);
         }
 
         let kind = profile.kind();
         let driver_id = profile.driver_id();
-        let driver = self
-            .drivers
-            .get(&driver_id)
-            .cloned()
-            .ok_or_else(|| format!("No driver registered for '{}'", driver_id))?;
+        let driver = self.drivers.get(&driver_id).cloned().ok_or_else(|| {
+            match driver_id.strip_prefix("rpc:") {
+                Some(socket_id) => PrepareConnectError::ExternalDriverUnavailable {
+                    driver_id: driver_id.clone(),
+                    socket_id: socket_id.to_string(),
+                },
+                None => PrepareConnectError::DriverNotRegistered {
+                    driver_id: driver_id.clone(),
+                },
+            }
+        })?;
 
         let secret_store_param = if kind == DbKind::SQLite {
             None
@@ -961,9 +1141,11 @@ impl ConnectionManager {
                 schema,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
+                collection_children: HashMap::new(),
                 schema_types: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
+                dependents_cache: HashMap::new(),
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
                 database_connections: prev_db_connections,
@@ -1027,6 +1209,45 @@ impl ConnectionManager {
             database: database.to_string(),
             schema: schema.map(String::from),
             table: table.to_string(),
+            connection: connected.connection_for_database(database),
+        })
+    }
+
+    pub fn prepare_fetch_collection_children(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+        limit: u32,
+    ) -> Result<FetchCollectionChildrenParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let page_token = connected
+            .collection_children
+            .get(&(database.to_string(), collection.to_string()))
+            .map(|cache| cache.next_page_token.clone())
+            .unwrap_or(None);
+
+        if connected
+            .collection_children
+            .contains_key(&(database.to_string(), collection.to_string()))
+            && page_token.is_none()
+        {
+            return Err("Collection children already fully cached".to_string());
+        }
+
+        Ok(FetchCollectionChildrenParams {
+            profile_id,
+            database: database.to_string(),
+            collection: collection.to_string(),
+            request: CollectionChildrenRequest {
+                collection: CollectionRef::new(database, collection),
+                limit,
+                page_token,
+            },
             connection: connected.connection_for_database(database),
         })
     }
@@ -1397,11 +1618,17 @@ impl FetchTableDetailsParams {
             .table_details(&self.database, self.schema.as_deref(), &self.table)
             .map_err(|e| e.to_string())?;
 
+        let dependents = self
+            .connection
+            .fetch_dependents(&self.database, self.schema.as_deref(), &self.table)
+            .unwrap_or_default();
+
         Ok(FetchTableDetailsResult {
             profile_id: self.profile_id,
             database: self.database,
             table: self.table,
             details,
+            dependents,
         })
     }
 }
@@ -1412,6 +1639,40 @@ pub struct FetchTableDetailsResult {
     pub database: String,
     pub table: String,
     pub details: TableInfo,
+    /// Dependent objects fetched alongside the table details (views, FK children, triggers).
+    /// Empty when the driver does not support dependent introspection.
+    pub dependents: Vec<RelationRef>,
+}
+
+pub struct FetchCollectionChildrenParams {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub collection: String,
+    pub request: CollectionChildrenRequest,
+    pub connection: Arc<dyn Connection>,
+}
+
+impl FetchCollectionChildrenParams {
+    pub fn execute(self) -> Result<FetchCollectionChildrenResult, String> {
+        let page = self
+            .connection
+            .collection_children(&self.request)
+            .map_err(|e| e.to_string())?;
+
+        Ok(FetchCollectionChildrenResult {
+            profile_id: self.profile_id,
+            database: self.database,
+            collection: self.collection,
+            page,
+        })
+    }
+}
+
+pub struct FetchCollectionChildrenResult {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub collection: String,
+    pub page: CollectionChildrenPage,
 }
 
 pub struct FetchSchemaTypesParams {
@@ -1507,7 +1768,10 @@ pub struct FetchSchemaForeignKeysResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, QueryLanguage};
+    use crate::{
+        DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, NoopSecretStore,
+        QueryLanguage,
+    };
     use secrecy::ExposeSecret;
 
     struct TestConnection {
@@ -1526,6 +1790,7 @@ mod tests {
                     display_name: format!("{kind:?}"),
                     description: "test".to_string(),
                     category: crate::DatabaseCategory::Relational,
+                    deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
                     default_port: None,
@@ -1537,6 +1802,8 @@ mod tests {
                     ddl: None,
                     transactions: None,
                     limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
                     classification_override: None,
                 },
             }
@@ -1604,9 +1871,11 @@ mod tests {
             schema,
             database_schemas: HashMap::new(),
             table_details: HashMap::new(),
+            collection_children: HashMap::new(),
             schema_types: HashMap::new(),
             schema_indexes: HashMap::new(),
             schema_foreign_keys: HashMap::new(),
+            dependents_cache: HashMap::new(),
             active_database: None,
             redis_key_cache: RedisKeyCache::default(),
             database_connections,
@@ -1625,7 +1894,10 @@ mod tests {
                 port: 3306,
                 user: "root".to_string(),
                 database: Some("app".to_string()),
-                ssl_mode: crate::SslMode::Disable,
+                ssl_mode: Some("prefer".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
@@ -1815,6 +2087,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prepare_connect_profile_returns_external_driver_unavailable_error_for_missing_rpc_driver() {
+        let manager = ConnectionManager::new(HashMap::new());
+
+        let mut profile = ConnectionProfile::new("rpc profile", DbConfig::default_postgres());
+        profile.set_driver_id("rpc:missing.sock".to_string());
+
+        let error = match manager.prepare_connect_profile(
+            profile.id,
+            &[profile],
+            &[],
+            &[],
+            &Arc::new(RwLock::new(
+                Box::new(NoopSecretStore) as Box<dyn SecretStore>
+            )),
+            |_profile, _ssh_tunnels| None,
+            None,
+        ) {
+            Ok(_) => panic!("expected missing rpc driver to return an error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            PrepareConnectError::ExternalDriverUnavailable {
+                driver_id: "rpc:missing.sock".to_string(),
+                socket_id: "missing.sock".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn prepare_connect_profile_keeps_generic_error_for_non_rpc_missing_driver() {
+        let manager = ConnectionManager::new(HashMap::new());
+
+        let profile = ConnectionProfile::new("sqlite", DbConfig::default_sqlite());
+
+        let error = match manager.prepare_connect_profile(
+            profile.id,
+            &[profile],
+            &[],
+            &[],
+            &Arc::new(RwLock::new(
+                Box::new(NoopSecretStore) as Box<dyn SecretStore>
+            )),
+            |_profile, _ssh_tunnels| None,
+            None,
+        ) {
+            Ok(_) => panic!("expected missing builtin driver to return an error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            PrepareConnectError::DriverNotRegistered {
+                driver_id: "sqlite".to_string(),
+            }
+        );
+    }
+
     // --- ConnectProfileParams::execute tests ---
 
     use crate::{
@@ -1836,6 +2168,7 @@ mod tests {
                     display_name: "TestPG".to_string(),
                     description: "test".to_string(),
                     category: DatabaseCategory::Relational,
+                    deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
                     default_port: Some(5432),
@@ -1847,6 +2180,8 @@ mod tests {
                     ddl: None,
                     transactions: None,
                     limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
                     classification_override: None,
                 },
                 form: &POSTGRES_FORM,
@@ -1907,7 +2242,10 @@ mod tests {
                 port: 5432,
                 user: "root".to_string(),
                 database: "app".to_string(),
-                ssl_mode: crate::SslMode::Disable,
+                ssl_mode: Some("prefer".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: Some(SshTunnelConfig {
                     host: "bastion.local".to_string(),
                     port: 22,
@@ -1953,7 +2291,10 @@ mod tests {
                 port: 5432,
                 user: "root".to_string(),
                 database: "app".to_string(),
-                ssl_mode: crate::SslMode::Disable,
+                ssl_mode: Some("prefer".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
@@ -2028,6 +2369,7 @@ mod tests {
                     display_name: "TestSQLite".to_string(),
                     description: "test".to_string(),
                     category: DatabaseCategory::Relational,
+                    deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
                     default_port: None,
@@ -2039,6 +2381,8 @@ mod tests {
                     ddl: None,
                     transactions: None,
                     limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
                     classification_override: None,
                 });
                 &META
@@ -2095,6 +2439,62 @@ mod tests {
             result.is_ok(),
             "execute should succeed for SQLite (no host_port), got: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn dependents_roundtrip_returns_stored_relations() {
+        use crate::{RelationKind, RelationRef};
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut connected = connected_profile(profile, connection, None, HashMap::new());
+
+        let deps = vec![
+            RelationRef {
+                kind: RelationKind::View,
+                qualified_name: "public.user_summary".to_string(),
+            },
+            RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: "orders.user_id".to_string(),
+            },
+        ];
+
+        connected.populate_dependents("mydb", "users", deps.clone());
+
+        let retrieved = connected.dependents("mydb", "users");
+        assert_eq!(retrieved, deps);
+    }
+
+    #[test]
+    fn dependents_for_unknown_table_returns_empty() {
+        use crate::{RelationKind, RelationRef};
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut connected = connected_profile(profile, connection, None, HashMap::new());
+
+        connected.populate_dependents(
+            "mydb",
+            "users",
+            vec![RelationRef {
+                kind: RelationKind::Trigger,
+                qualified_name: "public.audit_users".to_string(),
+            }],
+        );
+
+        let retrieved = connected.dependents("mydb", "orders");
+        assert!(
+            retrieved.is_empty(),
+            "expected empty for unknown table, got {:?}",
+            retrieved
         );
     }
 }

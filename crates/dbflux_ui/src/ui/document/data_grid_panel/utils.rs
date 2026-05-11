@@ -90,6 +90,42 @@ impl DataGridPanel {
         table_info.columns.clone()
     }
 
+    /// Returns the set of local column names that are FK source columns for the
+    /// current table, using the cached `TableInfo.foreign_keys`.
+    pub(super) fn get_fk_column_names(
+        &self,
+        cx: &Context<Self>,
+    ) -> std::collections::HashSet<String> {
+        let (profile_id, table_ref) = match &self.source {
+            super::DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            super::DataSource::Collection { .. } => return std::collections::HashSet::new(),
+            super::DataSource::QueryResult { .. } => return std::collections::HashSet::new(),
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = match state.connections().get(&profile_id) {
+            Some(c) => c,
+            None => return std::collections::HashSet::new(),
+        };
+
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (database.to_string(), table_ref.name.clone());
+        let table_info = match connected.table_details.get(&cache_key) {
+            Some(t) => t,
+            None => return std::collections::HashSet::new(),
+        };
+
+        table_info
+            .foreign_keys
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .flat_map(|fk| fk.columns.iter().cloned())
+            .collect()
+    }
+
     pub(super) fn get_all_column_defaults(&self, cx: &Context<Self>) -> Vec<Option<String>> {
         let (profile_id, table_ref) = match &self.source {
             super::DataSource::Table {

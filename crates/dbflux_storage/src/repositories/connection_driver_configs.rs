@@ -7,7 +7,7 @@ use log::info;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
-use dbflux_core::{DbConfig, DbKind, SshAuthMethod, SshTunnelConfig, SslMode};
+use dbflux_core::{DbConfig, DbKind, SshAuthMethod, SshTunnelConfig};
 
 use crate::bootstrap::OwnedConnection;
 use crate::error::StorageError;
@@ -110,6 +110,9 @@ impl ConnectionDriverConfigDto {
                 user,
                 database,
                 ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ..
             } => {
@@ -120,6 +123,9 @@ impl ConnectionDriverConfigDto {
                 dto.user = Some(user.clone());
                 dto.database_name = Some(database.clone());
                 dto.ssl_mode = ssl_mode_to_str(ssl_mode);
+                dto.ssl_ca = ssl_root_cert_path.clone();
+                dto.ssl_cert = ssl_client_cert_path.clone();
+                dto.ssl_key = ssl_client_key_path.clone();
                 if let Some(tunnel) = ssh_tunnel {
                     fill_ssh_tunnel_fields(&mut dto, tunnel);
                 }
@@ -132,6 +138,9 @@ impl ConnectionDriverConfigDto {
                 user,
                 database,
                 ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ..
             } => {
@@ -142,6 +151,9 @@ impl ConnectionDriverConfigDto {
                 dto.user = Some(user.clone());
                 dto.database_name = database.clone();
                 dto.ssl_mode = ssl_mode_to_str(ssl_mode);
+                dto.ssl_ca = ssl_root_cert_path.clone();
+                dto.ssl_cert = ssl_client_cert_path.clone();
+                dto.ssl_key = ssl_client_key_path.clone();
                 if let Some(tunnel) = ssh_tunnel {
                     fill_ssh_tunnel_fields(&mut dto, tunnel);
                 }
@@ -154,6 +166,10 @@ impl ConnectionDriverConfigDto {
                 user,
                 database,
                 auth_database,
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ..
             } => {
@@ -164,6 +180,10 @@ impl ConnectionDriverConfigDto {
                 dto.user = user.clone();
                 dto.database_name = database.clone();
                 dto.mongo_auth_database = auth_database.clone();
+                dto.ssl_mode = ssl_mode.clone().unwrap_or_default();
+                dto.ssl_ca = ssl_root_cert_path.clone();
+                dto.ssl_cert = ssl_client_cert_path.clone();
+                dto.ssl_key = ssl_client_key_path.clone();
                 if let Some(tunnel) = ssh_tunnel {
                     fill_ssh_tunnel_fields(&mut dto, tunnel);
                 }
@@ -176,6 +196,10 @@ impl ConnectionDriverConfigDto {
                 user,
                 database,
                 tls,
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ..
             } => {
@@ -185,8 +209,14 @@ impl ConnectionDriverConfigDto {
                 dto.port = Some(*port as i32);
                 dto.user = user.clone();
                 dto.database_name = database.map(|d| d.to_string());
+                // `redis_tls` is preserved for back-compat with the column schema; the
+                // canonical source of TLS info is now `ssl_mode`.
                 dto.redis_tls = *tls;
                 dto.redis_database = database.map(|d| d as i32);
+                dto.ssl_mode = ssl_mode.clone().unwrap_or_default();
+                dto.ssl_ca = ssl_root_cert_path.clone();
+                dto.ssl_cert = ssl_client_cert_path.clone();
+                dto.ssl_key = ssl_client_key_path.clone();
                 if let Some(tunnel) = ssh_tunnel {
                     fill_ssh_tunnel_fields(&mut dto, tunnel);
                 }
@@ -209,6 +239,15 @@ impl ConnectionDriverConfigDto {
                 dto.dynamo_endpoint = endpoint.clone();
                 dto.dynamo_table = table.clone();
             }
+            DbConfig::CloudWatchLogs {
+                region,
+                profile,
+                endpoint,
+            } => {
+                dto.dynamo_region = Some(region.clone());
+                dto.dynamo_profile = profile.clone();
+                dto.dynamo_endpoint = endpoint.clone();
+            }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
                 dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
@@ -223,7 +262,7 @@ impl ConnectionDriverConfigDto {
         let kind = str_to_db_kind(&self.config_key)?;
 
         match kind {
-            DbKind::Postgres | DbKind::MySQL => {
+            DbKind::Postgres => {
                 let ssh_tunnel = build_ssh_tunnel(self);
 
                 Some(DbConfig::Postgres {
@@ -233,7 +272,31 @@ impl ConnectionDriverConfigDto {
                     port: self.port.unwrap_or(5432) as u16,
                     user: self.user.clone().unwrap_or_default(),
                     database: self.database_name.clone().unwrap_or_default(),
-                    ssl_mode: str_to_ssl_mode(&self.ssl_mode),
+                    ssl_mode: str_to_ssl_mode_opt(&self.ssl_mode),
+                    ssl_root_cert_path: self.ssl_ca.clone(),
+                    ssl_client_cert_path: self.ssl_cert.clone(),
+                    ssl_client_key_path: self.ssl_key.clone(),
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id: None,
+                })
+            }
+            DbKind::MySQL | DbKind::MariaDB => {
+                let ssh_tunnel = build_ssh_tunnel(self);
+
+                Some(DbConfig::MySQL {
+                    use_uri: self.use_uri,
+                    uri: self.uri.clone(),
+                    host: self.host.clone().unwrap_or_default(),
+                    port: self.port.unwrap_or(3306) as u16,
+                    user: self.user.clone().unwrap_or_default(),
+                    database: self
+                        .database_name
+                        .clone()
+                        .filter(|database| !database.is_empty()),
+                    ssl_mode: str_to_ssl_mode_opt(&self.ssl_mode),
+                    ssl_root_cert_path: self.ssl_ca.clone(),
+                    ssl_client_cert_path: self.ssl_cert.clone(),
+                    ssl_client_key_path: self.ssl_key.clone(),
                     ssh_tunnel,
                     ssh_tunnel_profile_id: None,
                 })
@@ -249,12 +312,28 @@ impl ConnectionDriverConfigDto {
                     user: self.user.clone(),
                     database: self.database_name.clone(),
                     auth_database: self.mongo_auth_database.clone(),
+                    ssl_mode: str_to_ssl_mode_opt(&self.ssl_mode),
+                    ssl_root_cert_path: self.ssl_ca.clone(),
+                    ssl_client_cert_path: self.ssl_cert.clone(),
+                    ssl_client_key_path: self.ssl_key.clone(),
                     ssh_tunnel,
                     ssh_tunnel_profile_id: None,
                 })
             }
             DbKind::Redis => {
                 let ssh_tunnel = build_ssh_tunnel(self);
+
+                // Prefer the new `ssl_mode` column; migrate `redis_tls` only when the
+                // SSL mode is empty (legacy rows).
+                let ssl_mode = if self.ssl_mode.is_empty() {
+                    Some(if self.redis_tls {
+                        "on".to_string()
+                    } else {
+                        "off".to_string()
+                    })
+                } else {
+                    str_to_ssl_mode_opt(&self.ssl_mode)
+                };
 
                 Some(DbConfig::Redis {
                     use_uri: self.use_uri,
@@ -264,6 +343,10 @@ impl ConnectionDriverConfigDto {
                     user: self.user.clone(),
                     database: self.redis_database.map(|d| d as u32),
                     tls: self.redis_tls,
+                    ssl_mode,
+                    ssl_root_cert_path: self.ssl_ca.clone(),
+                    ssl_client_cert_path: self.ssl_cert.clone(),
+                    ssl_client_key_path: self.ssl_key.clone(),
                     ssh_tunnel,
                     ssh_tunnel_profile_id: None,
                 })
@@ -278,7 +361,11 @@ impl ConnectionDriverConfigDto {
                 endpoint: self.dynamo_endpoint.clone(),
                 table: self.dynamo_table.clone(),
             }),
-            _ => None,
+            DbKind::CloudWatchLogs => Some(DbConfig::CloudWatchLogs {
+                region: self.dynamo_region.clone().unwrap_or_default(),
+                profile: self.dynamo_profile.clone(),
+                endpoint: self.dynamo_endpoint.clone(),
+            }),
         }
     }
 }
@@ -296,6 +383,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::MongoDB => "MongoDB",
         DbKind::Redis => "Redis",
         DbKind::DynamoDB => "DynamoDB",
+        DbKind::CloudWatchLogs => "CloudWatchLogs",
     }
     .to_string()
 }
@@ -309,24 +397,51 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "MongoDB" => Some(DbKind::MongoDB),
         "Redis" => Some(DbKind::Redis),
         "DynamoDB" => Some(DbKind::DynamoDB),
+        "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
         _ => None,
     }
 }
 
-fn ssl_mode_to_str(mode: &SslMode) -> String {
-    match mode {
-        SslMode::Disable => "disable".to_string(),
-        SslMode::Prefer => "prefer".to_string(),
-        SslMode::Require => "require".to_string(),
+/// Converts an `Option<String>` ssl_mode to the string stored in the DTO column.
+///
+/// When the mode is absent, falls back to `"prefer"` (Postgres default).
+/// Normalises legacy PascalCase enum names (e.g. `"Prefer"` → `"prefer"`) so that
+/// any value that slipped through the old format is stored in the canonical id format.
+fn ssl_mode_to_str(mode: &Option<String>) -> String {
+    let id = mode.as_deref().unwrap_or("prefer");
+
+    match id {
+        "Disable" => "disable",
+        "Allow" => "allow",
+        "Prefer" => "prefer",
+        "Require" => "require",
+        "VerifyCa" => "verify-ca",
+        "VerifyFull" => "verify-full",
+        other => other,
     }
+    .to_string()
 }
 
-fn str_to_ssl_mode(s: &str) -> SslMode {
-    match s {
-        "disable" => SslMode::Disable,
-        "require" => SslMode::Require,
-        _ => SslMode::Prefer,
+/// Reconstructs an `Option<String>` ssl_mode from the DTO column.
+///
+/// Accepts both the new id format and legacy PascalCase names, normalising to the
+/// canonical id string. Returns `None` when the stored string is empty.
+fn str_to_ssl_mode_opt(s: &str) -> Option<String> {
+    if s.is_empty() {
+        return None;
     }
+
+    let normalised = match s {
+        "Disable" => "disable",
+        "Allow" => "allow",
+        "Prefer" => "prefer",
+        "Require" => "require",
+        "VerifyCa" => "verify-ca",
+        "VerifyFull" => "verify-full",
+        other => other,
+    };
+
+    Some(normalised.to_string())
 }
 
 fn ssh_auth_method_to_str(method: &SshAuthMethod) -> String {
@@ -654,5 +769,63 @@ impl ConnectionDriverConfigsRepository {
             })?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StorageRuntime;
+
+    fn temp_repo() -> (tempfile::TempDir, ConnectionDriverConfigsRepository) {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime = StorageRuntime::for_path(temp_dir.path().join("dbflux.db")).expect("runtime");
+        let repo = ConnectionDriverConfigsRepository::new(runtime.dbflux_db());
+
+        (temp_dir, repo)
+    }
+
+    #[test]
+    fn cloudwatch_driver_config_roundtrips_through_repository() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'CloudWatch', 'cloudwatch', 'cloudwatchlogs', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::CloudWatchLogs {
+            region: "us-east-1".to_string(),
+            profile: Some("dev".to_string()),
+            endpoint: Some("http://localhost:4566".to_string()),
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.insert(&dto).expect("insert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::CloudWatchLogs {
+                region,
+                profile,
+                endpoint,
+            } => {
+                assert_eq!(region, "us-east-1");
+                assert_eq!(profile.as_deref(), Some("dev"));
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:4566"));
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
     }
 }

@@ -6,6 +6,7 @@
 //! from the parent crate.
 
 pub use dbflux_app::AppState;
+pub use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
 pub use dbflux_core::ConnectedProfile;
 
 // Re-export event types from the parent crate

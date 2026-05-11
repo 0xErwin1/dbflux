@@ -169,6 +169,9 @@ pub fn classify_query_for_language(
 ) -> ExecutionClassification {
     match query_language {
         QueryLanguage::Sql => classify_sql_execution(query),
+        QueryLanguage::CloudWatchLogsInsightsQl
+        | QueryLanguage::OpenSearchPpl
+        | QueryLanguage::OpenSearchSql => ExecutionClassification::Read,
         QueryLanguage::MongoQuery => classify_mongo_query(query),
         QueryLanguage::RedisCommands => classify_redis_query(query),
         _ => ExecutionClassification::Write,
@@ -341,9 +344,31 @@ fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
         return vec![];
     }
 
+    if should_skip_sql_parse_diagnostics(query) {
+        return vec![];
+    }
+
     let mut diagnostics = Vec::new();
     collect_error_nodes(tree.root_node(), query, &mut diagnostics);
     diagnostics
+}
+
+fn should_skip_sql_parse_diagnostics(query: &str) -> bool {
+    query
+        .split(';')
+        .map(strip_leading_comments)
+        .filter(|statement| !statement.is_empty())
+        .all(is_postgres_grant_or_revoke_statement)
+}
+
+fn is_postgres_grant_or_revoke_statement(statement: &str) -> bool {
+    let normalized = statement.trim_start().to_ascii_uppercase();
+
+    if !(normalized.starts_with("GRANT ") || normalized.starts_with("REVOKE ")) {
+        return false;
+    }
+
+    normalized.contains(" ON SCHEMA ") || normalized.contains(" ON ALL TABLES IN SCHEMA ")
 }
 
 /// Walk the tree-sitter parse tree and collect ERROR / MISSING nodes.
@@ -1160,6 +1185,20 @@ mod tests {
     #[test]
     fn multiple_valid_statements_no_diagnostics() {
         let diags = sql_editor_diagnostics("SELECT 1; SELECT 2;");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn postgres_grant_on_schema_has_no_diagnostics() {
+        let diags = sql_editor_diagnostics("GRANT USAGE ON SCHEMA public TO sesquire;");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn postgres_grant_on_all_tables_in_schema_has_no_diagnostics() {
+        let diags = sql_editor_diagnostics(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sesquire;",
+        );
         assert!(diags.is_empty());
     }
 

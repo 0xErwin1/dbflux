@@ -1,7 +1,7 @@
 use crate::ui::components::dropdown::{Dropdown, DropdownItem};
+use dbflux_components::controls::InputState;
 use dbflux_core::{DriverFormDef, FormFieldDef, FormFieldKind, FormValues};
 use gpui::*;
-use gpui_component::input::InputState;
 use std::collections::HashMap;
 
 #[derive(Default)]

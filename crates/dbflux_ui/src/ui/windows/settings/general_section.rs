@@ -3,14 +3,15 @@ use super::SettingsSectionId;
 use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
-use dbflux_core::{GeneralSettings, RefreshPolicySetting, StartupFocus, ThemeSetting};
+use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_core::{AppStyle, GeneralSettings, RefreshPolicySetting, StartupFocus, ThemeSetting};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum GeneralFormRow {
     Theme,
+    Style,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -33,6 +34,7 @@ pub(super) struct GeneralSection {
     pub(super) gen_form_cursor: usize,
     pub(super) gen_editing_field: bool,
     pub(super) dropdown_theme: Entity<Dropdown>,
+    pub(super) dropdown_style: Entity<Dropdown>,
     pub(super) dropdown_default_focus: Entity<Dropdown>,
     pub(super) dropdown_refresh_policy: Entity<Dropdown>,
     pub(super) input_max_history: Entity<InputState>,
@@ -54,6 +56,7 @@ impl GeneralSection {
     ) -> Self {
         let settings = app_state.read(cx).general_settings().clone();
         let theme_index = Self::theme_index(settings.theme);
+        let style_index = Self::style_index(settings.style);
         let startup_focus_index = Self::startup_focus_index(settings.default_focus_on_startup);
         let refresh_policy_index = Self::refresh_policy_index(settings.default_refresh_policy);
         let max_history = settings.max_history_entries.to_string();
@@ -66,6 +69,12 @@ impl GeneralSection {
                 .placeholder("Theme")
                 .items(Self::theme_items())
                 .selected_index(Some(theme_index))
+        });
+        let dropdown_style = cx.new(move |_cx| {
+            Dropdown::new("general-style")
+                .placeholder("Style")
+                .items(Self::style_items())
+                .selected_index(Some(style_index))
         });
         let dropdown_default_focus = cx.new(move |_cx| {
             Dropdown::new("general-default-focus")
@@ -105,6 +114,14 @@ impl GeneralSection {
             &dropdown_theme,
             |this, _, event: &DropdownSelectionChanged, cx| {
                 this.gen_settings.theme = Self::theme_for_index(event.index);
+                cx.notify();
+            },
+        );
+
+        let style_subscription = cx.subscribe(
+            &dropdown_style,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.gen_settings.style = Self::style_for_index(event.index);
                 cx.notify();
             },
         );
@@ -178,6 +195,7 @@ impl GeneralSection {
             gen_form_cursor: 0,
             gen_editing_field: false,
             dropdown_theme,
+            dropdown_style,
             dropdown_default_focus,
             dropdown_refresh_policy,
             input_max_history,
@@ -188,6 +206,7 @@ impl GeneralSection {
             switching_input: false,
             _subscriptions: vec![
                 theme_subscription,
+                style_subscription,
                 focus_subscription,
                 refresh_policy_subscription,
                 blur_max_history,
@@ -199,7 +218,18 @@ impl GeneralSection {
     }
 
     fn theme_items() -> Vec<DropdownItem> {
-        vec![DropdownItem::new("Dark"), DropdownItem::new("Light")]
+        vec![
+            DropdownItem::new("Ayu Dark"),
+            DropdownItem::new("Ayu Mirage"),
+            DropdownItem::new("Ayu Light"),
+        ]
+    }
+
+    fn style_items() -> Vec<DropdownItem> {
+        vec![
+            DropdownItem::new(AppStyle::Default.label()),
+            DropdownItem::new(AppStyle::Compact.label()),
+        ]
     }
 
     fn startup_focus_items() -> Vec<DropdownItem> {
@@ -213,14 +243,30 @@ impl GeneralSection {
     fn theme_index(theme: ThemeSetting) -> usize {
         match theme {
             ThemeSetting::Dark => 0,
-            ThemeSetting::Light => 1,
+            ThemeSetting::Mirage => 1,
+            ThemeSetting::Light => 2,
         }
     }
 
     fn theme_for_index(index: usize) -> ThemeSetting {
         match index {
-            1 => ThemeSetting::Light,
+            1 => ThemeSetting::Mirage,
+            2 => ThemeSetting::Light,
             _ => ThemeSetting::Dark,
+        }
+    }
+
+    pub(super) fn style_index(style: AppStyle) -> usize {
+        match style {
+            AppStyle::Default => 0,
+            AppStyle::Compact => 1,
+        }
+    }
+
+    pub(super) fn style_for_index(index: usize) -> AppStyle {
+        match index {
+            1 => AppStyle::Compact,
+            _ => AppStyle::Default,
         }
     }
 
@@ -281,6 +327,63 @@ impl SettingsSection for GeneralSection {
 
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_general_changes(cx)
+    }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_general_footer_actions(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GeneralSection;
+    use dbflux_core::{AppStyle, ThemeSetting};
+
+    #[test]
+    fn theme_dropdown_exposes_exactly_three_ayu_labels() {
+        let labels: Vec<_> = GeneralSection::theme_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+
+        assert_eq!(labels, vec!["Ayu Dark", "Ayu Mirage", "Ayu Light"]);
+    }
+
+    #[test]
+    fn theme_index_and_reverse_mapping_cover_all_supported_ayu_themes() {
+        assert_eq!(GeneralSection::theme_index(ThemeSetting::Dark), 0);
+        assert_eq!(GeneralSection::theme_index(ThemeSetting::Mirage), 1);
+        assert_eq!(GeneralSection::theme_index(ThemeSetting::Light), 2);
+
+        assert_eq!(GeneralSection::theme_for_index(0), ThemeSetting::Dark);
+        assert_eq!(GeneralSection::theme_for_index(1), ThemeSetting::Mirage);
+        assert_eq!(GeneralSection::theme_for_index(2), ThemeSetting::Light);
+        assert_eq!(GeneralSection::theme_for_index(99), ThemeSetting::Dark);
+    }
+
+    #[test]
+    fn style_dropdown_exposes_exactly_two_labels() {
+        let labels: Vec<_> = GeneralSection::style_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+
+        assert_eq!(labels, vec!["Default", "Compact"]);
+    }
+
+    #[test]
+    fn style_index_and_reverse_mapping_cover_all_variants() {
+        assert_eq!(GeneralSection::style_index(AppStyle::Default), 0);
+        assert_eq!(GeneralSection::style_index(AppStyle::Compact), 1);
+
+        assert_eq!(GeneralSection::style_for_index(0), AppStyle::Default);
+        assert_eq!(GeneralSection::style_for_index(1), AppStyle::Compact);
+        // Out-of-range falls back to Default
+        assert_eq!(GeneralSection::style_for_index(99), AppStyle::Default);
     }
 }
 

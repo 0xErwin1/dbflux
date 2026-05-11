@@ -10,16 +10,16 @@ use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
     Connection, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
     CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, DdlCapabilities, DescribeRequest, DocumentConnection, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest, ExplainRequest, ForeignKeyInfo,
-    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row,
-    RowDelete, RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
-    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo,
-    TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
+    DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest,
+    ExplainRequest, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
+    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
+    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo,
+    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
     generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
     render_semantic_filter_sql,
 };
@@ -36,6 +36,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     display_name: "SQLite".into(),
     description: "Embedded file-based database".into(),
     category: DatabaseCategory::Relational,
+    deployment_class: Some(DeploymentClass::Embedded),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::VIEWS.bits()
@@ -154,6 +155,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_columns: 32766,
         max_indexes_per_table: 64,
     }),
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 
@@ -351,9 +354,16 @@ impl DbDriver for SqliteDriver {
         if is_memory {
             if let Some(id) = connection_id.as_ref() {
                 let pool_key = format!("{}:{}", profile.id, id);
-                if let Some(conn) = POOL.lock().unwrap().get(&pool_key) {
+                let pool = POOL
+                    .lock()
+                    .map_err(|_| DbError::connection_failed("connection pool mutex poisoned"))?;
+                if let Some(conn) = pool.get(&pool_key) {
                     let conn = conn.clone();
-                    let interrupt_handle = conn.lock().unwrap().get_interrupt_handle();
+                    drop(pool);
+                    let interrupt_handle = conn
+                        .lock()
+                        .map_err(|_| DbError::connection_failed("connection mutex poisoned"))?
+                        .get_interrupt_handle();
                     drop(pool_key);
                     return Ok(Box::new(SqliteConnection {
                         conn,
@@ -376,7 +386,9 @@ impl DbDriver for SqliteDriver {
             if let Some(id) = &connection_id {
                 let pool_key = format!("{}:{}", profile.id, id);
                 let pooled_conn: Arc<Mutex<RusqliteConnection>> = Arc::new(Mutex::new(conn));
-                POOL.lock().unwrap().insert(pool_key, pooled_conn.clone());
+                POOL.lock()
+                    .map_err(|_| DbError::connection_failed("connection pool mutex poisoned"))?
+                    .insert(pool_key, pooled_conn.clone());
                 return Ok(Box::new(SqliteConnection {
                     conn: pooled_conn,
                     interrupt_handle,
@@ -755,6 +767,10 @@ impl Connection for SqliteConnection {
         Ok(())
     }
 
+    // Invariant: trait returns Arc<dyn QueryCancelHandle> with no Result — cannot propagate.
+    // Mutex poison only occurs if another thread panicked while holding this lock, which is
+    // already a fatal application state.
+    #[allow(clippy::expect_used)]
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(SqliteCancelHandle {
             cancelled: self.cancelled.clone(),
@@ -834,6 +850,8 @@ impl Connection for SqliteConnection {
             foreign_keys: Some(foreign_keys),
             constraints: Some(constraints),
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         })
     }
 
@@ -861,6 +879,56 @@ impl Connection for SqliteConnection {
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         self.get_all_foreign_keys(&conn)
+    }
+
+    fn fetch_dependents(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| dbflux_core::DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        fetch_dependents(&conn, table)
+    }
+
+    fn fetch_row_by_pk(
+        &self,
+        _database: &str,
+        _schema: &str,
+        table: &str,
+        pk_column: &str,
+        pk_value: &dbflux_core::Value,
+    ) -> Result<Option<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        let pk_literal = SQLITE_DIALECT.value_to_literal(pk_value);
+        let sql = format!(
+            "SELECT * FROM {} WHERE {} = {} LIMIT 1",
+            SQLITE_DIALECT.quote_identifier(table),
+            SQLITE_DIALECT.quote_identifier(pk_column),
+            pk_literal,
+        );
+
+        let result = self.execute(&dbflux_core::QueryRequest::new(sql))?;
+        let columns = result.columns;
+        let Some(row) = result.rows.into_iter().next() else {
+            return Ok(None);
+        };
+
+        let map = columns
+            .into_iter()
+            .zip(row)
+            .map(|(col, val)| (col.name, val))
+            .collect();
+
+        Ok(Some(map))
+    }
+
+    fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
+        Some(dbflux_core::extract_referenced_tables(query))
     }
 
     fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
@@ -1335,6 +1403,8 @@ impl SqliteConnection {
                 foreign_keys: None,
                 constraints: None,
                 sample_fields: None,
+                presentation: dbflux_core::CollectionPresentation::DataGrid,
+                child_items: None,
             })
             .collect();
 
@@ -1812,6 +1882,8 @@ fn sqlite_generate_create_table(table: &TableInfo) -> String {
     let pk_columns: Vec<&ColumnInfo> = cols.iter().filter(|c| c.is_primary_key).collect();
 
     // SQLite: INTEGER PRIMARY KEY has special rowid semantics when inline
+    // Invariant: [0] is guarded by `len() == 1 &&` short-circuit in the same expression.
+    #[allow(clippy::indexing_slicing)]
     let single_integer_pk =
         pk_columns.len() == 1 && pk_columns[0].type_name.eq_ignore_ascii_case("INTEGER");
 
@@ -1958,6 +2030,8 @@ mod tests {
             foreign_keys: None,
             constraints: None,
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         };
 
         let composite_pk = TableInfo {
@@ -1985,6 +2059,8 @@ mod tests {
             foreign_keys: None,
             constraints: None,
             sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
         };
 
         let single_sql = sqlite_generate_create_table(&single_pk);
@@ -2092,4 +2168,100 @@ mod tests {
             "SELECT \"customer_id\", AVG(\"amount\") AS \"avg_amount\" FROM \"orders\" GROUP BY \"customer_id\" HAVING \"avg_amount\" > 10"
         );
     }
+}
+
+// =============================================================================
+// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// =============================================================================
+//
+// Wiring note: `table_details()` on the `RelationalConnection` trait returns
+// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
+// layer would need to call `fetch_dependents` in the same background task that
+// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
+// That wiring is deferred to a follow-up slice once the fetch task pattern is
+// extended to return both `TableInfo` and `Vec<RelationRef>`.
+
+/// Fetch objects that depend on `table` from a live SQLite connection.
+///
+/// Covers:
+///  - Views defined in `sqlite_master` that reference this table.
+///  - Triggers defined on this table in `sqlite_master`.
+///  - Tables with a foreign key referencing this table via `pragma_foreign_key_list`.
+///
+/// Note: SQLite does not support materialized views.
+pub fn fetch_dependents(
+    conn: &RusqliteConnection,
+    table: &str,
+) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
+    use dbflux_core::{DbError, RelationKind, RelationRef};
+
+    let mut deps: Vec<RelationRef> = Vec::new();
+
+    // Views and triggers in sqlite_master
+    let mut stmt = conn
+        .prepare(
+            "SELECT type, name FROM sqlite_master
+             WHERE type IN ('view', 'trigger')
+               AND sql LIKE '%' || ?1 || '%'",
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents objects: {}", e).into()))?;
+
+    let rows: Vec<(String, String)> = stmt
+        .query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents query: {}", e).into()))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for (obj_type, obj_name) in rows {
+        let kind = match obj_type.as_str() {
+            "view" => RelationKind::View,
+            "trigger" => RelationKind::Trigger,
+            _ => continue,
+        };
+        deps.push(RelationRef {
+            kind,
+            qualified_name: obj_name,
+        });
+    }
+
+    // Foreign key children via pragma_foreign_key_list on all tables
+    let all_tables: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
+            })?;
+
+        stmt.query_map([], |row| row.get(0))
+            .map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
+    };
+
+    for child_table in all_tables {
+        let has_fk = {
+            let query = format!(
+                "SELECT 1 FROM pragma_foreign_key_list('{}') WHERE \"table\" = ?1 LIMIT 1",
+                child_table.replace('\'', "''")
+            );
+            let mut fk_stmt = conn.prepare(&query).map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents fk_check: {}", e).into())
+            })?;
+
+            fk_stmt.exists([table]).map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents fk_check: {}", e).into())
+            })?
+        };
+
+        if has_fk {
+            deps.push(RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: child_table,
+            });
+        }
+    }
+
+    Ok(deps)
 }

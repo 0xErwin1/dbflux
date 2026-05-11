@@ -318,8 +318,12 @@ where
 {
     object
         .remove(key)
-        .map(serde_json::from_value)
+        .map(|value| match value {
+            Value::Null => Ok(None),
+            other => serde_json::from_value(other).map(Some),
+        })
         .transpose()
+        .map(|value| value.flatten())
         .map_err(|error| format!("invalid '{key}' field: {error}"))
 }
 
@@ -483,6 +487,7 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             database.map(|db| db.to_string()),
         ),
         DbConfig::DynamoDB { region, table, .. } => (Some(region.clone()), None, table.clone()),
+        DbConfig::CloudWatchLogs { region, .. } => (Some(region.clone()), None, None),
         DbConfig::External { values, .. } => {
             let host = values.get("host").cloned();
             let port = values
@@ -1649,6 +1654,9 @@ mod tests {
                 user: "admin".to_string(),
                 database: "production".to_string(),
                 ssl_mode: Default::default(),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },

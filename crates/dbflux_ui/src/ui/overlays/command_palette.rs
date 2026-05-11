@@ -1,12 +1,17 @@
 use crate::keymap::ContextId;
-use crate::ui::tokens::{FontSizes, Radii, Spacing};
-use dbflux_components::primitives::Text;
+use crate::ui::icons::AppIcon;
+use crate::ui::tokens::{Radii, Spacing};
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+#[cfg(test)]
+use dbflux_components::helpers::text_color_for_selected;
+use dbflux_components::primitives::{Chord, Icon, overlay_bg, surface_modal_container};
+use dbflux_components::tokens::BannerColors;
+use dbflux_components::typography::{Body, MonoCaption, MonoLabel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Sizable};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -256,6 +261,147 @@ struct FilteredItem {
 
 const VISIBLE_ITEMS: usize = 8;
 
+/// Section grouping for the rendered palette list.
+///
+/// The order here is the visual order in the palette. Sections render only
+/// when at least one matching item exists for that section. Section headers
+/// themselves are not selectable — they are a render-only concern.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PaletteSection {
+    Connections,
+    Commands,
+    Tables,
+    Scripts,
+}
+
+impl PaletteSection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connections => "Connections",
+            Self::Commands => "Commands",
+            Self::Tables => "Tables",
+            Self::Scripts => "Scripts",
+        }
+    }
+
+    fn for_item(item: &PaletteItem) -> Self {
+        match item {
+            PaletteItem::Connection { .. } => Self::Connections,
+            PaletteItem::Action { .. } => Self::Commands,
+            PaletteItem::Resource(_) => Self::Tables,
+            PaletteItem::Script { .. } => Self::Scripts,
+        }
+    }
+}
+
+/// Render row produced by section grouping.
+///
+/// `Item.display_idx` is the position in the filtered list (i.e. the value
+/// `selected_index` compares against). `palette_idx` is the index into
+/// `items`. `SectionHeader` rows are not selectable.
+enum PaletteRow {
+    SectionHeader(SharedString),
+    Item {
+        display_idx: usize,
+        palette_idx: usize,
+    },
+}
+
+fn palette_item_name(
+    item: &PaletteItem,
+    name: impl Into<SharedString>,
+    is_selected: bool,
+    theme: &gpui_component::theme::Theme,
+) -> AnyElement {
+    // Selected rows use the banner-style amber background, so the row name
+    // mirrors `theme.primary` for visual emphasis. Inactive rows keep the
+    // regular foreground.
+    let color = if is_selected {
+        theme.primary
+    } else {
+        theme.foreground
+    };
+
+    match item {
+        PaletteItem::Resource(_) | PaletteItem::Script { .. } => {
+            MonoLabel::new(name).color(color).into_any_element()
+        }
+        _ => Body::new(name).color(color).into_any_element(),
+    }
+}
+
+fn palette_category_text(
+    label: impl Into<SharedString>,
+    is_selected: bool,
+    theme: &gpui_component::theme::Theme,
+) -> MonoCaption {
+    MonoCaption::new(label).color(if is_selected {
+        theme.primary.opacity(0.75)
+    } else {
+        theme.muted_foreground
+    })
+}
+
+fn palette_qualifier_text(
+    label: impl Into<SharedString>,
+    is_selected: bool,
+    theme: &gpui_component::theme::Theme,
+) -> MonoCaption {
+    MonoCaption::new(label).color(if is_selected {
+        theme.primary.opacity(0.65)
+    } else {
+        theme.muted_foreground
+    })
+}
+
+#[cfg(test)]
+fn palette_shortcut_text(
+    shortcut: impl Into<SharedString>,
+    is_selected: bool,
+    theme: &gpui_component::theme::Theme,
+) -> MonoCaption {
+    MonoCaption::new(shortcut).color(text_color_for_selected(is_selected, theme))
+}
+
+/// Split a shortcut string like "ctrl-shift-k" into Chord parts.
+///
+/// Recognizes the canonical modifier tokens used in `KeyBinding` strings
+/// (`ctrl`, `shift`, `alt`, `cmd`) and capitalizes them for display. The
+/// final segment is treated as the key name and uppercased.
+fn palette_shortcut_parts(shortcut: &str) -> Vec<SharedString> {
+    let tokens: Vec<&str> = shortcut.split('-').collect();
+
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+
+    let mut parts: Vec<SharedString> = Vec::with_capacity(tokens.len());
+    let last_idx = tokens.len() - 1;
+
+    for (idx, token) in tokens.iter().enumerate() {
+        let display = if idx == last_idx {
+            token.to_uppercase()
+        } else {
+            match token.to_lowercase().as_str() {
+                "ctrl" => "Ctrl".to_string(),
+                "shift" => "Shift".to_string(),
+                "alt" => "Alt".to_string(),
+                "cmd" | "command" | "super" | "platform" => "Cmd".to_string(),
+                other => {
+                    let mut chars = other.chars();
+                    match chars.next() {
+                        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                        None => String::new(),
+                    }
+                }
+            }
+        };
+        parts.push(SharedString::from(display));
+    }
+
+    parts
+}
+
 pub struct CommandPalette {
     visible: bool,
     items: Vec<PaletteItem>,
@@ -264,6 +410,126 @@ pub struct CommandPalette {
     scroll_offset: usize,
     input_state: Entity<InputState>,
     matcher: SkimMatcherV2,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PaletteCommand, palette_qualifier_text, palette_shortcut_text};
+    use crate::ui::theme;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::TestAppContext;
+    use gpui_component::theme::Theme;
+    use std::fs;
+
+    fn command_palette_source() -> String {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/ui/overlays/command_palette.rs"
+        ))
+        .unwrap_or_else(|error| panic!("failed to read command_palette.rs: {error}"));
+
+        source
+            .rsplit("impl Render for CommandPalette")
+            .next()
+            .map(|render_impl| format!("impl Render for CommandPalette{render_impl}"))
+            .expect("command_palette.rs should contain a render implementation")
+    }
+
+    fn command_palette_overlay_source() -> String {
+        let source = command_palette_source();
+        let start = source
+            .find(".id(\"command-palette-overlay\")")
+            .expect("command_palette render should define the overlay container");
+
+        let remaining = &source[start..];
+        let end = remaining
+            .find(".child(\n                        div()\n                            .id(\"command-palette-list\")")
+            .unwrap_or(remaining.len());
+
+        remaining[..end].to_string()
+    }
+
+    #[gpui::test]
+    fn action_shortcuts_use_mono_caption_instead_of_bold_key_hint(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let shortcut = palette_shortcut_text("ctrl-k", false, &theme).inspect();
+        let selected_shortcut = palette_shortcut_text("enter", true, &theme).inspect();
+
+        for inspection in [shortcut, selected_shortcut] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+            assert!(!inspection.uses_muted_foreground_override);
+        }
+    }
+
+    #[test]
+    fn palette_commands_still_preserve_explicit_shortcuts() {
+        let command = PaletteCommand::new("id", "Open", "Action").with_shortcut("ctrl-k");
+
+        assert_eq!(command.shortcut, Some("ctrl-k"));
+    }
+
+    #[gpui::test]
+    fn qualifiers_use_mono_caption_role(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let qualifier = palette_qualifier_text("prod / analytics", false, &theme).inspect();
+        let selected = palette_qualifier_text("scripts/admin", true, &theme).inspect();
+
+        for inspection in [qualifier, selected] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+        }
+    }
+
+    #[test]
+    fn command_palette_overlay_uses_canonical_scrim_and_modal_container_contracts() {
+        let source = command_palette_source();
+
+        assert!(source.contains(".bg(overlay_bg(theme))"));
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn command_palette_render_keeps_overlay_identity_and_close_behavior() {
+        let source = command_palette_source();
+
+        assert!(source.contains(".id(\"command-palette-overlay\")"));
+        assert!(source.contains(".key_context(ContextId::CommandPalette.as_gpui_context())"));
+        assert!(source.contains("this.hide(cx);"));
+    }
+
+    #[test]
+    fn command_palette_overlay_chain_starts_from_the_shared_modal_container() {
+        let source = command_palette_overlay_source();
+
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(source.contains(".id(\"command-palette-container\")"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn command_palette_overlay_chain_keeps_the_shared_scrim_close_path() {
+        let source = command_palette_overlay_source();
+
+        assert!(source.contains(".bg(overlay_bg(theme))"));
+        assert!(source.contains("this.hide(cx);"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
+    }
 }
 
 /// Event emitted when the user selects a palette item.
@@ -560,60 +826,29 @@ impl CommandPalette {
     ) -> Stateful<Div> {
         let (category, name) = item.display_label();
 
-        let right_el = match item {
+        // Right column: action shortcuts use a Chord; resources/scripts/
+        // connections use their qualifier text. Selected rows additionally
+        // surface an `Enter` glyph to reinforce the run affordance.
+        let right_el: Option<AnyElement> = match item {
             PaletteItem::Action { shortcut, .. } => shortcut.map(|s| {
-                div()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .text_size(FontSizes::XS)
-                    .font_family("monospace")
-                    .when(is_selected, |d| {
-                        d.bg(theme.primary_foreground.opacity(0.2))
-                            .text_color(theme.primary_foreground)
-                    })
-                    .when(!is_selected, |d| {
-                        d.bg(theme.secondary).text_color(theme.muted_foreground)
-                    })
-                    .child(s)
+                let parts = palette_shortcut_parts(s);
+                Chord::new(parts).into_any_element()
             }),
-            PaletteItem::Connection { is_connected, .. } => {
-                let indicator = if *is_connected {
-                    div()
-                        .size(px(8.0))
-                        .rounded_full()
-                        .bg(gpui::green())
-                        .when(is_selected, |d| {
-                            d.border_1()
-                                .border_color(theme.primary_foreground.opacity(0.5))
-                        })
-                } else {
-                    div()
-                        .size(px(8.0))
-                        .rounded_full()
-                        .bg(theme.muted_foreground.opacity(0.4))
-                };
-                Some(indicator)
-            }
-            PaletteItem::Resource(_) => item.qualifier().map(|q| {
-                div()
-                    .text_size(FontSizes::XS)
-                    .when(is_selected, |d| {
-                        d.text_color(theme.primary_foreground.opacity(0.6))
-                    })
-                    .when(!is_selected, |d| d.text_color(theme.muted_foreground))
-                    .child(q)
-            }),
-            PaletteItem::Script { .. } => item.qualifier().map(|q| {
-                div()
-                    .text_size(FontSizes::XS)
-                    .when(is_selected, |d| {
-                        d.text_color(theme.primary_foreground.opacity(0.6))
-                    })
-                    .when(!is_selected, |d| d.text_color(theme.muted_foreground))
-                    .child(q)
-            }),
+            PaletteItem::Connection { .. }
+            | PaletteItem::Resource(_)
+            | PaletteItem::Script { .. } => item
+                .qualifier()
+                .map(|q| palette_qualifier_text(q, is_selected, theme).into_any_element()),
         };
+
+        let right_column = div()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .when_some(right_el, |d, el| d.child(el))
+            .when(is_selected, |d| {
+                d.child(Chord::new(vec![SharedString::from("\u{21B5}")]))
+            });
 
         div()
             .id(("cmd", idx))
@@ -625,12 +860,13 @@ impl CommandPalette {
             .justify_between()
             .rounded(Radii::SM)
             .cursor_pointer()
+            .border_l_2()
             .when(is_selected, |d| {
-                d.bg(theme.primary).text_color(theme.primary_foreground)
+                d.bg(BannerColors::warning_bg(theme))
+                    .border_color(theme.primary)
             })
             .when(!is_selected, |d| {
-                d.bg(theme.background)
-                    .text_color(theme.foreground)
+                d.border_color(gpui::transparent_black())
                     .hover(|d| d.bg(theme.secondary))
             })
             .child(
@@ -638,23 +874,10 @@ impl CommandPalette {
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .when(is_selected, |d| {
-                                d.text_color(theme.primary_foreground.opacity(0.7))
-                            })
-                            .when(!is_selected, |d| d.text_color(theme.muted_foreground))
-                            .child(category),
-                    )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(name),
-                    ),
+                    .child(palette_category_text(category, is_selected, theme))
+                    .child(palette_item_name(item, name, is_selected, theme)),
             )
-            .when_some(right_el, |d, el| d.child(el))
+            .child(right_column)
     }
 }
 
@@ -670,18 +893,51 @@ impl Render for CommandPalette {
         let theme = cx.theme();
         let input_state = self.input_state.clone();
 
-        let items_to_render: Vec<(usize, PaletteItem, bool)> = self
+        // Build the windowed list (scroll_offset..+VISIBLE_ITEMS) then group
+        // the resulting items by section. Section headers are interleaved
+        // before the first item of each section but are NOT counted in the
+        // `display_idx` that compares against `selected_index`.
+        let windowed: Vec<(usize, PaletteItem)> = self
             .filtered
             .iter()
             .enumerate()
             .skip(self.scroll_offset)
             .take(VISIBLE_ITEMS)
-            .map(|(idx, filtered)| {
-                let item = self.items[filtered.index].clone();
-                let is_selected = idx == self.selected_index;
-                (idx, item, is_selected)
-            })
+            .map(|(idx, filtered)| (idx, self.items[filtered.index].clone()))
             .collect();
+
+        let section_order = [
+            PaletteSection::Connections,
+            PaletteSection::Commands,
+            PaletteSection::Tables,
+            PaletteSection::Scripts,
+        ];
+
+        let mut rows: Vec<PaletteRow> = Vec::with_capacity(windowed.len() + section_order.len());
+        for section in section_order {
+            let mut header_pushed = false;
+            for (display_idx, item) in windowed.iter() {
+                if PaletteSection::for_item(item) != section {
+                    continue;
+                }
+                if !header_pushed {
+                    rows.push(PaletteRow::SectionHeader(SharedString::from(
+                        section.label().to_uppercase(),
+                    )));
+                    header_pushed = true;
+                }
+                // `palette_idx` is the original index into `self.items` for
+                // click handlers that re-trigger `execute_selected`.
+                let palette_idx = self.filtered[*display_idx].index;
+                rows.push(PaletteRow::Item {
+                    display_idx: *display_idx,
+                    palette_idx,
+                });
+            }
+        }
+
+        let total_count = self.items.len();
+        let filtered_count = self.filtered.len();
 
         div()
             .id("command-palette-overlay")
@@ -691,7 +947,7 @@ impl Render for CommandPalette {
             .flex()
             .justify_center()
             .pt(px(80.0))
-            .bg(gpui::black().opacity(0.5))
+            .bg(overlay_bg(theme))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -711,14 +967,15 @@ impl Render for CommandPalette {
                 this.execute_selected(window, cx);
             }))
             .child(
-                div()
+                surface_modal_container(cx)
                     .id("command-palette-container")
-                    .w(px(500.0))
-                    .max_h(px(400.0))
+                    // Force the deepest Ayu Dark background; the default
+                    // ModalContainer surface is a raised popover tone which
+                    // read as too warm / Mirage-like inside this palette.
                     .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(Radii::LG)
+                    .w_full()
+                    .max_w(px(560.0))
+                    .max_h(px(440.0))
                     .shadow_lg()
                     .flex()
                     .flex_col()
@@ -728,10 +985,24 @@ impl Render for CommandPalette {
                     })
                     .child(
                         div()
-                            .p(Spacing::SM)
+                            .px(Spacing::MD)
+                            .py(Spacing::SM)
                             .border_b_1()
                             .border_color(theme.border)
-                            .child(Input::new(&input_state).small().cleanable(true)),
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(Icon::new(AppIcon::Search).small().muted())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Input::new(&input_state).small().cleanable(true)),
+                            )
+                            .child(MonoCaption::new(format!(
+                                "{} / {}",
+                                filtered_count, total_count
+                            )))
+                            .child(Chord::new(vec![SharedString::from("Esc")])),
                     )
                     .child(
                         div()
@@ -749,18 +1020,40 @@ impl Render for CommandPalette {
                                     }
                                 },
                             ))
-                            .children(items_to_render.into_iter().map(
-                                |(idx, item, is_selected)| {
-                                    Self::render_palette_item(idx, &item, is_selected, theme)
+                            .children(rows.into_iter().map(|row| {
+                                match row {
+                                    PaletteRow::SectionHeader(label) => div()
+                                        .px(Spacing::MD)
+                                        .py(Spacing::XS)
+                                        .child(
+                                            MonoCaption::new(label)
+                                                .color(theme.muted_foreground)
+                                                .into_any_element(),
+                                        )
+                                        .into_any_element(),
+                                    PaletteRow::Item {
+                                        display_idx,
+                                        palette_idx,
+                                    } => {
+                                        let is_selected = display_idx == self.selected_index;
+                                        let item = self.items[palette_idx].clone();
+                                        Self::render_palette_item(
+                                            display_idx,
+                                            &item,
+                                            is_selected,
+                                            theme,
+                                        )
                                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                             cx.stop_propagation();
                                         })
                                         .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.selected_index = idx;
+                                            this.selected_index = display_idx;
                                             this.execute_selected(window, cx);
                                         }))
-                                },
-                            ))
+                                        .into_any_element()
+                                    }
+                                }
+                            }))
                             .when(self.filtered.is_empty(), |d| {
                                 d.child(
                                     div()
@@ -768,7 +1061,7 @@ impl Render for CommandPalette {
                                         .py(Spacing::LG)
                                         .flex()
                                         .justify_center()
-                                        .child(Text::muted("No matching items")),
+                                        .child(Body::new("No matching items").muted(cx)),
                                 )
                             }),
                     )
@@ -780,17 +1073,57 @@ impl Render for CommandPalette {
                             .border_color(theme.border)
                             .flex()
                             .items_center()
-                            .justify_between()
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .gap(Spacing::MD)
-                                    .child(Text::caption("↑↓/C-jk Navigate"))
-                                    .child(Text::caption("↵ Execute"))
-                                    .child(Text::caption("Esc Close")),
-                            )
-                            .child(Text::caption(format!("{} items", self.filtered.len()))),
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::XS)
+                                            .child(Chord::new(vec![
+                                                SharedString::from("\u{2191}"),
+                                                SharedString::from("\u{2193}"),
+                                            ]))
+                                            .child(
+                                                MonoCaption::new("navigate")
+                                                    .color(theme.muted_foreground),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::XS)
+                                            .child(Chord::new(vec![SharedString::from("\u{21B5}")]))
+                                            .child(
+                                                MonoCaption::new("run")
+                                                    .color(theme.muted_foreground),
+                                            ),
+                                    )
+                                    // Aspirational: "open in new tab" has no
+                                    // wired Tab+Enter handler in the palette
+                                    // yet. Rendered at half opacity to flag
+                                    // it as a forthcoming affordance rather
+                                    // than a live shortcut.
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::XS)
+                                            .opacity(0.5)
+                                            .child(Chord::new(vec![
+                                                SharedString::from("\u{21E5}"),
+                                                SharedString::from("\u{21B5}"),
+                                            ]))
+                                            .child(
+                                                MonoCaption::new("open in new tab")
+                                                    .color(theme.muted_foreground),
+                                            ),
+                                    ),
+                            ),
                     ),
             )
             .into_any_element()

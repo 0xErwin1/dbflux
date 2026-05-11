@@ -264,6 +264,7 @@ mod tests {
         display_name: "Test".into(),
         description: "Test driver".into(),
         category: dbflux_core::DatabaseCategory::Relational,
+        deployment_class: None,
         query_language: QueryLanguage::Sql,
         capabilities: DriverCapabilities::empty(),
         default_port: None,
@@ -282,6 +283,8 @@ mod tests {
         ddl: None,
         transactions: Some(TransactionCapabilities::default()),
         limits: None,
+        ssl_modes: None,
+        ssl_cert_fields: None,
         classification_override: None,
     });
 

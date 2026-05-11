@@ -24,13 +24,17 @@
 //! 3. Call `state.dispatch()` from `dispatch_command` when toolbar is active.
 //! 4. In render, build the element with `FilterBar::new(&state).render(cx)`.
 
+use dbflux_components::primitives::Icon;
+
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::InputState;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::InputState;
+use gpui_component::Sizable;
+use gpui_component::date_picker::DatePickerState;
 
 // ── Item kinds ────────────────────────────────────────────────────────────────
 
@@ -45,6 +49,10 @@ pub enum FilterBarItem {
     Dropdown {
         label: SharedString,
         dropdown: Entity<Dropdown>,
+    },
+    DatePicker {
+        label: SharedString,
+        date_picker: Entity<DatePickerState>,
     },
     /// An action button. Activated with Enter → the document handles it externally.
     /// `activate_input` returns `false` for buttons so the caller can dispatch the action.
@@ -66,6 +74,16 @@ impl FilterBarItem {
         Self::Dropdown {
             label: label.into(),
             dropdown,
+        }
+    }
+
+    pub fn date_picker(
+        label: impl Into<SharedString>,
+        date_picker: Entity<DatePickerState>,
+    ) -> Self {
+        Self::DatePicker {
+            label: label.into(),
+            date_picker,
         }
     }
 
@@ -154,6 +172,18 @@ impl FilterBarState {
         self.items.len()
     }
 
+    pub fn set_items(&mut self, items: Vec<FilterBarItem>) {
+        self.items = items;
+
+        if self.items.is_empty() {
+            self.focused_index = 0;
+            self.mode = FilterBarMode::Inactive;
+            return;
+        }
+
+        self.focused_index = self.focused_index.min(self.items.len().saturating_sub(1));
+    }
+
     // ── Activation ────────────────────────────────────────────────────────
 
     /// Enter toolbar navigation mode with the ring on `index` (clamped).
@@ -232,6 +262,14 @@ impl FilterBarState {
                 let dropdown = dropdown.clone();
                 dropdown.update(cx, |d, cx| {
                     d.open(cx);
+                });
+                true
+            }
+            FilterBarItem::DatePicker { date_picker, .. } => {
+                self.mode = FilterBarMode::Editing;
+                let date_picker = date_picker.clone();
+                date_picker.update(cx, |state, cx| {
+                    state.focus_handle(cx).focus(window);
                 });
                 true
             }
@@ -319,9 +357,10 @@ impl<'a> FilterBar<'a> {
 
         div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(Spacing::SM)
-            .h(Heights::TOOLBAR)
+            .min_h(Heights::TOOLBAR)
             .px(Spacing::SM)
             .border_b_1()
             .border_color(theme.border)
@@ -352,6 +391,7 @@ fn render_item(
                 div()
                     .flex()
                     .items_center()
+                    .h(Heights::CONTROL)
                     .min_w(px(180.0))
                     .rounded(Radii::SM)
                     .when(ring_active, |d| d.border_1().border_color(theme.ring))
@@ -366,9 +406,29 @@ fn render_item(
             .child(Text::caption(label.clone()))
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .h(Heights::CONTROL)
                     .rounded(Radii::SM)
                     .when(ring_active, |d| d.border_1().border_color(theme.ring))
                     .child(dropdown.clone()),
+            )
+            .into_any_element(),
+
+        FilterBarItem::DatePicker { label, date_picker } => div()
+            .flex()
+            .items_center()
+            .gap(Spacing::XS)
+            .child(Text::caption(label.clone()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(Heights::CONTROL)
+                    .min_w(px(220.0))
+                    .rounded(Radii::SM)
+                    .when(ring_active, |d| d.border_1().border_color(theme.ring))
+                    .child(gpui_component::date_picker::DatePicker::new(date_picker).small()),
             )
             .into_any_element(),
 
@@ -378,7 +438,7 @@ fn render_item(
             div()
                 .flex()
                 .items_center()
-                .h(Heights::BUTTON)
+                .h(Heights::CONTROL)
                 .px(Spacing::SM)
                 .gap_1()
                 .rounded(Radii::SM)
@@ -386,18 +446,11 @@ fn render_item(
                 .border_1()
                 .border_color(border_color)
                 .cursor_pointer()
-                .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
                 .hover(|d| d.bg(theme.accent.opacity(0.08)))
                 .when_some(*icon, |d, icon| {
-                    d.child(
-                        svg()
-                            .path(icon.path())
-                            .size_4()
-                            .text_color(theme.muted_foreground),
-                    )
+                    d.child(Icon::new(icon).size(px(16.0)).muted())
                 })
-                .child(label.clone())
+                .child(Text::body(label.clone()).font_size(FontSizes::SM))
                 .into_any_element()
         }
     }

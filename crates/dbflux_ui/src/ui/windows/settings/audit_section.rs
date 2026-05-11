@@ -1,17 +1,18 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
-use super::layout;
 use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
+use crate::ui::tokens::Radii;
+use crate::ui::windows::settings::layout;
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;
+use dbflux_components::typography::SubSectionLabel;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, Sizable};
 
@@ -283,7 +284,7 @@ impl AuditSection {
                 != self.original_settings.background_purge_interval_minutes
     }
 
-    pub(super) fn save_audit_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn save_audit_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let retention_str = self
             .input_retention_days
             .read(cx)
@@ -293,7 +294,10 @@ impl AuditSection {
         let retention_days = match retention_str.parse::<u32>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                cx.toast_error("Retention days must be a number >= 1", window);
+                Toast::error("Retention days must be a number >= 1")
+                    .meta_right(now_hms())
+                    .action(copy_action("Retention days must be a number >= 1"))
+                    .push(cx);
                 return;
             }
         };
@@ -307,7 +311,10 @@ impl AuditSection {
         let max_detail_bytes = match max_detail_str.parse::<usize>() {
             Ok(value) if value >= 1024 => value,
             _ => {
-                cx.toast_error("Max detail bytes must be >= 1024", window);
+                Toast::error("Max detail bytes must be >= 1024")
+                    .meta_right(now_hms())
+                    .action(copy_action("Max detail bytes must be >= 1024"))
+                    .push(cx);
                 return;
             }
         };
@@ -321,7 +328,10 @@ impl AuditSection {
         let purge_interval = match purge_interval_str.parse::<u32>() {
             Ok(value) => value,
             _ => {
-                cx.toast_error("Background purge interval must be a number", window);
+                Toast::error("Background purge interval must be a number")
+                    .meta_right(now_hms())
+                    .action(copy_action("Background purge interval must be a number"))
+                    .push(cx);
                 return;
             }
         };
@@ -338,12 +348,14 @@ impl AuditSection {
         // (real DB could not be opened), do not allow enabling it. This avoids the
         // write-then-correct pattern that could leave bad persisted state on crash.
         if app_state.is_audit_degraded() && self.settings.enabled {
-            cx.toast_error(
-                "Audit cannot be enabled: the audit database could not be opened. \
+            let msg = "Audit cannot be enabled: the audit database could not be opened. \
                  Please restart the application. If the problem persists, check disk space \
-                 and file permissions for the dbflux data directory.",
-                window,
-            );
+                 and file permissions for the dbflux data directory.";
+            Toast::error("Audit cannot be enabled")
+                .meta_right(now_hms())
+                .body(msg)
+                .action(copy_action(format!("Audit cannot be enabled: {}", msg)))
+                .push(cx);
             // Revert to disabled in-memory only; do NOT write — user must uncheck
             // the enabled checkbox and save again to persist a disabled state.
             self.settings.enabled = false;
@@ -351,7 +363,12 @@ impl AuditSection {
         }
 
         if let Err(e) = repo.upsert(&self.settings) {
-            cx.toast_error(format!("Failed to save: {}", e), window);
+            let body = e.to_string();
+            Toast::error("Failed to save")
+                .meta_right(now_hms())
+                .body(body.clone())
+                .action(copy_action(format!("Failed to save: {}", body)))
+                .push(cx);
             return;
         }
 
@@ -363,7 +380,9 @@ impl AuditSection {
 
         self.original_settings = self.settings.clone();
 
-        cx.toast_success("Audit settings saved.", window);
+        Toast::success("Audit settings saved.")
+            .meta_right(now_hms())
+            .push(cx);
     }
 }
 
@@ -385,6 +404,14 @@ impl SettingsSection for AuditSection {
 
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_audit_changes(cx)
+    }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_audit_footer_actions(cx))
     }
 
     fn handle_key_event(
@@ -485,10 +512,10 @@ impl AuditSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Audit",
                 "Configure global audit event capture and retention",
-                theme,
+                cx,
             ))
             .child(
                 div()
@@ -588,42 +615,35 @@ impl AuditSection {
                         cx,
                     )),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(border)
-                    .flex()
-                    .justify_end()
-                    .child({
-                        let is_save_focused = is_at(AuditFormRow::SaveButton);
+    }
 
-                        div()
-                            .rounded(px(4.0))
-                            .border_1()
-                            .border_color(if is_save_focused {
-                                primary
-                            } else {
-                                gpui::transparent_black()
-                            })
-                            .child(
-                                Button::new("save-audit")
-                                    .label("Save")
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.content_focused = true;
-                                        this.audit_form_cursor = this
-                                            .audit_form_rows()
-                                            .iter()
-                                            .position(|row| *row == AuditFormRow::SaveButton)
-                                            .unwrap_or_default();
-                                        this.save_audit_settings(window, cx);
-                                    })),
-                            )
-                    }),
-            )
+    fn render_audit_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_save_focused = self.content_focused
+            && self.audit_form_rows().get(self.audit_form_cursor).copied()
+                == Some(AuditFormRow::SaveButton);
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(layout::footer_action_frame(
+                is_save_focused,
+                cx.theme().primary,
+                dbflux_components::controls::Button::new("save-audit", "Save")
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.content_focused = true;
+                        this.audit_form_cursor = this
+                            .audit_form_rows()
+                            .iter()
+                            .position(|row| *row == AuditFormRow::SaveButton)
+                            .unwrap_or_default();
+                        this.save_audit_settings(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     fn render_audit_group_header(
@@ -632,11 +652,12 @@ impl AuditSection {
         border: Hsla,
         _muted_fg: Hsla,
     ) -> impl IntoElement {
-        div().pt_2().pb_1().border_b_1().border_color(border).child(
-            Text::body(label.to_string())
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(_muted_fg),
-        )
+        div()
+            .pt_2()
+            .pb_1()
+            .border_b_1()
+            .border_color(border)
+            .child(SubSectionLabel::new(label.to_string()))
     }
 
     fn render_audit_status_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -652,7 +673,7 @@ impl AuditSection {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(gpui::transparent_black())
             .child(div().size_2().rounded_full().bg(if is_enabled {
@@ -688,7 +709,7 @@ impl AuditSection {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
                 primary
@@ -740,8 +761,6 @@ impl AuditSection {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let primary = theme.primary;
-        let muted_fg = theme.muted_foreground;
-
         // Row is non-interactive: no cursor movement on activation,
         // checkbox cannot be toggled. Only visual focus state is shown.
         div()
@@ -750,7 +769,7 @@ impl AuditSection {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded(px(4.0))
+            .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
                 primary
@@ -765,14 +784,8 @@ impl AuditSection {
                 }),
             )
             .child(Checkbox::new(id).checked(checked))
-            .child(div().text_sm().text_color(muted_fg).child(label))
-            .child(
-                div()
-                    .text_xs()
-                    .italic()
-                    .text_color(muted_fg.opacity(0.7))
-                    .child("(not yet wired)"),
-            )
+            .child(Text::muted(label))
+            .child(div().italic().child(Text::dim_secondary("(not yet wired)")))
     }
 
     /// Internal implementation for input fields; `unsupported` dims the label
@@ -788,9 +801,6 @@ impl AuditSection {
         cx: &mut Context<Self>,
         unsupported: bool,
     ) -> impl IntoElement {
-        let theme = cx.theme();
-        let muted_fg = theme.muted_foreground;
-
         div()
             .flex()
             .flex_col()
@@ -800,28 +810,19 @@ impl AuditSection {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(if unsupported {
-                        muted_fg
+                    .child(if unsupported {
+                        Text::label_sm(label.to_string()).muted_foreground()
                     } else {
-                        theme.foreground
+                        Text::label_sm(label.to_string())
                     })
-                    .child(label.to_string())
                     .when(unsupported, |this| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .italic()
-                                .text_color(muted_fg.opacity(0.7))
-                                .child("(not yet wired)"),
-                        )
+                        this.child(div().italic().child(Text::dim_secondary("(not yet wired)")))
                     }),
             )
             .child(
                 div()
                     .w(px(200.0))
-                    .rounded(px(4.0))
+                    .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_focused {
                         primary

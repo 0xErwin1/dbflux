@@ -47,6 +47,31 @@ pub fn migrate_app_config(config: &mut AppConfig, legacy_allow_redis_flush: bool
     changed
 }
 
+pub const EXTERNAL_SERVICES_CONFIG_KEY: &str = "services";
+const LEGACY_EXTERNAL_SERVICES_CONFIG_KEY: &str = "rpc_services";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppConfigWarning {
+    LegacyRpcServicesIgnored,
+}
+
+impl std::fmt::Display for AppConfigWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LegacyRpcServicesIgnored => write!(
+                f,
+                "Legacy config key 'rpc_services' is ignored; rename it to 'services'"
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadedAppConfig {
+    pub config: AppConfig,
+    pub warnings: Vec<AppConfigWarning>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_config_version")]
@@ -275,6 +300,9 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub theme: ThemeSetting,
 
+    #[serde(default)]
+    pub style: AppStyle,
+
     // -- Startup & Session --
     #[serde(default = "default_true")]
     pub restore_session_on_startup: bool,
@@ -322,6 +350,7 @@ impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             theme: ThemeSetting::Dark,
+            style: AppStyle::Default,
             restore_session_on_startup: true,
             reopen_last_connections: false,
             default_focus_on_startup: StartupFocus::Sidebar,
@@ -360,7 +389,30 @@ pub enum RefreshPolicySetting {
 pub enum ThemeSetting {
     #[default]
     Dark,
+    Mirage,
     Light,
+}
+
+/// Controls global layout density.
+///
+/// - `Default` — standard density, square corners, font scale 12–20 px.
+/// - `Compact` — denser layout, 2 px radii, font scale 11–18 px (Design System).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppStyle {
+    #[default]
+    Default,
+    Compact,
+}
+
+impl AppStyle {
+    /// Human-readable label for display in settings dropdowns and UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            AppStyle::Default => "Default",
+            AppStyle::Compact => "Compact",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -462,6 +514,54 @@ pub struct ServiceConfig {
 
     #[serde(default)]
     pub startup_timeout_ms: Option<u64>,
+
+    #[serde(default)]
+    pub kind: RpcServiceKind,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_contract: Option<ServiceRpcApiContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceRpcApiContract {
+    pub family: String,
+    pub major: u16,
+    pub minor: u16,
+}
+
+impl ServiceRpcApiContract {
+    pub fn new(family: impl Into<String>, major: u16, minor: u16) -> Self {
+        Self {
+            family: family.into(),
+            major,
+            minor,
+        }
+    }
+}
+
+impl ServiceConfig {
+    pub fn resolved_api_contract(&self) -> ServiceRpcApiContract {
+        self.api_contract
+            .clone()
+            .unwrap_or_else(|| self.kind.default_api_contract())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RpcServiceKind {
+    #[default]
+    Driver,
+    AuthProvider,
+}
+
+impl RpcServiceKind {
+    pub fn default_api_contract(self) -> ServiceRpcApiContract {
+        match self {
+            RpcServiceKind::Driver => ServiceRpcApiContract::new("driver_rpc", 1, 1),
+            RpcServiceKind::AuthProvider => ServiceRpcApiContract::new("auth_provider_rpc", 1, 2),
+        }
+    }
 }
 
 fn default_enabled() -> bool {
@@ -497,13 +597,22 @@ impl AppConfigStore {
     }
 
     pub fn load(&self) -> Result<AppConfig, DbError> {
+        self.load_with_warnings().map(|loaded| loaded.config)
+    }
+
+    pub fn load_with_warnings(&self) -> Result<LoadedAppConfig, DbError> {
         if !self.path.exists() {
-            return Ok(AppConfig::default());
+            return Ok(LoadedAppConfig {
+                config: AppConfig::default(),
+                warnings: Vec::new(),
+            });
         }
 
         let content = fs::read_to_string(&self.path).map_err(DbError::IoError)?;
-        let json: serde_json::Value =
+        let mut json: serde_json::Value =
             serde_json::from_str(&content).map_err(|e| DbError::InvalidProfile(e.to_string()))?;
+
+        let warnings = Self::strip_legacy_service_keys(&mut json);
 
         let legacy_allow_redis_flush = json
             .get("general")
@@ -518,7 +627,28 @@ impl AppConfigStore {
             self.save(&config)?;
         }
 
-        Ok(config)
+        Ok(LoadedAppConfig { config, warnings })
+    }
+
+    fn strip_legacy_service_keys(json: &mut serde_json::Value) -> Vec<AppConfigWarning> {
+        let Some(object) = json.as_object_mut() else {
+            return Vec::new();
+        };
+
+        if object.remove(LEGACY_EXTERNAL_SERVICES_CONFIG_KEY).is_some() {
+            vec![AppConfigWarning::LegacyRpcServicesIgnored]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn existing_legacy_service_entries(&self) -> Option<serde_json::Value> {
+        let content = fs::read_to_string(&self.path).ok()?;
+        let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+        json.as_object()?
+            .get(LEGACY_EXTERNAL_SERVICES_CONFIG_KEY)
+            .cloned()
     }
 
     fn migrate(&self, config: &mut AppConfig, legacy_allow_redis_flush: bool) -> bool {
@@ -526,11 +656,39 @@ impl AppConfigStore {
     }
 
     pub fn save(&self, config: &AppConfig) -> Result<(), DbError> {
+        self.save_with_legacy_service_key(config, true)
+    }
+
+    pub fn save_without_legacy_service_key(&self, config: &AppConfig) -> Result<(), DbError> {
+        self.save_with_legacy_service_key(config, false)
+    }
+
+    fn save_with_legacy_service_key(
+        &self,
+        config: &AppConfig,
+        preserve_existing_legacy_key: bool,
+    ) -> Result<(), DbError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(DbError::IoError)?;
         }
 
-        let content = serde_json::to_string_pretty(config)
+        let mut json =
+            serde_json::to_value(config).map_err(|e| DbError::InvalidProfile(e.to_string()))?;
+
+        if let Some(object) = json.as_object_mut() {
+            if preserve_existing_legacy_key {
+                if let Some(legacy_services) = self.existing_legacy_service_entries() {
+                    object.insert(
+                        LEGACY_EXTERNAL_SERVICES_CONFIG_KEY.to_string(),
+                        legacy_services,
+                    );
+                }
+            } else {
+                object.remove(LEGACY_EXTERNAL_SERVICES_CONFIG_KEY);
+            }
+        }
+
+        let content = serde_json::to_string_pretty(&json)
             .map_err(|e| DbError::InvalidProfile(e.to_string()))?;
         fs::write(&self.path, content).map_err(DbError::IoError)?;
 
@@ -562,6 +720,16 @@ pub fn driver_maps_differ(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    fn temp_config_store() -> (TempDir, AppConfigStore) {
+        let temp_dir = TempDir::new().unwrap();
+        let store = AppConfigStore {
+            path: temp_dir.path().join("config.json"),
+        };
+
+        (temp_dir, store)
+    }
 
     // =========================================================================
     // GlobalOverrides
@@ -1010,6 +1178,64 @@ mod tests {
     }
 
     #[test]
+    fn service_config_deserializes_missing_kind_as_driver() {
+        let json = r#"{
+            "socket_id": "legacy-socket",
+            "enabled": true,
+            "command": "dbflux-driver-host",
+            "args": ["--stdio"]
+        }"#;
+
+        let service: ServiceConfig = serde_json::from_str(json).unwrap();
+
+        assert_eq!(service.kind, RpcServiceKind::Driver);
+    }
+
+    #[test]
+    fn service_config_serializes_kind_for_roundtrip() {
+        let service = ServiceConfig {
+            socket_id: "auth-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-driver-host".to_string()),
+            args: vec!["--stdio".to_string()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(5_000),
+            kind: RpcServiceKind::AuthProvider,
+            api_contract: Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 2)),
+        };
+
+        let json = serde_json::to_value(&service).unwrap();
+
+        assert_eq!(json.get("kind"), Some(&serde_json::json!("auth_provider")));
+
+        let restored: ServiceConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.kind, RpcServiceKind::AuthProvider);
+        assert_eq!(
+            restored.api_contract,
+            Some(ServiceRpcApiContract::new("auth_provider_rpc", 1, 2))
+        );
+    }
+
+    #[test]
+    fn service_config_defaults_missing_api_contract_from_kind() {
+        let service = ServiceConfig {
+            socket_id: "legacy-socket".to_string(),
+            enabled: true,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            startup_timeout_ms: None,
+            kind: RpcServiceKind::Driver,
+            api_contract: None,
+        };
+
+        assert_eq!(
+            service.resolved_api_contract(),
+            ServiceRpcApiContract::new("driver_rpc", 1, 1)
+        );
+    }
+
+    #[test]
     fn app_config_omits_empty_driver_maps_in_json() {
         let config = AppConfig::default();
         let json = serde_json::to_string(&config).unwrap();
@@ -1115,6 +1341,191 @@ mod tests {
         assert!(restored.governance.mcp_enabled_by_default);
         assert_eq!(restored.governance.trusted_clients.len(), 1);
         assert_eq!(restored.governance.trusted_clients[0].id, "client-a");
+    }
+
+    #[test]
+    fn load_ignores_legacy_rpc_services_key_and_reports_warning() {
+        let (_temp_dir, store) = temp_config_store();
+
+        fs::write(
+            store.path(),
+            r#"{
+                "version": 2,
+                "general": {
+                    "theme": "light"
+                },
+                "hook_definitions": {
+                    "after_connect": {
+                        "name": "After connect",
+                        "kind": "command",
+                        "command": "echo",
+                        "args": ["ok"],
+                        "cwd": null,
+                        "env": {},
+                        "timeout_ms": null,
+                        "enabled": true,
+                        "failure_mode": "warn"
+                    }
+                },
+                "rpc_services": [
+                    {
+                        "socket_id": "legacy.sock",
+                        "enabled": true,
+                        "command": "legacy-host",
+                        "args": ["--serve"]
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = store.load_with_warnings().unwrap();
+
+        assert!(loaded.config.services.is_empty());
+        assert_eq!(loaded.config.general.theme, ThemeSetting::Light);
+        assert!(loaded.config.hook_definitions.contains_key("after_connect"));
+        assert_eq!(
+            loaded.warnings,
+            vec![AppConfigWarning::LegacyRpcServicesIgnored]
+        );
+    }
+
+    #[test]
+    fn load_prefers_canonical_services_key_when_legacy_key_is_present() {
+        let (_temp_dir, store) = temp_config_store();
+
+        fs::write(
+            store.path(),
+            r#"{
+                "version": 2,
+                "services": [
+                    {
+                        "socket_id": "canonical.sock",
+                        "enabled": true,
+                        "command": "canonical-host"
+                    }
+                ],
+                "rpc_services": [
+                    {
+                        "socket_id": "legacy.sock",
+                        "enabled": true,
+                        "command": "legacy-host"
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = store.load_with_warnings().unwrap();
+
+        assert_eq!(loaded.config.services.len(), 1);
+        assert_eq!(loaded.config.services[0].socket_id, "canonical.sock");
+        assert_eq!(
+            loaded.warnings,
+            vec![AppConfigWarning::LegacyRpcServicesIgnored]
+        );
+    }
+
+    #[test]
+    fn load_keeps_canonical_services_key_unchanged() {
+        let (_temp_dir, store) = temp_config_store();
+
+        fs::write(
+            store.path(),
+            r#"{
+                "version": 2,
+                "services": [
+                    {
+                        "socket_id": "canonical.sock",
+                        "enabled": true,
+                        "command": "canonical-host"
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let _ = store.load().unwrap();
+        let saved = fs::read_to_string(store.path()).unwrap();
+
+        assert!(saved.contains("\"services\""));
+        assert!(!saved.contains("\"rpc_services\""));
+        assert!(saved.contains("canonical.sock"));
+    }
+
+    #[test]
+    fn save_preserves_existing_legacy_rpc_services_key_for_unrelated_updates() {
+        let (_temp_dir, store) = temp_config_store();
+
+        fs::write(
+            store.path(),
+            r#"{
+                "version": 2,
+                "general": {
+                    "theme": "dark"
+                },
+                "rpc_services": [
+                    {
+                        "socket_id": "legacy.sock",
+                        "enabled": true,
+                        "command": "legacy-host"
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let mut config = store.load().unwrap();
+        config.general.theme = ThemeSetting::Light;
+
+        store.save(&config).unwrap();
+
+        let saved = fs::read_to_string(store.path()).unwrap();
+
+        assert!(saved.contains("\"rpc_services\""));
+        assert!(saved.contains("legacy.sock"));
+        assert!(saved.contains("\"theme\": \"light\""));
+    }
+
+    #[test]
+    fn save_without_legacy_service_key_explicitly_removes_legacy_rpc_services() {
+        let (_temp_dir, store) = temp_config_store();
+
+        fs::write(
+            store.path(),
+            r#"{
+                "version": 2,
+                "rpc_services": [
+                    {
+                        "socket_id": "legacy.sock",
+                        "enabled": true,
+                        "command": "legacy-host"
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let mut config = AppConfig::default();
+        config.services.push(ServiceConfig {
+            socket_id: "canonical.sock".to_string(),
+            enabled: true,
+            command: Some("canonical-host".to_string()),
+            args: Vec::new(),
+            env: HashMap::new(),
+            startup_timeout_ms: None,
+            kind: RpcServiceKind::Driver,
+            api_contract: None,
+        });
+
+        store.save_without_legacy_service_key(&config).unwrap();
+
+        let saved = fs::read_to_string(store.path()).unwrap();
+
+        assert!(saved.contains("\"services\""));
+        assert!(saved.contains("canonical.sock"));
+        assert!(!saved.contains("\"rpc_services\""));
+        assert!(!saved.contains("legacy.sock"));
     }
 
     // =========================================================================

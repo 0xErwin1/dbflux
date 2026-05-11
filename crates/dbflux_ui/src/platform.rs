@@ -4,30 +4,59 @@
 /// This module provides helpers to detect the current platform and
 /// adjust window creation accordingly.
 use crate::ui::icons::AppIcon;
+use dbflux_components::primitives::{Icon, Text};
+#[cfg(target_os = "linux")]
+use dbflux_components::tokens::ChromeColors;
 use gpui::{
-    App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement, Stateful, Styled,
-    Window, WindowDecorations, WindowKind, WindowOptions, div, px, svg,
+    App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement, SharedString,
+    Stateful, Styled, Window, WindowDecorations, WindowKind, WindowOptions, div, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::InteractiveElementExt;
 
+/// A single breadcrumb entry for the CSD title bar.
+pub struct TitleCrumb {
+    pub icon: Option<AppIcon>,
+    pub label: SharedString,
+}
+
 /// Title bar height for Linux CSD mode. Used for layout and client inset reporting.
 pub const TITLE_BAR_HEIGHT: gpui::Pixels = px(32.0);
 
+/// Returns `true` when the current Linux desktop is expected to prefer app-drawn
+/// title bars instead of server-side decorations.
+#[cfg(target_os = "linux")]
+fn prefers_client_side_decorations() -> bool {
+    [
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "DESKTOP_SESSION",
+    ]
+    .into_iter()
+    .filter_map(|key| std::env::var(key).ok())
+    .flat_map(|value| {
+        value
+            .split(':')
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| segment.to_ascii_lowercase())
+            .collect::<Vec<_>>()
+    })
+    .any(|desktop| matches!(desktop.as_str(), "gnome" | "ubuntu" | "pop"))
+}
+
 /// Returns the `WindowDecorations` value to request when creating a top-level window.
 ///
-/// On Linux, requests `Client` (CSD) so Wayland compositors that honor the request
-/// (e.g. GNOME, Sway) grant CSD mode and the app renders its own title bar.
-/// On X11, requesting `Client` is safe because:
-/// - Most X11 window managers ignore the request and keep server-side decorations.
-/// - GPUI's `window.window_decorations()` returns the *actual negotiated result* at
-///   runtime, so `should_render_csd()` will return `false` when the compositor kept SSD.
-/// - No custom title bar renders unless the compositor actually switched to CSD mode.
-///
-/// On other platforms, returns `Server` explicitly to preserve the original behavior.
+/// On Linux, only GNOME-like desktop sessions request `Client` (CSD). Other Linux
+/// environments keep `Server` decorations so the window manager/compositor remains in
+/// control of the title bar.
 #[cfg(target_os = "linux")]
 pub fn decoration_request() -> Option<WindowDecorations> {
-    Some(WindowDecorations::Client)
+    Some(if prefers_client_side_decorations() {
+        WindowDecorations::Client
+    } else {
+        WindowDecorations::Server
+    })
 }
 
 /// Returns the `WindowDecorations` value to request when creating a top-level window.
@@ -65,11 +94,28 @@ pub fn should_render_csd(_window: &Window) -> bool {
 /// Returns `Some(element)` when CSD is active (Linux Wayland with compositor granting
 /// CSD), `None` otherwise. When `None` is returned on Linux, the client inset is
 /// explicitly reset to zero to prevent stale insets.
+///
+/// Pass `crumbs` to render a breadcrumb trail after the app name. An empty slice
+/// renders the title alone (same behavior as before).
 pub fn render_csd_title_bar(
     window: &mut Window,
     cx: &mut App,
     title: &str,
 ) -> Option<Stateful<gpui::Div>> {
+    render_csd_title_bar_with_crumbs(window, cx, title, &[])
+}
+
+/// Like [`render_csd_title_bar`] but accepts an optional breadcrumb trail displayed
+/// after the app name: `DBFlux  ›  {crumb1}  ›  {crumb2}`.
+pub fn render_csd_title_bar_with_crumbs(
+    window: &mut Window,
+    cx: &mut App,
+    title: &str,
+    crumbs: &[TitleCrumb],
+) -> Option<Stateful<gpui::Div>> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = crumbs;
+
     if !should_render_csd(window) {
         #[cfg(target_os = "linux")]
         window.set_client_inset(px(0.0));
@@ -96,12 +142,7 @@ pub fn render_csd_title_bar(
                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, _cx| {
                     handler(window);
                 })
-                .child(
-                    svg()
-                        .path(icon.path())
-                        .size_4()
-                        .text_color(theme.muted_foreground),
-                )
+                .child(Icon::new(icon).size(px(16.0)).muted())
         };
 
         let mut title_bar = div()
@@ -123,7 +164,9 @@ pub fn render_csd_title_bar(
                 },
             );
 
-        let drag_area = div()
+        let sep_color = ChromeColors::ghost_border();
+
+        let mut drag_area = div()
             .flex()
             .flex_row()
             .items_center()
@@ -135,13 +178,21 @@ pub fn render_csd_title_bar(
             .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
                 window.start_window_move();
             })
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(title_text),
-            );
+            .child(Text::label_sm(title_text));
+
+        for crumb in crumbs {
+            drag_area = drag_area
+                .child(div().w(px(1.0)).h(px(12.0)).bg(sep_color).flex_shrink_0())
+                .child({
+                    let mut crumb_el = div().flex().flex_row().items_center().gap(px(4.0));
+
+                    if let Some(icon) = crumb.icon {
+                        crumb_el = crumb_el.child(Icon::new(icon).size(px(12.0)).muted());
+                    }
+
+                    crumb_el.child(Text::label_sm(crumb.label.clone()))
+                });
+        }
 
         title_bar = title_bar.child(drag_area);
 

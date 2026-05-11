@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 pub const APP_CONTROL_AUTH_TOKEN_ENV: &str = "DBFLUX_IPC_TOKEN";
 pub const DRIVER_RPC_AUTH_TOKEN_ENV: &str = "DBFLUX_DRIVER_IPC_TOKEN";
+pub const AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV: &str = "DBFLUX_AUTH_PROVIDER_IPC_TOKEN";
 
 const AUTH_TOKEN_FILE: &str = "ipc_auth_token";
 
@@ -13,6 +14,7 @@ pub fn init_process_auth_tokens() -> io::Result<String> {
     unsafe {
         std::env::set_var(APP_CONTROL_AUTH_TOKEN_ENV, &token);
         std::env::set_var(DRIVER_RPC_AUTH_TOKEN_ENV, &token);
+        std::env::set_var(AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, &token);
     }
 
     write_app_control_token(&token)?;

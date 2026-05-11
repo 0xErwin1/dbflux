@@ -17,6 +17,11 @@ pub struct ColumnSpec {
     pub title: Arc<str>,
     pub kind: ColumnKind,
     pub align: TextAlign,
+    /// Raw SQL type as reported by the driver (e.g. `uuid`,
+    /// `character varying(255)`, `timestamp without time zone`).
+    /// Rendered in the header so users see the real engine type, not the
+    /// coarse `ColumnKind`.
+    pub type_name: Arc<str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,8 +133,47 @@ impl From<&ColumnMeta> for ColumnSpec {
             title: col.name.as_str().into(),
             kind,
             align,
+            type_name: abbreviate_sql_type(&col.type_name).into(),
         }
     }
+}
+
+/// Compress verbose SQL type names into shorter forms that fit data-grid
+/// header cells without losing information.
+///
+/// Examples:
+/// - `character varying(255)` -> `varchar(255)`
+/// - `character varying`      -> `varchar`
+/// - `timestamp without time zone` -> `timestamp`
+/// - `timestamp with time zone`    -> `timestamptz`
+/// - any other type is returned unchanged.
+fn abbreviate_sql_type(type_name: &str) -> String {
+    let trimmed = type_name.trim();
+    let lower = trimmed.to_lowercase();
+
+    if let Some(rest) = lower.strip_prefix("character varying") {
+        return format!("varchar{}", rest);
+    }
+    if let Some(rest) = lower.strip_prefix("character") {
+        return format!("char{}", rest);
+    }
+    if lower == "timestamp without time zone" {
+        return "timestamp".to_string();
+    }
+    if lower == "timestamp with time zone" {
+        return "timestamptz".to_string();
+    }
+    if lower == "time without time zone" {
+        return "time".to_string();
+    }
+    if lower == "time with time zone" {
+        return "timetz".to_string();
+    }
+    if lower == "double precision" {
+        return "double".to_string();
+    }
+
+    trimmed.to_string()
 }
 
 fn infer_column_kind(type_name: &str) -> ColumnKind {

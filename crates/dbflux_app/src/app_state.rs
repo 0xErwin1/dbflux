@@ -11,14 +11,13 @@ use dbflux_core::observability::{
 };
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionMcpGovernance,
-    ConnectionProfile, DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FormValues,
-    GeneralSettings, GlobalOverrides, HistoryEntry, HistoryManager, HookContext, HookPhase,
-    ProfileManager, ProxyProfile, SavedQuery, SavedQueryManager, SchemaForeignKeyInfo,
+    AuthProfile, CancelToken, Connection, ConnectionHook, ConnectionHooks, ConnectionProfile,
+    DbDriver, DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams,
+    FormValues, GeneralSettings, GlobalOverrides, HistoryEntry, HistoryManager, HookContext,
+    HookPhase, ProfileManager, ProxyProfile, SavedQuery, SavedQueryManager, SchemaForeignKeyInfo,
     SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore, ServiceConfig, SessionFacade,
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
-use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
 
 #[cfg(feature = "mcp")]
@@ -49,6 +48,9 @@ use dbflux_driver_redis::RedisDriver;
 #[cfg(feature = "dynamodb")]
 use dbflux_driver_dynamodb::DynamoDriver;
 
+#[cfg(feature = "cloudwatch")]
+use dbflux_driver_cloudwatch::CloudWatchDriver;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,6 +58,18 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
+use crate::rpc_services::{
+    AuthProviderServiceAdaptation, DriverServiceAdaptation, ExternalDriverDiagnostic,
+    RpcServiceDiscovery, adapt_auth_provider_service, adapt_driver_service, discover_services,
+};
+
+#[cfg(test)]
+use crate::rpc_services::{
+    DriverProbe, adapt_auth_provider_service_with, adapt_driver_service_with,
+};
+
+#[cfg(test)]
+use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
 
 pub use dbflux_core::{
     ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
@@ -63,20 +77,19 @@ pub use dbflux_core::{
     FetchTableDetailsParams, SwitchDatabaseParams,
 };
 
-fn rpc_registry_id(socket_id: &str) -> String {
-    format!("rpc:{}", socket_id)
-}
-
 struct BuiltDrivers {
     drivers: HashMap<String, Arc<dyn DbDriver>>,
+    external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
     general_settings: GeneralSettings,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, ConnectionHook>,
+    services: Vec<ServiceConfig>,
 }
 
 pub struct AppState {
     pub facade: SessionFacade,
+    external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
     general_settings: GeneralSettings,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
@@ -92,6 +105,11 @@ pub struct AppState {
     /// bootstrap_audit_settings will not enable the service even if persisted
     /// settings say enabled=true, preserving an honest degraded-state signal.
     audit_degraded: bool,
+    /// Session-scoped passphrase vault for SSH tunnel private keys.
+    ///
+    /// Passphrases entered via the modal prompt are held here for the process
+    /// lifetime. Never serialized, logged, or written to disk.
+    pub session_passphrase_vault: Arc<RwLock<dbflux_ssh::SessionPassphraseVault>>,
     #[cfg(feature = "mcp")]
     mcp_runtime: McpRuntime,
 }
@@ -103,10 +121,32 @@ impl AppState {
 
         Self::new_with_drivers_and_settings(
             built.drivers,
+            built.external_driver_diagnostics,
             built.general_settings,
             built.driver_overrides,
             built.driver_settings,
             built.hook_definitions,
+            built.services,
+            storage_runtime,
+            profiles,
+            auth_profiles,
+            proxies,
+            ssh_tunnels,
+        )
+    }
+
+    pub fn new_with_storage_runtime(storage_runtime: StorageRuntime) -> Self {
+        let (built, storage_runtime, profiles, auth_profiles, proxies, ssh_tunnels) =
+            Self::build_default_drivers_with_runtime(storage_runtime);
+
+        Self::new_with_drivers_and_settings(
+            built.drivers,
+            built.external_driver_diagnostics,
+            built.general_settings,
+            built.driver_overrides,
+            built.driver_settings,
+            built.hook_definitions,
+            built.services,
             storage_runtime,
             profiles,
             auth_profiles,
@@ -118,10 +158,12 @@ impl AppState {
     #[allow(clippy::too_many_arguments)]
     fn new_with_drivers_and_settings(
         drivers: HashMap<String, Arc<dyn DbDriver>>,
+        external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
         general_settings: GeneralSettings,
         driver_overrides: HashMap<DriverKey, GlobalOverrides>,
         driver_settings: HashMap<DriverKey, FormValues>,
         hook_definitions: HashMap<String, ConnectionHook>,
+        services: Vec<ServiceConfig>,
         storage_runtime: dbflux_storage::bootstrap::StorageRuntime,
         profiles: Vec<ConnectionProfile>,
         auth_profiles: Vec<dbflux_core::AuthProfile>,
@@ -169,6 +211,10 @@ impl AppState {
                 .register(Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new()));
         }
 
+        if !services.is_empty() {
+            Self::launch_rpc_auth_providers(&mut auth_provider_registry, services);
+        }
+
         let (audit_service, audit_degraded) =
             match dbflux_audit::AuditService::new_sqlite(storage_runtime.dbflux_db_path()) {
                 Ok(service) => (service, false),
@@ -191,6 +237,7 @@ impl AppState {
 
         let mut state = Self {
             facade,
+            external_driver_diagnostics,
             general_settings,
             driver_overrides,
             driver_settings,
@@ -202,6 +249,9 @@ impl AppState {
             storage_runtime,
             audit_service,
             audit_degraded,
+            session_passphrase_vault: Arc::new(RwLock::new(
+                dbflux_ssh::SessionPassphraseVault::new(),
+            )),
             #[cfg(feature = "mcp")]
             mcp_runtime,
         };
@@ -436,7 +486,25 @@ impl AppState {
         Vec<ProxyProfile>,
         Vec<SshTunnelProfile>,
     ) {
-        let drivers = Self::build_builtin_drivers();
+        let runtime = dbflux_storage::bootstrap::initialize()
+            .expect("failed to initialize internal storage — cannot continue");
+
+        Self::build_default_drivers_with_runtime(runtime)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn build_default_drivers_with_runtime(
+        runtime: dbflux_storage::bootstrap::StorageRuntime,
+    ) -> (
+        BuiltDrivers,
+        dbflux_storage::bootstrap::StorageRuntime,
+        Vec<ConnectionProfile>,
+        Vec<AuthProfile>,
+        Vec<ProxyProfile>,
+        Vec<SshTunnelProfile>,
+    ) {
+        let mut drivers = Self::build_builtin_drivers();
+        let mut external_driver_diagnostics = HashMap::new();
 
         let (
             general_settings,
@@ -445,10 +513,14 @@ impl AppState {
             hook_definitions,
             services,
             runtime,
-        ) = Self::load_app_config_from_storage();
+        ) = Self::load_app_config_from_runtime(runtime);
 
         if !services.is_empty() {
-            Self::launch_rpc_services(&mut drivers.clone(), services);
+            Self::launch_rpc_services(
+                &mut drivers,
+                &mut external_driver_diagnostics,
+                services.clone(),
+            );
         }
 
         let loaded = crate::config_loader::load_config(&runtime);
@@ -456,10 +528,12 @@ impl AppState {
         (
             BuiltDrivers {
                 drivers,
+                external_driver_diagnostics,
                 general_settings,
                 driver_overrides,
                 driver_settings,
                 hook_definitions,
+                services,
             },
             runtime,
             loaded.profiles,
@@ -470,7 +544,9 @@ impl AppState {
     }
 
     #[allow(clippy::type_complexity)]
-    fn load_app_config_from_storage() -> (
+    fn load_app_config_from_runtime(
+        runtime: dbflux_storage::bootstrap::StorageRuntime,
+    ) -> (
         GeneralSettings,
         HashMap<DriverKey, GlobalOverrides>,
         HashMap<DriverKey, FormValues>,
@@ -478,9 +554,6 @@ impl AppState {
         Vec<ServiceConfig>,
         dbflux_storage::bootstrap::StorageRuntime,
     ) {
-        let runtime = dbflux_storage::bootstrap::initialize()
-            .expect("failed to initialize internal storage — cannot continue");
-
         let loaded = crate::config_loader::load_config(&runtime);
 
         (
@@ -495,59 +568,211 @@ impl AppState {
 
     fn launch_rpc_services(
         drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
+        diagnostics: &mut HashMap<String, ExternalDriverDiagnostic>,
         services: Vec<ServiceConfig>,
     ) {
-        for service in services {
-            if !service.enabled {
-                log::info!("Skipping disabled service '{}'", service.socket_id);
-                continue;
-            }
-
-            let driver_id = rpc_registry_id(&service.socket_id);
-
-            if drivers.contains_key(&driver_id) {
-                log::warn!(
-                    "Skipping external RPC service '{}': driver id already exists",
-                    service.socket_id
-                );
-                continue;
-            }
-
-            let launch = IpcDriverLaunchConfig {
-                program: service
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| "dbflux-driver-host".to_string()),
-                args: service.args.clone(),
-                env: service.env.into_iter().collect(),
-                startup_timeout: std::time::Duration::from_millis(
-                    service.startup_timeout_ms.unwrap_or(5_000),
-                ),
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC service '{}': invalid launch configuration: {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                    diagnostics.insert(diagnostic.socket_id.clone(), diagnostic);
+                    continue;
+                }
             };
 
-            let (kind, metadata, form_definition, settings_schema) =
-                match IpcDriver::probe_driver(&service.socket_id, Some(&launch)) {
-                    Ok(info) => info,
-                    Err(error) => {
-                        log::warn!(
-                            "Skipping RPC service '{}': failed to probe driver metadata: {}",
-                            service.socket_id,
-                            error
-                        );
-                        continue;
+            match adapt_driver_service(descriptor, |driver_id| drivers.contains_key(driver_id)) {
+                DriverServiceAdaptation::Registered { driver_id, service } => {
+                    if let Some(socket_id) = driver_id.strip_prefix("rpc:") {
+                        diagnostics.remove(socket_id);
                     }
-                };
+                    drivers.insert(driver_id, service);
+                }
+                DriverServiceAdaptation::SkippedDisabled { socket_id } => {
+                    log::info!("Skipping disabled service '{}'", socket_id);
+                }
+                DriverServiceAdaptation::SkippedNonDriver { socket_id, kind } => {
+                    log::info!(
+                        "Deferring non-driver RPC service '{}' of kind {:?}",
+                        socket_id,
+                        kind
+                    );
+                }
+                DriverServiceAdaptation::SkippedDuplicate { socket_id } => {
+                    log::warn!(
+                        "Skipping external RPC service '{}': driver id already exists",
+                        socket_id
+                    );
+                }
+                DriverServiceAdaptation::ProbeFailed { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC service '{}': {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                    diagnostics.insert(diagnostic.socket_id.clone(), diagnostic);
+                }
+            }
+        }
+    }
 
-            let ipc_driver = IpcDriver::new(
-                service.socket_id.clone(),
-                kind,
-                metadata,
-                form_definition,
-                settings_schema,
+    fn launch_rpc_auth_providers(
+        registry: &mut AuthProviderRegistry,
+        services: Vec<ServiceConfig>,
+    ) {
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC auth-provider service '{}': invalid launch configuration: {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                    continue;
+                }
+            };
+
+            match adapt_auth_provider_service(descriptor, |provider_id| {
+                registry.get(provider_id).is_some()
+            }) {
+                AuthProviderServiceAdaptation::Registered {
+                    provider_id,
+                    service,
+                } => {
+                    log::info!("Registered external RPC auth provider '{}'", provider_id);
+                    registry.register(service);
+                }
+                AuthProviderServiceAdaptation::SkippedDisabled { socket_id } => {
+                    log::info!("Skipping disabled auth-provider service '{}'", socket_id);
+                }
+                AuthProviderServiceAdaptation::SkippedNonAuthProvider { socket_id, kind } => {
+                    log::info!(
+                        "Deferring non-auth RPC service '{}' of kind {:?}",
+                        socket_id,
+                        kind
+                    );
+                }
+                AuthProviderServiceAdaptation::SkippedDuplicate {
+                    socket_id,
+                    provider_id,
+                } => {
+                    log::warn!(
+                        "Skipping RPC auth-provider service '{}': provider id '{}' already exists",
+                        socket_id,
+                        provider_id
+                    );
+                }
+                AuthProviderServiceAdaptation::Incompatible { diagnostic }
+                | AuthProviderServiceAdaptation::ProbeFailed { diagnostic } => {
+                    log::warn!(
+                        "Skipping RPC auth-provider service '{}': {}",
+                        diagnostic.socket_id,
+                        diagnostic.summary
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn launch_rpc_services_with<Probe, Build>(
+        drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
+        diagnostics: &mut HashMap<String, ExternalDriverDiagnostic>,
+        services: Vec<ServiceConfig>,
+        mut probe: Probe,
+        mut build: Build,
+    ) where
+        Probe: FnMut(
+            &str,
+            Option<&IpcDriverLaunchConfig>,
+        ) -> Result<DriverProbe, Box<dbflux_core::DbError>>,
+        Build:
+            FnMut(String, String, DriverProbe, Option<IpcDriverLaunchConfig>) -> Arc<dyn DbDriver>,
+    {
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { diagnostic } => {
+                    diagnostics.insert(diagnostic.socket_id.clone(), diagnostic);
+                    continue;
+                }
+            };
+
+            match adapt_driver_service_with(
+                descriptor,
+                |driver_id| drivers.contains_key(driver_id),
+                |socket_id, launch| probe(socket_id, launch),
+                |driver_id, socket_id, probe_result, launch| {
+                    build(driver_id, socket_id, probe_result, launch)
+                },
+            ) {
+                DriverServiceAdaptation::Registered { driver_id, service } => {
+                    if let Some(socket_id) = driver_id.strip_prefix("rpc:") {
+                        diagnostics.remove(socket_id);
+                    }
+                    drivers.insert(driver_id, service);
+                }
+                DriverServiceAdaptation::SkippedDisabled { socket_id } => {
+                    log::info!("Skipping disabled service '{}'", socket_id);
+                }
+                DriverServiceAdaptation::SkippedNonDriver { socket_id, kind } => {
+                    log::info!(
+                        "Deferring non-driver RPC service '{}' of kind {:?}",
+                        socket_id,
+                        kind
+                    );
+                }
+                DriverServiceAdaptation::SkippedDuplicate { socket_id } => {
+                    log::warn!(
+                        "Skipping external RPC service '{}': driver id already exists",
+                        socket_id
+                    );
+                }
+                DriverServiceAdaptation::ProbeFailed { diagnostic } => {
+                    diagnostics.insert(diagnostic.socket_id.clone(), diagnostic);
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn launch_rpc_auth_providers_with<Probe>(
+        registry: &mut AuthProviderRegistry,
+        services: Vec<ServiceConfig>,
+        mut probe: Probe,
+    ) where
+        Probe:
+            FnMut(
+                &str,
+                Option<&dbflux_ipc::IpcServiceLaunchConfig>,
             )
-            .with_launch_config(launch);
+                -> Result<Arc<dyn dbflux_core::auth::DynAuthProvider>, Box<dbflux_core::DbError>>,
+    {
+        for discovery in discover_services(services) {
+            let descriptor = match discovery {
+                RpcServiceDiscovery::Descriptor(descriptor) => descriptor,
+                RpcServiceDiscovery::InvalidConfig { .. } => continue,
+            };
 
-            drivers.insert(driver_id, Arc::new(ipc_driver));
+            match adapt_auth_provider_service_with(
+                descriptor,
+                |provider_id| registry.get(provider_id).is_some(),
+                |socket_id, launch| probe(socket_id, launch),
+            ) {
+                AuthProviderServiceAdaptation::Registered { service, .. } => {
+                    registry.register(service);
+                }
+                AuthProviderServiceAdaptation::SkippedDisabled { .. }
+                | AuthProviderServiceAdaptation::SkippedNonAuthProvider { .. }
+                | AuthProviderServiceAdaptation::SkippedDuplicate { .. }
+                | AuthProviderServiceAdaptation::Incompatible { .. }
+                | AuthProviderServiceAdaptation::ProbeFailed { .. } => {}
+            }
         }
     }
 
@@ -590,6 +815,11 @@ impl AppState {
         #[cfg(feature = "dynamodb")]
         {
             drivers.insert("dynamodb".to_string(), Arc::new(DynamoDriver::new()));
+        }
+
+        #[cfg(feature = "cloudwatch")]
+        {
+            drivers.insert("cloudwatch".to_string(), Arc::new(CloudWatchDriver::new()));
         }
 
         drivers
@@ -686,6 +916,18 @@ impl AppState {
         self.facade
             .connections
             .set_table_details(profile_id, database, table, details);
+    }
+
+    pub fn set_dependents(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        table: String,
+        deps: Vec<dbflux_core::RelationRef>,
+    ) {
+        self.facade
+            .connections
+            .set_dependents(profile_id, database, table, deps);
     }
 
     #[allow(dead_code)]
@@ -839,7 +1081,18 @@ impl AppState {
     pub fn prepare_connect_profile(
         &self,
         profile_id: Uuid,
-    ) -> Result<ConnectProfileParams, String> {
+    ) -> Result<ConnectProfileParams, dbflux_core::PrepareConnectError> {
+        self.prepare_connect_profile_with_passphrase(profile_id, None)
+    }
+
+    /// Like `prepare_connect_profile` but allows supplying an explicit SSH
+    /// passphrase (from the tunnel-auth modal) that overrides both the session
+    /// vault and the OS keyring.
+    pub fn prepare_connect_profile_with_passphrase(
+        &self,
+        profile_id: Uuid,
+        override_passphrase: Option<&str>,
+    ) -> Result<ConnectProfileParams, dbflux_core::PrepareConnectError> {
         let secrets = &self.facade.secrets;
 
         let proxy_secret = {
@@ -855,15 +1108,89 @@ impl AppState {
             }
         };
 
+        // Priority: explicit override > session vault > OS keyring.
+        let vault = self.session_passphrase_vault.clone();
+        let override_passphrase = override_passphrase.map(str::to_owned);
+
+        // Capture what we need from secrets before the closure; secrets itself
+        // cannot be moved into the closure because it borrows self.
+        let keyring_ssh_secret: Option<SecretString> = {
+            let profile = self
+                .facade
+                .profiles
+                .profiles
+                .iter()
+                .find(|p| p.id == profile_id);
+            match profile {
+                Some(p) => secrets.get_ssh_secret_for_profile(p, &self.facade.ssh_tunnels.items),
+                None => None,
+            }
+        };
+
         self.facade.connections.prepare_connect_profile(
             profile_id,
             &self.facade.profiles.profiles,
             &self.facade.ssh_tunnels.items,
             &self.facade.proxies.items,
             &secrets.secret_store_arc(),
-            |profile, ssh_tunnels| secrets.get_ssh_secret_for_profile(profile, ssh_tunnels),
+            move |profile, _ssh_tunnels| {
+                use dbflux_core::secrecy::SecretString;
+
+                // An explicit passphrase (from the modal) always wins.
+                if let Some(ref p) = override_passphrase {
+                    return Some(SecretString::from(p.clone()));
+                }
+
+                // Check the session vault for a remembered passphrase.
+                let tunnel_id = profile.config.ssh_tunnel_profile_id();
+                if let Some(id) = tunnel_id
+                    && let Ok(guard) = vault.read()
+                    && let Some(vault_pass) = guard.get(&id)
+                {
+                    return Some(SecretString::from(vault_pass.to_owned()));
+                }
+
+                // Fall back to the OS keyring result captured above.
+                keyring_ssh_secret
+            },
             proxy_secret,
         )
+    }
+
+    /// Resolve the SSH tunnel profile ID associated with a connection profile, if any.
+    pub fn ssh_tunnel_id_for_profile(&self, profile_id: Uuid) -> Option<Uuid> {
+        self.facade
+            .profiles
+            .profiles
+            .iter()
+            .find(|p| p.id == profile_id)
+            .and_then(|p| p.config.ssh_tunnel_profile_id())
+    }
+
+    /// Retrieve the SSH tunnel profile for the given tunnel ID, if it exists.
+    pub fn ssh_tunnel_profile(&self, tunnel_id: Uuid) -> Option<&SshTunnelProfile> {
+        self.facade
+            .ssh_tunnels
+            .items
+            .iter()
+            .find(|t| t.id == tunnel_id)
+    }
+
+    /// Retrieve the remembered passphrase for the given SSH tunnel profile ID, if any.
+    pub fn passphrase_for(&self, tunnel_id: Uuid) -> Option<String> {
+        self.session_passphrase_vault
+            .read()
+            .ok()
+            .and_then(|guard| guard.get(&tunnel_id).map(str::to_owned))
+    }
+
+    /// Store a passphrase for the given SSH tunnel profile ID for the rest of the process lifetime.
+    ///
+    /// The passphrase is held only in memory and is never persisted to disk.
+    pub fn cache_passphrase(&self, tunnel_id: Uuid, passphrase: String) {
+        if let Ok(mut guard) = self.session_passphrase_vault.write() {
+            guard.insert(tunnel_id, passphrase);
+        }
     }
 
     pub fn apply_connect_profile(
@@ -952,6 +1279,30 @@ impl AppState {
         self.facade
             .connections
             .prepare_fetch_table_details(profile_id, database, schema, table)
+    }
+
+    pub fn prepare_fetch_collection_children(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        collection: &str,
+        limit: u32,
+    ) -> Result<FetchCollectionChildrenParams, String> {
+        self.facade
+            .connections
+            .prepare_fetch_collection_children(profile_id, database, collection, limit)
+    }
+
+    pub fn set_collection_children_page(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        collection: String,
+        page: dbflux_core::CollectionChildrenPage,
+    ) {
+        self.facade
+            .connections
+            .set_collection_children_page(profile_id, database, collection, page);
     }
 
     pub fn prepare_fetch_schema_types(
@@ -1762,6 +2113,10 @@ impl AppState {
         &self.storage_runtime
     }
 
+    pub fn external_driver_diagnostic(&self, socket_id: &str) -> Option<&ExternalDriverDiagnostic> {
+        self.external_driver_diagnostics.get(socket_id)
+    }
+
     pub fn driver_for_profile(&self, profile: &ConnectionProfile) -> Option<Arc<dyn DbDriver>> {
         self.facade
             .connections
@@ -2193,7 +2548,7 @@ impl AppState {
     pub fn set_profile_mcp_governance(
         &mut self,
         profile_id: Uuid,
-        governance: Option<ConnectionMcpGovernance>,
+        governance: Option<dbflux_core::ConnectionMcpGovernance>,
     ) -> Result<(), String> {
         let Some(profile) = self
             .facade
@@ -2311,6 +2666,10 @@ impl AppState {
         ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
     }
 
+    pub fn profile_uses_connect_pipeline(&self, profile: &ConnectionProfile) -> bool {
+        profile.uses_pipeline() || self.infer_auth_profile_for_connection(profile).is_some()
+    }
+
     pub fn prepare_pipeline_input(
         &self,
         profile_id: Uuid,
@@ -2351,7 +2710,7 @@ impl AppState {
             })
             .or(profile.auth_profile_id);
 
-        let auth_profile = selected_auth_profile_id.and_then(|auth_id| {
+        let selected_auth_profile = selected_auth_profile_id.and_then(|auth_id| {
             self.facade
                 .auth_profiles
                 .items
@@ -2359,6 +2718,9 @@ impl AppState {
                 .find(|p| p.id == auth_id && p.enabled)
                 .cloned()
         });
+
+        let auth_profile =
+            selected_auth_profile.or_else(|| self.infer_auth_profile_for_connection(&profile));
 
         let uses_managed_access = matches!(
             profile.access_kind,
@@ -2371,10 +2733,10 @@ impl AppState {
             );
         }
 
-        let registered_auth_provider_ids: HashSet<&str> = self
+        let registered_auth_provider_ids: HashSet<String> = self
             .auth_provider_registry
             .providers()
-            .map(|provider| provider.provider_id())
+            .map(|provider| provider.provider_id().to_string())
             .collect();
 
         let uses_registered_auth_value_sources =
@@ -2384,7 +2746,7 @@ impl AppState {
                 .any(|value_ref| match value_ref {
                     dbflux_core::values::ValueRef::Secret { provider, .. }
                     | dbflux_core::values::ValueRef::Parameter { provider, .. } => {
-                        registered_auth_provider_ids.contains(provider.as_str())
+                        registered_auth_provider_ids.contains(provider)
                     }
                     _ => false,
                 });
@@ -2474,10 +2836,621 @@ impl AppState {
             cancel,
         })
     }
+
+    fn infer_auth_profile_for_connection(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Option<AuthProfile> {
+        let aws_profile_name = profile.external_auth_profile_name()?.trim();
+
+        if aws_profile_name.is_empty() {
+            return None;
+        }
+
+        if let Some(profile) = self.facade.auth_profiles.items.iter().find(|auth_profile| {
+            auth_profile.enabled
+                && auth_profile
+                    .fields
+                    .get("profile_name")
+                    .is_some_and(|name| name == aws_profile_name)
+                && self
+                    .auth_provider_registry
+                    .get(&auth_profile.provider_id)
+                    .is_some_and(|provider| provider.capabilities().login.supported)
+        }) {
+            return Some(profile.clone());
+        }
+
+        self.auth_provider_registry
+            .providers()
+            .filter(|provider| provider.capabilities().login.supported)
+            .flat_map(|provider| provider.detect_importable_profiles())
+            .find(|candidate| {
+                candidate
+                    .fields
+                    .get("profile_name")
+                    .is_some_and(|name| name == aws_profile_name)
+            })
+            .map(|candidate| {
+                AuthProfile::new(
+                    candidate.display_name,
+                    candidate.provider_id,
+                    candidate.fields,
+                )
+            })
+    }
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbflux_core::access::AccessKind;
+    use dbflux_core::auth::{
+        AuthFormDef, AuthProfile, AuthSession, AuthSessionState, DynAuthProvider,
+        ImportableProfile, ResolvedCredentials, UrlCallback,
+    };
+    use dbflux_core::{
+        ConnectionProfile, DatabaseCategory, DbConfig, DbError, DbKind, DriverFormDef,
+        DriverMetadataBuilder, PrepareConnectError, QueryLanguage, RpcServiceKind,
+        ServiceRpcApiContract,
+    };
+    use dbflux_driver_ipc::IpcDriver;
+
+    fn fake_probe() -> crate::rpc_services::DriverProbe {
+        let metadata = DriverMetadataBuilder::new(
+            "sqlite",
+            "SQLite",
+            DatabaseCategory::Relational,
+            QueryLanguage::Sql,
+        )
+        .build();
+
+        (
+            DbKind::SQLite,
+            metadata,
+            DriverFormDef { tabs: vec![] },
+            None,
+        )
+    }
+
+    fn test_service(kind: RpcServiceKind) -> ServiceConfig {
+        ServiceConfig {
+            socket_id: "svc-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-driver-host".to_string()),
+            args: vec!["--stdio".to_string()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(1_000),
+            kind,
+            api_contract: None,
+        }
+    }
+
+    struct TestAuthProvider {
+        provider_id: String,
+        importable_profile_name: Option<String>,
+    }
+
+    impl TestAuthProvider {
+        fn new(provider_id: impl Into<String>) -> Self {
+            Self {
+                provider_id: provider_id.into(),
+                importable_profile_name: None,
+            }
+        }
+
+        fn with_importable_profile(
+            provider_id: impl Into<String>,
+            profile_name: impl Into<String>,
+        ) -> Self {
+            Self {
+                provider_id: provider_id.into(),
+                importable_profile_name: Some(profile_name.into()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DynAuthProvider for TestAuthProvider {
+        fn provider_id(&self) -> &str {
+            &self.provider_id
+        }
+
+        fn display_name(&self) -> &str {
+            "Test Auth Provider"
+        }
+
+        fn form_def(&self) -> &AuthFormDef {
+            static FORM: std::sync::OnceLock<AuthFormDef> = std::sync::OnceLock::new();
+            FORM.get_or_init(|| AuthFormDef { tabs: vec![] })
+        }
+
+        fn capabilities(&self) -> &dbflux_core::auth::AuthProviderCapabilities {
+            static CAPABILITIES: dbflux_core::auth::AuthProviderCapabilities =
+                dbflux_core::auth::AuthProviderCapabilities {
+                    login: dbflux_core::auth::AuthProviderLoginCapabilities {
+                        supported: true,
+                        verification_url_progress: true,
+                    },
+                };
+
+            &CAPABILITIES
+        }
+
+        async fn validate_session(
+            &self,
+            _profile: &dbflux_core::AuthProfile,
+        ) -> Result<AuthSessionState, DbError> {
+            Ok(AuthSessionState::LoginRequired)
+        }
+
+        async fn login(
+            &self,
+            profile: &dbflux_core::AuthProfile,
+            url_callback: UrlCallback,
+        ) -> Result<AuthSession, DbError> {
+            url_callback(None);
+
+            Ok(AuthSession {
+                provider_id: self.provider_id.clone(),
+                profile_id: profile.id,
+                expires_at: None,
+                data: None,
+            })
+        }
+
+        async fn resolve_credentials(
+            &self,
+            _profile: &dbflux_core::AuthProfile,
+        ) -> Result<ResolvedCredentials, DbError> {
+            Ok(ResolvedCredentials::default())
+        }
+
+        fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
+            let Some(profile_name) = self.importable_profile_name.as_ref() else {
+                return Vec::new();
+            };
+
+            let mut fields = HashMap::new();
+            fields.insert("profile_name".to_string(), profile_name.clone());
+
+            vec![ImportableProfile {
+                display_name: profile_name.clone(),
+                provider_id: self.provider_id.clone(),
+                fields,
+            }]
+        }
+    }
+
+    fn test_state_with_profiles(
+        drivers: HashMap<String, Arc<dyn DbDriver>>,
+        profiles: Vec<ConnectionProfile>,
+    ) -> AppState {
+        test_state_with_profiles_and_auth_profiles(drivers, profiles, Vec::new())
+    }
+
+    fn test_state_with_profiles_and_auth_profiles(
+        drivers: HashMap<String, Arc<dyn DbDriver>>,
+        profiles: Vec<ConnectionProfile>,
+        auth_profiles: Vec<AuthProfile>,
+    ) -> AppState {
+        let runtime =
+            dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("storage runtime");
+
+        AppState::new_with_drivers_and_settings(
+            drivers,
+            HashMap::new(),
+            GeneralSettings::default(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            Vec::new(),
+            runtime,
+            profiles,
+            auth_profiles,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn build_builtin_drivers_registers_cloudwatch_driver() {
+        let drivers = AppState::build_builtin_drivers();
+
+        assert!(drivers.contains_key("cloudwatch"));
+
+        let driver = drivers.get("cloudwatch").expect("cloudwatch driver");
+        assert_eq!(driver.metadata().id, "cloudwatch");
+        assert_eq!(driver.display_name(), "CloudWatch Logs");
+    }
+
+    #[test]
+    fn launch_rpc_services_registers_driver_services_into_runtime_map() {
+        let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            &mut diagnostics,
+            vec![test_service(RpcServiceKind::Driver)],
+            |socket_id, _launch| {
+                assert_eq!(socket_id, "svc-socket");
+                Ok(fake_probe())
+            },
+            |_, socket_id, (kind, metadata, form_definition, settings_schema), launch| {
+                let launch = launch.expect("managed service should keep launch config");
+                Arc::new(
+                    IpcDriver::new(socket_id, kind, metadata, form_definition, settings_schema)
+                        .with_launch_config(launch),
+                ) as Arc<dyn DbDriver>
+            },
+        );
+
+        assert!(drivers.contains_key("rpc:svc-socket"));
+    }
+
+    #[test]
+    fn launch_rpc_services_registers_legacy_driver_services_without_api_metadata() {
+        let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
+        let service = test_service(RpcServiceKind::Driver);
+
+        assert_eq!(service.api_contract, None);
+        assert_eq!(
+            service.resolved_api_contract(),
+            ServiceRpcApiContract::new("driver_rpc", 1, 1)
+        );
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            &mut diagnostics,
+            vec![service],
+            |socket_id, _launch| {
+                assert_eq!(socket_id, "svc-socket");
+                Ok(fake_probe())
+            },
+            |_, socket_id, (kind, metadata, form_definition, settings_schema), launch| {
+                let launch = launch.expect("managed service should keep launch config");
+                Arc::new(
+                    IpcDriver::new(socket_id, kind, metadata, form_definition, settings_schema)
+                        .with_launch_config(launch),
+                ) as Arc<dyn DbDriver>
+            },
+        );
+
+        assert!(drivers.contains_key("rpc:svc-socket"));
+    }
+
+    #[test]
+    fn launch_rpc_services_defers_non_driver_services_without_registration() {
+        let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            &mut diagnostics,
+            vec![test_service(RpcServiceKind::AuthProvider)],
+            |_, _| panic!("non-driver services must not be probed"),
+            |_, _, _, _| panic!("non-driver services must not be registered"),
+        );
+
+        assert!(drivers.is_empty());
+    }
+
+    #[test]
+    fn launch_rpc_services_skips_failed_driver_probes_without_registration() {
+        let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            &mut diagnostics,
+            vec![test_service(RpcServiceKind::Driver)],
+            |_, _| Err(Box::new(DbError::connection_failed("probe failed"))),
+            |_, _, _, _| panic!("failed probes must not build a driver"),
+        );
+
+        assert!(drivers.is_empty());
+    }
+
+    #[test]
+    fn launch_rpc_services_records_config_diagnostics_without_registration() {
+        let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
+        let invalid_service = ServiceConfig {
+            socket_id: "svc-socket".to_string(),
+            enabled: true,
+            command: None,
+            args: vec!["--stdio".to_string()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(1_000),
+            kind: RpcServiceKind::Driver,
+            api_contract: None,
+        };
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            &mut diagnostics,
+            vec![invalid_service],
+            |_, _| panic!("invalid config must not reach probe"),
+            |_, _, _, _| panic!("invalid config must not build a driver"),
+        );
+
+        assert!(drivers.is_empty());
+
+        let diagnostic = diagnostics.get("svc-socket").expect("config diagnostic");
+        assert_eq!(
+            diagnostic.stage,
+            crate::rpc_services::ExternalDriverStage::Config
+        );
+        assert!(diagnostic.summary.contains("--driver"));
+    }
+
+    #[test]
+    fn launch_rpc_services_records_probe_diagnostics_without_registration() {
+        let mut drivers = HashMap::new();
+        let mut diagnostics = HashMap::new();
+
+        AppState::launch_rpc_services_with(
+            &mut drivers,
+            &mut diagnostics,
+            vec![test_service(RpcServiceKind::Driver)],
+            |_, _| Err(Box::new(DbError::connection_failed("probe failed"))),
+            |_, _, _, _| panic!("failed probes must not build a driver"),
+        );
+
+        assert!(drivers.is_empty());
+
+        let diagnostic = diagnostics.get("svc-socket").expect("probe diagnostic");
+        assert_eq!(
+            diagnostic.stage,
+            crate::rpc_services::ExternalDriverStage::Probe
+        );
+        assert_eq!(diagnostic.summary, "probe failed");
+    }
+
+    #[test]
+    fn launch_rpc_auth_providers_registers_runtime_provider_without_driver_side_effects() {
+        let mut registry = AuthProviderRegistry::new();
+
+        AppState::launch_rpc_auth_providers_with(
+            &mut registry,
+            vec![test_service(RpcServiceKind::AuthProvider)],
+            |socket_id, launch| {
+                let launch = launch.expect("managed auth provider should keep launch config");
+                assert_eq!(socket_id, "svc-socket");
+                assert_eq!(launch.program, "dbflux-driver-host");
+
+                Ok(Arc::new(TestAuthProvider::new("rpc-auth")) as Arc<dyn DynAuthProvider>)
+            },
+        );
+
+        assert!(registry.get("rpc-auth").is_some());
+        assert!(registry.get("rpc:svc-socket").is_none());
+    }
+
+    #[test]
+    fn launch_rpc_auth_providers_preserves_existing_provider_on_duplicate() {
+        let mut registry = AuthProviderRegistry::new();
+        registry.register(Arc::new(TestAuthProvider::new("aws-sso")));
+
+        AppState::launch_rpc_auth_providers_with(
+            &mut registry,
+            vec![test_service(RpcServiceKind::AuthProvider)],
+            |_, _| Ok(Arc::new(TestAuthProvider::new("aws-sso")) as Arc<dyn DynAuthProvider>),
+        );
+
+        let providers: Vec<String> = registry
+            .providers()
+            .map(|provider| provider.provider_id().to_string())
+            .collect();
+
+        assert_eq!(providers, vec!["aws-sso".to_string()]);
+    }
+
+    #[test]
+    fn build_pipeline_input_preserves_connection_auth_profile_id_selection() {
+        let auth_profile = AuthProfile::new("OIDC", "custom-oidc", HashMap::new());
+
+        let mut profile = ConnectionProfile::new("rpc profile", DbConfig::default_postgres());
+        profile.auth_profile_id = Some(auth_profile.id);
+
+        let mut state = test_state_with_profiles_and_auth_profiles(
+            HashMap::new(),
+            vec![profile.clone()],
+            vec![auth_profile.clone()],
+        );
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider::new("custom-oidc")));
+
+        let input = state
+            .build_pipeline_input_for_profile(profile, CancelToken::new())
+            .expect("connection auth profile should be preserved");
+
+        let selected_auth_profile = input
+            .auth_profile
+            .expect("pipeline input should include the selected auth profile");
+
+        assert_eq!(selected_auth_profile.id, auth_profile.id);
+        assert_eq!(selected_auth_profile.provider_id, "custom-oidc");
+    }
+
+    #[test]
+    fn build_pipeline_input_preserves_managed_access_auth_profile_id_param() {
+        let fallback_auth_profile = AuthProfile::new("Fallback", "custom-oidc", HashMap::new());
+        let managed_auth_profile = AuthProfile::new("Managed", "custom-oidc", HashMap::new());
+
+        let mut managed_params = HashMap::new();
+        managed_params.insert("instance_id".to_string(), "i-abc123".to_string());
+        managed_params.insert("region".to_string(), "us-east-1".to_string());
+        managed_params.insert("remote_port".to_string(), "5432".to_string());
+        managed_params.insert(
+            "auth_profile_id".to_string(),
+            managed_auth_profile.id.to_string(),
+        );
+
+        let mut profile = ConnectionProfile::new("rpc profile", DbConfig::default_postgres());
+        profile.auth_profile_id = Some(fallback_auth_profile.id);
+        profile.access_kind = Some(AccessKind::Managed {
+            provider: "aws-ssm".to_string(),
+            params: managed_params,
+        });
+
+        let mut state = test_state_with_profiles_and_auth_profiles(
+            HashMap::new(),
+            vec![profile.clone()],
+            vec![fallback_auth_profile, managed_auth_profile.clone()],
+        );
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider::new("custom-oidc")));
+
+        let input = state
+            .build_pipeline_input_for_profile(profile, CancelToken::new())
+            .expect("managed access auth profile should be preserved");
+
+        let selected_auth_profile = input
+            .auth_profile
+            .expect("pipeline input should include the managed access auth profile");
+
+        assert_eq!(selected_auth_profile.id, managed_auth_profile.id);
+        assert_eq!(selected_auth_profile.provider_id, "custom-oidc");
+    }
+
+    #[test]
+    fn profile_uses_connect_pipeline_for_importable_aws_sso_profile() {
+        let profile = ConnectionProfile::new(
+            "cloudwatch",
+            DbConfig::CloudWatchLogs {
+                region: "us-east-1".to_string(),
+                profile: Some("example-sso-profile".to_string()),
+                endpoint: None,
+            },
+        );
+
+        let mut state = test_state_with_profiles(HashMap::new(), vec![profile.clone()]);
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider::with_importable_profile(
+                "aws-sso",
+                "example-sso-profile",
+            )));
+
+        assert!(state.profile_uses_connect_pipeline(&profile));
+    }
+
+    #[test]
+    fn build_pipeline_input_infers_importable_aws_sso_profile() {
+        let profile = ConnectionProfile::new(
+            "cloudwatch",
+            DbConfig::CloudWatchLogs {
+                region: "us-east-1".to_string(),
+                profile: Some("example-sso-profile".to_string()),
+                endpoint: None,
+            },
+        );
+
+        let mut state = test_state_with_profiles(HashMap::new(), vec![profile.clone()]);
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider::with_importable_profile(
+                "aws-sso",
+                "example-sso-profile",
+            )));
+
+        let input = state
+            .build_pipeline_input_for_profile(profile, CancelToken::new())
+            .expect("importable AWS SSO profile should build pipeline input");
+
+        let auth_profile = input
+            .auth_profile
+            .expect("pipeline input should include inferred auth profile");
+
+        assert_eq!(auth_profile.name, "example-sso-profile");
+        assert_eq!(auth_profile.provider_id, "aws-sso");
+        assert_eq!(
+            auth_profile.fields.get("profile_name").map(String::as_str),
+            Some("example-sso-profile")
+        );
+        assert!(input.auth_provider.is_some());
+    }
+
+    #[test]
+    fn build_pipeline_input_infers_importable_aws_sso_profile_when_selected_id_is_stale() {
+        let mut profile = ConnectionProfile::new(
+            "cloudwatch",
+            DbConfig::CloudWatchLogs {
+                region: "us-east-1".to_string(),
+                profile: Some("example-sso-profile".to_string()),
+                endpoint: None,
+            },
+        );
+        profile.auth_profile_id = Some(Uuid::new_v4());
+
+        let mut state = test_state_with_profiles(HashMap::new(), vec![profile.clone()]);
+        state
+            .auth_provider_registry
+            .register(Arc::new(TestAuthProvider::with_importable_profile(
+                "aws-sso",
+                "example-sso-profile",
+            )));
+
+        let input = state
+            .build_pipeline_input_for_profile(profile, CancelToken::new())
+            .expect("stale auth profile id should fall back to importable AWS SSO profile");
+
+        let auth_profile = input
+            .auth_profile
+            .expect("pipeline input should include inferred auth profile");
+
+        assert_eq!(auth_profile.provider_id, "aws-sso");
+        assert_eq!(
+            auth_profile.fields.get("profile_name").map(String::as_str),
+            Some("example-sso-profile")
+        );
+        assert!(input.auth_provider.is_some());
+    }
+
+    #[test]
+    fn prepare_connect_profile_preserves_external_driver_unavailable_and_app_diagnostic() {
+        let mut profile = ConnectionProfile::new("rpc profile", DbConfig::default_postgres());
+        profile.set_driver_id("rpc:missing.sock".to_string());
+        let profile_id = profile.id;
+
+        let mut state = test_state_with_profiles(HashMap::new(), vec![profile]);
+        state.external_driver_diagnostics.insert(
+            "missing.sock".to_string(),
+            crate::rpc_services::ExternalDriverDiagnostic {
+                socket_id: "missing.sock".to_string(),
+                stage: crate::rpc_services::ExternalDriverStage::Probe,
+                summary: "Probe failed".to_string(),
+                details: Some("host exited before ready".to_string()),
+            },
+        );
+
+        let error = match state.prepare_connect_profile(profile_id) {
+            Ok(_) => panic!("missing rpc driver must return a typed error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            PrepareConnectError::ExternalDriverUnavailable {
+                driver_id: "rpc:missing.sock".to_string(),
+                socket_id: "missing.sock".to_string(),
+            }
+        );
+
+        let diagnostic = state
+            .external_driver_diagnostic("missing.sock")
+            .expect("app diagnostic");
+        assert_eq!(diagnostic.summary, "Probe failed");
     }
 }

@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::result_large_err
+)]
+
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ConnectionProfile, DbConfig,
     DbDriver, DbError, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, Pagination,
@@ -19,6 +27,10 @@ fn connect_mongodb(uri: String) -> Result<Box<dyn dbflux_core::Connection>, DbEr
             user: None,
             database: Some("testdb".to_string()),
             auth_database: None,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         },

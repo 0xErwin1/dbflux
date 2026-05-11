@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::result_large_err,
+    clippy::unwrap_in_result
+)]
+
 use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, DbError, IndexData, QueryRequest, Value};
 use dbflux_driver_sqlite::SqliteDriver;
 use dbflux_test_support::ddl_fixtures::SqliteFixtures;

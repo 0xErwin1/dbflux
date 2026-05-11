@@ -18,12 +18,15 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
 use crate::ui::windows::settings::SettingsWindow;
+use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::primitives::Text;
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
-    CollectionIndexInfo, CollectionRef, ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind,
-    CreateIndexRequest, CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
-    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, IndexData, IndexDirection,
-    QueryLanguage, ReindexRequest, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo,
+    CollectionChildInfo, CollectionIndexInfo, CollectionPresentation, CollectionRef,
+    ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
+    CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DropForeignKeyRequest,
+    DropIndexRequest, DropTypeRequest, EventStreamTarget, IndexData, IndexDirection, QueryLanguage,
+    ReindexRequest, RelationRef, SchemaCacheKey, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, TableInfo, TableRef,
     TaskId, TypeDefinition, ViewInfo,
 };
@@ -32,7 +35,6 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Root;
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use std::collections::{HashMap, HashSet};
@@ -56,6 +58,11 @@ pub enum SidebarEvent {
         profile_id: Uuid,
         collection: CollectionRef,
     },
+    OpenCollectionChild {
+        profile_id: Uuid,
+        target: EventStreamTarget,
+        title: String,
+    },
     OpenKeyValueDatabase {
         profile_id: Uuid,
         database: String,
@@ -78,6 +85,39 @@ pub enum SidebarEvent {
     PipelineStarted {
         profile_name: String,
         watcher: dbflux_core::StateWatcher,
+    },
+    /// Request to open the delete-connection modal for a specific connection profile.
+    RequestDeleteConnection {
+        connection_name: String,
+        profile_id: Uuid,
+        has_open_documents: bool,
+    },
+    /// Request to open the drop-table modal for a specific table.
+    RequestDropTable {
+        item_id: String,
+        table_name: String,
+        schema_name: Option<String>,
+        dependents: Vec<dbflux_core::RelationRef>,
+    },
+    /// Request to prompt the user for an SSH tunnel passphrase.
+    ///
+    /// Emitted when a connection attempt fails with a passphrase-required error
+    /// and the session vault does not already hold a passphrase for this tunnel.
+    RequestTunnelAuth {
+        /// Profile that triggered the connection attempt.
+        profile_id: uuid::Uuid,
+        /// SSH tunnel profile UUID used as the vault key.
+        tunnel_id: uuid::Uuid,
+        /// Friendly name for the tunnel profile shown in the modal.
+        tunnel_name: String,
+        /// SSH server hostname.
+        host: String,
+        /// SSH server port.
+        port: u16,
+        /// SSH username.
+        user: String,
+        /// True when a previous passphrase attempt for this profile already failed.
+        last_attempt_failed: bool,
     },
 }
 
@@ -183,6 +223,7 @@ impl ContextMenuItem {
 #[derive(Clone)]
 pub enum ContextMenuAction {
     Open,
+    OpenChildPicker,
     ViewSchema,
     GenerateCode(String),
     Connect,
@@ -254,6 +295,7 @@ impl ContextMenuAction {
     fn icon(&self) -> Option<AppIcon> {
         match self {
             Self::Open => Some(AppIcon::Eye),
+            Self::OpenChildPicker => Some(AppIcon::ScrollText),
             Self::ViewSchema => Some(AppIcon::Table),
             Self::GenerateCode(_) => Some(AppIcon::Code),
             Self::Connect => Some(AppIcon::Plug),
@@ -337,9 +379,8 @@ impl Render for ScriptsDragPreview {
             .px(Spacing::SM)
             .py(Spacing::XS)
             .text_size(FontSizes::SM)
-            .text_color(theme.foreground)
             .shadow_md()
-            .child(self.label.clone())
+            .child(Text::body(self.label.clone()).font_size(FontSizes::SM))
     }
 }
 
@@ -372,12 +413,12 @@ impl Render for DragPreview {
             .px(Spacing::SM)
             .py(Spacing::XS)
             .text_size(FontSizes::SM)
-            .text_color(theme.foreground)
             .shadow_md()
-            .child(self.label.clone())
+            .child(Text::body(self.label.clone()).font_size(FontSizes::SM))
     }
 }
 
+#[derive(Clone)]
 pub struct ContextMenuState {
     pub item_id: String,
     pub selected_index: usize,
@@ -464,6 +505,9 @@ enum PendingAction {
     ExpandCollection {
         item_id: String,
     },
+    OpenChildPicker {
+        item_id: String,
+    },
 }
 
 impl PendingAction {
@@ -474,9 +518,33 @@ impl PendingAction {
             | Self::ExpandTypesFolder { item_id }
             | Self::ExpandSchemaIndexesFolder { item_id }
             | Self::ExpandSchemaForeignKeysFolder { item_id }
-            | Self::ExpandCollection { item_id } => item_id,
+            | Self::ExpandCollection { item_id }
+            | Self::OpenChildPicker { item_id } => item_id,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildPickerSortColumn {
+    Name,
+    LastEvent,
+}
+
+struct ChildPickerState {
+    profile_id: Uuid,
+    database: String,
+    collection: String,
+    title: String,
+    focus_handle: FocusHandle,
+    children: Vec<CollectionChildInfo>,
+    filter_input: Entity<InputState>,
+    filter_query: String,
+    page: usize,
+    page_size: usize,
+    sort_column: ChildPickerSortColumn,
+    sort_descending: bool,
+    selected_index: usize,
+    filter_focused: bool,
 }
 
 /// Result of checking whether table details are available.
@@ -532,12 +600,15 @@ fn compute_gutter_map(items: &[TreeItem]) -> HashMap<String, GutterInfo> {
 pub struct Sidebar {
     app_state: Entity<AppStateEntity>,
     tree_state: Entity<TreeState>,
+    connections_search_input: Entity<InputState>,
+    connections_search_query: String,
     active_tab: SidebarTab,
     scripts_tree_state: Entity<TreeState>,
     scripts_search_input: Entity<InputState>,
     scripts_search_query: String,
     pending_toast: Option<PendingToast>,
     connections_focused: bool,
+    search_input_focused: bool,
     visible_entry_count: usize,
     /// User overrides for expansion state (item_id -> is_expanded)
     expansion_overrides: HashMap<String, bool>,
@@ -581,9 +652,16 @@ pub struct Sidebar {
     delete_confirm_modal: Option<DeleteConfirmState>,
     /// Whether the add menu dropdown is open
     add_menu_open: bool,
+    child_picker: Option<ChildPickerState>,
+    pending_child_picker_item: Option<String>,
     scripts_drop_target: Option<DropTarget>,
     gutter_metadata: HashMap<String, GutterInfo>,
     scripts_gutter_metadata: HashMap<String, GutterInfo>,
+    /// Item ID of the currently hovered tree row (drives hover-only ⋯ button).
+    hovered_item_id: Option<SharedString>,
+    /// Profile ID waiting for an SSH passphrase to be supplied via the tunnel-auth modal.
+    /// Set when a connect attempt fails with a passphrase-required error.
+    pub pending_tunnel_auth_profile_id: Option<Uuid>,
 }
 
 use crate::ui::components::toast::PendingToast;
@@ -594,6 +672,10 @@ struct DeleteConfirmState {
     is_folder: bool,
     object_type: Option<String>,
     is_ddl: bool,
+    /// When set, confirm executes a batch delete over every id in the list
+    /// (each routed through `execute_delete`). `item_id`/`item_name` describe
+    /// the anchor item used as the modal's primary subject for messaging.
+    multi_item_ids: Vec<String>,
 }
 
 /// Borrowed snapshot of the delete confirmation modal state, used by the
@@ -603,6 +685,9 @@ pub struct DeleteModalState<'a> {
     pub is_folder: bool,
     pub is_ddl: bool,
     pub object_type: Option<&'a str>,
+    /// When `Some(n)`, the modal confirms a batch delete of `n` selected
+    /// sidebar items. The renderer uses this to switch the message wording.
+    pub multi_count: Option<usize>,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -617,6 +702,8 @@ impl Sidebar {
         let visible_entry_count = Self::count_visible_entries(&items);
         let gutter_metadata = compute_gutter_map(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
+        let connections_search_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("Filter connections and schema..."));
 
         let scripts_items = Self::build_initial_scripts_tree(app_state.read(cx));
         let scripts_gutter_metadata = compute_gutter_map(&scripts_items);
@@ -648,15 +735,45 @@ impl Sidebar {
             },
         );
 
+        let connections_search_entity = connections_search_input.clone();
+        let connections_search_subscription = cx.subscribe_in(
+            &connections_search_entity,
+            window,
+            |this, input_state, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    this.connections_search_query = input_state.read(cx).value().to_string();
+                    this.refresh_tree(cx);
+                }
+                InputEvent::Focus => {
+                    this.search_input_focused = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.search_input_focused = false;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {}
+            },
+        );
+
         let scripts_search_entity = scripts_search_input.clone();
         let scripts_search_subscription = cx.subscribe_in(
             &scripts_search_entity,
             window,
-            |this, input_state, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
+            |this, input_state, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
                     this.scripts_search_query = input_state.read(cx).value().to_string();
                     this.refresh_scripts_tree(cx);
                 }
+                InputEvent::Focus => {
+                    this.search_input_focused = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.search_input_focused = false;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {}
             },
         );
 
@@ -692,12 +809,15 @@ impl Sidebar {
         Self {
             app_state,
             tree_state,
+            connections_search_input,
+            connections_search_query: String::new(),
             active_tab: SidebarTab::Connections,
             scripts_tree_state,
             scripts_search_input,
             scripts_search_query: String::new(),
             pending_toast: None,
             connections_focused: false,
+            search_input_focused: false,
             visible_entry_count,
             expansion_overrides: HashMap::new(),
             context_menu: None,
@@ -709,6 +829,7 @@ impl Sidebar {
             _subscriptions: vec![
                 app_state_subscription,
                 rename_subscription,
+                connections_search_subscription,
                 scripts_search_subscription,
                 tree_expansion_subscription,
             ],
@@ -728,10 +849,19 @@ impl Sidebar {
             pending_delete_item: None,
             delete_confirm_modal: None,
             add_menu_open: false,
+            child_picker: None,
+            pending_child_picker_item: None,
             scripts_drop_target: None,
             gutter_metadata,
             scripts_gutter_metadata,
+            hovered_item_id: None,
+            pending_tunnel_auth_profile_id: None,
         }
+    }
+
+    /// Return the profile ID that is currently awaiting SSH passphrase input, if any.
+    pub fn pending_tunnel_auth_profile_id(&self) -> Option<Uuid> {
+        self.pending_tunnel_auth_profile_id
     }
 
     pub fn set_connections_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
@@ -743,6 +873,34 @@ impl Sidebar {
 
     pub fn active_tab(&self) -> SidebarTab {
         self.active_tab
+    }
+
+    pub fn search_input_is_focused(&self, window: &Window, cx: &App) -> bool {
+        let input = match self.active_tab {
+            SidebarTab::Connections => &self.connections_search_input,
+            SidebarTab::Scripts => &self.scripts_search_input,
+        };
+
+        input.read(cx).focus_handle(cx).is_focused(window)
+    }
+
+    pub fn search_input_has_focus_state(&self) -> bool {
+        self.search_input_focused
+    }
+
+    pub fn focus_active_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.active_tab {
+            SidebarTab::Connections => {
+                self.connections_search_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
+            SidebarTab::Scripts => {
+                self.scripts_search_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
+        }
+
+        cx.notify();
     }
 
     pub fn set_active_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
@@ -814,6 +972,31 @@ impl Sidebar {
             }
             SchemaNodeId::Collection { .. } => {
                 self.browse_collection(item_id, cx);
+            }
+            SchemaNodeId::CollectionChild { .. } => {
+                self.browse_collection_child(item_id, cx);
+            }
+            SchemaNodeId::CollectionChildrenMore {
+                profile_id,
+                database,
+                collection,
+            } => {
+                let pending = PendingAction::ExpandCollection {
+                    item_id: SchemaNodeId::Collection {
+                        profile_id,
+                        database: database.clone(),
+                        name: collection.clone(),
+                    }
+                    .to_string(),
+                };
+
+                self.spawn_fetch_collection_children(
+                    profile_id,
+                    &database,
+                    &collection,
+                    pending,
+                    cx,
+                );
             }
             SchemaNodeId::Profile { profile_id } => {
                 let is_connected = self
@@ -918,6 +1101,12 @@ impl Sidebar {
 
         let node_kind = parse_node_kind(item_id);
 
+        if node_kind == SchemaNodeKind::CollectionChildrenMore && click_count == 1 {
+            self.execute_item(item_id, cx);
+            cx.notify();
+            return;
+        }
+
         if click_count == 2 {
             let is_key_value_db = matches!(
                 parse_node_id(item_id),
@@ -995,6 +1184,28 @@ impl Sidebar {
         }
     }
 
+    fn browse_collection_child(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if let Some(SchemaNodeId::CollectionChild {
+            profile_id,
+            database,
+            collection,
+            child_id,
+            name,
+        }) = parse_node_id(item_id)
+        {
+            let target = EventStreamTarget {
+                collection: CollectionRef::new(database, collection),
+                child_id: Some(child_id),
+            };
+
+            cx.emit(SidebarEvent::OpenCollectionChild {
+                profile_id,
+                target,
+                title: name,
+            });
+        }
+    }
+
     fn toggle_item_expansion(&mut self, item_id: &str, cx: &mut Context<Self>) {
         let items = self.build_tree_items_with_overrides(cx);
         let currently_expanded = Self::find_item_expanded(&items, item_id).unwrap_or(false);
@@ -1016,12 +1227,65 @@ impl Sidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::{ItemIdParts, NODE_KIND_NONE, parse_node_kind};
+    use super::Sidebar;
+    use super::{ContextMenuAction, ContextMenuItem, ItemIdParts, NODE_KIND_NONE, parse_node_kind};
+    use crate::app::{ExternalDriverDiagnostic, ExternalDriverStage};
+    use crate::ui::views::sidebar::operations::{
+        connect_prepare_error_toast, format_connect_prepare_error,
+    };
+    use dbflux_core::PrepareConnectError;
     use dbflux_core::{SchemaNodeId, SchemaNodeKind};
+    use gpui_component::tree::TreeItem;
     use uuid::Uuid;
 
     fn test_uuid() -> Uuid {
         Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+    }
+
+    fn event_stream_collection_item(profile_id: Uuid, name: &str) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::Collection {
+                profile_id,
+                database: "logs".into(),
+                name: name.into(),
+            }
+            .to_string(),
+            name.to_string(),
+        )
+    }
+
+    fn event_stream_profile_tree(profile_id: Uuid) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::Profile { profile_id }.to_string(),
+            "cloudwatch".to_string(),
+        )
+        .expanded(true)
+        .children(vec![
+            TreeItem::new(
+                SchemaNodeId::Database {
+                    profile_id,
+                    name: "logs".into(),
+                }
+                .to_string(),
+                "logs".to_string(),
+            )
+            .expanded(true)
+            .children(vec![
+                TreeItem::new(
+                    SchemaNodeId::CollectionsFolder {
+                        profile_id,
+                        database: "logs".into(),
+                    }
+                    .to_string(),
+                    "Collections (2)".to_string(),
+                )
+                .expanded(true)
+                .children(vec![
+                    event_stream_collection_item(profile_id, "/aws/lambda/app"),
+                    event_stream_collection_item(profile_id, "/aws/ecs/api"),
+                ]),
+            ]),
+        ])
     }
 
     #[test]
@@ -1031,6 +1295,20 @@ mod tests {
             database: None,
             schema: "public".into(),
             name: "users".into(),
+        };
+        let s = id.to_string();
+        let parsed: SchemaNodeId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn collection_child_id_roundtrip() {
+        let id = SchemaNodeId::CollectionChild {
+            profile_id: test_uuid(),
+            database: "logs".into(),
+            collection: "/aws/lambda/app".into(),
+            child_id: "stream-1".into(),
+            name: "2026/04/25/[$LATEST]abc".into(),
         };
         let s = id.to_string();
         let parsed: SchemaNodeId = s.parse().unwrap();
@@ -1223,8 +1501,6 @@ mod tests {
 
     #[test]
     fn to_menu_items_maps_separators() {
-        use super::{ContextMenuAction, ContextMenuItem};
-
         let items = vec![
             ContextMenuItem::item("Open", ContextMenuAction::Open),
             ContextMenuItem::separator(),
@@ -1233,5 +1509,197 @@ mod tests {
         let menu_items = ContextMenuItem::to_menu_items(&items);
         assert_eq!(menu_items.len(), 2);
         assert!(menu_items[1].is_separator);
+    }
+
+    #[test]
+    fn format_connect_prepare_error_uses_external_driver_diagnostic_details() {
+        let error = PrepareConnectError::ExternalDriverUnavailable {
+            driver_id: "rpc:missing.sock".to_string(),
+            socket_id: "missing.sock".to_string(),
+        };
+        let diagnostic = ExternalDriverDiagnostic {
+            socket_id: "missing.sock".to_string(),
+            stage: ExternalDriverStage::Probe,
+            summary: "Probe failed".to_string(),
+            details: Some("host exited before ready".to_string()),
+        };
+
+        let message = format_connect_prepare_error(&error, Some(&diagnostic));
+
+        assert!(message.contains("rpc:missing.sock"));
+        assert!(message.contains("Probe failed"));
+        assert!(message.contains("host exited before ready"));
+    }
+
+    #[test]
+    fn format_connect_prepare_error_falls_back_to_generic_message_without_diagnostic() {
+        let error = PrepareConnectError::DriverNotRegistered {
+            driver_id: "sqlite".to_string(),
+        };
+
+        let message = format_connect_prepare_error(&error, None);
+
+        assert_eq!(message, "No driver registered for 'sqlite'");
+    }
+
+    #[test]
+    fn connect_prepare_error_toast_formats_external_driver_diagnostics_for_real_connect_path() {
+        let error = PrepareConnectError::ExternalDriverUnavailable {
+            driver_id: "rpc:missing.sock".to_string(),
+            socket_id: "missing.sock".to_string(),
+        };
+        let diagnostic = ExternalDriverDiagnostic {
+            socket_id: "missing.sock".to_string(),
+            stage: ExternalDriverStage::Launch,
+            summary: "Driver host exited before socket was ready".to_string(),
+            details: Some("stdout:\nbooting\n\nstderr:\nmissing binary".to_string()),
+        };
+
+        let toast = connect_prepare_error_toast(&error, Some(&diagnostic));
+
+        assert!(toast.is_error);
+        assert!(toast.message.contains("rpc:missing.sock"));
+        assert!(toast.message.contains("missing.sock"));
+        assert!(toast.message.contains("did not start"));
+        assert!(
+            toast
+                .message
+                .contains("Driver host exited before socket was ready")
+        );
+    }
+
+    #[test]
+    fn connect_prepare_error_toast_falls_back_to_generic_prepare_error_message() {
+        let error = PrepareConnectError::DriverNotRegistered {
+            driver_id: "sqlite".to_string(),
+        };
+
+        let toast = connect_prepare_error_toast(&error, None);
+
+        assert!(toast.is_error);
+        assert_eq!(toast.message, "No driver registered for 'sqlite'");
+    }
+
+    #[test]
+    fn sidebar_tree_filter_keeps_matching_ancestors_visible() {
+        let profile_id = Uuid::new_v4();
+
+        let filtered =
+            Sidebar::apply_tree_filter(vec![event_stream_profile_tree(profile_id)], "lambda");
+
+        let profile = &filtered[0];
+        let database = &profile.children[0];
+        let collections = &database.children[0];
+
+        assert_eq!(profile.label.as_ref(), "cloudwatch");
+        assert_eq!(database.label.as_ref(), "logs");
+        assert_eq!(collections.label.as_ref(), "Collections (2)");
+        assert_eq!(collections.children.len(), 1);
+        assert_eq!(collections.children[0].label.as_ref(), "/aws/lambda/app");
+    }
+
+    #[test]
+    fn sidebar_tree_filter_matches_non_cloudwatch_nodes() {
+        let postgres_profile_id = Uuid::new_v4();
+        let items = vec![
+            TreeItem::new(
+                SchemaNodeId::Profile {
+                    profile_id: postgres_profile_id,
+                }
+                .to_string(),
+                "postgres".to_string(),
+            )
+            .expanded(true)
+            .children(vec![
+                TreeItem::new(
+                    SchemaNodeId::Database {
+                        profile_id: postgres_profile_id,
+                        name: "app".to_string(),
+                    }
+                    .to_string(),
+                    "app".to_string(),
+                )
+                .expanded(true)
+                .children(vec![TreeItem::new(
+                    SchemaNodeId::TablesFolder {
+                        profile_id: postgres_profile_id,
+                        schema: "public".to_string(),
+                    }
+                    .to_string(),
+                    "Tables (1)".to_string(),
+                )]),
+            ]),
+        ];
+
+        let filtered = Sidebar::apply_tree_filter(items, "postgres");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].label.as_ref(), "postgres");
+    }
+
+    #[test]
+    fn sidebar_tree_filter_matches_loaded_descendants_and_preserves_path() {
+        let postgres_profile_id = Uuid::new_v4();
+        let items = vec![
+            TreeItem::new(
+                SchemaNodeId::Profile {
+                    profile_id: postgres_profile_id,
+                }
+                .to_string(),
+                "postgres".to_string(),
+            )
+            .expanded(true)
+            .children(vec![
+                TreeItem::new(
+                    SchemaNodeId::Database {
+                        profile_id: postgres_profile_id,
+                        name: "app".to_string(),
+                    }
+                    .to_string(),
+                    "app".to_string(),
+                )
+                .expanded(false)
+                .children(vec![
+                    TreeItem::new(
+                        SchemaNodeId::TablesFolder {
+                            profile_id: postgres_profile_id,
+                            schema: "public".to_string(),
+                        }
+                        .to_string(),
+                        "Tables (1)".to_string(),
+                    )
+                    .expanded(false)
+                    .children(vec![TreeItem::new(
+                        SchemaNodeId::Table {
+                            profile_id: postgres_profile_id,
+                            database: Some("app".to_string()),
+                            schema: "public".to_string(),
+                            name: "users".to_string(),
+                        }
+                        .to_string(),
+                        "users".to_string(),
+                    )]),
+                ]),
+            ]),
+        ];
+
+        let filtered = Sidebar::apply_tree_filter(items, "users");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].label.as_ref(), "postgres");
+        assert_eq!(filtered[0].children[0].label.as_ref(), "app");
+        assert_eq!(
+            filtered[0].children[0].children[0].label.as_ref(),
+            "Tables (1)"
+        );
+        assert_eq!(
+            filtered[0].children[0].children[0].children[0]
+                .label
+                .as_ref(),
+            "users"
+        );
+        assert!(filtered[0].is_expanded());
+        assert!(filtered[0].children[0].is_expanded());
+        assert!(filtered[0].children[0].children[0].is_expanded());
     }
 }

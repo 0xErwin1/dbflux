@@ -1,12 +1,14 @@
 use crate::keymap::{ContextId, KeyChord, default_keymap};
+use crate::ui::icons::AppIcon;
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::Input;
+use dbflux_components::primitives::{BannerBlock, BannerVariant, Chord, Icon as FluxIcon};
+use dbflux_components::typography::{Body, FieldLabel, MonoCaption};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::{Icon, IconName};
 
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};
-use super::layout;
 
 impl KeybindingsSection {
     pub(super) fn render_keybindings_section(
@@ -71,6 +73,21 @@ impl KeybindingsSection {
 
             // Add bindings if expanded
             if is_expanded {
+                // Pre-compute conflict map: chord → list of command names that share it.
+                // Used to render an inline `BannerBlock::Warning` above the first
+                // occurrence of each conflicting chord within this context.
+                let mut chord_groups: std::collections::HashMap<KeyChord, Vec<String>> =
+                    std::collections::HashMap::new();
+                for (chord, cmd, _) in filtered_bindings.iter() {
+                    chord_groups
+                        .entry(chord.clone())
+                        .or_default()
+                        .push(cmd.display_name().to_string());
+                }
+
+                let mut emitted_conflict_for: std::collections::HashSet<KeyChord> =
+                    std::collections::HashSet::new();
+
                 for (binding_idx, (chord, cmd, source_ctx)) in filtered_bindings.iter().enumerate()
                 {
                     let is_inherited = *source_ctx != *context;
@@ -79,6 +96,23 @@ impl KeybindingsSection {
                             current_selection,
                             KeybindingsSelection::Binding(ci, bi) if ci == idx && bi == binding_idx
                         );
+
+                    if let Some(group) = chord_groups.get(chord)
+                        && group.len() > 1
+                        && !emitted_conflict_for.contains(chord)
+                    {
+                        let current_name = cmd.display_name().to_string();
+                        let others: Vec<String> = group
+                            .iter()
+                            .filter(|name| **name != current_name)
+                            .cloned()
+                            .collect();
+                        flat_items.push(KeybindingsListItem::ConflictWarning {
+                            chord: chord.clone(),
+                            other_cmd_names: others,
+                        });
+                        emitted_conflict_for.insert(chord.clone());
+                    }
 
                     flat_items.push(KeybindingsListItem::Binding {
                         chord: chord.clone(),
@@ -102,10 +136,10 @@ impl KeybindingsSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Keyboard Shortcuts",
                 "View all keyboard shortcuts by context",
-                theme,
+                cx,
             ))
             .child(
                 div().p_4().border_b_1().border_color(border).child(
@@ -114,9 +148,9 @@ impl KeybindingsSection {
                         .items_center()
                         .gap_2()
                         .child(
-                            Icon::new(IconName::Search)
+                            FluxIcon::new(AppIcon::Search)
                                 .size(px(16.0))
-                                .text_color(muted_foreground),
+                                .color(muted_foreground),
                         )
                         .child(
                             div()
@@ -136,114 +170,117 @@ impl KeybindingsSection {
                     .flex()
                     .flex_col()
                     .gap_0()
-                    .children(flat_items.into_iter().map(|item| match item {
-                        KeybindingsListItem::ContextHeader {
-                            context,
-                            ctx_idx,
-                            is_expanded,
-                            is_selected,
-                            binding_count,
-                        } => {
-                            let has_parent = context.parent().is_some();
-                            let parent_name =
-                                context.parent().map(|p| p.display_name()).unwrap_or("");
+                    .children(flat_items.into_iter().map(|item| {
+                        match item {
+                            KeybindingsListItem::ContextHeader {
+                                context,
+                                ctx_idx,
+                                is_expanded,
+                                is_selected,
+                                binding_count,
+                            } => {
+                                let has_parent = context.parent().is_some();
+                                let parent_name =
+                                    context.parent().map(|p| p.display_name()).unwrap_or("");
 
-                            div()
-                                .id(SharedString::from(format!(
-                                    "context-{}",
-                                    context.as_gpui_context()
-                                )))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .px_3()
-                                .py_2()
-                                .mt_1()
-                                .rounded(px(4.0))
-                                .cursor_pointer()
-                                .bg(if is_selected {
-                                    secondary
-                                } else {
-                                    gpui::transparent_black()
-                                })
-                                .hover(|d| d.bg(secondary))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.keybindings_selection =
-                                        KeybindingsSelection::Context(ctx_idx);
-
-                                    if this.keybindings_expanded.contains(&context) {
-                                        this.keybindings_expanded.remove(&context);
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "context-{}",
+                                        context.as_gpui_context()
+                                    )))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_3()
+                                    .py_2()
+                                    .mt_1()
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .bg(if is_selected {
+                                        secondary
                                     } else {
-                                        this.keybindings_expanded.insert(context);
-                                    }
-                                    cx.notify();
-                                }))
-                                // Chevron icon
-                                .child(
-                                    div()
-                                        .w(px(16.0))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(
-                                            Icon::new(if is_expanded {
-                                                IconName::ChevronDown
-                                            } else {
-                                                IconName::ChevronRight
-                                            })
-                                            .size(px(16.0))
-                                            .text_color(muted_foreground),
-                                        ),
-                                )
-                                // Context name and bindings count
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(context.display_name()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(muted_foreground)
-                                                .child(format!("({} bindings)", binding_count)),
-                                        ),
-                                )
-                                // Inherits info
-                                .when(has_parent, |d| {
-                                    d.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted_foreground)
-                                            .child(format!("inherits from {}", parent_name)),
-                                    )
-                                })
-                        }
+                                        gpui::transparent_black()
+                                    })
+                                    .hover(|d| d.bg(secondary))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.keybindings_selection =
+                                            KeybindingsSelection::Context(ctx_idx);
 
-                        KeybindingsListItem::Binding {
-                            chord,
-                            cmd_name,
-                            is_inherited,
-                            is_selected,
-                            ctx_idx,
-                            binding_idx,
-                        } => self.render_binding_row(
-                            &chord,
-                            &cmd_name,
-                            is_inherited,
-                            is_selected,
-                            ctx_idx,
-                            binding_idx,
-                            muted_foreground,
-                            secondary,
-                            border,
-                            cx,
-                        ),
+                                        if this.keybindings_expanded.contains(&context) {
+                                            this.keybindings_expanded.remove(&context);
+                                        } else {
+                                            this.keybindings_expanded.insert(context);
+                                        }
+                                        cx.notify();
+                                    }))
+                                    // Chevron icon
+                                    .child(
+                                        div()
+                                            .w(px(16.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                FluxIcon::new(if is_expanded {
+                                                    AppIcon::ChevronDown
+                                                } else {
+                                                    AppIcon::ChevronRight
+                                                })
+                                                .size(px(16.0))
+                                                .color(muted_foreground),
+                                            ),
+                                    )
+                                    // Context name and bindings count
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(FieldLabel::new(context.display_name()))
+                                            .child(
+                                                Body::new(format!("({} bindings)", binding_count))
+                                                    .color(muted_foreground),
+                                            ),
+                                    )
+                                    // Inherits info
+                                    .when(has_parent, |d| {
+                                        d.child(MonoCaption::new(format!(
+                                            "inherits from {}",
+                                            parent_name
+                                        )))
+                                    })
+                                    .into_any_element()
+                            }
+
+                            KeybindingsListItem::Binding {
+                                chord,
+                                cmd_name,
+                                is_inherited,
+                                is_selected,
+                                ctx_idx,
+                                binding_idx,
+                            } => self
+                                .render_binding_row(
+                                    &chord,
+                                    &cmd_name,
+                                    is_inherited,
+                                    is_selected,
+                                    ctx_idx,
+                                    binding_idx,
+                                    muted_foreground,
+                                    secondary,
+                                    border,
+                                    cx,
+                                )
+                                .into_any_element(),
+
+                            KeybindingsListItem::ConflictWarning {
+                                chord,
+                                other_cmd_names,
+                            } => Self::render_conflict_warning(&chord, &other_cmd_names)
+                                .into_any_element(),
+                        }
                     })),
             )
     }
@@ -288,83 +325,62 @@ impl KeybindingsSection {
                 this.keybindings_selection = KeybindingsSelection::Binding(ctx_idx, binding_idx);
                 cx.notify();
             }))
-            .child(div().w(px(140.0)).child(self.render_key_badge(
-                chord,
-                muted_foreground,
-                secondary,
-            )))
             .child(
                 div()
-                    .flex_1()
-                    .text_sm()
-                    .when(is_inherited, |d| d.text_color(muted_foreground))
-                    .child(cmd_name.to_string()),
+                    .w(px(140.0))
+                    .child(Chord::new(self.chord_to_parts(chord))),
             )
+            .child(div().flex_1().child(if is_inherited {
+                Body::new(cmd_name.to_string()).color(muted_foreground)
+            } else {
+                Body::new(cmd_name.to_string())
+            }))
             .when(is_inherited, |d| {
                 d.child(
                     div()
-                        .text_xs()
-                        .text_color(muted_foreground)
                         .px_2()
                         .py(px(2.0))
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .bg(secondary)
-                        .child("inherited"),
+                        .child(MonoCaption::new("inherited")),
                 )
             })
     }
 
-    fn render_key_badge(
-        &self,
-        chord: &KeyChord,
-        muted_foreground: Hsla,
-        secondary: Hsla,
-    ) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .children(self.chord_to_badges(chord, muted_foreground, secondary))
-    }
-
-    fn chord_to_badges(
-        &self,
-        chord: &KeyChord,
-        muted_foreground: Hsla,
-        secondary: Hsla,
-    ) -> Vec<Div> {
-        let mut badges = Vec::new();
+    fn chord_to_parts(&self, chord: &KeyChord) -> Vec<SharedString> {
+        let mut parts: Vec<SharedString> = Vec::new();
 
         if chord.modifiers.ctrl {
-            badges.push(self.render_single_key_badge("Ctrl", muted_foreground, secondary));
+            parts.push("Ctrl".into());
         }
         if chord.modifiers.alt {
-            badges.push(self.render_single_key_badge("Alt", muted_foreground, secondary));
+            parts.push("Alt".into());
         }
         if chord.modifiers.shift {
-            badges.push(self.render_single_key_badge("Shift", muted_foreground, secondary));
+            parts.push("Shift".into());
         }
         if chord.modifiers.platform {
-            badges.push(self.render_single_key_badge("Cmd", muted_foreground, secondary));
+            parts.push("Cmd".into());
         }
 
-        let key_display = self.format_key(&chord.key);
-        badges.push(self.render_single_key_badge(&key_display, muted_foreground, secondary));
-
-        badges
+        parts.push(SharedString::from(self.format_key(&chord.key)));
+        parts
     }
 
-    fn render_single_key_badge(&self, key: &str, muted_foreground: Hsla, secondary: Hsla) -> Div {
-        div()
-            .px_2()
-            .py(px(2.0))
-            .rounded(px(4.0))
-            .bg(secondary)
-            .border_1()
-            .border_color(muted_foreground.opacity(0.3))
-            .text_xs()
-            .font_weight(FontWeight::MEDIUM)
-            .child(key.to_string())
+    fn render_conflict_warning(chord: &KeyChord, others: &[String]) -> impl IntoElement {
+        let other_list = if others.is_empty() {
+            "another binding".to_string()
+        } else {
+            others.join(", ")
+        };
+
+        div().ml(px(28.0)).py_1().child(
+            BannerBlock::new(
+                BannerVariant::Warning,
+                format!("Conflict: {} also bound to {}", chord, other_list),
+            )
+            .with_body("Two or more commands share this chord in this context."),
+        )
     }
 
     fn format_key(&self, key: &str) -> String {

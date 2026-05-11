@@ -6,12 +6,12 @@ use crate::app::AppStateEntity;
 use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::form_renderer::FormRendererState;
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     DriverFormDef, DriverKey, DriverMetadata, FormValues, GeneralSettings, GlobalOverrides,
 };
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -142,8 +142,8 @@ impl DriversSection {
         let drv_refresh_input_sub = cx.subscribe_in(
             &drv_refresh_interval_input,
             window,
-            |this, _, event: &gpui_component::input::InputEvent, _window, cx| {
-                if matches!(event, gpui_component::input::InputEvent::Change) {
+            |this, _, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
                     if this.drv_loading_selected_editor {
                         return;
                     }
@@ -465,6 +465,15 @@ impl SettingsSection for DriversSection {
 
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_driver_changes(cx)
+    }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        self.drv_selected_idx
+            .map(|_| self.render_driver_footer_actions(cx))
     }
 }
 

@@ -170,6 +170,17 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             _ => {}
         },
 
+        DbConfig::CloudWatchLogs {
+            region,
+            profile,
+            endpoint,
+        } => match field {
+            "region" => *region = val.to_string(),
+            "profile" => *profile = Some(val.to_string()),
+            "endpoint" => *endpoint = Some(val.to_string()),
+            _ => {}
+        },
+
         DbConfig::External { values, .. } => {
             values.insert(field.to_string(), val.to_string());
         }

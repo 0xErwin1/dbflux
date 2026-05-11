@@ -1,17 +1,19 @@
-use super::layout;
 use super::section_trait::SectionFocusEvent;
-use super::{SettingsSection, SettingsSectionId};
+use super::{SettingsSection, SettingsSectionId, layout};
 use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::components::multi_select::MultiSelect;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
+use crate::ui::tokens::Radii;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Label, Text};
+use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::primitives::Label;
+use dbflux_components::typography::{Body, FieldLabel, MonoCaption, MonoMeta, SubSectionLabel};
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::{InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use std::collections::HashSet;
 
@@ -281,6 +283,20 @@ pub(super) struct McpSection {
 impl EventEmitter<SectionFocusEvent> for McpSection {}
 
 impl McpSection {
+    fn section_header_copy(&self) -> (&'static str, &'static str) {
+        match self.variant {
+            McpSectionVariant::Clients => (
+                "Trusted Clients",
+                "Manage AI agent identities allowed to connect via MCP",
+            ),
+            McpSectionVariant::Roles => ("Roles", "Manage named role bundles for MCP governance"),
+            McpSectionVariant::Policies => (
+                "Policies",
+                "Manage tool and execution-class policy rules for MCP governance",
+            ),
+        }
+    }
+
     pub(super) fn new(
         app_state: Entity<AppStateEntity>,
         variant: McpSectionVariant,
@@ -425,12 +441,13 @@ impl McpSection {
         }
     }
 
-    fn save_client(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    fn save_client(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let draft = self.draft_client(cx);
         if draft.id.is_empty() || draft.name.is_empty() {
-            cx.toast_error("Client ID and name are required", window);
+            Toast::error("Client ID and name are required")
+                .meta_right(now_hms())
+                .action(copy_action("Client ID and name are required"))
+                .push(cx);
             return;
         }
 
@@ -446,14 +463,16 @@ impl McpSection {
         });
 
         self.selected_client_id = Some(draft.id);
-        cx.toast_info("Trusted client saved", window);
+        Toast::info("Trusted client saved")
+            .meta_right(now_hms())
+            .push(cx);
     }
 
     fn delete_selected_client(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
         let Some(client_id) = self.selected_client_id.clone() else {
-            cx.toast_warning("Select a trusted client first", window);
+            Toast::warning("Select a trusted client first")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -469,14 +488,16 @@ impl McpSection {
         });
 
         self.clear_client_form(window, cx);
-        cx.toast_info("Trusted client deleted", window);
+        Toast::info("Trusted client deleted")
+            .meta_right(now_hms())
+            .push(cx);
     }
 
-    fn toggle_selected_client_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    fn toggle_selected_client_active(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(mut selected) = self.selected_client(cx) else {
-            cx.toast_warning("Select a trusted client first", window);
+            Toast::warning("Select a trusted client first")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -499,7 +520,7 @@ impl McpSection {
         } else {
             "Trusted client deactivated"
         };
-        cx.toast_info(msg, window);
+        Toast::info(msg).meta_right(now_hms()).push(cx);
     }
 
     // ─── Role helpers ─────────────────────────────────────────────────────────
@@ -545,16 +566,20 @@ impl McpSection {
             .collect()
     }
 
-    fn save_role(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    fn save_role(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let id = self.input_role_id.read(cx).value().trim().to_string();
         if id.is_empty() {
-            cx.toast_error("Role ID is required", window);
+            Toast::error("Role ID is required")
+                .meta_right(now_hms())
+                .action(copy_action("Role ID is required"))
+                .push(cx);
             return;
         }
         if dbflux_mcp::is_builtin(&id) {
-            cx.toast_error("Built-in roles cannot be modified", window);
+            Toast::error("Built-in roles cannot be modified")
+                .meta_right(now_hms())
+                .action(copy_action("Built-in roles cannot be modified"))
+                .push(cx);
             return;
         }
 
@@ -576,14 +601,14 @@ impl McpSection {
         });
 
         self.selected_role_id = Some(id);
-        cx.toast_info("Role saved", window);
+        Toast::info("Role saved").meta_right(now_hms()).push(cx);
     }
 
     fn delete_selected_role(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
         let Some(role_id) = self.selected_role_id.clone() else {
-            cx.toast_warning("Select a role first", window);
+            Toast::warning("Select a role first")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -599,7 +624,7 @@ impl McpSection {
         });
 
         self.clear_role_form(window, cx);
-        cx.toast_info("Role deleted", window);
+        Toast::info("Role deleted").meta_right(now_hms()).push(cx);
     }
 
     fn build_policy_multiselect_items(policies: &[ToolPolicyDto]) -> Vec<DropdownItem> {
@@ -649,16 +674,20 @@ impl McpSection {
         self.draft_policy_tools.clear();
     }
 
-    fn save_policy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    fn save_policy(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let id = self.input_policy_id.read(cx).value().trim().to_string();
         if id.is_empty() {
-            cx.toast_error("Policy ID is required", window);
+            Toast::error("Policy ID is required")
+                .meta_right(now_hms())
+                .action(copy_action("Policy ID is required"))
+                .push(cx);
             return;
         }
         if dbflux_mcp::is_builtin(&id) {
-            cx.toast_error("Built-in policies cannot be modified", window);
+            Toast::error("Built-in policies cannot be modified")
+                .meta_right(now_hms())
+                .action(copy_action("Built-in policies cannot be modified"))
+                .push(cx);
             return;
         }
 
@@ -685,14 +714,14 @@ impl McpSection {
         });
 
         self.selected_policy_id = Some(id);
-        cx.toast_info("Policy saved", window);
+        Toast::info("Policy saved").meta_right(now_hms()).push(cx);
     }
 
     fn delete_selected_policy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
         let Some(policy_id) = self.selected_policy_id.clone() else {
-            cx.toast_warning("Select a policy first", window);
+            Toast::warning("Select a policy first")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -708,7 +737,7 @@ impl McpSection {
         });
 
         self.clear_policy_form(window, cx);
-        cx.toast_info("Policy deleted", window);
+        Toast::info("Policy deleted").meta_right(now_hms()).push(cx);
     }
 
     // ─── Render helpers ───────────────────────────────────────────────────────
@@ -744,7 +773,10 @@ impl McpSection {
                     .flex_col()
                     .gap_1()
                     .when(clients.is_empty(), |r| {
-                        r.child(Text::muted("No trusted clients configured."))
+                        r.child(
+                            Body::new("No trusted clients configured.")
+                                .color(theme.muted_foreground),
+                        )
                     })
                     .children(clients.iter().map(|client| {
                         let id = client.id.clone();
@@ -753,7 +785,7 @@ impl McpSection {
                         div()
                             .id(SharedString::from(format!("client-{}", client.id)))
                             .p_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if is_selected {
                                 theme.primary
@@ -778,46 +810,26 @@ impl McpSection {
                                     .flex()
                                     .justify_between()
                                     .items_center()
-                                    .child(Label::new(client.name.clone()))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(if client.active {
-                                                theme.success
-                                            } else {
-                                                theme.muted_foreground
-                                            })
-                                            .child(if client.active {
-                                                "active"
-                                            } else {
-                                                "inactive"
-                                            }),
-                                    ),
+                                    .child(FieldLabel::new(client.name.clone()))
+                                    .child(if client.active {
+                                        MonoCaption::new("active").color(theme.success)
+                                    } else {
+                                        MonoCaption::new("inactive")
+                                    }),
                             )
-                            .child(Text::caption(client.id.clone()))
+                            .child(MonoMeta::new(client.id.clone()))
                     })),
             );
-
-        let save_label = if self.selected_client(cx).is_some() {
-            "Update Client"
-        } else {
-            "Create Client"
-        };
-        let active_label = if self.draft_active {
-            "Deactivate"
-        } else {
-            "Activate"
-        };
 
         let form = div()
             .flex_1()
             .h_full()
             .flex()
             .flex_col()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Trusted Clients",
                 "AI agent identities allowed to connect via MCP",
-                &theme,
+                cx,
             ))
             .child(
                 div()
@@ -847,53 +859,7 @@ impl McpSection {
                                         cx.notify();
                                     })),
                             )
-                            .child(Text::body("Active")),
-                    ),
-            )
-            .child(
-                div()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(Text::caption(if self.client_has_unsaved_changes(cx) {
-                        "Unsaved form changes"
-                    } else {
-                        "All changes applied"
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                Button::new("mcp-client-toggle-active", active_label)
-                                    .small()
-                                    .ghost()
-                                    .disabled(self.selected_client(cx).is_none())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.toggle_selected_client_active(window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("mcp-client-delete", "Delete")
-                                    .small()
-                                    .danger()
-                                    .disabled(self.selected_client(cx).is_none())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.delete_selected_client(window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("mcp-client-save", save_label)
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.save_client(window, cx);
-                                    })),
-                            ),
+                            .child(Body::new("Active")),
                     ),
             );
 
@@ -934,7 +900,7 @@ impl McpSection {
                     .flex_col()
                     .gap_1()
                     .when(roles.is_empty(), |r| {
-                        r.child(Text::muted("No roles configured."))
+                        r.child(Body::new("No roles configured.").color(theme.muted_foreground))
                     })
                     .children(roles.iter().map(|role| {
                         let id = role.id.clone();
@@ -943,7 +909,7 @@ impl McpSection {
                         div()
                             .id(SharedString::from(format!("role-{}", role.id)))
                             .p_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if is_selected {
                                 theme.primary
@@ -969,7 +935,7 @@ impl McpSection {
                                     .items_center()
                                     .justify_between()
                                     .gap_2()
-                                    .child(Label::new(
+                                    .child(FieldLabel::new(
                                         builtin_display_name(&role.id)
                                             .unwrap_or(role.id.as_str())
                                             .to_string(),
@@ -982,12 +948,14 @@ impl McpSection {
                                                 .rounded_sm()
                                                 .text_xs()
                                                 .bg(theme.accent.opacity(0.2))
-                                                .text_color(theme.accent_foreground)
-                                                .child("built-in"),
+                                                .child(
+                                                    MonoCaption::new("built-in")
+                                                        .color(theme.accent_foreground),
+                                                ),
                                         )
                                     }),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "{} {}",
                                 role.policy_ids.len(),
                                 if role.policy_ids.len() == 1 {
@@ -999,27 +967,15 @@ impl McpSection {
                     })),
             );
 
-        let role_is_builtin = self
-            .selected_role_id
-            .as_deref()
-            .map(dbflux_mcp::is_builtin)
-            .unwrap_or(false);
-
-        let save_label = if self.selected_role_id.is_some() {
-            "Update Role"
-        } else {
-            "Create Role"
-        };
-
         let form = div()
             .flex_1()
             .h_full()
             .flex()
             .flex_col()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Roles",
                 "Group policies into named roles assigned to actors per connection",
-                &theme,
+                cx,
             ))
             .child(
                 div()
@@ -1033,39 +989,11 @@ impl McpSection {
                     .child(Label::new("Role ID"))
                     .child(Input::new(&self.input_role_id).small())
                     .child(Label::new("Policies"))
-                    .child(Text::caption("Select policies defined in the Policies tab"))
-                    .child(self.role_policies_multiselect.clone()),
-            )
-            .child(
-                div()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_2()
-                    .when(role_is_builtin, |d| {
-                        d.child(Text::caption("Built-in roles cannot be modified"))
-                    })
                     .child(
-                        Button::new("mcp-role-delete", "Delete")
-                            .small()
-                            .danger()
-                            .disabled(self.selected_role_id.is_none() || role_is_builtin)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.delete_selected_role(window, cx);
-                            })),
+                        Body::new("Select policies defined in the Policies tab")
+                            .color(theme.muted_foreground),
                     )
-                    .child(
-                        Button::new("mcp-role-save", save_label)
-                            .small()
-                            .primary()
-                            .disabled(role_is_builtin)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_role(window, cx);
-                            })),
-                    ),
+                    .child(self.role_policies_multiselect.clone()),
             );
 
         div()
@@ -1111,7 +1039,7 @@ impl McpSection {
                     .flex_col()
                     .gap_1()
                     .when(policies.is_empty(), |r| {
-                        r.child(Text::muted("No policies configured."))
+                        r.child(Body::new("No policies configured.").color(theme.muted_foreground))
                     })
                     .children(policies.iter().map(|policy| {
                         let id = policy.id.clone();
@@ -1120,7 +1048,7 @@ impl McpSection {
                         div()
                             .id(SharedString::from(format!("policy-{}", policy.id)))
                             .p_2()
-                            .rounded(px(4.0))
+                            .rounded(Radii::SM)
                             .border_1()
                             .border_color(if is_selected {
                                 theme.primary
@@ -1146,7 +1074,7 @@ impl McpSection {
                                     .items_center()
                                     .justify_between()
                                     .gap_2()
-                                    .child(Label::new(
+                                    .child(FieldLabel::new(
                                         builtin_display_name(&policy.id)
                                             .unwrap_or(policy.id.as_str())
                                             .to_string(),
@@ -1159,12 +1087,14 @@ impl McpSection {
                                                 .rounded_sm()
                                                 .text_xs()
                                                 .bg(theme.accent.opacity(0.2))
-                                                .text_color(theme.accent_foreground)
-                                                .child("built-in"),
+                                                .child(
+                                                    MonoCaption::new("built-in")
+                                                        .color(theme.accent_foreground),
+                                                ),
                                         )
                                     }),
                             )
-                            .child(Text::caption(format!(
+                            .child(MonoCaption::new(format!(
                                 "{} tools · {} classes",
                                 policy.allowed_tools.len(),
                                 policy.allowed_classes.len()
@@ -1172,27 +1102,15 @@ impl McpSection {
                     })),
             );
 
-        let policy_is_builtin = self
-            .selected_policy_id
-            .as_deref()
-            .map(dbflux_mcp::is_builtin)
-            .unwrap_or(false);
-
-        let save_label = if self.selected_policy_id.is_some() {
-            "Update Policy"
-        } else {
-            "Create Policy"
-        };
-
         let form = div()
             .flex_1()
             .h_full()
             .flex()
             .flex_col()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "Policies",
                 "Define which tools and execution classes are allowed",
-                &theme,
+                cx,
             ))
             .child(
                 div()
@@ -1242,8 +1160,11 @@ impl McpSection {
                                             .flex()
                                             .flex_col()
                                             .gap_0p5()
-                                            .child(Label::new(label))
-                                            .child(Text::caption(description)),
+                                            .child(FieldLabel::new(label))
+                                            .child(
+                                                Body::new(description)
+                                                    .color(theme.muted_foreground),
+                                            ),
                                     )
                             })),
                     )
@@ -1253,7 +1174,7 @@ impl McpSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(Text::caption(*group_name).font_weight(FontWeight::MEDIUM))
+                            .child(SubSectionLabel::new(*group_name))
                             .child(div().flex().flex_col().gap_2().pl_2().children(
                                 tools.iter().map(|&tool| {
                                     let checked = self.draft_policy_tools.contains(tool);
@@ -1288,43 +1209,15 @@ impl McpSection {
                                                 .flex()
                                                 .flex_col()
                                                 .gap_0p5()
-                                                .child(Label::new(label))
-                                                .child(Text::caption(description)),
+                                                .child(FieldLabel::new(label))
+                                                .child(
+                                                    Body::new(description)
+                                                        .color(theme.muted_foreground),
+                                                ),
                                         )
                                 }),
                             ))
                     })),
-            )
-            .child(
-                div()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_2()
-                    .when(policy_is_builtin, |d| {
-                        d.child(Text::caption("Built-in policies cannot be modified"))
-                    })
-                    .child(
-                        Button::new("mcp-policy-delete", "Delete")
-                            .small()
-                            .danger()
-                            .disabled(self.selected_policy_id.is_none() || policy_is_builtin)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.delete_selected_policy(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("mcp-policy-save", save_label)
-                            .small()
-                            .primary()
-                            .disabled(policy_is_builtin)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_policy(window, cx);
-                            })),
-                    ),
             );
 
         div()
@@ -1333,6 +1226,184 @@ impl McpSection {
             .overflow_hidden()
             .child(list)
             .child(form)
+    }
+
+    fn render_clients_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let primary = cx.theme().primary;
+        let save_label = if self.selected_client(cx).is_some() {
+            "Update Client"
+        } else {
+            "Create Client"
+        };
+        let active_label = if self.draft_active {
+            "Deactivate"
+        } else {
+            "Activate"
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap_3()
+            .child(
+                Body::new(if self.client_has_unsaved_changes(cx) {
+                    "Unsaved form changes"
+                } else {
+                    "All changes applied"
+                })
+                .color(cx.theme().muted_foreground),
+            )
+            .child(layout::footer_action_frame(
+                false,
+                primary,
+                Button::new("mcp-client-toggle-active", active_label)
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .disabled(self.selected_client(cx).is_none())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_selected_client_active(window, cx);
+                    })),
+            ))
+            .child(layout::footer_action_frame(
+                false,
+                primary,
+                Button::new("mcp-client-delete", "Delete")
+                    .small()
+                    .danger()
+                    .w_full()
+                    .disabled(self.selected_client(cx).is_none())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.delete_selected_client(window, cx);
+                    })),
+            ))
+            .child(layout::footer_action_frame(
+                false,
+                primary,
+                Button::new("mcp-client-save", save_label)
+                    .small()
+                    .primary()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_client(window, cx);
+                    })),
+            ))
+            .into_any_element()
+    }
+
+    fn render_roles_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let primary = cx.theme().primary;
+        let role_is_builtin = self
+            .selected_role_id
+            .as_deref()
+            .map(dbflux_mcp::is_builtin)
+            .unwrap_or(false);
+        let save_label = if self.selected_role_id.is_some() {
+            "Update Role"
+        } else {
+            "Create Role"
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap_3()
+            .when(role_is_builtin, |div| {
+                div.child(
+                    Body::new("Built-in roles cannot be modified")
+                        .color(cx.theme().muted_foreground),
+                )
+            })
+            .child(layout::footer_action_frame(
+                false,
+                primary,
+                Button::new("mcp-role-delete", "Delete")
+                    .small()
+                    .danger()
+                    .w_full()
+                    .disabled(self.selected_role_id.is_none() || role_is_builtin)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.delete_selected_role(window, cx);
+                    })),
+            ))
+            .child(layout::footer_action_frame(
+                false,
+                primary,
+                Button::new("mcp-role-save", save_label)
+                    .small()
+                    .primary()
+                    .w_full()
+                    .disabled(role_is_builtin)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_role(window, cx);
+                    })),
+            ))
+            .into_any_element()
+    }
+
+    fn render_policies_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let primary = cx.theme().primary;
+        let policy_is_builtin = self
+            .selected_policy_id
+            .as_deref()
+            .map(dbflux_mcp::is_builtin)
+            .unwrap_or(false);
+        let save_label = if self.selected_policy_id.is_some() {
+            "Update Policy"
+        } else {
+            "Create Policy"
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap_3()
+            .when(policy_is_builtin, |div| {
+                div.child(
+                    Body::new("Built-in policies cannot be modified")
+                        .color(cx.theme().muted_foreground),
+                )
+            })
+            .child(layout::footer_action_frame(
+                false,
+                primary,
+                Button::new("mcp-policy-delete", "Delete")
+                    .small()
+                    .danger()
+                    .w_full()
+                    .disabled(self.selected_policy_id.is_none() || policy_is_builtin)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.delete_selected_policy(window, cx);
+                    })),
+            ))
+            .child(layout::footer_action_frame(
+                false,
+                primary,
+                Button::new("mcp-policy-save", save_label)
+                    .small()
+                    .primary()
+                    .w_full()
+                    .disabled(policy_is_builtin)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_policy(window, cx);
+                    })),
+            ))
+            .into_any_element()
     }
 
     // ─── Keyboard navigation ──────────────────────────────────────────────────
@@ -1552,6 +1623,18 @@ impl SettingsSection for McpSection {
             _ => false,
         }
     }
+
+    fn render_footer_actions(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(match self.variant {
+            McpSectionVariant::Clients => self.render_clients_footer_actions(window, cx),
+            McpSectionVariant::Roles => self.render_roles_footer_actions(window, cx),
+            McpSectionVariant::Policies => self.render_policies_footer_actions(window, cx),
+        })
+    }
 }
 
 impl Render for McpSection {
@@ -1583,6 +1666,18 @@ impl Render for McpSection {
             McpSectionVariant::Policies => self.render_policies_content(cx).into_any_element(),
         };
 
-        div().h_full().overflow_hidden().child(content)
+        let (title, description) = self.section_header_copy();
+
+        div()
+            .h_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(dbflux_components::composites::section_header(
+                title,
+                description,
+                cx,
+            ))
+            .child(div().flex_1().min_h_0().overflow_hidden().child(content))
     }
 }

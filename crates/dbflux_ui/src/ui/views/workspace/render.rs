@@ -1,65 +1,14 @@
 use super::*;
+use crate::keymap::ContextId;
 use crate::platform;
-use dbflux_components::primitives::Text;
+use crate::ui::components::modal_frame::ModalFrame;
+use crate::ui::tokens::FontSizes;
+use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
+use dbflux_components::primitives::{Chord, Icon, Text, overlay_bg};
+use dbflux_components::typography::Body;
+use gpui_component::IconName;
 
 impl Workspace {
-    fn render_panel_header(
-        &self,
-        title: &'static str,
-        icon: AppIcon,
-        is_expanded: bool,
-        is_focused: bool,
-        on_toggle: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let theme = cx.theme().clone();
-        let chevron = if is_expanded {
-            AppIcon::ChevronDown
-        } else {
-            AppIcon::ChevronRight
-        };
-
-        let title_color = if is_focused {
-            theme.primary
-        } else {
-            theme.foreground
-        };
-
-        let title_weight = if is_focused {
-            FontWeight::BOLD
-        } else {
-            FontWeight::MEDIUM
-        };
-
-        div()
-            .id(SharedString::from(format!("panel-header-{}", title)))
-            .flex()
-            .items_center()
-            .justify_between()
-            .h(px(24.0))
-            .px_2()
-            .bg(theme.tab_bar)
-            .border_b_1()
-            .border_color(theme.border)
-            .cursor_pointer()
-            .hover(|s| s.bg(theme.secondary))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                on_toggle(this, cx);
-            }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_xs()
-                    .font_weight(title_weight)
-                    .text_color(title_color)
-                    .child(svg().path(chevron.path()).size_3().text_color(title_color))
-                    .child(svg().path(icon.path()).size_3().text_color(title_color))
-                    .child(title),
-            )
-    }
-
     /// Renders the active document from TabManager (v0.3).
     fn render_active_document(&self, cx: &App) -> Option<AnyElement> {
         self.tab_manager
@@ -67,6 +16,21 @@ impl Workspace {
             .active_document()
             .map(|doc| doc.render())
     }
+}
+
+/// One row of the empty-workspace placeholder: a `Chord` followed by a
+/// muted description.
+fn empty_state_shortcut<const N: usize>(
+    keys: [&'static str; N],
+    description: &'static str,
+) -> gpui::Div {
+    gpui::div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(Chord::new(keys))
+        .child(Text::dim_secondary(description))
 }
 
 impl Render for Workspace {
@@ -94,6 +58,13 @@ impl Render for Workspace {
             self.set_focus(self.focus_target, window, cx);
         }
 
+        // Open the login modal on behalf of a settings-window auth-profile login.
+        if let Some((provider_name, profile_name, url)) = self.pending_login_modal_open.take() {
+            self.login_modal.update(cx, |modal, cx| {
+                modal.open_manual(provider_name, profile_name, url, window, cx);
+            });
+        }
+
         let sidebar_dock = self.sidebar_dock.clone();
         let status_bar = self.status_bar.clone();
         let tasks_panel = self.tasks_panel.clone();
@@ -113,17 +84,45 @@ impl Render for Workspace {
         let bg_color = theme.background;
         let muted_fg = theme.muted_foreground;
         let header_size = px(25.0);
+        let sidebar_context_menu = self.sidebar.read(cx).context_menu_state().cloned();
+        let tab_context_menu = self.tab_bar.read(cx).context_menu_state().cloned();
+        let child_picker_open = self.sidebar.read(cx).has_child_picker_open();
 
         // Linux CSD title bar: render only when the compositor has negotiated CSD mode.
-        let linux_title_bar = platform::render_csd_title_bar(window, cx, "DBFlux");
+        // Include the active connection name as a breadcrumb when connected.
+        let crumbs: Vec<platform::TitleCrumb> = {
+            let connection_name = self
+                .app_state
+                .read(cx)
+                .active_connection()
+                .map(|c| c.profile.name.clone());
+
+            if let Some(name) = connection_name {
+                vec![platform::TitleCrumb {
+                    icon: Some(crate::ui::icons::AppIcon::Database),
+                    label: name.into(),
+                }]
+            } else {
+                vec![]
+            }
+        };
+        let linux_title_bar =
+            platform::render_csd_title_bar_with_crumbs(window, cx, "DBFlux", &crumbs);
 
         let right_pane = if has_tabs {
-            let tasks_header = self.render_panel_header(
+            let workspace = cx.entity().clone();
+            let tasks_header = panel_header_collapsible_variant(
+                "panel-header-Background Tasks",
                 "Background Tasks",
-                AppIcon::Loader,
-                tasks_expanded,
+                PanelHeaderVariant::WorkspaceTasks,
+                !tasks_expanded,
                 tasks_focused,
-                Self::toggle_tasks_panel,
+                Some(IconName::Loader),
+                move |_, _, app| {
+                    workspace.update(app, |workspace, cx| {
+                        workspace.toggle_tasks_panel(cx);
+                    });
+                },
                 cx,
             );
 
@@ -161,6 +160,7 @@ impl Render for Workspace {
                                             .flex()
                                             .flex_col()
                                             .flex_1()
+                                            .min_h_0()
                                             .overflow_hidden()
                                             .child(doc),
                                     )
@@ -205,12 +205,19 @@ impl Render for Workspace {
                 )
         } else {
             // Empty state: welcome message + tasks panel
-            let tasks_header_empty = self.render_panel_header(
+            let workspace = cx.entity().clone();
+            let tasks_header_empty = panel_header_collapsible_variant(
+                "panel-header-Background Tasks",
                 "Background Tasks",
-                AppIcon::Loader,
-                tasks_expanded,
+                PanelHeaderVariant::WorkspaceTasks,
+                !tasks_expanded,
                 tasks_focused,
-                Self::toggle_tasks_panel,
+                Some(IconName::Loader),
+                move |_, _, app| {
+                    workspace.update(app, |workspace, cx| {
+                        workspace.toggle_tasks_panel(cx);
+                    });
+                },
                 cx,
             );
 
@@ -229,15 +236,30 @@ impl Render for Workspace {
                                 .justify_center()
                                 .gap_4()
                                 .child(
-                                    svg()
-                                        .path(AppIcon::Database.path())
-                                        .size_16()
-                                        .text_color(muted_fg.opacity(0.5)),
+                                    Icon::new(AppIcon::Database)
+                                        .size(px(64.0))
+                                        .color(muted_fg.opacity(0.5)),
                                 )
-                                .child(Text::muted("No documents open"))
+                                .child(Body::new("No documents open").muted(cx))
                                 .child(
-                                    Text::caption("Press Ctrl+N to create a new query")
-                                        .text_color(muted_fg.opacity(0.7)),
+                                    div()
+                                        .mt_4()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .child(empty_state_shortcut(["Ctrl", "N"], "new query"))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "Shift", "P"],
+                                            "command palette",
+                                        ))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "O"],
+                                            "open script from disk",
+                                        ))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "Shift", "N"],
+                                            "new connection",
+                                        )),
                                 ),
                         ),
                 )
@@ -556,6 +578,19 @@ impl Render for Workspace {
             .child(self.sql_preview_modal.clone())
             .child(login_modal)
             .child(sso_wizard)
+            // S8 modals — rendered as full-screen overlays using ModalShell chrome.
+            .when(self.modal_delete_connection.read(cx).is_visible(), |root| {
+                root.child(self.modal_delete_connection.clone())
+            })
+            .when(self.modal_unsaved_changes.read(cx).is_visible(), |root| {
+                root.child(self.modal_unsaved_changes.clone())
+            })
+            .when(self.modal_drop_table.read(cx).is_visible(), |root| {
+                root.child(self.modal_drop_table.clone())
+            })
+            .when(self.modal_tunnel_auth.read(cx).is_visible(), |root| {
+                root.child(self.modal_tunnel_auth.clone())
+            })
             .child(
                 div()
                     .absolute()
@@ -587,7 +622,7 @@ impl Render for Workspace {
                                 .id("governance-overlay")
                                 .absolute()
                                 .inset_0()
-                                .bg(gpui::hsla(0.0, 0.0, 0.0, 0.45))
+                                .bg(theme.overlay.opacity(0.45))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -626,8 +661,40 @@ impl Render for Workspace {
                     root
                 }
             })
+            .when(child_picker_open, |root| {
+                let sidebar_entity = self.sidebar.clone();
+                let focus_handle = self
+                    .sidebar
+                    .read(cx)
+                    .child_picker_focus_handle()
+                    .unwrap_or_else(|| self.focus_handle.clone());
+                let content = self.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.render_child_picker_content(cx).into_any_element()
+                });
+
+                root.child(
+                    ModalFrame::new(
+                        "event-stream-child-picker",
+                        &focus_handle,
+                        move |_window, cx| {
+                            sidebar_entity.update(cx, |sidebar, cx| {
+                                sidebar.close_child_picker(cx);
+                            });
+                        },
+                    )
+                    .context_id(ContextId::EventStreamsPicker)
+                    .icon(AppIcon::ScrollText)
+                    .title("Event Streams")
+                    .width(px(1000.0))
+                    .height(px(720.0))
+                    .top_offset(px(60.0))
+                    .block_scroll()
+                    .child(content)
+                    .render(cx),
+                )
+            })
             // Context menu rendered at workspace level for proper positioning
-            .when_some(self.sidebar.read(cx).context_menu_state(), |this, menu| {
+            .when_some(sidebar_context_menu, |this, menu| {
                 use crate::ui::components::context_menu as ctx;
                 use crate::ui::views::sidebar::ContextMenuItem;
 
@@ -715,7 +782,7 @@ impl Render for Workspace {
                     })
             })
             // Tab context menu rendered at workspace level for proper positioning
-            .when_some(self.tab_bar.read(cx).context_menu_state(), |this, menu| {
+            .when_some(tab_context_menu, |this, menu| {
                 use crate::ui::components::context_menu as ctx;
                 use crate::ui::document::tab_bar::TabBar;
 
@@ -762,7 +829,9 @@ impl Render for Workspace {
                     let sidebar_confirm = self.sidebar.clone();
                     let sidebar_cancel = self.sidebar.clone();
 
-                    let message = if modal_state.is_ddl {
+                    let message = if let Some(count) = modal_state.multi_count {
+                        format!("Delete {count} selected items?")
+                    } else if modal_state.is_ddl {
                         let object_type = modal_state.object_type.unwrap_or("Object");
                         format!("Drop {} \"{}\"?", object_type, modal_state.item_name)
                     } else if modal_state.is_folder {
@@ -779,7 +848,7 @@ impl Render for Workspace {
                             .id("delete-modal-overlay")
                             .absolute()
                             .inset_0()
-                            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.5))
+                            .bg(overlay_bg(theme))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -838,7 +907,6 @@ impl Render for Workspace {
                                                     .rounded(Radii::SM)
                                                     .cursor_pointer()
                                                     .text_size(FontSizes::SM)
-                                                    .text_color(theme.muted_foreground)
                                                     .bg(theme.secondary)
                                                     .hover(move |d| d.bg(btn_hover))
                                                     .on_click(move |_, _, cx| {
@@ -847,12 +915,13 @@ impl Render for Workspace {
                                                         });
                                                     })
                                                     .child(
-                                                        svg()
-                                                            .path(AppIcon::X.path())
-                                                            .size_4()
-                                                            .text_color(theme.muted_foreground),
+                                                        Icon::new(AppIcon::X)
+                                                            .size(px(16.0))
+                                                            .muted(),
                                                     )
-                                                    .child("Cancel"),
+                                                    .child(
+                                                        Text::caption("Cancel").muted_foreground(),
+                                                    ),
                                             )
                                             .child(
                                                 div()
@@ -865,7 +934,6 @@ impl Render for Workspace {
                                                     .rounded(Radii::SM)
                                                     .cursor_pointer()
                                                     .text_size(FontSizes::SM)
-                                                    .text_color(theme.background)
                                                     .bg(theme.danger)
                                                     .hover(|d| d.opacity(0.9))
                                                     .on_click(move |_, _, cx| {
@@ -874,17 +942,158 @@ impl Render for Workspace {
                                                         });
                                                     })
                                                     .child(
-                                                        svg()
-                                                            .path(AppIcon::Delete.path())
-                                                            .size_4()
-                                                            .text_color(theme.background),
+                                                        Icon::new(AppIcon::Delete)
+                                                            .size(px(16.0))
+                                                            .color(theme.background),
                                                     )
-                                                    .child(confirm_label),
+                                                    .child(
+                                                        Text::caption(confirm_label)
+                                                            .color(theme.background),
+                                                    ),
                                             ),
                                     ),
                             ),
                     )
                 },
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use dbflux_components::composites::{
+        PanelHeaderBackground, PanelHeaderTitleColor, PanelHeaderVariant, inspect_panel_header,
+    };
+    use dbflux_components::primitives::SurfaceRole;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::FontWeight;
+
+    #[test]
+    fn panel_headers_keep_mono_family_and_focus_weight_difference() {
+        let focused = inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, true, false);
+        let unfocused =
+            inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, false, false);
+
+        for inspection in [&focused.title, &unfocused.title] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::SM));
+        }
+
+        assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
+        assert_eq!(unfocused.title.weight_override, Some(FontWeight::MEDIUM));
+    }
+
+    #[test]
+    fn workspace_render_uses_canonical_panel_header_contract() {
+        let source = workspace_render_source();
+
+        assert!(source.contains("panel_header_collapsible_variant("));
+        assert!(source.contains("PanelHeaderVariant::WorkspaceTasks"));
+        assert!(!source.contains("fn background_tasks_panel_header("));
+        assert!(!source.contains("fn render_panel_header("));
+        assert!(!source.contains("fn panel_header_title("));
+    }
+
+    #[test]
+    fn workspace_render_drops_local_background_tasks_header_styling() {
+        let source = workspace_render_source();
+
+        assert!(!source.contains(".bg(theme.tab_bar)"));
+        assert!(!source.contains(".hover(|s| s.bg(theme.secondary))"));
+        assert!(!source.contains("theme.primary"));
+    }
+
+    #[test]
+    fn workspace_render_keeps_loader_icon_in_the_tasks_header_contract() {
+        let source = workspace_render_source();
+
+        assert!(source.contains("Some(IconName::Loader)"));
+    }
+
+    #[test]
+    fn workspace_tasks_panel_variant_matches_expected_shared_chrome() {
+        let collapsed =
+            inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, false, false);
+
+        assert_eq!(collapsed.background, PanelHeaderBackground::ThemeTabBar);
+        assert_eq!(
+            collapsed.hover_background,
+            Some(PanelHeaderBackground::Surface(SurfaceRole::Card))
+        );
+        assert_eq!(
+            collapsed.base_title_color,
+            PanelHeaderTitleColor::Foreground
+        );
+
+        let focused = inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, true, false);
+
+        assert_eq!(
+            focused.focus_title_color,
+            Some(PanelHeaderTitleColor::Primary)
+        );
+        assert_eq!(focused.title.family, Some(AppFonts::MONO));
+        assert_eq!(focused.title.size_override, Some(FontSizes::SM));
+        assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
+    }
+
+    #[test]
+    fn tabbed_and_empty_workspace_paths_both_use_the_workspace_tasks_contract() {
+        let invocations = background_tasks_header_invocations();
+
+        assert_eq!(invocations.len(), 2);
+
+        for invocation in invocations {
+            assert!(invocation.contains("panel_header_collapsible_variant("));
+            assert!(invocation.contains("PanelHeaderVariant::WorkspaceTasks"));
+            assert!(invocation.contains("tasks_focused"));
+            assert!(invocation.contains("Some(IconName::Loader)"));
+        }
+    }
+
+    #[test]
+    fn workspace_background_tasks_contract_stays_out_of_local_helper_code_paths() {
+        let invocations = background_tasks_header_invocations();
+
+        for invocation in invocations {
+            assert!(!invocation.contains("theme.tab_bar"));
+            assert!(!invocation.contains("theme.primary"));
+        }
+    }
+
+    fn workspace_render_source() -> String {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/ui/views/workspace/render.rs"
+        ))
+        .expect("render.rs should be readable for source-inspection tests");
+
+        source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("render.rs should contain production code before tests")
+            .to_string()
+    }
+
+    fn background_tasks_header_invocations() -> Vec<String> {
+        let source = workspace_render_source();
+        let mut invocations = Vec::new();
+        let mut remaining = source.as_str();
+
+        while let Some(start) = remaining.find("panel_header_collapsible_variant(") {
+            let tail = &remaining[start..];
+            let end = tail
+                .find(",\n                cx,\n            );")
+                .map(|index| index + ",\n                cx,\n            );".len())
+                .expect("workspace render should close the panel_header_collapsible_variant call");
+
+            invocations.push(tail[..end].to_string());
+            remaining = &tail[end..];
+        }
+
+        invocations
     }
 }

@@ -3,14 +3,16 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionCountRequest,
-    ConnectionProfile, CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind,
-    DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverMetadata, ExplainRequest, FormValues, LanguageService,
-    NoOpCodeGenerator, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner,
-    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableBrowseRequest,
-    TableCountRequest, TableInfo, Value, ViewInfo,
+    CodeGenCapabilities, CodeGenerator, CollectionBrowseRequest, CollectionChildrenPage,
+    CollectionChildrenRequest, CollectionCountRequest, CollectionRef, ConnectionProfile,
+    CrudResult, CustomTypeInfo, DatabaseInfo, DbConfig, DbError, DbKind, DbSchemaInfo,
+    DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
+    DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest, FormValues,
+    LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RelationRef, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect,
+    SqlGenerationRequest, SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo,
+    Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -87,6 +89,33 @@ pub enum SchemaObjectKind {
     View,
     Database,
     Collection,
+}
+
+/// Additional source controls requested by a driver for query execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceQueryMode {
+    pub value: String,
+    pub label: String,
+    pub query_language: QueryLanguage,
+}
+
+/// Additional source controls requested by a driver for query execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceContextSpec {
+    pub targets_label: String,
+    pub targets_placeholder: String,
+    pub start_label: String,
+    pub end_label: String,
+    pub query_mode_label: Option<String>,
+    pub query_modes: Vec<SourceQueryMode>,
+    pub default_query_mode: Option<String>,
+}
+
+/// A driver-owned event stream target that can be opened in the audit document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventStreamTarget {
+    pub collection: CollectionRef,
+    pub child_id: Option<String>,
 }
 
 impl SchemaObjectKind {
@@ -369,6 +398,19 @@ pub trait DbDriver: Send + Sync {
     ///
     /// Used by the "Test Connection" button in the connection manager.
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError>;
+
+    /// Like `test_connection`, but returns enriched diagnostics when available.
+    ///
+    /// Drivers that can provide engine version, RTT, server time, or SSL info
+    /// should override this method. The default implementation calls
+    /// `test_connection` and wraps an empty result on success.
+    fn test_connection_rich(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<crate::TestConnectionResult, DbError> {
+        self.test_connection(profile)
+            .map(|()| crate::TestConnectionResult::default())
+    }
 }
 
 /// Key-value operations exposed by drivers in `DatabaseCategory::KeyValue`.
@@ -703,6 +745,56 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Best-effort extraction of tables referenced by a SQL query string.
+    ///
+    /// Returns `None` if the driver cannot parse the query, or `Some(refs)` with
+    /// the list of `TableRef`s extracted from FROM/JOIN/UPDATE/INSERT/DELETE
+    /// clauses.
+    ///
+    /// NoSQL and key-value drivers inherit the default `None` — drift detection
+    /// is skipped for them automatically.
+    ///
+    /// Used by drift detection to know which tables to fingerprint before
+    /// executing a query.
+    fn referenced_tables(&self, _query: &str) -> Option<Vec<crate::schema::QueryTableRef>> {
+        None
+    }
+
+    /// Fetch objects that depend on `schema.table` — views, materialized views,
+    /// FK child tables, and triggers.
+    ///
+    /// Returns an empty `Vec` by default so NoSQL and other drivers that do not
+    /// support this concept degrade gracefully.
+    fn fetch_dependents(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<RelationRef>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Fetch a single row from a table by primary-key match.
+    ///
+    /// Returns the row's values keyed by column name, or `None` if no row
+    /// matches. Used by the RowInspector to forward-resolve foreign-key
+    /// references.
+    ///
+    /// Non-relational drivers that don't override this method return
+    /// `NotSupported` and the UI degrades gracefully (no REFERENCES shown).
+    fn fetch_row_by_pk(
+        &self,
+        _database: &str,
+        _schema: &str,
+        _table: &str,
+        _pk_column: &str,
+        _pk_value: &Value,
+    ) -> Result<Option<std::collections::HashMap<String, Value>>, DbError> {
+        Err(DbError::NotSupported(
+            "fetch_row_by_pk not supported by this driver".to_string(),
+        ))
+    }
+
     // =========================================================================
     // Browse Operations (semantic queries, no raw SQL/JSON from UI)
     // =========================================================================
@@ -808,6 +900,16 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// List driver-owned child sources under a collection/container.
+    fn collection_children(
+        &self,
+        _request: &CollectionChildrenRequest,
+    ) -> Result<CollectionChildrenPage, DbError> {
+        Err(DbError::NotSupported(
+            "Collection child listing not supported by this driver".to_string(),
+        ))
+    }
+
     /// Count documents in a collection with an optional filter.
     ///
     /// The default implementation returns `NotSupported`.
@@ -815,6 +917,22 @@ pub trait Connection: Send + Sync {
         Err(DbError::NotSupported(
             "Collection counting not supported by this driver".to_string(),
         ))
+    }
+
+    /// Browse a driver-owned event stream source as canonical observability records.
+    fn browse_event_stream(
+        &self,
+        _target: &EventStreamTarget,
+        _query: &EventQuery,
+    ) -> Result<EventPage, DbError> {
+        Err(DbError::NotSupported(
+            "Event stream browsing not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Optional source-context controls exposed by this driver in query documents.
+    fn source_context_spec(&self) -> Option<SourceContextSpec> {
+        None
     }
 
     /// Explain a query execution plan for a table or custom query.
@@ -1252,4 +1370,68 @@ pub trait ConnectionExt {
 
     /// Attempt to cast this connection as a key-value connection.
     fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection>;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DbError, DbKind, DriverMetadata, QueryRequest, QueryResult, SchemaSnapshot};
+
+    /// Minimal Connection stub that only implements the required methods and
+    /// relies on default impls for everything else.
+    struct StubConnection;
+
+    impl Connection for StubConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            unimplemented!("StubConnection::metadata not needed for this test")
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn crate::sql::dialect::SqlDialect {
+            unimplemented!("StubConnection::dialect not needed for this test")
+        }
+    }
+
+    #[test]
+    fn fetch_row_by_pk_default_returns_not_supported() {
+        let conn = StubConnection;
+        let result = conn.fetch_row_by_pk("db", "public", "users", "id", &crate::Value::Int(1));
+
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "default impl must return NotSupported, got: {:?}",
+            result
+        );
+    }
 }

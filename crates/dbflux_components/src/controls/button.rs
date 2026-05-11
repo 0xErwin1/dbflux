@@ -1,11 +1,11 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, ElementId, SharedString, Window};
+use gpui::{App, ClickEvent, ElementId, SharedString, Window, px};
 use gpui_component::button::{
     Button as GpuiButton, ButtonVariant as GpuiButtonVariant, ButtonVariants,
 };
 use gpui_component::{Disableable, Icon, Sizable};
 
-use crate::tokens::Radii;
+use crate::primitives::focus_frame;
 
 /// Visual variant of the button controlling color scheme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -115,13 +115,19 @@ impl Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let gpui_variant = self.gpui_variant();
+        let focus_handle = window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let is_focused = focus_handle.is_focused(window);
 
         let mut btn = GpuiButton::new(self.id)
             .label(self.label)
             .with_variant(gpui_variant)
-            .rounded(Radii::SM)
+            .rounded(px(0.0))
+            .overflow_hidden()
             .disabled(self.disabled)
             .when(self.variant == ButtonVariant::Dropdown, |b| {
                 b.dropdown_caret(true)
@@ -143,6 +149,12 @@ impl RenderOnce for Button {
             btn = btn.on_click(handler);
         }
 
-        btn
+        let button = btn.into_any_element();
+
+        if is_focused {
+            focus_frame(true, None, button, cx).into_any_element()
+        } else {
+            button
+        }
     }
 }

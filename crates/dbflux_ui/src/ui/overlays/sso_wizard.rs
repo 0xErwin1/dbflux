@@ -2,14 +2,14 @@ use crate::app::{AppStateChanged, AppStateEntity, AuthProfileCreated};
 use crate::platform;
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::Spacing;
+use crate::ui::tokens::{Radii, Spacing};
+use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::primitives::Text;
 use dbflux_core::AuthProfile;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::InputState;
 use uuid::Uuid;
 
 #[cfg(feature = "aws")]
@@ -390,7 +390,7 @@ impl SsoWizard {
                                     div()
                                         .px(Spacing::SM)
                                         .py(Spacing::XS)
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_1()
                                         .border_color(cx.theme().border)
                                         .cursor_pointer()
@@ -463,7 +463,7 @@ impl SsoWizard {
                                     div()
                                         .px(Spacing::SM)
                                         .py(Spacing::XS)
-                                        .rounded(px(4.0))
+                                        .rounded(Radii::SM)
                                         .border_1()
                                         .border_color(cx.theme().border)
                                         .cursor_pointer()

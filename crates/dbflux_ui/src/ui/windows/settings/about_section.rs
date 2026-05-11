@@ -1,6 +1,7 @@
-use super::{SettingsSection, SettingsSectionId, layout};
+use super::{SettingsSection, SettingsSectionId};
 use crate::ui::icons::AppIcon;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::Icon;
+use dbflux_components::typography::{Body, FieldLabel, Headline, MonoCaption};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -44,10 +45,10 @@ impl Render for AboutSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(layout::section_header(
+            .child(dbflux_components::composites::section_header(
                 "About",
                 "Project information",
-                theme,
+                cx,
             ))
             .child(
                 div().flex_1().min_h_0().overflow_y_scrollbar().p_6().child(
@@ -60,62 +61,60 @@ impl Render for AboutSection {
                                 .flex()
                                 .items_center()
                                 .gap_3()
-                                .child(
-                                    svg()
-                                        .path(AppIcon::DbFlux.path())
-                                        .size(px(65.0))
-                                        .text_color(theme.primary),
-                                )
+                                .child(Icon::new(AppIcon::DbFlux).size(px(65.0)).primary())
                                 .child(
                                     div()
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(
-                                            div()
-                                                .text_xl()
-                                                .font_weight(FontWeight::BOLD)
-                                                .child("DBFlux"),
-                                        )
-                                        .child(Text::caption(format!("{} ({})", VERSION, PROFILE))),
+                                        .child(Headline::new("DBFlux").xl())
+                                        .child(MonoCaption::new(format!(
+                                            "{} ({})",
+                                            VERSION, PROFILE
+                                        ))),
                                 ),
                         )
                         .child(
-                            div().text_sm().child(
+                            div().child(
+                                // items_baseline + Body-wrapped fillers keeps
+                                // the link rows and the surrounding plain text
+                                // on the same baseline; bare &str children
+                                // sit on a different metric and look pulled up.
                                 div()
                                     .flex()
+                                    .items_baseline()
                                     .gap_1()
                                     .child(
                                         div()
                                             .id("about-link-issues")
-                                            .text_color(theme.link)
                                             .cursor_pointer()
                                             .hover(|d| d.underline())
                                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                                 cx.open_url(&issues_url);
                                             })
-                                            .child("Report a bug"),
+                                            .child(Body::new("Report a bug").color(theme.link)),
                                     )
-                                    .child("or")
+                                    .child(Body::new("or"))
                                     .child(
                                         div()
                                             .id("about-link-repo")
-                                            .text_color(theme.link)
                                             .cursor_pointer()
                                             .hover(|d| d.underline())
                                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                 cx.open_url(REPOSITORY);
                                             })
-                                            .child("view the source code"),
+                                            .child(
+                                                Body::new("view the source code").color(theme.link),
+                                            ),
                                     )
-                                    .child("on GitHub."),
+                                    .child(Body::new("on GitHub.")),
                             ),
                         )
-                        .child(Text::caption(format!(
+                        .child(Body::new(format!(
                             "Copyright © 2026 {} and contributors.",
                             author_name
                         )))
-                        .child(Text::caption(format!(
+                        .child(Body::new(format!(
                             "Licensed under the {} licenses.",
                             license_display
                         )))
@@ -128,12 +127,15 @@ impl Render for AboutSection {
                                 .flex()
                                 .flex_col()
                                 .gap_2()
+                                .child(FieldLabel::new("Third-Party Licenses"))
                                 .child(
-                                    Text::body("Third-Party Licenses")
-                                        .font_weight(FontWeight::SEMIBOLD),
+                                    Body::new("UI icons from Lucide (ISC License)")
+                                        .color(theme.muted_foreground),
                                 )
-                                .child(Text::caption("UI icons from Lucide (ISC License)"))
-                                .child(Text::caption("Brand icons from Simple Icons (CC0 1.0)")),
+                                .child(
+                                    Body::new("Brand icons from Simple Icons (CC0 1.0)")
+                                        .color(theme.muted_foreground),
+                                ),
                         ),
                 ),
             )

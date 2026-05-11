@@ -2,12 +2,12 @@ use std::sync::{Arc, Mutex};
 
 use dbflux_core::DbError;
 use dbflux_ipc::{
-    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ProtocolVersion,
+    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ProtocolVersion, RpcApiFamily,
     driver_protocol::{
         DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
         DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
     },
-    framing,
+    driver_rpc_supported_versions, framing,
 };
 use interprocess::local_socket::{Name, Stream as IpcStream, prelude::*};
 use uuid::Uuid;
@@ -117,11 +117,12 @@ impl RpcClient {
             .filter(|token| !token.is_empty());
 
         let request = DriverRequestEnvelope::new(
+            DRIVER_RPC_VERSION,
             0,
             DriverRequestBody::Hello(DriverHelloRequest {
                 client_name: "dbflux_driver_ipc".to_string(),
                 client_version: env!("CARGO_PKG_VERSION").to_string(),
-                supported_versions: vec![DRIVER_RPC_VERSION],
+                supported_versions: driver_rpc_supported_versions().to_vec(),
                 requested_capabilities: vec![
                     DriverCapability::Cancellation,
                     DriverCapability::ChunkedResults,
@@ -136,6 +137,11 @@ impl RpcClient {
 
         match response.body {
             DriverResponseBody::Hello(hello) => {
+                validate_hello_selected_version(
+                    hello.selected_version,
+                    driver_rpc_supported_versions(),
+                )?;
+
                 log::info!(
                     "Connected to driver host: {} v{}",
                     hello.server_name,
@@ -744,11 +750,8 @@ impl RpcClient {
         body: DriverRequestBody,
     ) -> Result<DriverResponseBody, RpcError> {
         let request_id = self.next_request_id()?;
-        let mut envelope = DriverRequestEnvelope::new(request_id, body);
-
-        if let Some(sid) = session_id {
-            envelope = envelope.with_session(sid);
-        }
+        let envelope =
+            build_call_request_envelope(self.selected_version(), request_id, body, session_id);
 
         let response = self.send_raw(envelope)?;
         Ok(response.body)
@@ -795,6 +798,8 @@ impl RpcClient {
             return Err(RpcError::Protocol("Request ID mismatch".into()));
         }
 
+        validate_response_protocol_version(request.protocol_version, response.protocol_version)?;
+
         Ok(response)
     }
 
@@ -813,10 +818,68 @@ fn protocol_supports_semantic_planning(version: ProtocolVersion) -> bool {
         || (version.major == DRIVER_RPC_VERSION.major && version.minor >= 1)
 }
 
+fn build_call_request_envelope(
+    selected_version: ProtocolVersion,
+    request_id: u64,
+    body: DriverRequestBody,
+    session_id: Option<Uuid>,
+) -> DriverRequestEnvelope {
+    let mut envelope = DriverRequestEnvelope::new(selected_version, request_id, body);
+
+    if let Some(session_id) = session_id {
+        envelope = envelope.with_session(session_id);
+    }
+
+    envelope
+}
+
+fn validate_hello_selected_version(
+    selected_version: ProtocolVersion,
+    client_supported_versions: &[ProtocolVersion],
+) -> Result<(), RpcError> {
+    let selected_contract =
+        dbflux_ipc::RpcApiContract::new(RpcApiFamily::DriverRpc, selected_version);
+    let client_contract =
+        dbflux_ipc::RpcApiContract::new(RpcApiFamily::DriverRpc, DRIVER_RPC_VERSION);
+
+    if !client_contract.is_compatible_with(selected_contract)
+        || !client_supported_versions.contains(&selected_version)
+    {
+        return Err(RpcError::Protocol(format!(
+            "Driver host returned unsupported selected_version {}.{}",
+            selected_version.major, selected_version.minor
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_response_protocol_version(
+    negotiated_version: ProtocolVersion,
+    response_version: ProtocolVersion,
+) -> Result<(), RpcError> {
+    if negotiated_version != response_version {
+        return Err(RpcError::Protocol(format!(
+            "Driver host responded with protocol {}.{} but negotiated version is {}.{}",
+            response_version.major,
+            response_version.minor,
+            negotiated_version.major,
+            negotiated_version.minor
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::protocol_supports_semantic_planning;
-    use dbflux_ipc::ProtocolVersion;
+    use super::{
+        build_call_request_envelope, protocol_supports_semantic_planning,
+        validate_hello_selected_version, validate_response_protocol_version,
+    };
+    use dbflux_ipc::driver_protocol::DriverRequestBody;
+    use dbflux_ipc::{ProtocolVersion, driver_rpc_supported_versions};
+    use uuid::Uuid;
 
     #[test]
     fn semantic_planning_requires_driver_rpc_v1_1_or_newer() {
@@ -829,5 +892,77 @@ mod tests {
         assert!(protocol_supports_semantic_planning(ProtocolVersion::new(
             2, 0
         )));
+    }
+
+    #[test]
+    fn hello_selected_version_must_be_supported_by_both_peers() {
+        let error = validate_hello_selected_version(
+            ProtocolVersion::new(1, 2),
+            driver_rpc_supported_versions(),
+        )
+        .expect_err("unsupported selection should be rejected");
+
+        assert!(error.to_string().contains("unsupported selected_version"));
+    }
+
+    #[test]
+    fn hello_selected_version_accepts_supported_downgrade() {
+        validate_hello_selected_version(
+            ProtocolVersion::new(1, 0),
+            driver_rpc_supported_versions(),
+        )
+        .expect("selected downgrade within client support should be accepted");
+    }
+
+    #[test]
+    fn hello_selected_version_rejects_major_mismatch_even_if_listed() {
+        let error = validate_hello_selected_version(
+            ProtocolVersion::new(2, 0),
+            &[ProtocolVersion::new(2, 0)],
+        )
+        .expect_err("major mismatch should be rejected");
+
+        assert!(error.to_string().contains("unsupported selected_version"));
+    }
+
+    #[test]
+    fn response_protocol_version_must_match_negotiated_version() {
+        let error = validate_response_protocol_version(
+            ProtocolVersion::new(1, 0),
+            ProtocolVersion::new(1, 1),
+        )
+        .expect_err("response drift should be rejected");
+
+        assert!(error.to_string().contains("negotiated version"));
+    }
+
+    #[test]
+    fn call_request_envelope_uses_negotiated_version_and_session_id() {
+        let session_id = Uuid::nil();
+
+        let envelope = build_call_request_envelope(
+            ProtocolVersion::new(1, 0),
+            7,
+            DriverRequestBody::Ping,
+            Some(session_id),
+        );
+
+        assert_eq!(envelope.protocol_version, ProtocolVersion::new(1, 0));
+        assert_eq!(envelope.request_id, 7);
+        assert_eq!(envelope.session_id, Some(session_id));
+    }
+
+    #[test]
+    fn call_request_envelope_omits_session_id_when_absent() {
+        let envelope = build_call_request_envelope(
+            ProtocolVersion::new(1, 0),
+            8,
+            DriverRequestBody::Ping,
+            None,
+        );
+
+        assert_eq!(envelope.protocol_version, ProtocolVersion::new(1, 0));
+        assert_eq!(envelope.request_id, 8);
+        assert_eq!(envelope.session_id, None);
     }
 }

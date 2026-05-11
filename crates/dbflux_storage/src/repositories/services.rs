@@ -83,7 +83,7 @@ impl ServiceRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
+                SELECT socket_id, enabled, command, startup_timeout_ms, service_kind, api_family, api_major, api_minor, created_at, updated_at
                 FROM cfg_services
                 ORDER BY socket_id ASC
                 "#,
@@ -100,8 +100,12 @@ impl ServiceRepository {
                     enabled: row.get::<_, i32>(1)? != 0,
                     command: row.get(2)?,
                     startup_timeout_ms: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    service_kind: row.get(4)?,
+                    api_family: row.get(5)?,
+                    api_major: row.get(6)?,
+                    api_minor: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -134,7 +138,7 @@ impl ServiceRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
+                SELECT socket_id, enabled, command, startup_timeout_ms, service_kind, api_family, api_major, api_minor, created_at, updated_at
                 FROM cfg_services
                 WHERE socket_id = ?1
                 "#,
@@ -150,8 +154,12 @@ impl ServiceRepository {
                 enabled: row.get::<_, i32>(1)? != 0,
                 command: row.get(2)?,
                 startup_timeout_ms: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                service_kind: row.get(4)?,
+                api_family: row.get(5)?,
+                api_major: row.get(6)?,
+                api_minor: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         });
 
@@ -179,9 +187,9 @@ impl ServiceRepository {
         tx.execute(
             r#"
                 INSERT INTO cfg_services (
-                    socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
+                    socket_id, enabled, command, startup_timeout_ms, service_kind, api_family, api_major, api_minor, created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, datetime('now'), datetime('now')
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now')
                 )
                 "#,
             params![
@@ -189,6 +197,10 @@ impl ServiceRepository {
                 service.enabled as i32,
                 service.command,
                 service.startup_timeout_ms,
+                service.service_kind,
+                service.api_family,
+                service.api_major,
+                service.api_minor,
             ],
         )
         .map_err(|source| StorageError::Sqlite {
@@ -223,6 +235,10 @@ impl ServiceRepository {
                     enabled = ?2,
                     command = ?3,
                     startup_timeout_ms = ?4,
+                    service_kind = ?5,
+                    api_family = ?6,
+                    api_major = ?7,
+                    api_minor = ?8,
                     updated_at = datetime('now')
                 WHERE socket_id = ?1
                 "#,
@@ -231,6 +247,10 @@ impl ServiceRepository {
                     service.enabled as i32,
                     service.command,
                     service.startup_timeout_ms,
+                    service.service_kind,
+                    service.api_family,
+                    service.api_major,
+                    service.api_minor,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -267,12 +287,16 @@ impl ServiceRepository {
         tx.execute(
             r#"
                 INSERT INTO cfg_services (
-                    socket_id, enabled, command, startup_timeout_ms, created_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
+                    socket_id, enabled, command, startup_timeout_ms, service_kind, api_family, api_major, api_minor, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'))
                 ON CONFLICT(socket_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     command = excluded.command,
                     startup_timeout_ms = excluded.startup_timeout_ms,
+                    service_kind = excluded.service_kind,
+                    api_family = excluded.api_family,
+                    api_major = excluded.api_major,
+                    api_minor = excluded.api_minor,
                     updated_at = datetime('now')
                 "#,
             params![
@@ -280,6 +304,10 @@ impl ServiceRepository {
                 service.enabled as i32,
                 service.command,
                 service.startup_timeout_ms,
+                service.service_kind,
+                service.api_family,
+                service.api_major,
+                service.api_minor,
             ],
         )
         .map_err(|source| StorageError::Sqlite {
@@ -332,6 +360,10 @@ pub struct ServiceDto {
     pub enabled: bool,
     pub command: Option<String>,
     pub startup_timeout_ms: Option<i64>,
+    pub service_kind: String,
+    pub api_family: Option<String>,
+    pub api_major: Option<i64>,
+    pub api_minor: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -344,6 +376,10 @@ impl ServiceDto {
             enabled: true,
             command: None,
             startup_timeout_ms: None,
+            service_kind: "driver".to_string(),
+            api_family: None,
+            api_major: None,
+            api_minor: None,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -383,6 +419,77 @@ mod tests {
         let fetched = repo.all().expect("should fetch");
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].socket_id, "test-socket");
+        assert_eq!(fetched[0].service_kind, "driver");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn service_upsert_persists_service_kind() {
+        let path = temp_db("service_kind");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        let repo = ServiceRepository::new(Arc::new(conn));
+        let dto = ServiceDto {
+            socket_id: "auth-socket".to_string(),
+            enabled: true,
+            command: Some("dbflux-driver-host".to_string()),
+            startup_timeout_ms: Some(5_000),
+            service_kind: "auth_provider".to_string(),
+            api_family: Some("auth_provider_rpc".to_string()),
+            api_major: Some(1),
+            api_minor: Some(0),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo
+            .get("auth-socket")
+            .expect("should load")
+            .expect("service row");
+
+        assert_eq!(fetched.service_kind, "auth_provider");
+        assert_eq!(fetched.api_family.as_deref(), Some("auth_provider_rpc"));
+        assert_eq!(fetched.api_major, Some(1));
+        assert_eq!(fetched.api_minor, Some(0));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn service_insert_defaults_missing_api_contract_columns_to_null() {
+        let path = temp_db("service_api_contract_defaults");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        let repo = ServiceRepository::new(Arc::new(conn));
+        let dto = ServiceDto::new("driver-socket".to_string());
+
+        repo.insert(&dto).expect("should insert");
+
+        let fetched = repo
+            .get("driver-socket")
+            .expect("should load")
+            .expect("service row");
+
+        assert_eq!(fetched.api_family, None);
+        assert_eq!(fetched.api_major, None);
+        assert_eq!(fetched.api_minor, None);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::tokens::Radii;
 use dbflux_components::primitives::Text;
 use gpui::prelude::FluentBuilder;
 use gpui_component::ActiveTheme;
@@ -171,14 +172,14 @@ impl ConnectionManagerWindow {
                 let theme = cx.theme();
                 this.child(
                     div()
-                        .rounded(px(4.0))
+                        .rounded(Radii::SM)
                         .border_1()
                         .border_color(theme.warning.opacity(0.3))
                         .bg(theme.warning.opacity(0.1))
                         .p_2()
                         .child(
                             Text::caption("Selected hook enables Lua process.run and can execute external programs with your user permissions")
-                                .text_color(theme.warning),
+                                .warning(),
                         ),
                 )
             })

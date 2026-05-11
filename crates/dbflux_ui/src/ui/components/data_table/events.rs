@@ -106,6 +106,8 @@ pub enum ContextMenuAction {
     Order(SortDirection),
     /// Remove ordering.
     RemoveOrdering,
+    /// Open the row inspector panel for the selected row.
+    InspectRow,
 }
 
 /// Events emitted by the DataTable component.

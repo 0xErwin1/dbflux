@@ -41,7 +41,7 @@ impl SettingsCoordinator {
                 vec![
                     TreeNavNode::leaf("hooks", "Hooks", Some(AppIcon::SquareTerminal)),
                     TreeNavNode::leaf("drivers", "Drivers", Some(AppIcon::Database)),
-                    TreeNavNode::leaf("services", "Services (RPC)", Some(AppIcon::Plug)),
+                    TreeNavNode::leaf("services", "RPC Services", Some(AppIcon::Plug)),
                 ],
             ),
             #[cfg(feature = "mcp")]
@@ -186,5 +186,17 @@ mod tests {
             let id = SettingsCoordinator::tree_id_for_section(section);
             assert_eq!(SettingsCoordinator::section_for_tree_id(id), Some(section));
         }
+    }
+
+    #[test]
+    fn services_tree_label_uses_neutral_rpc_wording() {
+        let tree = SettingsCoordinator::build_sidebar_tree();
+        let services_row = tree
+            .rows()
+            .iter()
+            .find(|row| row.id.as_ref() == "services")
+            .expect("services row");
+
+        assert_eq!(services_row.label.as_ref(), "RPC Services");
     }
 }

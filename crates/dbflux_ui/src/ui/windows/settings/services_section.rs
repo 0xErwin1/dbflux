@@ -4,11 +4,11 @@ use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
-use dbflux_core::ServiceConfig;
+use dbflux_components::controls::InputState;
+use dbflux_core::{RpcServiceKind, ServiceConfig};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::dialog::Dialog;
-use gpui_component::input::InputState;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum ServiceFocus {
@@ -21,6 +21,7 @@ pub(super) enum ServiceFormRow {
     SocketId,
     Command,
     Timeout,
+    Kind,
     Enabled,
     Arg(usize),
     #[allow(dead_code)]
@@ -52,6 +53,7 @@ pub(super) struct ServicesSection {
     pub(super) input_socket_id: Entity<InputState>,
     pub(super) input_svc_command: Entity<InputState>,
     pub(super) input_svc_timeout: Entity<InputState>,
+    pub(super) svc_kind: RpcServiceKind,
     pub(super) svc_enabled: bool,
 
     pub(super) svc_arg_inputs: Vec<Entity<InputState>>,
@@ -91,6 +93,7 @@ impl ServicesSection {
             input_socket_id,
             input_svc_command,
             input_svc_timeout,
+            svc_kind: RpcServiceKind::Driver,
             svc_enabled: true,
             svc_arg_inputs: Vec::new(),
             svc_env_key_inputs: Vec::new(),
@@ -230,6 +233,14 @@ impl SettingsSection for ServicesSection {
 
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_svc_changes(cx)
+    }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_service_footer_actions(cx))
     }
 }
 

@@ -593,6 +593,9 @@ impl DbFluxServer {
         // Only SQL/MongoDB/Redis queries are supported for execution
         match language {
             QueryLanguage::Sql
+            | QueryLanguage::CloudWatchLogsInsightsQl
+            | QueryLanguage::OpenSearchPpl
+            | QueryLanguage::OpenSearchSql
             | QueryLanguage::MongoQuery
             | QueryLanguage::RedisCommands
             | QueryLanguage::Cql
@@ -627,6 +630,7 @@ impl DbFluxServer {
             offset: None,
             statement_timeout: None,
             database: None,
+            execution_context: None,
         };
 
         let result = Self::execute_connection_blocking(conn.clone(), move |connection| {

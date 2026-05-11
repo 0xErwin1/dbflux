@@ -5,13 +5,16 @@ use super::tab_manager::TabManager;
 use super::types::{DocumentId, DocumentMetaSnapshot, DocumentState};
 use crate::ui::components::context_menu::MenuItem;
 use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{Radii, Spacing};
-use dbflux_components::primitives::Text;
+use crate::ui::tokens::{Heights, Radii, Spacing};
+use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::BannerColors;
+use dbflux_components::typography::MonoMeta;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::tooltip::Tooltip;
 
-const TAB_BAR_HEIGHT: Pixels = px(36.0);
+const TAB_BAR_HEIGHT: Pixels = Heights::TAB;
 
 #[allow(dead_code)]
 pub struct TabBar {
@@ -29,6 +32,7 @@ pub struct TabBar {
 }
 
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct TabContextMenu {
     pub tab_id: DocumentId,
     pub tab_index: usize,
@@ -195,16 +199,16 @@ impl Render for TabBar {
         let active_id = manager.active_id();
         let drop_target_index = self.drop_target_index;
 
-        let tab_snapshots: Vec<_> = manager
+        let tab_data: Vec<_> = manager
             .documents()
             .iter()
-            .map(|doc| doc.meta_snapshot(cx))
+            .map(|doc| (doc.meta_snapshot(cx), doc.change_summary(cx)))
             .collect();
 
-        let mut tabs: Vec<AnyElement> = Vec::with_capacity(tab_snapshots.len());
-        for (idx, meta) in tab_snapshots.into_iter().enumerate() {
+        let mut tabs: Vec<AnyElement> = Vec::with_capacity(tab_data.len());
+        for (idx, (meta, change_summary)) in tab_data.into_iter().enumerate() {
             tabs.push(
-                self.render_tab(meta, idx, active_id, drop_target_index, cx)
+                self.render_tab(meta, change_summary, idx, active_id, drop_target_index, cx)
                     .into_any_element(),
             );
         }
@@ -236,9 +240,22 @@ impl Render for TabBar {
 }
 
 impl TabBar {
+    fn tab_title_text(
+        title: SharedString,
+        is_active: bool,
+        theme: &gpui_component::Theme,
+    ) -> MonoMeta {
+        MonoMeta::new(title).color(if is_active {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        })
+    }
+
     fn render_tab(
         &self,
         meta: DocumentMetaSnapshot,
+        change_summary: Option<String>,
         idx: usize,
         active_id: Option<DocumentId>,
         drop_target_index: Option<usize>,
@@ -247,22 +264,23 @@ impl TabBar {
         let id = meta.id;
         let is_active = active_id == Some(id);
         let is_executing = meta.state == DocumentState::Executing;
+        let is_dirty = meta.state == DocumentState::Modified;
         let is_drop_target = drop_target_index == Some(idx);
 
         let title = meta.title.clone();
 
         let tab_manager = self.tab_manager.clone();
 
-        let icon_path = match meta.icon {
-            super::types::DocumentIcon::Sql => AppIcon::Code.path(),
-            super::types::DocumentIcon::Table => AppIcon::Table.path(),
-            super::types::DocumentIcon::Redis => AppIcon::Database.path(),
-            super::types::DocumentIcon::RedisKey => AppIcon::Hash.path(),
-            super::types::DocumentIcon::Terminal => AppIcon::SquareTerminal.path(),
-            super::types::DocumentIcon::Mongo => AppIcon::Database.path(),
-            super::types::DocumentIcon::Collection => AppIcon::Folder.path(),
-            super::types::DocumentIcon::Script => AppIcon::ScrollText.path(),
-            super::types::DocumentIcon::Audit => AppIcon::ScrollText.path(),
+        let icon = match meta.icon {
+            super::types::DocumentIcon::Sql => AppIcon::Code,
+            super::types::DocumentIcon::Table => AppIcon::Table,
+            super::types::DocumentIcon::Redis => AppIcon::Database,
+            super::types::DocumentIcon::RedisKey => AppIcon::Hash,
+            super::types::DocumentIcon::Terminal => AppIcon::SquareTerminal,
+            super::types::DocumentIcon::Mongo => AppIcon::Database,
+            super::types::DocumentIcon::Collection => AppIcon::Folder,
+            super::types::DocumentIcon::Script => AppIcon::ScrollText,
+            super::types::DocumentIcon::Audit => AppIcon::ScrollText,
         };
 
         let center_x = self.active_tab_center_x.clone();
@@ -279,9 +297,18 @@ impl TabBar {
             .gap(Spacing::SM)
             .cursor_pointer()
             .when(is_active, |el| {
+                let stripe_color = cx.theme().primary;
                 el.bg(cx.theme().tab_bar)
-                    .border_b_2()
-                    .border_color(cx.theme().accent)
+                    .child(
+                        // Active-tab indicator: 1 px stripe at the bottom edge.
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h(Heights::TAB_STRIPE)
+                            .bg(stripe_color),
+                    )
                     .child(
                         canvas(
                             move |bounds: Bounds<Pixels>, _, _| {
@@ -332,22 +359,40 @@ impl TabBar {
                 }),
             )
             // Icon
-            .child(svg().path(icon_path).size_4().text_color(if is_active {
+            .child(Icon::new(icon).size(px(16.0)).color(if is_active {
                 cx.theme().foreground
             } else {
                 cx.theme().muted_foreground
             }))
             // Title
-            .child(
-                div()
-                    .flex_1()
-                    .truncate()
-                    .child(Text::caption(title).text_color(if is_active {
-                        cx.theme().foreground
-                    } else {
-                        cx.theme().muted_foreground
-                    })),
-            )
+            .child(div().flex_1().truncate().child(Self::tab_title_text(
+                title.into(),
+                is_active,
+                cx.theme(),
+            )))
+            // Dirty indicator: amber dot when the document has unsaved changes.
+            // Shows the change summary in a tooltip on hover.
+            .when(is_dirty, |el| {
+                let dot_color = BannerColors::warning_bg(cx.theme());
+                let tooltip_text: SharedString = change_summary
+                    .as_deref()
+                    .unwrap_or("Unsaved changes")
+                    .to_string()
+                    .into();
+
+                el.child(
+                    div()
+                        .id(ElementId::Name(format!("dirty-dot-{}", id.0).into()))
+                        .w(px(6.0))
+                        .h(px(6.0))
+                        .rounded_full()
+                        .bg(dot_color)
+                        .flex_shrink_0()
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(tooltip_text.clone()).build(window, cx)
+                        }),
+                )
+            })
             // Spinner or close button
             .child(self.render_tab_action(id, is_executing, cx))
     }
@@ -370,10 +415,9 @@ impl TabBar {
             .justify_center()
             .rounded(Radii::SM)
             .child(if is_executing {
-                svg()
-                    .path(AppIcon::Loader.path())
+                Icon::new(AppIcon::Loader)
                     .size(px(12.0))
-                    .text_color(accent)
+                    .color(accent)
                     .into_any_element()
             } else {
                 div()
@@ -385,12 +429,7 @@ impl TabBar {
                     .items_center()
                     .justify_center()
                     .hover(move |el| el.bg(secondary))
-                    .child(
-                        svg()
-                            .path(AppIcon::X.path())
-                            .size(px(12.0))
-                            .text_color(muted_fg),
-                    )
+                    .child(Icon::new(AppIcon::X).size(px(12.0)).color(muted_fg))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _event, _window, cx| {
@@ -414,12 +453,7 @@ impl TabBar {
             .justify_center()
             .cursor_pointer()
             .hover(|el| el.bg(cx.theme().secondary))
-            .child(
-                svg()
-                    .path(AppIcon::Plus.path())
-                    .size(px(14.0))
-                    .text_color(cx.theme().muted_foreground),
-            )
+            .child(Icon::new(AppIcon::Plus).size(px(14.0)).muted())
             .on_click(cx.listener(|_this, _event, _window, cx| {
                 cx.emit(TabBarEvent::NewTabRequested);
             }))
@@ -445,6 +479,11 @@ mod tests {
         TAB_MENU_CLOSE_RIGHT, TAB_MENU_SEPARATOR, TabBar, next_actionable_index,
         prev_actionable_index,
     };
+    use crate::ui::theme;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::TestAppContext;
+    use gpui_component::theme::Theme;
 
     #[test]
     fn build_tab_menu_items_returns_correct_structure() {
@@ -520,5 +559,23 @@ mod tests {
     fn prev_actionable_stays_at_start() {
         let items = TabBar::build_tab_menu_items();
         assert_eq!(prev_actionable_index(0, &items), 0);
+    }
+
+    #[gpui::test]
+    fn tab_titles_use_mono_meta_role(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let active = TabBar::tab_title_text("query.sql".into(), true, &theme).inspect();
+        let inactive = TabBar::tab_title_text("table/users".into(), false, &theme).inspect();
+
+        for inspection in [active, inactive] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::SM));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+        }
     }
 }

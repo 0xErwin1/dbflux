@@ -1,10 +1,11 @@
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Spacing};
+use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::primitives::{Icon, Text};
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_component::input::{Input, InputState};
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
@@ -122,18 +123,8 @@ impl JsonEditorView {
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
-                    .child(
-                        svg()
-                            .path(AppIcon::CircleAlert.path())
-                            .size_4()
-                            .text_color(theme.danger),
-                    )
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.danger)
-                            .child(error_msg),
-                    ),
+                    .child(Icon::new(AppIcon::CircleAlert).size(px(16.0)).danger())
+                    .child(Text::caption(error_msg).font_size(FontSizes::XS).danger()),
             );
         }
 

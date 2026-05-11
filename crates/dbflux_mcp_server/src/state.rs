@@ -9,8 +9,9 @@ use dbflux_core::auth::DynAuthProvider;
 use dbflux_core::{
     AccessKind, AuthProfileManager, ConnectionMcpGovernance, ConnectionMcpPolicyBinding,
     ConnectionProfile, DbDriver, DriverKey, FormValues, GovernanceSettings, KeyringSecretStore,
-    ProfileManager, SecretManager, ValueRef,
+    ProfileManager, RpcServiceKind, SecretManager, ServiceConfig, ValueRef,
 };
+use dbflux_ipc::{AUTH_PROVIDER_RPC_API_CONTRACT, RpcAuthProvider};
 use dbflux_mcp::{
     McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
     builtin_policies, builtin_roles,
@@ -50,6 +51,7 @@ impl ServerState {
         let storage_runtime = open_storage_runtime()?;
         let profiles = load_profiles(&storage_runtime)?;
         let auth_profiles = load_auth_profiles(&storage_runtime)?;
+        let services = dbflux_storage::load_service_configs(&storage_runtime);
         let (runtime, governance_settings) = build_runtime(config_dir.as_deref())?;
 
         // Validate that the client_id exists as a trusted client
@@ -59,7 +61,7 @@ impl ServerState {
         let auth_profile_manager =
             AuthProfileManager::with_items(auth_profiles, None, "auth profiles");
         let driver_registry = build_driver_registry();
-        let auth_provider_registry = build_auth_provider_registry();
+        let auth_provider_registry = build_auth_provider_registry(&services);
         let driver_settings = Arc::new(load_driver_settings(&storage_runtime)?);
         let secret_manager = Arc::new(SecretManager::new(Box::new(KeyringSecretStore::new())));
 
@@ -556,6 +558,7 @@ fn str_to_db_kind(value: &str) -> Option<dbflux_core::DbKind> {
         "MongoDB" => Some(dbflux_core::DbKind::MongoDB),
         "Redis" => Some(dbflux_core::DbKind::Redis),
         "DynamoDB" => Some(dbflux_core::DbKind::DynamoDB),
+        "CloudWatchLogs" => Some(dbflux_core::DbKind::CloudWatchLogs),
         _ => None,
     }
 }
@@ -569,6 +572,7 @@ fn default_db_config_for_kind(kind: dbflux_core::DbKind) -> dbflux_core::DbConfi
         dbflux_core::DbKind::MongoDB => dbflux_core::DbConfig::default_mongodb(),
         dbflux_core::DbKind::Redis => dbflux_core::DbConfig::default_redis(),
         dbflux_core::DbKind::DynamoDB => dbflux_core::DbConfig::default_dynamodb(),
+        dbflux_core::DbKind::CloudWatchLogs => dbflux_core::DbConfig::default_cloudwatch_logs(),
     }
 }
 
@@ -820,7 +824,9 @@ fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
     registry
 }
 
-fn build_auth_provider_registry() -> HashMap<String, Arc<dyn DynAuthProvider>> {
+fn build_auth_provider_registry(
+    services: &[ServiceConfig],
+) -> HashMap<String, Arc<dyn DynAuthProvider>> {
     #[allow(unused_mut)]
     let mut registry: HashMap<String, Arc<dyn DynAuthProvider>> = HashMap::new();
 
@@ -841,5 +847,505 @@ fn build_auth_provider_registry() -> HashMap<String, Arc<dyn DynAuthProvider>> {
         );
     }
 
+    load_external_auth_providers(&mut registry, services);
+
     registry
+}
+
+fn load_external_auth_providers(
+    registry: &mut HashMap<String, Arc<dyn DynAuthProvider>>,
+    services: &[ServiceConfig],
+) {
+    for service in services {
+        if !service.enabled {
+            continue;
+        }
+
+        if service.kind != RpcServiceKind::AuthProvider {
+            continue;
+        }
+
+        if let Err(message) = validate_auth_provider_contract(service) {
+            log::warn!(
+                "Skipping RPC auth-provider service '{}': {}",
+                service.socket_id,
+                message
+            );
+            continue;
+        }
+
+        let launch = match RpcAuthProvider::build_launch_config(
+            &service.socket_id,
+            service.command.as_deref(),
+            &service.args,
+            &service.env,
+            service.startup_timeout_ms,
+        ) {
+            Ok(launch) => launch,
+            Err(error) => {
+                log::warn!(
+                    "Skipping RPC auth-provider service '{}': {}",
+                    service.socket_id,
+                    error
+                );
+                continue;
+            }
+        };
+
+        let provider = match RpcAuthProvider::probe(&service.socket_id, launch) {
+            Ok(provider) => Arc::new(provider) as Arc<dyn DynAuthProvider>,
+            Err(error) => {
+                log::warn!(
+                    "Skipping RPC auth-provider service '{}': {}",
+                    service.socket_id,
+                    error
+                );
+                continue;
+            }
+        };
+
+        let provider_id = provider.provider_id().to_string();
+        if registry.contains_key(&provider_id) {
+            log::warn!(
+                "Skipping RPC auth-provider service '{}': provider id '{}' already exists",
+                service.socket_id,
+                provider_id
+            );
+            continue;
+        }
+
+        registry.insert(provider_id, provider);
+    }
+}
+
+fn validate_auth_provider_contract(service: &ServiceConfig) -> Result<(), String> {
+    let contract = service.resolved_api_contract();
+
+    if contract.family != "auth_provider_rpc" {
+        return Err(format!(
+            "auth-provider service declares incompatible RPC family '{}'",
+            contract.family
+        ));
+    }
+
+    if contract.major != AUTH_PROVIDER_RPC_API_CONTRACT.version.major {
+        return Err(format!(
+            "auth-provider service declares incompatible RPC major version {}",
+            contract.major
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use dbflux_core::auth::{AuthProfile, AuthSessionState, UrlCallback};
+    use dbflux_core::secrecy::ExposeSecret;
+    use dbflux_storage::repositories::services::ServiceDto;
+    use dbflux_test_support::{
+        FakeAuthProviderRpcConfig, FakeAuthProviderRpcServer, FakeAuthRpcResult,
+    };
+
+    fn temp_runtime() -> (tempfile::TempDir, StorageRuntime) {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime = StorageRuntime::for_path(temp_dir.path().join("dbflux.db")).expect("runtime");
+        (temp_dir, runtime)
+    }
+
+    fn insert_auth_provider_service(runtime: &StorageRuntime, socket_id: &str) {
+        let repo = runtime.services();
+
+        repo.insert(&ServiceDto {
+            socket_id: socket_id.to_string(),
+            enabled: true,
+            command: None,
+            startup_timeout_ms: None,
+            service_kind: "auth_provider".to_string(),
+            api_family: Some("auth_provider_rpc".to_string()),
+            api_major: Some(1),
+            api_minor: Some(0),
+            created_at: String::new(),
+            updated_at: String::new(),
+        })
+        .expect("insert service");
+    }
+
+    #[tokio::test]
+    async fn build_auth_provider_registry_loads_persisted_external_provider() {
+        let (_temp_dir, runtime) = temp_runtime();
+        insert_auth_provider_service(&runtime, "mcp-auth");
+
+        let profile = AuthProfile::new("rpc profile", "rpc-auth", HashMap::new());
+        let profile_id = profile.id;
+
+        let mut credentials = dbflux_ipc::ResolvedCredentialsDto {
+            fields: HashMap::new(),
+            secret_fields: HashMap::new(),
+        };
+        credentials
+            .fields
+            .insert("region".to_string(), "us-east-1".to_string());
+        credentials
+            .secret_fields
+            .insert("token".to_string(), "secret-token".to_string());
+
+        let server = FakeAuthProviderRpcServer::start(FakeAuthProviderRpcConfig {
+            socket_id: "mcp-auth".to_string(),
+            provider_id: "rpc-auth".to_string(),
+            display_name: "RPC Auth".to_string(),
+            form_definition: dbflux_core::AuthFormDef { tabs: vec![] },
+            capabilities: dbflux_core::auth::AuthProviderCapabilities {
+                login: dbflux_core::auth::AuthProviderLoginCapabilities {
+                    supported: true,
+                    verification_url_progress: true,
+                },
+            },
+            supported_versions: dbflux_ipc::auth_provider_rpc_supported_versions().to_vec(),
+            expected_connections: 5,
+            validate_session: FakeAuthRpcResult::Ok(AuthSessionState::Valid { expires_at: None }),
+            validate_session_sequence: Vec::new(),
+            login_progress: Some(Some("https://verify.example".to_string())),
+            login: FakeAuthRpcResult::Ok(dbflux_ipc::AuthSessionDto {
+                provider_id: "rpc-auth".to_string(),
+                profile_id,
+                expires_at: None,
+                session_data: None,
+            }),
+            resolve_credentials: FakeAuthRpcResult::Ok(credentials),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
+                retriable: false,
+            }),
+            expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
+                .ok()
+                .filter(|token| !token.is_empty()),
+        })
+        .expect("start fake auth provider server");
+
+        let direct_probe = dbflux_ipc::RpcAuthProvider::probe("mcp-auth", None)
+            .expect("direct probe should succeed before registry build");
+        assert_eq!(direct_probe.provider_id(), "rpc-auth");
+
+        let services = dbflux_storage::load_service_configs(&runtime);
+        let registry = build_auth_provider_registry(&services);
+        let provider = registry.get("rpc-auth").expect("registered provider");
+
+        let state = provider
+            .validate_session(&profile)
+            .await
+            .expect("validate session");
+        assert!(matches!(state, AuthSessionState::Valid { .. }));
+
+        let callback_url = Arc::new(std::sync::Mutex::new(None));
+        let callback_url_for_login = callback_url.clone();
+        let session = provider
+            .login(
+                &profile,
+                Box::new(move |url| {
+                    *callback_url_for_login.lock().expect("callback lock") = url;
+                }) as UrlCallback,
+            )
+            .await
+            .expect("login");
+
+        assert_eq!(session.provider_id, "rpc-auth");
+        assert_eq!(
+            callback_url.lock().expect("callback lock").as_deref(),
+            Some("https://verify.example")
+        );
+
+        let resolved = provider
+            .resolve_credentials(&profile)
+            .await
+            .expect("resolve credentials");
+        assert_eq!(
+            resolved.fields.get("region").map(String::as_str),
+            Some("us-east-1")
+        );
+        assert_eq!(
+            resolved
+                .secret_fields
+                .get("token")
+                .map(|value| value.expose_secret()),
+            Some("secret-token")
+        );
+
+        server.wait().expect("fake server join");
+    }
+
+    #[test]
+    fn build_auth_provider_registry_skips_incompatible_persisted_service() {
+        let mut services = vec![ServiceConfig {
+            socket_id: "bad-auth".to_string(),
+            enabled: true,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            startup_timeout_ms: None,
+            kind: RpcServiceKind::AuthProvider,
+            api_contract: Some(dbflux_core::ServiceRpcApiContract::new("driver_rpc", 1, 1)),
+        }];
+
+        let registry = build_auth_provider_registry(&services);
+        assert!(registry.get("bad-auth").is_none());
+
+        services[0].api_contract = Some(dbflux_core::ServiceRpcApiContract::new(
+            "auth_provider_rpc",
+            2,
+            0,
+        ));
+
+        let registry = build_auth_provider_registry(&services);
+        assert!(registry.get("bad-auth").is_none());
+    }
+
+    #[tokio::test]
+    async fn rpc_auth_provider_login_without_progress_reports_none_callback() {
+        let server = FakeAuthProviderRpcServer::start(FakeAuthProviderRpcConfig {
+            socket_id: "no-progress-auth".to_string(),
+            provider_id: "rpc-auth".to_string(),
+            display_name: "RPC Auth".to_string(),
+            form_definition: dbflux_core::AuthFormDef { tabs: vec![] },
+            capabilities: dbflux_core::auth::AuthProviderCapabilities {
+                login: dbflux_core::auth::AuthProviderLoginCapabilities {
+                    supported: true,
+                    verification_url_progress: false,
+                },
+            },
+            supported_versions: dbflux_ipc::auth_provider_rpc_supported_versions().to_vec(),
+            expected_connections: 2,
+            validate_session: FakeAuthRpcResult::Ok(AuthSessionState::LoginRequired),
+            validate_session_sequence: Vec::new(),
+            login_progress: None,
+            login: FakeAuthRpcResult::Ok(dbflux_ipc::AuthSessionDto {
+                provider_id: "rpc-auth".to_string(),
+                profile_id: uuid::Uuid::nil(),
+                expires_at: None,
+                session_data: None,
+            }),
+            resolve_credentials: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "unused".to_string(),
+                retriable: false,
+            }),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
+                retriable: false,
+            }),
+            expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
+                .ok()
+                .filter(|token| !token.is_empty()),
+        })
+        .expect("start fake auth provider server");
+
+        let provider = dbflux_ipc::RpcAuthProvider::probe("no-progress-auth", None)
+            .expect("probe provider without progress url");
+        let profile = AuthProfile::new("rpc profile", "rpc-auth", HashMap::new());
+
+        let callback_url = Arc::new(std::sync::Mutex::new(Some("unexpected".to_string())));
+        let callback_url_for_login = callback_url.clone();
+
+        provider
+            .login(
+                &profile,
+                Box::new(move |url| {
+                    *callback_url_for_login.lock().expect("callback lock") = url;
+                }) as UrlCallback,
+            )
+            .await
+            .expect("login without progress");
+
+        assert!(callback_url.lock().expect("callback lock").is_none());
+        server.wait().expect("fake server join");
+    }
+
+    #[tokio::test]
+    async fn rpc_auth_provider_login_refreshes_session_after_successful_generic_flow() {
+        let profile = AuthProfile::new("rpc profile", "rpc-auth", HashMap::new());
+        let profile_id = profile.id;
+
+        let server = FakeAuthProviderRpcServer::start(FakeAuthProviderRpcConfig {
+            socket_id: "refreshing-auth".to_string(),
+            provider_id: "rpc-auth".to_string(),
+            display_name: "RPC Auth".to_string(),
+            form_definition: dbflux_core::AuthFormDef { tabs: vec![] },
+            capabilities: dbflux_core::auth::AuthProviderCapabilities {
+                login: dbflux_core::auth::AuthProviderLoginCapabilities {
+                    supported: true,
+                    verification_url_progress: true,
+                },
+            },
+            supported_versions: dbflux_ipc::auth_provider_rpc_supported_versions().to_vec(),
+            expected_connections: 4,
+            validate_session: FakeAuthRpcResult::Ok(AuthSessionState::Valid { expires_at: None }),
+            validate_session_sequence: vec![
+                FakeAuthRpcResult::Ok(AuthSessionState::LoginRequired),
+                FakeAuthRpcResult::Ok(AuthSessionState::Valid { expires_at: None }),
+            ],
+            login_progress: Some(Some("https://verify.example/device".to_string())),
+            login: FakeAuthRpcResult::Ok(dbflux_ipc::AuthSessionDto {
+                provider_id: "rpc-auth".to_string(),
+                profile_id,
+                expires_at: None,
+                session_data: None,
+            }),
+            resolve_credentials: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "unused".to_string(),
+                retriable: false,
+            }),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
+                retriable: false,
+            }),
+            expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
+                .ok()
+                .filter(|token| !token.is_empty()),
+        })
+        .expect("start refreshing fake auth provider server");
+
+        let provider = dbflux_ipc::RpcAuthProvider::probe("refreshing-auth", None)
+            .expect("probe provider with login capability");
+
+        let initial_state = provider
+            .validate_session(&profile)
+            .await
+            .expect("initial validate_session");
+        assert!(matches!(initial_state, AuthSessionState::LoginRequired));
+
+        let callback_url = Arc::new(std::sync::Mutex::new(None));
+        let callback_url_for_login = callback_url.clone();
+
+        let session = provider
+            .login(
+                &profile,
+                Box::new(move |url| {
+                    *callback_url_for_login.lock().expect("callback lock") = url;
+                }) as UrlCallback,
+            )
+            .await
+            .expect("generic login should succeed");
+
+        assert_eq!(session.provider_id, "rpc-auth");
+        assert_eq!(session.profile_id, profile_id);
+        assert_eq!(
+            callback_url.lock().expect("callback lock").as_deref(),
+            Some("https://verify.example/device")
+        );
+
+        let refreshed_state = provider
+            .validate_session(&profile)
+            .await
+            .expect("refreshed validate_session");
+        assert!(matches!(
+            refreshed_state,
+            AuthSessionState::Valid { expires_at: None }
+        ));
+
+        server.wait().expect("fake server join");
+    }
+
+    #[test]
+    fn build_auth_provider_registry_skips_version_mismatch_probe_failure() {
+        let (_temp_dir, runtime) = temp_runtime();
+        insert_auth_provider_service(&runtime, "version-mismatch-auth");
+
+        let server = FakeAuthProviderRpcServer::start(FakeAuthProviderRpcConfig {
+            socket_id: "version-mismatch-auth".to_string(),
+            provider_id: "rpc-auth".to_string(),
+            display_name: "RPC Auth".to_string(),
+            form_definition: dbflux_core::AuthFormDef { tabs: vec![] },
+            capabilities: dbflux_core::auth::AuthProviderCapabilities::default(),
+            supported_versions: vec![dbflux_ipc::ProtocolVersion::new(2, 0)],
+            expected_connections: 1,
+            validate_session: FakeAuthRpcResult::Ok(AuthSessionState::LoginRequired),
+            validate_session_sequence: Vec::new(),
+            login_progress: None,
+            login: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "unused".to_string(),
+                retriable: false,
+            }),
+            resolve_credentials: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "unused".to_string(),
+                retriable: false,
+            }),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
+                retriable: false,
+            }),
+            expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
+                .ok()
+                .filter(|token| !token.is_empty()),
+        })
+        .expect("start mismatch fake auth provider server");
+
+        let services = dbflux_storage::load_service_configs(&runtime);
+        let registry = build_auth_provider_registry(&services);
+
+        assert!(registry.get("rpc-auth").is_none());
+        server.wait().expect("fake server join");
+    }
+
+    #[test]
+    fn build_auth_provider_registry_accepts_legacy_v1_0_auth_provider_probe() {
+        let (_temp_dir, runtime) = temp_runtime();
+        insert_auth_provider_service(&runtime, "legacy-auth");
+
+        let server = FakeAuthProviderRpcServer::start(FakeAuthProviderRpcConfig {
+            socket_id: "legacy-auth".to_string(),
+            provider_id: "legacy-rpc-auth".to_string(),
+            display_name: "Legacy RPC Auth".to_string(),
+            form_definition: dbflux_core::AuthFormDef { tabs: vec![] },
+            capabilities: dbflux_core::auth::AuthProviderCapabilities::default(),
+            supported_versions: vec![dbflux_ipc::ProtocolVersion::new(1, 0)],
+            expected_connections: 1,
+            validate_session: FakeAuthRpcResult::Ok(AuthSessionState::LoginRequired),
+            validate_session_sequence: Vec::new(),
+            login_progress: None,
+            login: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "unused".to_string(),
+                retriable: false,
+            }),
+            resolve_credentials: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code: dbflux_ipc::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "unused".to_string(),
+                retriable: false,
+            }),
+            fetch_dynamic_options: FakeAuthRpcResult::Err(dbflux_ipc::AuthProviderRpcError {
+                code:
+                    dbflux_ipc::auth_provider_protocol::AuthProviderRpcErrorCode::UnsupportedMethod,
+                message: "fetch_dynamic_options not configured".to_string(),
+                retriable: false,
+            }),
+            expected_auth_token: std::env::var(dbflux_ipc::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV)
+                .ok()
+                .filter(|token| !token.is_empty()),
+        })
+        .expect("start legacy fake auth provider server");
+
+        let services = dbflux_storage::load_service_configs(&runtime);
+        let registry = build_auth_provider_registry(&services);
+
+        let provider = registry
+            .get("legacy-rpc-auth")
+            .expect("legacy provider must register");
+        assert_eq!(provider.provider_id(), "legacy-rpc-auth");
+        assert!(!provider.capabilities().login.supported);
+
+        server.wait().expect("fake server join");
+    }
 }

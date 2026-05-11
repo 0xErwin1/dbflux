@@ -13,15 +13,21 @@ pub(crate) mod tree_store;
 
 use crate::DbError;
 
+#[derive(Debug, Clone)]
+pub struct TreeLoadResult {
+    pub tree: ConnectionTree,
+    pub recovered_from_error: bool,
+}
+
 /// Backend for persisting a connection tree.
 pub trait TreeStore {
     /// Loads the connection tree from the store.
-    fn load(&self) -> Result<ConnectionTree, DbError>;
+    fn load(&self) -> Result<TreeLoadResult, DbError>;
     /// Saves the connection tree to the store.
     fn save(&self, tree: &ConnectionTree) -> Result<(), DbError>;
 }
 
-pub use context::ExecutionContext;
+pub use context::{ExecutionContext, ExecutionSourceContext};
 pub use hook::{
     ConnectionHook, ConnectionHookBindings, ConnectionHooks, DetachedProcessHandle,
     DetachedProcessReceiver, DetachedProcessSender, HookContext, HookExecution, HookExecutionMode,
@@ -33,16 +39,20 @@ pub use hook::{
 pub use item_manager::{AuthProfileManager, Identifiable, ItemManager};
 pub use manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
-    ConnectionManager, ConnectionResolutionError, DatabaseConnection, FetchDatabaseSchemaParams,
+    ConnectionManager, ConnectionResolutionError, DatabaseConnection,
+    FetchCollectionChildrenParams, FetchCollectionChildrenResult, FetchDatabaseSchemaParams,
     FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
     FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaTypesParams,
     FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
-    OwnedCacheEntry, PendingOperation, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
-    SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
+    OwnedCacheEntry, PendingOperation, PrepareConnectError, RedisKeyCache, RedisKeyCacheEntry,
+    ResolvedProxy, SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
 };
+#[allow(deprecated)]
 pub use profile::{
     ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionProfile, DbConfig, DbKind,
-    SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
+    SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslInfo, SslMode, TestConnectionResult,
+    ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
+    ssl_mode_requires_root_cert,
 };
 pub use profile_manager::ProfileManager;
 pub use proxy::{ProxyAuth, ProxyKind, ProxyProfile, host_matches_no_proxy};

@@ -20,17 +20,20 @@ pub use access::{AccessHandle, AccessKind, AccessManager};
 
 pub use auth::{
     AuthFormDef, AuthProfile, AuthProfileSummary, AuthProvider, AuthSession, AuthSessionState,
-    DynAuthProvider, ImportableProfile, ResolvedCredentials,
+    DynAuthProvider, FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse,
+    ImportableProfile, ResolvedCredentials,
 };
 
 pub use config::{
-    AppConfig, AppConfigStore, DangerousAction, DriverKey, EffectiveSettings, GeneralSettings,
-    GlobalOverrides, GovernanceSettings, PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting,
-    ScriptEntry, ScriptsDirectory, ServiceConfig, StartupFocus, ThemeSetting, ToolPolicyConfig,
-    TrustedClientConfig, all_script_extensions, driver_maps_differ, filter_entries,
-    hook_script_path, is_openable_script, migrate_app_config,
+    AppConfig, AppConfigStore, AppConfigWarning, AppStyle, DangerousAction, DriverKey,
+    EXTERNAL_SERVICES_CONFIG_KEY, EffectiveSettings, GeneralSettings, GlobalOverrides,
+    GovernanceSettings, LoadedAppConfig, PolicyRoleConfig, RefreshPolicy, RefreshPolicySetting,
+    RpcServiceKind, ScriptEntry, ScriptsDirectory, ServiceConfig, ServiceRpcApiContract,
+    StartupFocus, ThemeSetting, ToolPolicyConfig, TrustedClientConfig, all_script_extensions,
+    driver_maps_differ, filter_entries, hook_script_path, is_openable_script, migrate_app_config,
 };
 
+#[allow(deprecated)]
 pub use connection::{
     AuthProfileManager, CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult,
     ConnectedProfile, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionManager,
@@ -38,28 +41,32 @@ pub use connection::{
     ConnectionResolutionError, ConnectionTree, ConnectionTreeManager, ConnectionTreeNode,
     ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig, DbKind,
     DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender, ExecutionContext,
+    ExecutionSourceContext, FetchCollectionChildrenParams, FetchCollectionChildrenResult,
     FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
     FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
     FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
     FetchTableDetailsResult, HookContext, HookExecution, HookExecutionContext, HookExecutionMode,
     HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
     Identifiable, ItemManager, LuaCapabilities, OutputEvent, OutputReceiver, OutputSender,
-    OutputStreamKind, OwnedCacheEntry, PendingOperation, ProcessExecutionError, ProcessExecutor,
-    ProfileManager, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache,
-    RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod,
-    SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslMode, SwitchDatabaseParams,
-    SwitchDatabaseResult, TreeStore, detached_process_channel, execute_streaming_process,
-    host_matches_no_proxy, output_channel,
+    OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
+    ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
+    ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
+    ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo,
+    SslMode, SwitchDatabaseParams, SwitchDatabaseResult, TestConnectionResult, TreeLoadResult,
+    TreeStore, detached_process_channel, execute_streaming_process, host_matches_no_proxy,
+    output_channel, ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
+    ssl_mode_requires_root_cert,
 };
 
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
     ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,
-    DocumentConnection, ErrorLocation, FormattedError, KeyValueApi, KeyValueConnection,
-    NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter, RelationalConnection,
-    SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind, ShutdownCoordinator,
-    ShutdownPhase, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
-    Value, sanitize_uri,
+    DocumentConnection, ErrorLocation, EventStreamTarget, FormattedError, KeyValueApi,
+    KeyValueConnection, NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter,
+    RelationalConnection, SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy,
+    SchemaObjectKind, ShutdownCoordinator, ShutdownPhase, SourceContextSpec, SourceQueryMode,
+    TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value,
+    sanitize_uri,
 };
 
 pub use data::{
@@ -75,13 +82,13 @@ pub use data::{
 };
 
 pub use driver::{
-    DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, DriverMetadataBuilder, ExecutionClassification, FormFieldDef,
-    FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel, MONGODB_FORM,
-    MYSQL_FORM, MutationCapabilities, OperationClassifier, POSTGRES_FORM, PaginationStyle,
-    QueryCapabilities, QueryLanguage, REDIS_FORM, SQLITE_FORM, SelectOption, SyntaxInfo,
-    TransactionCapabilities, WhereOperator, field_file_path, field_password, field_use_uri,
-    ssh_tab,
+    CLOUDWATCH_FORM, DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DeploymentClass,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DriverMetadataBuilder,
+    ExecutionClassification, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, Icon,
+    IsolationLevel, MONGODB_FORM, MYSQL_FORM, MutationCapabilities, OperationClassifier,
+    POSTGRES_FORM, PaginationStyle, QueryCapabilities, QueryLanguage, REDIS_FORM, RefreshTrigger,
+    SQLITE_FORM, SelectOption, SslCertFields, SslModeOption, SyntaxInfo, TransactionCapabilities,
+    WhereOperator, field_file_path, field_password, field_use_uri, ssh_tab,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};
@@ -104,17 +111,21 @@ pub use query::{
 
 pub use schema::node_id as schema_node_id;
 pub use schema::{
-    CollectionIndexInfo, CollectionInfo, ColumnFamilyInfo, ColumnInfo, ConstraintInfo,
-    ConstraintKind, ContainerInfo, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo,
-    DbSchemaInfo, DocumentSchema, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, GraphInfo,
+    CollectionChildInfo, CollectionChildrenCache, CollectionChildrenPage,
+    CollectionChildrenRequest, CollectionIndexInfo, CollectionInfo, CollectionPresentation,
+    ColumnDiff, ColumnFamilyInfo, ColumnInfo, ColumnSnapshot, ConstraintInfo, ConstraintKind,
+    ContainerInfo, CustomTypeInfo, CustomTypeKind, DataStructure, DatabaseInfo, DbSchemaInfo,
+    DocumentSchema, DriftOutcome, FieldInfo, ForeignKeyBuilder, ForeignKeyInfo, GraphInfo,
     GraphSchema, IndexBuilder, IndexData, IndexDirection, IndexInfo, KeyInfo, KeySpaceInfo,
     KeyValueSchema, MeasurementInfo, MultiModelCapabilities, MultiModelSchema, NodeLabelInfo,
-    ParseSchemaNodeIdError, PropertyInfo, RelationalSchema, RelationshipTypeInfo,
-    RetentionPolicyInfo, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
-    SchemaIndexInfo, SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SearchIndexInfo,
-    SearchMappingInfo, SearchSchema, TableInfo, TimeSeriesFieldInfo, TimeSeriesSchema,
-    VectorCollectionInfo, VectorMetadataField, VectorMetric, VectorSchema, ViewInfo,
-    WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
+    ParseSchemaNodeIdError, PropertyInfo, QueryTableRef, RelationKind, RelationRef,
+    RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo, SchemaChange, SchemaDiff,
+    SchemaDriftDetected, SchemaFingerprint, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexBuilder, SchemaIndexInfo, SchemaNodeId, SchemaNodeKind, SchemaSnapshot,
+    SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo, TimeSeriesFieldInfo,
+    TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric, VectorSchema,
+    ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema, check_drift_sync,
+    check_schema_drift, diff_table_info, extract_referenced_tables,
 };
 
 pub use sql::{

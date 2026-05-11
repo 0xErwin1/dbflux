@@ -1,4 +1,36 @@
 use super::*;
+use crate::ui::icons::AppIcon;
+use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
+use dbflux_components::typography::MonoLabel;
+use gpui::FontWeight;
+
+fn sidebar_tree_label(
+    label: SharedString,
+    node_kind: SchemaNodeKind,
+    is_active: bool,
+    is_active_database: bool,
+    color: Hsla,
+) -> MonoLabel {
+    let weight = if (node_kind == SchemaNodeKind::Profile && is_active) || is_active_database {
+        FontWeight::SEMIBOLD
+    } else if matches!(
+        node_kind,
+        SchemaNodeKind::TablesFolder
+            | SchemaNodeKind::ViewsFolder
+            | SchemaNodeKind::TypesFolder
+            | SchemaNodeKind::ColumnsFolder
+            | SchemaNodeKind::IndexesFolder
+            | SchemaNodeKind::ForeignKeysFolder
+            | SchemaNodeKind::ConstraintsFolder
+            | SchemaNodeKind::DependentsFolder
+    ) {
+        FontWeight::MEDIUM
+    } else {
+        FontWeight::NORMAL
+    };
+
+    MonoLabel::new(label).font_weight(weight).color(color)
+}
 
 pub(super) struct TreeRenderParams {
     pub connections: Vec<Uuid>,
@@ -23,6 +55,70 @@ pub(super) struct TreeRenderParams {
     pub color_orange: Hsla,
     pub color_schema: Hsla,
     pub color_green: Hsla,
+    /// Item ID of the currently hovered tree row. Used to show the ⋯ button
+    /// only while a row is hovered.
+    pub hovered_item_id: Option<SharedString>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidebar_tree_label;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use dbflux_core::SchemaNodeKind;
+    use gpui::FontWeight;
+    use gpui::SharedString;
+
+    #[test]
+    fn sidebar_tree_items_keep_mono_family_and_hierarchy_weights() {
+        let leaf = sidebar_tree_label(
+            SharedString::from("users"),
+            SchemaNodeKind::Table,
+            false,
+            false,
+            gpui::blue(),
+        )
+        .inspect();
+
+        let folder = sidebar_tree_label(
+            SharedString::from("Tables"),
+            SchemaNodeKind::TablesFolder,
+            false,
+            false,
+            gpui::yellow(),
+        )
+        .inspect();
+
+        let active_profile = sidebar_tree_label(
+            SharedString::from("prod-postgres"),
+            SchemaNodeKind::Profile,
+            true,
+            false,
+            gpui::red(),
+        )
+        .inspect();
+
+        let active_database = sidebar_tree_label(
+            SharedString::from("analytics"),
+            SchemaNodeKind::Database,
+            false,
+            true,
+            gpui::green(),
+        )
+        .inspect();
+
+        for inspection in [leaf, folder, active_profile, active_database] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::BASE));
+            assert!(inspection.has_custom_color_override);
+        }
+
+        assert_eq!(leaf.weight_override, Some(FontWeight::NORMAL));
+        assert_eq!(folder.weight_override, Some(FontWeight::MEDIUM));
+        assert_eq!(active_profile.weight_override, Some(FontWeight::SEMIBOLD));
+        assert_eq!(active_database.weight_override, Some(FontWeight::SEMIBOLD));
+    }
 }
 
 pub(super) fn render_tree_item(
@@ -35,6 +131,38 @@ pub(super) fn render_tree_item(
     let item = entry.item();
     let item_id = item.id.clone();
     let depth = entry.depth();
+
+    // Loading placeholder rows. Two encodings exist:
+    //   - new pattern: id ends with `_loading`
+    //   - legacy SchemaNodeId variants whose pipe-encoded form starts with the
+    //     `LD|`, `YL|`, `XL|`, or `KL|` prefix (database/types/schema-indexes/
+    //     schema-fks loading folders)
+    // Render either case with `AppIcon::Loader` for visual consistency.
+    let is_loading_row = item_id.ends_with("_loading")
+        || item_id.starts_with("LD|")
+        || item_id.starts_with("YL|")
+        || item_id.starts_with("XL|")
+        || item_id.starts_with("KL|");
+    if is_loading_row {
+        let theme = cx.theme();
+        let indent_px = depth as f32 * 14.0_f32;
+        let _ = params;
+        return ListItem::new(ix).h(Heights::ROW).child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .pl(px(indent_px + 14.0 + 4.0)) // align with label start
+                .py(Spacing::XS)
+                .child(
+                    Icon::new(AppIcon::Loader)
+                        .size(px(12.0))
+                        .color(theme.muted_foreground),
+                )
+                .child(Text::caption("Loading…").color(theme.muted_foreground)),
+        );
+    }
 
     let node_kind = parse_node_kind(&item_id);
     let parsed_id = parse_node_id(&item_id);
@@ -87,10 +215,12 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::CustomType
                 | SchemaNodeKind::ScriptsFolder
                 | SchemaNodeKind::Collection
+                | SchemaNodeKind::CollectionChild
                 | SchemaNodeKind::CollectionsFolder
                 | SchemaNodeKind::DatabaseIndexesFolder
                 | SchemaNodeKind::CollectionFieldsFolder
                 | SchemaNodeKind::CollectionIndexesFolder
+                | SchemaNodeKind::DependentsFolder
         ));
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
@@ -263,12 +393,7 @@ pub(super) fn render_tree_item(
                                         this.handle_chevron_click(&item_id_for_chevron, cx);
                                     });
                                 })
-                                .child(
-                                    svg()
-                                        .path(icon.path())
-                                        .size_3p5()
-                                        .text_color(theme.muted_foreground),
-                                )
+                                .child(Icon::new(icon).size(px(14.0)).muted())
                         }),
                 )
                 .child(
@@ -278,13 +403,28 @@ pub(super) fn render_tree_item(
                         .flex()
                         .justify_center()
                         .when_some(node_icon, |el, icon| {
-                            el.child(svg().path(icon.path()).size_4().text_color(icon_color))
+                            el.child(Icon::new(icon).small().color(icon_color))
                         })
                         .when(node_icon.is_none() && !unicode_icon.is_empty(), |el| {
-                            el.text_size(FontSizes::SM)
-                                .text_color(icon_color)
-                                .child(unicode_icon)
-                        }),
+                            el.child(
+                                Text::body(unicode_icon)
+                                    .font_size(FontSizes::SM)
+                                    .color(icon_color),
+                            )
+                        })
+                        .when(
+                            node_icon.is_none()
+                                && unicode_icon.is_empty()
+                                && node_kind == SchemaNodeKind::Profile,
+                            |el| {
+                                let dot_variant = if is_connected {
+                                    StatusDotVariant::Success
+                                } else {
+                                    StatusDotVariant::Idle
+                                };
+                                el.child(StatusDot::new(dot_variant))
+                            },
+                        ),
                 )
                 .when(is_being_renamed, |el| {
                     let rename_input = params.rename_input.clone();
@@ -303,32 +443,15 @@ pub(super) fn render_tree_item(
                     )
                 })
                 .when(!is_being_renamed, |el| {
-                    el.child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .text_size(FontSizes::BASE)
-                            .text_color(label_color)
-                            .when(node_kind == SchemaNodeKind::Profile && is_active, |d| {
-                                d.font_weight(FontWeight::SEMIBOLD)
-                            })
-                            .when(is_active_database, |d| d.font_weight(FontWeight::SEMIBOLD))
-                            .when(
-                                matches!(
-                                    node_kind,
-                                    SchemaNodeKind::TablesFolder
-                                        | SchemaNodeKind::ViewsFolder
-                                        | SchemaNodeKind::TypesFolder
-                                        | SchemaNodeKind::ColumnsFolder
-                                        | SchemaNodeKind::IndexesFolder
-                                        | SchemaNodeKind::ForeignKeysFolder
-                                        | SchemaNodeKind::ConstraintsFolder
-                                ),
-                                |d| d.font_weight(FontWeight::MEDIUM),
-                            )
-                            .child(item.label.clone()),
-                    )
+                    el.child(div().flex_1().overflow_hidden().text_ellipsis().child(
+                        sidebar_tree_label(
+                            item.label.clone(),
+                            node_kind,
+                            is_active,
+                            is_active_database,
+                            label_color,
+                        ),
+                    ))
                 })
                 .when(
                     matches!(
@@ -761,6 +884,17 @@ pub(super) fn render_tree_item(
                         let item_id_for_menu = item_id.clone();
                         let hover_bg = theme.secondary;
 
+                        // Render the ⋯ button as fully transparent when the row is not hovered.
+                        // The button still occupies its layout slot so no reflow happens on hover.
+                        // Visibility is driven by `params.hovered_item_id` which the sidebar
+                        // entity updates on `on_mouse_enter` for the list item.
+                        let is_row_hovered = params
+                            .hovered_item_id
+                            .as_ref()
+                            .is_some_and(|id| id == &item_id_for_menu);
+
+                        let btn_opacity: f32 = if is_row_hovered { 1.0 } else { 0.0 };
+
                         el.child(
                             div()
                                 .id(SharedString::from(format!("menu-btn-{}", item_id_for_menu)))
@@ -769,6 +903,7 @@ pub(super) fn render_tree_item(
                                 .px_1()
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
+                                .opacity(btn_opacity)
                                 .hover(move |d| d.bg(hover_bg))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
@@ -823,6 +958,20 @@ pub(super) fn render_tree_item(
                 ),
         );
 
+    // Track which row is hovered so the ⋯ button opacity can be driven by
+    // `hovered_item_id` on the next render. Clearing on mouse-leave is handled
+    // by the sidebar container's `on_mouse_leave` in render.rs.
+    let sidebar_for_hover = sidebar_entity.clone();
+    let item_id_for_hover = item_id.clone();
+    list_item = list_item.on_mouse_enter(move |_, _, cx| {
+        sidebar_for_hover.update(cx, |this, cx| {
+            if this.hovered_item_id.as_ref() != Some(&item_id_for_hover) {
+                this.hovered_item_id = Some(item_id_for_hover.clone());
+                cx.notify();
+            }
+        });
+    });
+
     if node_kind.shows_pointer_cursor() {
         list_item = list_item.cursor(CursorStyle::PointingHand);
     }
@@ -853,11 +1002,10 @@ fn resolve_node_icon(
             } else {
                 theme.muted_foreground
             };
-            let unicode = if icon.is_none() {
-                if is_connected { "\u{25CF}" } else { "\u{25CB}" }
-            } else {
-                ""
-            };
+
+            // When no driver icon is set, signal that a StatusDot should render
+            // (the icon slot handles this via the `use_status_dot` branch).
+            let unicode = "";
             (icon, unicode, color)
         }
         SchemaNodeKind::Database => (Some(AppIcon::Database), "", params.color_orange),
@@ -889,6 +1037,7 @@ fn resolve_node_icon(
         SchemaNodeKind::Constraint => (Some(AppIcon::Lock), "", params.color_yellow),
         SchemaNodeKind::CollectionsFolder => (Some(AppIcon::Folder), "", params.color_teal),
         SchemaNodeKind::Collection => (Some(AppIcon::Box), "", params.color_teal),
+        SchemaNodeKind::CollectionChild => (Some(AppIcon::ScrollText), "", params.color_teal),
         SchemaNodeKind::DatabaseIndexesFolder | SchemaNodeKind::CollectionIndexesFolder => {
             (Some(AppIcon::Hash), "", params.color_purple)
         }
@@ -911,6 +1060,8 @@ fn resolve_node_icon(
                 .unwrap_or(AppIcon::ScrollText);
             (Some(icon), "", theme.muted_foreground)
         }
+        SchemaNodeKind::DependentsFolder => (Some(AppIcon::Link2), "", params.color_gray),
+        SchemaNodeKind::DependentItem => (Some(AppIcon::ExternalLink), "", theme.muted_foreground),
         _ => (None, "", theme.muted_foreground),
     }
 }
@@ -996,10 +1147,13 @@ fn resolve_label_color(
         | SchemaNodeKind::CollectionFieldsFolder
         | SchemaNodeKind::CollectionIndexesFolder => params.color_gray,
         SchemaNodeKind::Collection => params.color_teal,
+        SchemaNodeKind::CollectionChild => params.color_teal,
         SchemaNodeKind::CollectionField => params.color_blue,
         SchemaNodeKind::CollectionIndex => params.color_purple,
         SchemaNodeKind::ScriptsFolder => theme.foreground,
         SchemaNodeKind::ScriptFile => theme.foreground,
+        SchemaNodeKind::DependentsFolder => params.color_gray,
+        SchemaNodeKind::DependentItem => theme.muted_foreground,
         _ => theme.muted_foreground,
     }
 }
