@@ -5,7 +5,7 @@
 //! Uses `dbflux_tunnel_core::Tunnel` for the shared RAII lifecycle and
 //! implements `TunnelConnector` for SSH-specific forwarding logic.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -15,6 +15,96 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use dbflux_core::{DbError, SshAuthMethod, SshTunnelConfig};
 use dbflux_tunnel_core::{ForwardingConnection, Tunnel, TunnelConnector, adaptive_sleep};
 use ssh2::Session;
+use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Session passphrase vault
+// ---------------------------------------------------------------------------
+
+/// Session-scoped in-memory store for SSH key passphrases.
+///
+/// Passphrases are retained for the lifetime of the process and never
+/// written to disk, logged, or serialized.
+///
+/// # Security note
+/// Values are stored in process memory in clear text. This is intentional
+/// for a local-first client where the OS keyring may not have the passphrase
+/// (for example, newly imported keys). NEVER serialize, log, or persist the
+/// inner map. The `Debug` implementation deliberately omits all values to
+/// prevent accidental passphrase exposure in log output.
+pub struct SessionPassphraseVault {
+    inner: HashMap<Uuid, String>,
+}
+
+impl std::fmt::Debug for SessionPassphraseVault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionPassphraseVault")
+            .field("count", &self.inner.len())
+            .finish()
+    }
+}
+
+impl SessionPassphraseVault {
+    pub fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+
+    /// Retrieve the passphrase stored for `id`, if any.
+    pub fn get(&self, id: &Uuid) -> Option<&str> {
+        self.inner.get(id).map(String::as_str)
+    }
+
+    /// Store or replace the passphrase for `id`.
+    pub fn insert(&mut self, id: Uuid, passphrase: String) {
+        self.inner.insert(id, passphrase);
+    }
+
+    /// Remove the passphrase for a specific tunnel.
+    pub fn remove(&mut self, id: &Uuid) {
+        self.inner.remove(id);
+    }
+
+    /// Remove all stored passphrases.
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+}
+
+impl Default for SessionPassphraseVault {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Passphrase-required detection
+// ---------------------------------------------------------------------------
+
+/// Returns `true` when a `DbError` from `establish_session` indicates that
+/// the SSH private key file requires a passphrase that was not supplied (or
+/// that the supplied passphrase was wrong).
+///
+/// ssh2/libssh2 surfaces this as error messages containing phrases like
+/// "Unable to extract public key" or "Failed to decrypt" or "bad decrypt".
+pub fn is_passphrase_required_error(error: &DbError) -> bool {
+    is_passphrase_required_error_str(&error.to_string())
+}
+
+/// Returns `true` when a plain-string error message from a connect attempt
+/// indicates that the SSH private key requires a passphrase.
+///
+/// Use this variant when the original `DbError` has already been converted to
+/// a `String` (e.g., after `Result::map_err(|e| e.to_string())`).
+pub fn is_passphrase_required_error_str(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("unable to extract public key")
+        || lower.contains("failed to decrypt")
+        || lower.contains("bad decrypt")
+        || lower.contains("unable to open private key")
+        || lower.contains("passphrase")
+}
 
 /// An active SSH tunnel that forwards local connections to a remote host.
 ///
@@ -471,4 +561,64 @@ fn run_ssh_tunnel_loop(
     }
 
     log::info!("[SSH] Tunnel loop shutting down");
+}
+
+// ---------------------------------------------------------------------------
+// Tests — SessionPassphraseVault pure logic
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_and_get_roundtrip() {
+        let mut vault = SessionPassphraseVault::new();
+        let id = Uuid::new_v4();
+        vault.insert(id, "hunter2".to_string());
+        assert_eq!(vault.get(&id), Some("hunter2"));
+    }
+
+    #[test]
+    fn get_missing_key_returns_none() {
+        let vault = SessionPassphraseVault::new();
+        let id = Uuid::new_v4();
+        assert_eq!(vault.get(&id), None);
+    }
+
+    #[test]
+    fn clear_removes_all_entries() {
+        let mut vault = SessionPassphraseVault::new();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        vault.insert(id1, "pass1".to_string());
+        vault.insert(id2, "pass2".to_string());
+        vault.clear();
+        assert_eq!(vault.get(&id1), None);
+        assert_eq!(vault.get(&id2), None);
+    }
+
+    #[test]
+    fn remove_removes_single_entry() {
+        let mut vault = SessionPassphraseVault::new();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        vault.insert(id1, "pass1".to_string());
+        vault.insert(id2, "pass2".to_string());
+        vault.remove(&id1);
+        assert_eq!(vault.get(&id1), None);
+        assert_eq!(vault.get(&id2), Some("pass2"));
+    }
+
+    #[test]
+    fn debug_impl_does_not_expose_passphrase_values() {
+        let mut vault = SessionPassphraseVault::new();
+        vault.insert(Uuid::new_v4(), "super_secret_passphrase".to_string());
+        let debug_str = format!("{:?}", vault);
+        assert!(
+            !debug_str.contains("super_secret_passphrase"),
+            "Debug output must not expose passphrase: {debug_str}",
+        );
+        assert!(debug_str.contains("SessionPassphraseVault"));
+    }
 }

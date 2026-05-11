@@ -343,6 +343,32 @@ impl DbConfig {
         }
     }
 
+    /// Returns the SSH tunnel profile ID referenced by this config, if any.
+    pub fn ssh_tunnel_profile_id(&self) -> Option<Uuid> {
+        match self {
+            DbConfig::Postgres {
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::MySQL {
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::MongoDB {
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::Redis {
+                ssh_tunnel_profile_id,
+                ..
+            } => *ssh_tunnel_profile_id,
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::External { .. } => None,
+        }
+    }
+
     /// Whether this config has any SSH tunnel configured (inline or via profile reference).
     pub fn has_ssh_tunnel(&self) -> bool {
         match self {

@@ -544,6 +544,19 @@ impl Render for Workspace {
             .child(self.sql_preview_modal.clone())
             .child(login_modal)
             .child(sso_wizard)
+            // S8 modals — rendered as full-screen overlays using ModalShell chrome.
+            .when(self.modal_delete_connection.read(cx).is_visible(), |root| {
+                root.child(self.modal_delete_connection.clone())
+            })
+            .when(self.modal_unsaved_changes.read(cx).is_visible(), |root| {
+                root.child(self.modal_unsaved_changes.clone())
+            })
+            .when(self.modal_drop_table.read(cx).is_visible(), |root| {
+                root.child(self.modal_drop_table.clone())
+            })
+            .when(self.modal_tunnel_auth.read(cx).is_visible(), |root| {
+                root.child(self.modal_tunnel_auth.clone())
+            })
             .child(
                 div()
                     .absolute()

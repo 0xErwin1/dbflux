@@ -249,6 +249,15 @@ pub struct Workspace {
     #[cfg(feature = "mcp")]
     mcp_approvals_view: Entity<McpApprovalsView>,
 
+    /// S8 modals — rendered as full-screen overlays via `ModalShell`.
+    modal_delete_connection: Entity<crate::ui::overlays::modals::ModalDeleteConnection>,
+    modal_unsaved_changes: Entity<crate::ui::overlays::modals::ModalUnsavedChanges>,
+    modal_drop_table: Entity<crate::ui::overlays::modals::ModalDropTable>,
+    /// Item ID of the drop-table pending delete, consumed when modal confirms.
+    pending_drop_table_item_id: Option<String>,
+    /// SSH tunnel passphrase modal.
+    modal_tunnel_auth: Entity<crate::ui::overlays::modals::ModalTunnelAuth>,
+
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
     pending_sql: Option<String>,
@@ -312,6 +321,137 @@ impl Workspace {
         let login_modal = cx.new(|cx| LoginModal::new(window, cx));
         let sso_wizard = cx.new(|cx| SsoWizard::new(app_state.clone(), window, cx));
         let shutdown_overlay = cx.new(|cx| ShutdownOverlay::new(app_state.clone(), window, cx));
+
+        let modal_delete_connection =
+            cx.new(crate::ui::overlays::modals::ModalDeleteConnection::new);
+        let modal_unsaved_changes = cx.new(crate::ui::overlays::modals::ModalUnsavedChanges::new);
+        let modal_drop_table =
+            cx.new(|cx| crate::ui::overlays::modals::ModalDropTable::new(window, cx));
+        let modal_tunnel_auth =
+            cx.new(|cx| crate::ui::overlays::modals::ModalTunnelAuth::new(window, cx));
+
+        // Subscribe: ModalDeleteConnection — on Confirmed, execute the pending delete.
+        cx.subscribe(
+            &modal_delete_connection,
+            |this, _, outcome: &crate::ui::overlays::modals::DeleteConnectionOutcome, cx| {
+                use crate::ui::overlays::modals::DeleteConnectionOutcome;
+                if matches!(outcome, DeleteConnectionOutcome::Confirmed) {
+                    this.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.confirm_modal_delete(cx);
+                    });
+                } else {
+                    this.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.cancel_modal_delete(cx);
+                    });
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalDropTable — on Confirmed, execute the pending DDL drop.
+        cx.subscribe(
+            &modal_drop_table,
+            |this, _, outcome: &crate::ui::overlays::modals::DropTableOutcome, cx| {
+                use crate::ui::overlays::modals::DropTableOutcome;
+                if matches!(outcome, DropTableOutcome::Confirmed) {
+                    this.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.confirm_modal_delete(cx);
+                    });
+                } else {
+                    this.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.cancel_modal_delete(cx);
+                    });
+                }
+                this.pending_drop_table_item_id = None;
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalTunnelAuth — handle passphrase provided or cancelled.
+        cx.subscribe_in(
+            &modal_tunnel_auth,
+            window,
+            |this, _, outcome: &crate::ui::overlays::modals::TunnelAuthOutcome, _window, cx| {
+                use crate::ui::overlays::modals::TunnelAuthOutcome;
+
+                match outcome.clone() {
+                    TunnelAuthOutcome::Provided {
+                        passphrase,
+                        remember,
+                    } => {
+                        // Find the profile waiting for auth.
+                        let profile_id = this.sidebar.read(cx).pending_tunnel_auth_profile_id;
+
+                        if let Some(profile_id) = profile_id {
+                            if remember {
+                                // Cache optimistically: evicted if the connect fails again with
+                                // passphrase error (modal reopens with last_attempt_failed=true).
+                                this.app_state.update(cx, |state, _cx| {
+                                    if let Some(tunnel_id) =
+                                        state.ssh_tunnel_id_for_profile(profile_id)
+                                    {
+                                        state.cache_passphrase(tunnel_id, passphrase.clone());
+                                    }
+                                });
+                            }
+
+                            this.sidebar.update(cx, |sidebar, cx| {
+                                sidebar
+                                    .connect_to_profile_with_passphrase(profile_id, passphrase, cx);
+                            });
+                        }
+                    }
+                    TunnelAuthOutcome::Cancelled => {
+                        this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.pending_tunnel_auth_profile_id = None;
+                            cx.notify();
+                        });
+                        this.app_state.update(cx, |_state, cx| {
+                            cx.emit(AppStateChanged);
+                        });
+                    }
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalUnsavedChanges — handle save / discard / cancel outcomes.
+        cx.subscribe_in(
+            &modal_unsaved_changes,
+            window,
+            |this, _, outcome: &crate::ui::overlays::modals::UnsavedChangesOutcome, window, cx| {
+                use crate::ui::overlays::modals::UnsavedChangesOutcome;
+                match outcome {
+                    UnsavedChangesOutcome::DiscardAll => {
+                        // Close all tabs without saving.
+                        let ids: Vec<_> = this
+                            .tab_manager
+                            .read(cx)
+                            .documents()
+                            .iter()
+                            .map(|d| d.id())
+                            .collect();
+                        for id in ids {
+                            this.close_tab(id, window, cx);
+                        }
+                    }
+                    UnsavedChangesOutcome::SaveSelected(ids) => {
+                        let ids = ids.clone();
+                        for id in &ids {
+                            if let Some(doc) = this.tab_manager.read(cx).document(*id).cloned() {
+                                doc.dispatch_command(
+                                    crate::keymap::Command::SaveFileAs,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }
+                    }
+                    UnsavedChangesOutcome::Cancelled => {}
+                }
+            },
+        )
+        .detach();
 
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
             this.toggle_tasks_panel(cx);
@@ -514,6 +654,59 @@ impl Workspace {
                 } => {
                     this.start_pipeline_progress(profile_name.clone(), watcher.clone(), window, cx);
                 }
+                SidebarEvent::RequestDeleteConnection {
+                    connection_name,
+                    has_open_documents,
+                    ..
+                } => {
+                    use crate::ui::overlays::modals::DeleteConnectionRequest;
+                    let req = DeleteConnectionRequest {
+                        connection_name: connection_name.clone(),
+                        has_open_documents: *has_open_documents,
+                    };
+                    this.modal_delete_connection.update(cx, |modal, cx| {
+                        modal.open(req, cx);
+                    });
+                }
+                SidebarEvent::RequestDropTable {
+                    item_id,
+                    table_name,
+                    schema_name,
+                    dependents,
+                } => {
+                    use crate::ui::overlays::modals::DropTableRequest;
+                    let req = DropTableRequest {
+                        table_name: table_name.clone(),
+                        schema_name: schema_name.clone(),
+                        dependents: dependents.clone(),
+                    };
+                    this.pending_drop_table_item_id = Some(item_id.clone());
+                    this.modal_drop_table.update(cx, |modal, cx| {
+                        modal.open(req, window, cx);
+                    });
+                }
+                SidebarEvent::RequestTunnelAuth {
+                    tunnel_id,
+                    tunnel_name,
+                    host,
+                    port,
+                    user,
+                    last_attempt_failed,
+                    ..
+                } => {
+                    use crate::ui::overlays::modals::TunnelAuthRequest;
+                    let req = TunnelAuthRequest {
+                        tunnel_id: *tunnel_id,
+                        tunnel_name: tunnel_name.clone(),
+                        host: host.clone(),
+                        port: *port,
+                        user: user.clone(),
+                        last_attempt_failed: *last_attempt_failed,
+                    };
+                    this.modal_tunnel_auth.update(cx, |modal, cx| {
+                        modal.open(req, window, cx);
+                    });
+                }
             },
         )
         .detach();
@@ -686,6 +879,11 @@ impl Workspace {
             tab_bar,
             #[cfg(feature = "mcp")]
             mcp_approvals_view,
+            modal_delete_connection,
+            modal_unsaved_changes,
+            modal_drop_table,
+            pending_drop_table_item_id: None,
+            modal_tunnel_auth,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,

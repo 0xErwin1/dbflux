@@ -708,12 +708,43 @@ impl Workspace {
     }
 
     /// Closes the active tab.
+    ///
+    /// If the tab has unsaved changes, opens `ModalUnsavedChanges` instead of
+    /// closing immediately. The modal's subscription in `Workspace::new` handles
+    /// the final close/save after the user decides.
     pub(super) fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(doc_id) = self.tab_manager.read(cx).active_id() else {
             return;
         };
 
-        self.close_tab(doc_id, window, cx);
+        let dirty_summaries = self.tab_manager.read(cx).dirty_summaries(cx);
+        let this_doc_dirty = dirty_summaries
+            .iter()
+            .find(|(id, _)| *id == doc_id)
+            .cloned();
+
+        if let Some((id, summary)) = this_doc_dirty {
+            let doc_name = self
+                .tab_manager
+                .read(cx)
+                .document(doc_id)
+                .map(|d| d.tab_title(cx))
+                .unwrap_or_else(|| "Untitled".to_string());
+
+            use crate::ui::overlays::modals::{DirtySummaryEntry, UnsavedChangesRequest};
+            let req = UnsavedChangesRequest {
+                entries: vec![DirtySummaryEntry {
+                    id,
+                    name: doc_name,
+                    summary,
+                }],
+            };
+            self.modal_unsaved_changes.update(cx, |modal, cx| {
+                modal.open(req, cx);
+            });
+        } else {
+            self.close_tab(doc_id, window, cx);
+        }
     }
 
     /// Deletes the backing file for empty file-backed scripts about to be closed.

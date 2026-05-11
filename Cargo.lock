@@ -2719,6 +2719,7 @@ dependencies = [
  "dirs 6.0.0",
  "log",
  "ssh2",
+ "uuid",
 ]
 
 [[package]]

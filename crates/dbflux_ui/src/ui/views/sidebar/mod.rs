@@ -86,6 +86,39 @@ pub enum SidebarEvent {
         profile_name: String,
         watcher: dbflux_core::StateWatcher,
     },
+    /// Request to open the delete-connection modal for a specific connection profile.
+    RequestDeleteConnection {
+        connection_name: String,
+        profile_id: Uuid,
+        has_open_documents: bool,
+    },
+    /// Request to open the drop-table modal for a specific table.
+    RequestDropTable {
+        item_id: String,
+        table_name: String,
+        schema_name: Option<String>,
+        dependents: Vec<dbflux_core::RelationRef>,
+    },
+    /// Request to prompt the user for an SSH tunnel passphrase.
+    ///
+    /// Emitted when a connection attempt fails with a passphrase-required error
+    /// and the session vault does not already hold a passphrase for this tunnel.
+    RequestTunnelAuth {
+        /// Profile that triggered the connection attempt.
+        profile_id: uuid::Uuid,
+        /// SSH tunnel profile UUID used as the vault key.
+        tunnel_id: uuid::Uuid,
+        /// Friendly name for the tunnel profile shown in the modal.
+        tunnel_name: String,
+        /// SSH server hostname.
+        host: String,
+        /// SSH server port.
+        port: u16,
+        /// SSH username.
+        user: String,
+        /// True when a previous passphrase attempt for this profile already failed.
+        last_attempt_failed: bool,
+    },
 }
 
 /// Sentinel value for IDs that don't correspond to schema tree nodes
@@ -626,6 +659,9 @@ pub struct Sidebar {
     scripts_gutter_metadata: HashMap<String, GutterInfo>,
     /// Item ID of the currently hovered tree row (drives hover-only ⋯ button).
     hovered_item_id: Option<SharedString>,
+    /// Profile ID waiting for an SSH passphrase to be supplied via the tunnel-auth modal.
+    /// Set when a connect attempt fails with a passphrase-required error.
+    pub pending_tunnel_auth_profile_id: Option<Uuid>,
 }
 
 use crate::ui::components::toast::PendingToast;
@@ -819,7 +855,13 @@ impl Sidebar {
             gutter_metadata,
             scripts_gutter_metadata,
             hovered_item_id: None,
+            pending_tunnel_auth_profile_id: None,
         }
+    }
+
+    /// Return the profile ID that is currently awaiting SSH passphrase input, if any.
+    pub fn pending_tunnel_auth_profile_id(&self) -> Option<Uuid> {
+        self.pending_tunnel_auth_profile_id
     }
 
     pub fn set_connections_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
