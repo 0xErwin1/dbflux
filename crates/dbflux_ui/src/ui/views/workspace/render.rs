@@ -243,16 +243,6 @@ impl Render for Workspace {
                                 .child(Body::new("No documents open").muted(cx))
                                 .child(
                                     div()
-                                        .max_w(px(460.0))
-                                        .text_size(FontSizes::SM)
-                                        .text_color(muted_fg.opacity(0.7))
-                                        .text_center()
-                                        .child(
-                                            "Open a table from the sidebar, or create a new query / script. Everything stays local — your connections never leave this machine.",
-                                        ),
-                                )
-                                .child(
-                                    div()
                                         .mt_4()
                                         .flex()
                                         .flex_col()

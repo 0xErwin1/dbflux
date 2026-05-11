@@ -1073,7 +1073,6 @@ impl Render for CommandPalette {
                             .border_color(theme.border)
                             .flex()
                             .items_center()
-                            .justify_between()
                             .child(
                                 div()
                                     .flex()
@@ -1124,10 +1123,6 @@ impl Render for CommandPalette {
                                                     .color(theme.muted_foreground),
                                             ),
                                     ),
-                            )
-                            .child(
-                                MonoCaption::new("Local only \u{00B7} no telemetry")
-                                    .color(theme.muted_foreground),
                             ),
                     ),
             )
