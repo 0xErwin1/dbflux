@@ -1,6 +1,7 @@
 mod badge;
 mod banner;
 mod chord;
+mod file_picker;
 mod focus_frame;
 mod icon;
 mod icon_button;
@@ -17,6 +18,7 @@ mod type_to_confirm;
 pub use badge::{Badge, BadgeVariant};
 pub use banner::{BannerBlock, BannerVariant};
 pub use chord::Chord;
+pub use file_picker::{FilePicker, file_picker_label};
 pub use focus_frame::focus_frame;
 pub use icon::Icon;
 pub use icon_button::IconButton;

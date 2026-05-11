@@ -3,7 +3,7 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Radii;
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::{
-    Icon as AppIconElement, Label, SegmentedControl, SegmentedItem, Text,
+    FilePicker, Icon as AppIconElement, Label, SegmentedControl, SegmentedItem, Text,
 };
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
@@ -253,8 +253,6 @@ impl ConnectionManagerWindow {
         slot: super::SslCertSlot,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = cx.theme().clone();
-
         let input_entity = match slot {
             super::SslCertSlot::CaCert => &self.ssl_ca_cert_input,
             super::SslCertSlot::ClientCert => &self.ssl_client_cert_input,
@@ -263,90 +261,41 @@ impl ConnectionManagerWindow {
 
         let current_value = input_entity.read(cx).value().to_string();
         let has_value = !current_value.trim().is_empty();
-        let display_label = file_picker_label(&current_value);
+        let current_value_for_browse = has_value.then(|| current_value.clone());
 
-        let label_color = if has_value {
-            theme.foreground
-        } else {
-            theme.muted_foreground
+        let button_id: SharedString = match slot {
+            super::SslCertSlot::CaCert => "ssl-cert-picker-ca".into(),
+            super::SslCertSlot::ClientCert => "ssl-cert-picker-client-cert".into(),
+            super::SslCertSlot::ClientKey => "ssl-cert-picker-client-key".into(),
         };
 
-        let button_id = SharedString::from(match slot {
-            super::SslCertSlot::CaCert => "ssl-cert-picker-ca",
-            super::SslCertSlot::ClientCert => "ssl-cert-picker-client-cert",
-            super::SslCertSlot::ClientKey => "ssl-cert-picker-client-key",
+        let entity = cx.entity().clone();
+        let browse_entity = entity.clone();
+        let clear_entity = entity;
+
+        let picker = FilePicker::new(
+            button_id,
+            current_value.clone(),
+            AppIcon::Folder,
+            AppIcon::X,
+        )
+        .on_browse(move |_event, window, cx| {
+            let starting_value = current_value_for_browse.clone();
+            browse_entity.update(cx, |this, cx| {
+                this.browse_ssl_cert(slot, starting_value.clone(), window, cx);
+            });
+        })
+        .on_clear(move |_event, window, cx| {
+            clear_entity.update(cx, |this, cx| {
+                this.clear_ssl_cert(slot, window, cx);
+            });
         });
-
-        let current_value_for_browse = if has_value {
-            Some(current_value.clone())
-        } else {
-            None
-        };
-
-        let picker_button = div()
-            .id(button_id.clone())
-            .flex()
-            .items_center()
-            .gap_2()
-            .h(crate::ui::tokens::Heights::CONTROL)
-            .px_2()
-            .border_1()
-            .border_color(theme.input)
-            .rounded(Radii::SM)
-            .cursor_pointer()
-            .hover(|d| d.bg(theme.list_hover))
-            .child(
-                AppIconElement::new(AppIcon::Folder)
-                    .size(px(14.0))
-                    .color(label_color),
-            )
-            .child(
-                div()
-                    .text_size(crate::ui::tokens::FontSizes::SM)
-                    .text_color(label_color)
-                    .child(SharedString::from(display_label)),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    this.browse_ssl_cert(slot, current_value_for_browse.clone(), window, cx);
-                }),
-            );
-
-        let clear_button = if has_value {
-            Some(
-                div()
-                    .id(SharedString::from(format!("{}-clear", button_id)))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(crate::ui::tokens::Heights::CONTROL)
-                    .w(crate::ui::tokens::Heights::CONTROL)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.list_hover))
-                    .child(
-                        AppIconElement::new(AppIcon::X)
-                            .size(px(12.0))
-                            .color(theme.muted_foreground),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.clear_ssl_cert(slot, window, cx);
-                        }),
-                    ),
-            )
-        } else {
-            None
-        };
 
         let control = div()
             .flex()
             .items_center()
             .gap_2()
-            .child(picker_button)
-            .when_some(clear_button, |d, btn| d.child(btn))
+            .child(picker)
             .child(div().flex_1());
 
         Self::field_row_cm(label, false, control, None::<&str>, cx).into_any_element()
@@ -859,46 +808,6 @@ impl ConnectionManagerWindow {
     }
 }
 
-/// Pure helper that maps a stored file-picker value to the label shown on the
-/// picker button. When empty/whitespace, the user sees a "Browse…" placeholder;
-/// otherwise the file basename is shown so the row stays compact.
-pub(super) fn file_picker_label(value: &str) -> String {
-    if value.trim().is_empty() {
-        return "Browse\u{2026}".to_string();
-    }
-
-    std::path::Path::new(value)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| value.to_string())
-}
-
-#[cfg(test)]
-mod file_picker_label_tests {
-    use super::file_picker_label;
-
-    #[test]
-    fn empty_value_returns_browse_placeholder() {
-        assert_eq!(file_picker_label(""), "Browse\u{2026}");
-    }
-
-    #[test]
-    fn whitespace_only_value_returns_browse_placeholder() {
-        assert_eq!(file_picker_label("   "), "Browse\u{2026}");
-    }
-
-    #[test]
-    fn absolute_path_returns_basename() {
-        assert_eq!(file_picker_label("/home/user/certs/ca.pem"), "ca.pem");
-    }
-
-    #[test]
-    fn relative_path_returns_basename() {
-        assert_eq!(file_picker_label("certs/client.key"), "client.key");
-    }
-
-    #[test]
-    fn bare_filename_returns_itself() {
-        assert_eq!(file_picker_label("server.crt"), "server.crt");
-    }
-}
+// The `file_picker_label` helper and its tests moved to
+// `dbflux_components::primitives::file_picker` together with the `FilePicker`
+// primitive itself.

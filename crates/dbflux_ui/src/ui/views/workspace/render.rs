@@ -4,7 +4,7 @@ use crate::platform;
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::tokens::FontSizes;
 use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
-use dbflux_components::primitives::{Icon, Text, overlay_bg};
+use dbflux_components::primitives::{Chord, Icon, Text, overlay_bg};
 use dbflux_components::typography::Body;
 use gpui_component::IconName;
 
@@ -16,6 +16,21 @@ impl Workspace {
             .active_document()
             .map(|doc| doc.render())
     }
+}
+
+/// One row of the empty-workspace placeholder: a `Chord` followed by a
+/// muted description.
+fn empty_state_shortcut<const N: usize>(
+    keys: [&'static str; N],
+    description: &'static str,
+) -> gpui::Div {
+    gpui::div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(Chord::new(keys))
+        .child(Text::dim_secondary(description))
 }
 
 impl Render for Workspace {
@@ -226,7 +241,36 @@ impl Render for Workspace {
                                         .color(muted_fg.opacity(0.5)),
                                 )
                                 .child(Body::new("No documents open").muted(cx))
-                                .child(Text::dim_secondary("Press Ctrl+N to create a new query")),
+                                .child(
+                                    div()
+                                        .max_w(px(460.0))
+                                        .text_size(FontSizes::SM)
+                                        .text_color(muted_fg.opacity(0.7))
+                                        .text_center()
+                                        .child(
+                                            "Open a table from the sidebar, or create a new query / script. Everything stays local — your connections never leave this machine.",
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .mt_4()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .child(empty_state_shortcut(["Ctrl", "N"], "new query"))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "Shift", "P"],
+                                            "command palette",
+                                        ))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "O"],
+                                            "open script from disk",
+                                        ))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "Shift", "N"],
+                                            "new connection",
+                                        )),
+                                ),
                         ),
                 )
                 .child(
