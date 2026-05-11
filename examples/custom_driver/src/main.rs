@@ -516,6 +516,7 @@ fn create_metadata() -> DriverMetadata {
         display_name: "Mock Database".into(),
         description: "Example custom driver for testing DBFlux integration".into(),
         category: DatabaseCategory::KeyValue,
+            deployment_class: None,
         query_language: QueryLanguage::Sql,
         capabilities: DriverCapabilities::KEYVALUE_BASE,
         default_port: None,

@@ -1,6 +1,6 @@
 use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::Dropdown;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::tokens::Radii;
 use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
@@ -342,7 +342,10 @@ impl GeneralSection {
         let max_history = match max_history_str.parse::<usize>() {
             Ok(value) if value >= 10 => value,
             _ => {
-                cx.toast_error("Max history entries must be a number >= 10", window);
+                Toast::error("Max history entries must be a number >= 10")
+                    .meta_right(now_hms())
+                    .action(copy_action("Max history entries must be a number >= 10"))
+                    .push(cx);
                 return;
             }
         };
@@ -351,7 +354,10 @@ impl GeneralSection {
         let auto_save_ms = match auto_save_str.parse::<u64>() {
             Ok(value) if value >= 500 => value,
             _ => {
-                cx.toast_error("Auto-save interval must be >= 500 ms", window);
+                Toast::error("Auto-save interval must be >= 500 ms")
+                    .meta_right(now_hms())
+                    .action(copy_action("Auto-save interval must be >= 500 ms"))
+                    .push(cx);
                 return;
             }
         };
@@ -365,7 +371,10 @@ impl GeneralSection {
         let refresh_interval = match refresh_interval_str.parse::<u32>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                cx.toast_error("Refresh interval must be >= 1 second", window);
+                Toast::error("Refresh interval must be >= 1 second")
+                    .meta_right(now_hms())
+                    .action(copy_action("Refresh interval must be >= 1 second"))
+                    .push(cx);
                 return;
             }
         };
@@ -374,7 +383,10 @@ impl GeneralSection {
         let max_bg_tasks = match max_bg_str.parse::<usize>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                cx.toast_error("Max background tasks must be >= 1", window);
+                Toast::error("Max background tasks must be >= 1")
+                    .meta_right(now_hms())
+                    .action(copy_action("Max background tasks must be >= 1"))
+                    .push(cx);
                 return;
             }
         };
@@ -389,7 +401,12 @@ impl GeneralSection {
             dbflux_app::config_loader::save_general_settings(runtime, &self.gen_settings)
         {
             log::error!("Failed to save general settings to SQLite: {}", e);
-            cx.toast_error(format!("Failed to save: {}", e), window);
+            let body = e.to_string();
+            Toast::error("Failed to save")
+                .meta_right(now_hms())
+                .body(body.clone())
+                .action(copy_action(format!("Failed to save: {}", body)))
+                .push(cx);
             return;
         }
 
@@ -407,10 +424,9 @@ impl GeneralSection {
             cx,
         );
 
-        cx.toast_success(
-            "Settings saved. Some changes apply on next startup.",
-            window,
-        );
+        Toast::success("Settings saved. Some changes apply on next startup.")
+            .meta_right(now_hms())
+            .push(cx);
     }
 
     pub(super) fn render_general_section(&self, cx: &mut Context<Self>) -> impl IntoElement {

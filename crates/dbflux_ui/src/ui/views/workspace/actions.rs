@@ -236,7 +236,6 @@ impl Workspace {
 
     /// Opens the global audit viewer as a document tab.
     pub(super) fn open_audit_viewer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
         use crate::ui::document::AuditDocument;
 
         // Check if an audit document is already open
@@ -265,7 +264,9 @@ impl Workspace {
             });
 
             self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
-            cx.toast_info("Focusing existing audit viewer", window);
+            Toast::info("Focusing existing audit viewer")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         }
 
@@ -278,25 +279,25 @@ impl Workspace {
         });
 
         self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
-        cx.toast_info("Opened audit viewer", window);
+        Toast::info("Opened audit viewer")
+            .meta_right(now_hms())
+            .push(cx);
     }
 
     #[cfg(feature = "mcp")]
-    pub(super) fn open_mcp_approvals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    pub(super) fn open_mcp_approvals(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.mcp_approvals_view.update(cx, |view, cx| {
             view.refresh(cx);
         });
 
         self.active_governance_panel = Some(super::GovernancePanel::Approvals);
-        cx.toast_info("Opened MCP approvals", window);
+        Toast::info("Opened MCP approvals")
+            .meta_right(now_hms())
+            .push(cx);
     }
 
     #[cfg(feature = "mcp")]
-    pub(super) fn refresh_mcp_governance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    pub(super) fn refresh_mcp_governance(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
             if let Err(e) = state.persist_mcp_governance() {
                 log::error!("Failed to persist MCP governance: {}", e);
@@ -308,12 +309,12 @@ impl Workspace {
             }
         });
 
-        cx.toast_info("MCP governance state persisted", window);
+        Toast::info("MCP governance state persisted")
+            .meta_right(now_hms())
+            .push(cx);
     }
 
-    pub(super) fn disconnect_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    pub(super) fn disconnect_active(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let profile_id = self.app_state.read(cx).active_connection_id();
 
         if let Some(id) = profile_id {
@@ -329,18 +330,20 @@ impl Workspace {
             });
 
             if let Some(name) = name {
-                cx.toast_info(format!("Disconnecting from {}...", name), window);
+                Toast::info(format!("Disconnecting from {}...", name))
+                    .meta_right(now_hms())
+                    .push(cx);
             }
         }
     }
 
-    pub(super) fn refresh_schema(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    pub(super) fn refresh_schema(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let active = self.app_state.read(cx).active_connection();
 
         let Some(active) = active else {
-            cx.toast_warning("No active connection", window);
+            Toast::warning("No active connection")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -374,7 +377,9 @@ impl Workspace {
         })
         .detach();
 
-        cx.toast_info("Refreshing schema...", window);
+        Toast::info("Refreshing schema...")
+            .meta_right(now_hms())
+            .push(cx);
     }
 
     /// Opens a table in a new DataDocument tab, or focuses the existing one.
@@ -386,8 +391,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::components::toast::ToastExt;
-
         let has_connection = self
             .app_state
             .read(cx)
@@ -410,7 +413,10 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                cx.toast_error("No active connection for this table", window);
+                Toast::error("No active connection for this table")
+                    .meta_right(now_hms())
+                    .action(copy_action("No active connection for this table"))
+                    .push(cx);
                 return;
             }
             OpenDocumentDecision::FocusExisting(id) => {
@@ -454,8 +460,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::components::toast::ToastExt;
-
         let has_connection = self
             .app_state
             .read(cx)
@@ -500,7 +504,10 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                cx.toast_error("No active connection for this collection", window);
+                Toast::error("No active connection for this collection")
+                    .meta_right(now_hms())
+                    .action(copy_action("No active connection for this collection"))
+                    .push(cx);
                 return;
             }
             OpenDocumentDecision::FocusExisting(id) => {
@@ -567,8 +574,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::components::toast::ToastExt;
-
         let has_connection = self
             .app_state
             .read(cx)
@@ -591,7 +596,10 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                cx.toast_error("No active connection for this event source", window);
+                Toast::error("No active connection for this event source")
+                    .meta_right(now_hms())
+                    .action(copy_action("No active connection for this event source"))
+                    .push(cx);
                 return;
             }
             OpenDocumentDecision::FocusExisting(id) => {
@@ -626,8 +634,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::ui::components::toast::ToastExt;
-
         let has_connection = self
             .app_state
             .read(cx)
@@ -647,7 +653,12 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                cx.toast_error("No active connection for this key-value database", window);
+                Toast::error("No active connection for this key-value database")
+                    .meta_right(now_hms())
+                    .action(copy_action(
+                        "No active connection for this key-value database",
+                    ))
+                    .push(cx);
                 return;
             }
             OpenDocumentDecision::FocusExisting(id) => {
@@ -708,12 +719,43 @@ impl Workspace {
     }
 
     /// Closes the active tab.
+    ///
+    /// If the tab has unsaved changes, opens `ModalUnsavedChanges` instead of
+    /// closing immediately. The modal's subscription in `Workspace::new` handles
+    /// the final close/save after the user decides.
     pub(super) fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(doc_id) = self.tab_manager.read(cx).active_id() else {
             return;
         };
 
-        self.close_tab(doc_id, window, cx);
+        let dirty_summaries = self.tab_manager.read(cx).dirty_summaries(cx);
+        let this_doc_dirty = dirty_summaries
+            .iter()
+            .find(|(id, _)| *id == doc_id)
+            .cloned();
+
+        if let Some((id, summary)) = this_doc_dirty {
+            let doc_name = self
+                .tab_manager
+                .read(cx)
+                .document(doc_id)
+                .map(|d| d.tab_title(cx))
+                .unwrap_or_else(|| "Untitled".to_string());
+
+            use crate::ui::overlays::modals::{DirtySummaryEntry, UnsavedChangesRequest};
+            let req = UnsavedChangesRequest {
+                entries: vec![DirtySummaryEntry {
+                    id,
+                    name: doc_name,
+                    summary,
+                }],
+            };
+            self.modal_unsaved_changes.update(cx, |modal, cx| {
+                modal.open(req, cx);
+            });
+        } else {
+            self.close_tab(doc_id, window, cx);
+        }
     }
 
     /// Deletes the backing file for empty file-backed scripts about to be closed.

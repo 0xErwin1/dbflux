@@ -105,6 +105,11 @@ pub struct AppState {
     /// bootstrap_audit_settings will not enable the service even if persisted
     /// settings say enabled=true, preserving an honest degraded-state signal.
     audit_degraded: bool,
+    /// Session-scoped passphrase vault for SSH tunnel private keys.
+    ///
+    /// Passphrases entered via the modal prompt are held here for the process
+    /// lifetime. Never serialized, logged, or written to disk.
+    pub session_passphrase_vault: Arc<RwLock<dbflux_ssh::SessionPassphraseVault>>,
     #[cfg(feature = "mcp")]
     mcp_runtime: McpRuntime,
 }
@@ -244,6 +249,9 @@ impl AppState {
             storage_runtime,
             audit_service,
             audit_degraded,
+            session_passphrase_vault: Arc::new(RwLock::new(
+                dbflux_ssh::SessionPassphraseVault::new(),
+            )),
             #[cfg(feature = "mcp")]
             mcp_runtime,
         };
@@ -910,6 +918,18 @@ impl AppState {
             .set_table_details(profile_id, database, table, details);
     }
 
+    pub fn set_dependents(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        table: String,
+        deps: Vec<dbflux_core::RelationRef>,
+    ) {
+        self.facade
+            .connections
+            .set_dependents(profile_id, database, table, deps);
+    }
+
     #[allow(dead_code)]
     pub fn needs_table_details(&self, profile_id: Uuid, database: &str, table: &str) -> bool {
         self.facade
@@ -1062,6 +1082,17 @@ impl AppState {
         &self,
         profile_id: Uuid,
     ) -> Result<ConnectProfileParams, dbflux_core::PrepareConnectError> {
+        self.prepare_connect_profile_with_passphrase(profile_id, None)
+    }
+
+    /// Like `prepare_connect_profile` but allows supplying an explicit SSH
+    /// passphrase (from the tunnel-auth modal) that overrides both the session
+    /// vault and the OS keyring.
+    pub fn prepare_connect_profile_with_passphrase(
+        &self,
+        profile_id: Uuid,
+        override_passphrase: Option<&str>,
+    ) -> Result<ConnectProfileParams, dbflux_core::PrepareConnectError> {
         let secrets = &self.facade.secrets;
 
         let proxy_secret = {
@@ -1077,15 +1108,89 @@ impl AppState {
             }
         };
 
+        // Priority: explicit override > session vault > OS keyring.
+        let vault = self.session_passphrase_vault.clone();
+        let override_passphrase = override_passphrase.map(str::to_owned);
+
+        // Capture what we need from secrets before the closure; secrets itself
+        // cannot be moved into the closure because it borrows self.
+        let keyring_ssh_secret: Option<SecretString> = {
+            let profile = self
+                .facade
+                .profiles
+                .profiles
+                .iter()
+                .find(|p| p.id == profile_id);
+            match profile {
+                Some(p) => secrets.get_ssh_secret_for_profile(p, &self.facade.ssh_tunnels.items),
+                None => None,
+            }
+        };
+
         self.facade.connections.prepare_connect_profile(
             profile_id,
             &self.facade.profiles.profiles,
             &self.facade.ssh_tunnels.items,
             &self.facade.proxies.items,
             &secrets.secret_store_arc(),
-            |profile, ssh_tunnels| secrets.get_ssh_secret_for_profile(profile, ssh_tunnels),
+            move |profile, _ssh_tunnels| {
+                use dbflux_core::secrecy::SecretString;
+
+                // An explicit passphrase (from the modal) always wins.
+                if let Some(ref p) = override_passphrase {
+                    return Some(SecretString::from(p.clone()));
+                }
+
+                // Check the session vault for a remembered passphrase.
+                let tunnel_id = profile.config.ssh_tunnel_profile_id();
+                if let Some(id) = tunnel_id
+                    && let Ok(guard) = vault.read()
+                    && let Some(vault_pass) = guard.get(&id)
+                {
+                    return Some(SecretString::from(vault_pass.to_owned()));
+                }
+
+                // Fall back to the OS keyring result captured above.
+                keyring_ssh_secret
+            },
             proxy_secret,
         )
+    }
+
+    /// Resolve the SSH tunnel profile ID associated with a connection profile, if any.
+    pub fn ssh_tunnel_id_for_profile(&self, profile_id: Uuid) -> Option<Uuid> {
+        self.facade
+            .profiles
+            .profiles
+            .iter()
+            .find(|p| p.id == profile_id)
+            .and_then(|p| p.config.ssh_tunnel_profile_id())
+    }
+
+    /// Retrieve the SSH tunnel profile for the given tunnel ID, if it exists.
+    pub fn ssh_tunnel_profile(&self, tunnel_id: Uuid) -> Option<&SshTunnelProfile> {
+        self.facade
+            .ssh_tunnels
+            .items
+            .iter()
+            .find(|t| t.id == tunnel_id)
+    }
+
+    /// Retrieve the remembered passphrase for the given SSH tunnel profile ID, if any.
+    pub fn passphrase_for(&self, tunnel_id: Uuid) -> Option<String> {
+        self.session_passphrase_vault
+            .read()
+            .ok()
+            .and_then(|guard| guard.get(&tunnel_id).map(str::to_owned))
+    }
+
+    /// Store a passphrase for the given SSH tunnel profile ID for the rest of the process lifetime.
+    ///
+    /// The passphrase is held only in memory and is never persisted to disk.
+    pub fn cache_passphrase(&self, tunnel_id: Uuid, passphrase: String) {
+        if let Ok(mut guard) = self.session_passphrase_vault.write() {
+            guard.insert(tunnel_id, passphrase);
+        }
     }
 
     pub fn apply_connect_profile(

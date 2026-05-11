@@ -76,8 +76,13 @@ impl Render for AboutSection {
                         )
                         .child(
                             div().child(
+                                // items_baseline + Body-wrapped fillers keeps
+                                // the link rows and the surrounding plain text
+                                // on the same baseline; bare &str children
+                                // sit on a different metric and look pulled up.
                                 div()
                                     .flex()
+                                    .items_baseline()
                                     .gap_1()
                                     .child(
                                         div()
@@ -89,7 +94,7 @@ impl Render for AboutSection {
                                             })
                                             .child(Body::new("Report a bug").color(theme.link)),
                                     )
-                                    .child("or")
+                                    .child(Body::new("or"))
                                     .child(
                                         div()
                                             .id("about-link-repo")
@@ -102,7 +107,7 @@ impl Render for AboutSection {
                                                 Body::new("view the source code").color(theme.link),
                                             ),
                                     )
-                                    .child("on GitHub."),
+                                    .child(Body::new("on GitHub.")),
                             ),
                         )
                         .child(Body::new(format!(

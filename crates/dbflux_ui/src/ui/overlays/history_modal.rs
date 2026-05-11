@@ -1,6 +1,6 @@
 use crate::app::AppStateEntity;
 use crate::keymap::ContextId;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
@@ -363,14 +363,16 @@ impl HistoryModal {
         cx.notify();
     }
 
-    fn confirm_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let ModalMode::Save { ref sql } = self.mode else {
             return;
         };
 
         let name = self.save_name_input.read(cx).value();
         if name.trim().is_empty() {
-            cx.toast_warning("Enter a name for the query", window);
+            Toast::warning("Enter a name for the query")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         }
 
@@ -381,7 +383,7 @@ impl HistoryModal {
             state.add_saved_query(query);
         });
         cx.emit(QuerySaved { id, name });
-        cx.toast_success("Saved query", window);
+        Toast::success("Saved query").meta_right(now_hms()).push(cx);
         self.close(cx);
     }
 

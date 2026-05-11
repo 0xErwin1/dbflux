@@ -1,6 +1,6 @@
 use super::{DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus};
 use crate::ui::components::data_table::SortState as TableSortState;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
@@ -311,9 +311,24 @@ impl Render for DataGridPanel {
                     .when(
                         matches!(content_mode, DataGridContentMode::EmptyFallback),
                         |d| {
-                            d.flex().items_center().justify_center().child(Text::muted(
-                                if is_loading { "Loading..." } else { "No data" },
-                            ))
+                            d.flex()
+                                .items_center()
+                                .justify_center()
+                                .child(if is_loading {
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .child(
+                                            Icon::new(AppIcon::Loader)
+                                                .size(px(12.0))
+                                                .color(theme.muted_foreground),
+                                        )
+                                        .child(Text::muted("Loading…"))
+                                        .into_any_element()
+                                } else {
+                                    Text::muted("No data").into_any_element()
+                                })
                         },
                     )
                     .when(
@@ -339,6 +354,7 @@ impl Render for DataGridPanel {
                 sort_info,
                 has_data,
                 uses_result_view,
+                dirty_count,
                 &theme,
                 cx,
             ))
@@ -357,6 +373,10 @@ impl Render for DataGridPanel {
             // Document preview modal overlay
             .when(self.document_preview_modal.read(cx).is_visible(), |d| {
                 d.child(self.document_preview_modal.clone())
+            })
+            // Row inspector overlay — rendered as an absolute panel on the right edge
+            .when_some(self.row_inspector.clone(), |d, inspector| {
+                d.child(inspector)
             })
     }
 }
@@ -396,7 +416,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(Text::caption(source_query_prefix.to_string()))
+                    .child(Text::caption(source_query_prefix.to_string()).primary())
                     .child(Text::label(source_name.to_string())),
             )
             .child(
@@ -404,7 +424,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(Text::caption("WHERE"))
+                    .child(Text::caption("WHERE").primary())
                     .child(
                         div()
                             .flex()
@@ -459,7 +479,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(Text::caption("LIMIT"))
+                    .child(Text::caption("LIMIT").primary())
                     .child(
                         div()
                             .w(px(60.0))
@@ -1062,6 +1082,7 @@ impl DataGridPanel {
         sort_info: Option<(String, SortDirection, bool)>,
         has_data: bool,
         uses_result_view: bool,
+        pending_change_count: usize,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -1087,12 +1108,23 @@ impl DataGridPanel {
             .border_t_1()
             .border_color(theme.border)
             .bg(theme.tab_bar)
-            // Left: row count / shape info and sort info
+            // Left: pending-change count (when applicable), row count / shape info, sort info
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
+                    // Pending-change count — visible only when there are unsaved edits
+                    .when(pending_change_count > 0, |d| {
+                        d.child(
+                            Text::caption(format!(
+                                "{} pending change{}",
+                                pending_change_count,
+                                if pending_change_count == 1 { "" } else { "s" }
+                            ))
+                            .color(theme.warning),
+                        )
+                    })
                     // Result view mode selector (for non-Table shapes)
                     .when(available_modes.len() > 1, |d| {
                         d.child(div().flex().items_center().gap_0().children(
@@ -1156,84 +1188,69 @@ impl DataGridPanel {
                         )
                     }),
             )
-            // Center: pagination (for Table and Collection sources)
-            .child(div().flex().items_center().gap(Spacing::SM).when_some(
+            // Center: pagination (for Table and Collection sources).
+            // Layout: ‹  N / Total  › using Unicode single-chevrons.
+            .child(div().flex().items_center().gap(Spacing::XS).when_some(
                 pagination_info.clone().filter(|_| is_paginated),
                 |d, pagination| {
                     let page = pagination.current_page();
-                    let offset = pagination.offset();
-                    let start = offset + 1;
-                    let end = offset + row_count as u64;
+
+                    let page_label = if let Some(total) = total_pages {
+                        format!("{} / {}", page, total)
+                    } else {
+                        format!("{}", page)
+                    };
 
                     d.child(
                         div()
                             .id("prev-page")
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .px(Spacing::XS)
+                            .justify_center()
+                            .w(px(20.0))
+                            .h(px(20.0))
                             .rounded(Radii::SM)
+                            .text_size(FontSizes::SM)
                             .when(can_prev, |d| {
                                 d.cursor_pointer()
+                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.go_to_prev_page(window, cx);
                                     }))
                             })
-                            .when(!can_prev, |d| d.opacity(0.5))
-                            .child(Icon::new(AppIcon::ChevronLeft).size(px(12.0)).color(
-                                if can_prev {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(Text::caption("Prev").font_size(FontSizes::XS).color(
-                                if can_prev {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            )),
+                            .when(!can_prev, |d| {
+                                d.text_color(theme.muted_foreground).opacity(0.5)
+                            })
+                            .child("\u{2039}"),
                     )
                     .child(
-                        Text::caption(if let Some(total) = total_pages {
-                            format!("Page {}/{} ({}-{})", page, total, start, end)
-                        } else {
-                            format!("Page {} ({}-{})", page, start, end)
-                        })
-                        .font_size(FontSizes::XS),
+                        Text::caption(page_label)
+                            .font_size(FontSizes::XS)
+                            .color(theme.muted_foreground),
                     )
                     .child(
                         div()
                             .id("next-page")
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .px(Spacing::XS)
+                            .justify_center()
+                            .w(px(20.0))
+                            .h(px(20.0))
                             .rounded(Radii::SM)
+                            .text_size(FontSizes::SM)
                             .when(can_next, |d| {
                                 d.cursor_pointer()
+                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.go_to_next_page(window, cx);
                                     }))
                             })
-                            .when(!can_next, |d| d.opacity(0.5))
-                            .child(Text::caption("Next").font_size(FontSizes::XS).color(
-                                if can_next {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(Icon::new(AppIcon::ChevronRight).size(px(12.0)).color(
-                                if can_next {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            )),
+                            .when(!can_next, |d| {
+                                d.text_color(theme.muted_foreground).opacity(0.5)
+                            })
+                            .child("\u{203a}"),
                     )
                 },
             ))

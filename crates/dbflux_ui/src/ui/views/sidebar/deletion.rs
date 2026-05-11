@@ -89,47 +89,81 @@ impl Sidebar {
     pub fn show_delete_confirm_modal(&mut self, item_id: &str, cx: &mut Context<Self>) {
         let state = self.app_state.read(cx);
 
-        let (item_name, is_folder) = match parse_node_id(item_id) {
-            Some(SchemaNodeId::ConnectionFolder { node_id }) => {
-                if let Some(node) = state.connection_tree().find_by_id(node_id) {
-                    (node.name.clone(), true)
-                } else {
-                    return;
-                }
-            }
+        match parse_node_id(item_id) {
             Some(SchemaNodeId::Profile { profile_id }) => {
-                if let Some(profile) = state.profiles().iter().find(|p| p.id == profile_id) {
-                    (profile.name.clone(), false)
-                } else {
+                // Connection profiles use the full ModalDeleteConnection chrome.
+                let Some(profile) = state.profiles().iter().find(|p| p.id == profile_id) else {
                     return;
-                }
+                };
+                let connection_name = profile.name.clone();
+                let has_open_documents = state.connections().contains_key(&profile_id);
+
+                // Store the pending delete so Confirm can execute it.
+                self.delete_confirm_modal = Some(DeleteConfirmState {
+                    item_id: item_id.to_string(),
+                    item_name: connection_name.clone(),
+                    is_folder: false,
+                    object_type: None,
+                    is_ddl: false,
+                    multi_item_ids: Vec::new(),
+                });
+
+                cx.emit(SidebarEvent::RequestDeleteConnection {
+                    connection_name,
+                    profile_id,
+                    has_open_documents,
+                });
             }
+
+            Some(SchemaNodeId::ConnectionFolder { node_id }) => {
+                let Some(node) = state.connection_tree().find_by_id(node_id) else {
+                    return;
+                };
+                self.delete_confirm_modal = Some(DeleteConfirmState {
+                    item_id: item_id.to_string(),
+                    item_name: node.name.clone(),
+                    is_folder: true,
+                    object_type: None,
+                    is_ddl: false,
+                    multi_item_ids: Vec::new(),
+                });
+                cx.notify();
+            }
+
             Some(SchemaNodeId::ScriptFile { ref path }) => {
                 let name = std::path::Path::new(path)
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.clone());
-                (name, false)
+                self.delete_confirm_modal = Some(DeleteConfirmState {
+                    item_id: item_id.to_string(),
+                    item_name: name,
+                    is_folder: false,
+                    object_type: None,
+                    is_ddl: false,
+                    multi_item_ids: Vec::new(),
+                });
+                cx.notify();
             }
+
             Some(SchemaNodeId::ScriptsFolder { path: Some(ref p) }) => {
                 let name = std::path::Path::new(p)
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| p.clone());
-                (name, true)
+                self.delete_confirm_modal = Some(DeleteConfirmState {
+                    item_id: item_id.to_string(),
+                    item_name: name,
+                    is_folder: true,
+                    object_type: None,
+                    is_ddl: false,
+                    multi_item_ids: Vec::new(),
+                });
+                cx.notify();
             }
-            _ => return,
-        };
 
-        self.delete_confirm_modal = Some(DeleteConfirmState {
-            item_id: item_id.to_string(),
-            item_name,
-            is_folder,
-            object_type: None,
-            is_ddl: false,
-            multi_item_ids: Vec::new(),
-        });
-        cx.notify();
+            _ => {}
+        }
     }
 
     /// Open the delete confirmation modal for a batch of sidebar selections.
@@ -162,23 +196,62 @@ impl Sidebar {
         object_type: &str,
         cx: &mut Context<Self>,
     ) {
-        let item_name = match parse_node_id(item_id) {
+        match parse_node_id(item_id) {
+            Some(SchemaNodeId::Table {
+                ref name,
+                ref schema,
+                ref profile_id,
+                ref database,
+            }) if object_type == "Table" => {
+                // Tables use the richer ModalDropTable with TypeToConfirm + dependents.
+                let effective_db = database.as_deref().unwrap_or(schema.as_str()).to_string();
+                let dependents = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(profile_id)
+                    .map(|conn| conn.dependents(&effective_db, name))
+                    .unwrap_or_default();
+
+                let schema_name = Some(schema.clone());
+                let table_name = name.clone();
+
+                // Also store an inline state so `confirm_modal_delete` can execute the drop.
+                self.delete_confirm_modal = Some(DeleteConfirmState {
+                    item_id: item_id.to_string(),
+                    item_name: table_name.clone(),
+                    is_folder: false,
+                    object_type: Some(object_type.to_string()),
+                    is_ddl: true,
+                    multi_item_ids: Vec::new(),
+                });
+
+                cx.emit(SidebarEvent::RequestDropTable {
+                    item_id: item_id.to_string(),
+                    table_name,
+                    schema_name,
+                    dependents,
+                });
+            }
+
             Some(SchemaNodeId::Table { name, .. })
             | Some(SchemaNodeId::View { name, .. })
             | Some(SchemaNodeId::Collection { name, .. })
-            | Some(SchemaNodeId::Database { name, .. }) => name,
-            _ => return,
-        };
+            | Some(SchemaNodeId::Database { name, .. }) => {
+                // Views, collections, databases use the existing inline confirm.
+                self.delete_confirm_modal = Some(DeleteConfirmState {
+                    item_id: item_id.to_string(),
+                    item_name: name,
+                    is_folder: false,
+                    object_type: Some(object_type.to_string()),
+                    is_ddl: true,
+                    multi_item_ids: Vec::new(),
+                });
+                cx.notify();
+            }
 
-        self.delete_confirm_modal = Some(DeleteConfirmState {
-            item_id: item_id.to_string(),
-            item_name,
-            is_folder: false,
-            object_type: Some(object_type.to_string()),
-            is_ddl: true,
-            multi_item_ids: Vec::new(),
-        });
-        cx.notify();
+            _ => {}
+        }
     }
 
     pub fn confirm_modal_delete(&mut self, cx: &mut Context<Self>) {

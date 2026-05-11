@@ -453,11 +453,21 @@ impl Render for super::KeyValueDocument {
                 .justify_center()
                 .border_l_1()
                 .border_color(theme.border)
-                .child(Text::muted(if self.runner.is_primary_active() {
-                    "Loading..."
+                .child(if self.runner.is_primary_active() {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .child(
+                            Icon::new(AppIcon::Loader)
+                                .size(px(12.0))
+                                .color(theme.muted_foreground),
+                        )
+                        .child(Text::muted("Loading…"))
+                        .into_any_element()
                 } else {
-                    "Select a key to inspect"
-                }))
+                    Text::muted("Select a key to inspect").into_any_element()
+                })
                 .into_any_element()
         };
 
@@ -589,9 +599,19 @@ impl Render for super::KeyValueDocument {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(Icon::new(AppIcon::Rows3).size(px(12.0)).muted())
+                            .child(if self.runner.is_primary_active() {
+                                Icon::new(AppIcon::Loader)
+                                    .size(px(12.0))
+                                    .color(theme.muted_foreground)
+                                    .into_any_element()
+                            } else {
+                                Icon::new(AppIcon::Rows3)
+                                    .size(px(12.0))
+                                    .muted()
+                                    .into_any_element()
+                            })
                             .child(Text::caption(if self.runner.is_primary_active() {
-                                "Loading...".to_string()
+                                "Loading…".to_string()
                             } else {
                                 format!("{} keys", key_count)
                             })),

@@ -84,6 +84,14 @@ pub struct BundledFontAsset {
     pub data: &'static [u8],
 }
 
+// Metrics sweep checklist (design-bundle-application S9b.5):
+// - Button label vertical centering at Heights::BUTTON (28px)
+// - Input baseline at Heights::INPUT (32px)
+// - Sidebar group label uppercase tracking
+// - Doc tab label truncation at Heights::TAB (36px)
+// - Status-bar items at Heights::TOOLBAR (32px)
+// - Modal body min-height 96px
+// - Table row text at Heights::ROW (28px) / ROW_COMPACT (24px)
 pub struct AppFonts;
 
 impl AppFonts {

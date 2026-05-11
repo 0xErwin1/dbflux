@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use crate::ui::tokens::FontSizes;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::primitives::Text;
+use dbflux_components::tokens::RowColors;
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -636,6 +637,9 @@ impl DataTable {
         let state_entity = self.state.clone();
         let resize_drag = self.resize_drag.clone();
 
+        let pk_cols = state.pk_columns().to_vec();
+        let fk_cols = state.fk_columns().clone();
+
         let header_cells: Vec<_> = model
             .columns
             .iter()
@@ -651,6 +655,11 @@ impl DataTable {
                 } else {
                     ""
                 };
+
+                let is_pk = pk_cols.contains(&col_ix);
+                let is_fk = fk_cols.contains(&col_ix);
+
+                let type_label: String = col_spec.type_name.as_ref().to_string();
 
                 let state_for_click = state_entity.clone();
                 let resize_drag_for_down = resize_drag.clone();
@@ -683,6 +692,22 @@ impl DataTable {
                             .items_center()
                             .gap_1()
                             .overflow_hidden()
+                            // PK badge — shown as a small "PK" label in accent color
+                            .when(is_pk, |d| {
+                                d.child(
+                                    Text::body("PK")
+                                        .font_size(FontSizes::XS)
+                                        .color(theme.accent),
+                                )
+                            })
+                            // FK badge — shown as a small "FK" label in muted color
+                            .when(is_fk, |d| {
+                                d.child(
+                                    Text::body("FK")
+                                        .font_size(FontSizes::XS)
+                                        .color(theme.muted_foreground),
+                                )
+                            })
                             .child(
                                 div()
                                     .overflow_hidden()
@@ -695,6 +720,17 @@ impl DataTable {
                                             theme.table_head_foreground
                                         },
                                     )),
+                            )
+                            // Type label — dimmed suffix showing the real SQL type.
+                            .when_some(
+                                (!type_label.is_empty()).then_some(type_label),
+                                |d, label| {
+                                    d.child(
+                                        Text::body(label)
+                                            .font_size(FontSizes::XS)
+                                            .color(theme.muted_foreground.opacity(0.6)),
+                                    )
+                                },
                             ),
                     )
                     .child(div().child(if is_sorted {
@@ -861,12 +897,12 @@ fn render_rows(
             // - PendingInsert: green-ish to indicate new row
             // - PendingDelete: red-ish with visual indication of deletion
             let row_bg = match row_state {
-                dbflux_core::RowState::Dirty => None, // Cell-level only
-                dbflux_core::RowState::Saving => Some(theme.warning.opacity(0.1)),
-                dbflux_core::RowState::Error(_) => Some(theme.danger.opacity(0.15)),
+                dbflux_core::RowState::Dirty => None, // Cell-level only — see dirty cell highlight below
+                dbflux_core::RowState::Saving => Some(RowColors::saving(theme)),
+                dbflux_core::RowState::Error(_) => Some(RowColors::error(theme)),
                 dbflux_core::RowState::Clean => None,
-                dbflux_core::RowState::PendingInsert => Some(theme.success.opacity(0.15)),
-                dbflux_core::RowState::PendingDelete => Some(theme.danger.opacity(0.1)),
+                dbflux_core::RowState::PendingInsert => Some(RowColors::insert(theme)),
+                dbflux_core::RowState::PendingDelete => Some(RowColors::delete(theme)),
             };
 
             let is_pending_delete = row_state.is_pending_delete();
@@ -953,9 +989,11 @@ fn render_rows(
                         .border_r_1()
                         .border_color(theme.border)
                         .cursor_pointer()
-                        // Highlight individual dirty cells (like DBeaver)
+                        // Highlight individual dirty cells (like DBeaver).
+                        // Uses RowColors::dirty for the background and the
+                        // theme warning for the 2px left accent stroke.
                         .when(is_cell_dirty, |d| {
-                            d.bg(theme.warning.opacity(0.2))
+                            d.bg(RowColors::dirty(theme))
                                 .border_l_2()
                                 .border_color(theme.warning)
                         })

@@ -23,14 +23,14 @@ use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, CollectionInfo,
     CollectionRef, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
     ConnectionProfile, DYNAMODB_FORM, DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig,
-    DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DocumentConnection, DocumentDelete,
-    DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, FieldInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexDirection, KeyValueConnection, LanguageService, MutationCapabilities, OrderByColumn,
-    Pagination, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, SchemaDropTarget,
-    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef, SemanticFilter,
-    SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, TableInfo,
+    DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DocumentConnection,
+    DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, FieldInfo, FormValues, FormattedError, Icon,
+    IndexData, IndexDirection, KeyValueConnection, LanguageService, MutationCapabilities,
+    OrderByColumn, Pagination, PaginationStyle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef,
+    SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, TableInfo,
     TransactionCapabilities, ValidationResult, Value, WhereOperator,
 };
 
@@ -246,6 +246,7 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     display_name: "DynamoDB".into(),
     description: "AWS managed NoSQL key-value and document database".into(),
     category: DatabaseCategory::Document,
+    deployment_class: Some(DeploymentClass::CloudManaged),
     query_language: QueryLanguage::Custom("DynamoDB".into()),
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::AUTHENTICATION.bits()
@@ -345,6 +346,8 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         max_columns: 0,
         max_indexes_per_table: 0,
     }),
+    ssl_modes: None,
+    ssl_cert_fields: None,
     classification_override: None,
 });
 

@@ -21,6 +21,7 @@ use dbflux_components::controls::{
     GpuiInput as Input, InputEvent, InputState, ReadonlyTextView, SelectableText,
 };
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
+use dbflux_components::tokens::BannerColors;
 use dbflux_core::{
     CollectionRef, EventQuery, EventRecord, EventStreamTarget, Pagination, RefreshPolicy,
     observability::{EventCategory, EventOutcome, EventSeverity},
@@ -1602,21 +1603,32 @@ impl AuditDocument {
         }
     }
 
+    /// Foreground color for a level chip, tinted via `BannerColors`.
+    ///
+    /// - error → Danger (red)
+    /// - warn  → Warning (amber)
+    /// - info  → Info (blue)
+    /// - debug/trace/other → Neutral (muted)
     fn level_color(level: Option<&str>, theme: &gpui_component::Theme) -> Hsla {
         match level {
-            Some("error") => theme.danger,
-            Some("warn") => theme.warning,
-            Some("info") => theme.primary,
+            Some("error") => BannerColors::danger_fg(theme),
+            Some("warn") => BannerColors::warning_fg(theme),
+            Some("info") => BannerColors::info_fg(theme),
             _ => theme.muted_foreground,
         }
     }
 
+    /// Background tint for a level chip, sourced from `BannerColors`.
     fn level_bg_color(level: Option<&str>, theme: &gpui_component::Theme) -> Hsla {
         match level {
-            Some("error") => theme.danger.opacity(0.15),
-            Some("warn") => theme.warning.opacity(0.15),
-            Some("info") => theme.primary.opacity(0.15),
-            _ => theme.muted_foreground.opacity(0.15),
+            Some("error") => BannerColors::danger_bg(theme),
+            Some("warn") => BannerColors::warning_bg(theme),
+            Some("info") => BannerColors::info_bg(theme),
+            _ => {
+                let mut neutral = theme.muted_foreground;
+                neutral.a = 0.15;
+                neutral
+            }
         }
     }
 
@@ -2879,8 +2891,23 @@ impl AuditDocument {
                         };
                         let category = Self::short_category_label(event.category.as_deref());
 
-                        row.child(level_display)
-                            .child(Text::caption(category.to_string()))
+                        // Neutral CAT chip — categories share a single muted tint
+                        // because the LVL chip already carries severity color.
+                        let mut neutral_bg = theme.muted_foreground;
+                        neutral_bg.a = 0.15;
+                        let category_chip = div()
+                            .px_1p5()
+                            .py_px()
+                            .rounded(px(3.0))
+                            .bg(neutral_bg)
+                            .flex_shrink_0()
+                            .child(
+                                Text::label_sm(category.to_string())
+                                    .font_size(FontSizes::XS)
+                                    .color(theme.muted_foreground),
+                            );
+
+                        row.child(level_display).child(category_chip)
                     })
                     .child(div().text_sm().flex_1().truncate().child(summary_display))
                     .when_some(
@@ -3256,14 +3283,17 @@ impl AuditDocument {
                 .child(Text::caption(row_count_label))
         };
 
-        // Center: pagination — identical to DataGridPanel.
-        let center = div().flex().items_center().gap(Spacing::SM).when_some(
+        // Center: pagination — matches the DataGridPanel `‹ N / Total ›`
+        // pattern using Unicode single-chevrons (see S5.5).
+        let center = div().flex().items_center().gap(Spacing::XS).when_some(
             self.total_pages(),
             |pagination, total_pages| {
                 let page = self.pagination.current_page();
-                let offset = self.pagination.offset();
-                let start = offset + 1;
-                let end = offset + self.events.len() as u64;
+                let page_label = if total_pages > 1 {
+                    format!("{} / {}", page, total_pages)
+                } else {
+                    format!("{}", page)
+                };
 
                 pagination
                     .child(
@@ -3271,65 +3301,51 @@ impl AuditDocument {
                             .id("audit-prev-page")
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .px(Spacing::XS)
+                            .justify_center()
+                            .w(px(20.0))
+                            .h(px(20.0))
                             .rounded(Radii::SM)
-                            .text_size(FontSizes::XS)
+                            .text_size(FontSizes::SM)
                             .when(can_prev, |d| {
                                 d.cursor_pointer()
+                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.go_to_prev_page(cx);
                                     }))
                             })
-                            .when(!can_prev, |d| d.opacity(0.5))
-                            .child(Icon::new(AppIcon::ChevronLeft).size(px(12.0)).color(
-                                if can_prev {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            ))
-                            .child(Text::caption("Prev").color(if can_prev {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            })),
+                            .when(!can_prev, |d| {
+                                d.text_color(theme.muted_foreground).opacity(0.5)
+                            })
+                            .child("\u{2039}"),
                     )
-                    .child(Text::caption(if total_pages > 1 {
-                        format!("Page {}/{} ({}-{})", page, total_pages, start, end)
-                    } else {
-                        format!("Page {}/{}", page, total_pages)
-                    }))
+                    .child(
+                        Text::caption(page_label)
+                            .font_size(FontSizes::XS)
+                            .color(theme.muted_foreground),
+                    )
                     .child(
                         div()
                             .id("audit-next-page")
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .px(Spacing::XS)
+                            .justify_center()
+                            .w(px(20.0))
+                            .h(px(20.0))
                             .rounded(Radii::SM)
-                            .text_size(FontSizes::XS)
+                            .text_size(FontSizes::SM)
                             .when(can_next, |d| {
                                 d.cursor_pointer()
+                                    .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.go_to_next_page(cx);
                                     }))
                             })
-                            .when(!can_next, |d| d.opacity(0.5))
-                            .child(Text::caption("Next").color(if can_next {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            }))
-                            .child(Icon::new(AppIcon::ChevronRight).size(px(12.0)).color(
-                                if can_next {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                },
-                            )),
+                            .when(!can_next, |d| {
+                                d.text_color(theme.muted_foreground).opacity(0.5)
+                            })
+                            .child("\u{203a}"),
                     )
             },
         );
@@ -3345,7 +3361,20 @@ impl AuditDocument {
             )
             .when_some(
                 self.status_message.clone().filter(|_| self.is_loading),
-                |d, _| d.child(Text::dim("Loading...")),
+                |d, _| {
+                    d.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(
+                                Icon::new(AppIcon::Loader)
+                                    .size(px(12.0))
+                                    .color(theme.muted_foreground),
+                            )
+                            .child(Text::dim("Loading…")),
+                    )
+                },
             );
 
         workspace_footer_bar(&theme, left, center, right)

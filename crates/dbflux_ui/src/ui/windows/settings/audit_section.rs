@@ -3,7 +3,7 @@ use super::SettingsSectionId;
 use super::section_trait::SectionFocusEvent;
 use crate::app::AppStateEntity;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::tokens::Radii;
 use crate::ui::windows::settings::layout;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
@@ -284,7 +284,7 @@ impl AuditSection {
                 != self.original_settings.background_purge_interval_minutes
     }
 
-    pub(super) fn save_audit_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn save_audit_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let retention_str = self
             .input_retention_days
             .read(cx)
@@ -294,7 +294,10 @@ impl AuditSection {
         let retention_days = match retention_str.parse::<u32>() {
             Ok(value) if value >= 1 => value,
             _ => {
-                cx.toast_error("Retention days must be a number >= 1", window);
+                Toast::error("Retention days must be a number >= 1")
+                    .meta_right(now_hms())
+                    .action(copy_action("Retention days must be a number >= 1"))
+                    .push(cx);
                 return;
             }
         };
@@ -308,7 +311,10 @@ impl AuditSection {
         let max_detail_bytes = match max_detail_str.parse::<usize>() {
             Ok(value) if value >= 1024 => value,
             _ => {
-                cx.toast_error("Max detail bytes must be >= 1024", window);
+                Toast::error("Max detail bytes must be >= 1024")
+                    .meta_right(now_hms())
+                    .action(copy_action("Max detail bytes must be >= 1024"))
+                    .push(cx);
                 return;
             }
         };
@@ -322,7 +328,10 @@ impl AuditSection {
         let purge_interval = match purge_interval_str.parse::<u32>() {
             Ok(value) => value,
             _ => {
-                cx.toast_error("Background purge interval must be a number", window);
+                Toast::error("Background purge interval must be a number")
+                    .meta_right(now_hms())
+                    .action(copy_action("Background purge interval must be a number"))
+                    .push(cx);
                 return;
             }
         };
@@ -339,12 +348,14 @@ impl AuditSection {
         // (real DB could not be opened), do not allow enabling it. This avoids the
         // write-then-correct pattern that could leave bad persisted state on crash.
         if app_state.is_audit_degraded() && self.settings.enabled {
-            cx.toast_error(
-                "Audit cannot be enabled: the audit database could not be opened. \
+            let msg = "Audit cannot be enabled: the audit database could not be opened. \
                  Please restart the application. If the problem persists, check disk space \
-                 and file permissions for the dbflux data directory.",
-                window,
-            );
+                 and file permissions for the dbflux data directory.";
+            Toast::error("Audit cannot be enabled")
+                .meta_right(now_hms())
+                .body(msg)
+                .action(copy_action(format!("Audit cannot be enabled: {}", msg)))
+                .push(cx);
             // Revert to disabled in-memory only; do NOT write — user must uncheck
             // the enabled checkbox and save again to persist a disabled state.
             self.settings.enabled = false;
@@ -352,7 +363,12 @@ impl AuditSection {
         }
 
         if let Err(e) = repo.upsert(&self.settings) {
-            cx.toast_error(format!("Failed to save: {}", e), window);
+            let body = e.to_string();
+            Toast::error("Failed to save")
+                .meta_right(now_hms())
+                .body(body.clone())
+                .action(copy_action(format!("Failed to save: {}", body)))
+                .push(cx);
             return;
         }
 
@@ -364,7 +380,9 @@ impl AuditSection {
 
         self.original_settings = self.settings.clone();
 
-        cx.toast_success("Audit settings saved.", window);
+        Toast::success("Audit settings saved.")
+            .meta_right(now_hms())
+            .push(cx);
     }
 }
 

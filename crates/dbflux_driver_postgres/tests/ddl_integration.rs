@@ -7,8 +7,7 @@
 )]
 
 use dbflux_core::{
-    ConnectionProfile, ConstraintKind, DbConfig, DbDriver, DbError, IndexData, QueryRequest,
-    SslMode, Value,
+    ConnectionProfile, ConstraintKind, DbConfig, DbDriver, DbError, IndexData, QueryRequest, Value,
 };
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::{containers, ddl_fixtures::PostgresFixtures};
@@ -27,7 +26,10 @@ fn connect_postgres(
             port: 5432,
             user: String::new(),
             database: "postgres".to_string(),
-            ssl_mode: SslMode::Prefer,
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         },

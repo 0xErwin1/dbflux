@@ -212,6 +212,20 @@ pub enum SchemaNodeId {
         table: String,
     },
 
+    // Dependents disclosure (views, FK children, triggers that use a table)
+    DependentsFolder {
+        profile_id: Uuid,
+        schema: String,
+        table: String,
+    },
+    DependentItem {
+        profile_id: Uuid,
+        schema: String,
+        table: String,
+        /// The `qualified_name` of the `RelationRef`.
+        name: String,
+    },
+
     // Scripts section (not connection-bound)
     ScriptsFolder {
         path: Option<String>,
@@ -262,6 +276,8 @@ pub enum SchemaNodeKind {
     EnumValue,
     BaseType,
     Placeholder,
+    DependentsFolder,
+    DependentItem,
     ScriptsFolder,
     ScriptFile,
 }
@@ -309,6 +325,8 @@ impl SchemaNodeId {
             Self::EnumValue { .. } => SchemaNodeKind::EnumValue,
             Self::BaseType { .. } => SchemaNodeKind::BaseType,
             Self::Placeholder { .. } => SchemaNodeKind::Placeholder,
+            Self::DependentsFolder { .. } => SchemaNodeKind::DependentsFolder,
+            Self::DependentItem { .. } => SchemaNodeKind::DependentItem,
             Self::ScriptsFolder { .. } => SchemaNodeKind::ScriptsFolder,
             Self::ScriptFile { .. } => SchemaNodeKind::ScriptFile,
         }
@@ -355,7 +373,9 @@ impl SchemaNodeId {
             | Self::CollectionIndex { profile_id, .. }
             | Self::EnumValue { profile_id, .. }
             | Self::BaseType { profile_id, .. }
-            | Self::Placeholder { profile_id, .. } => Some(*profile_id),
+            | Self::Placeholder { profile_id, .. }
+            | Self::DependentsFolder { profile_id, .. }
+            | Self::DependentItem { profile_id, .. } => Some(*profile_id),
         }
     }
 }
@@ -402,6 +422,8 @@ const P_BASE_TYPE: &str = "BT";
 const P_PLACEHOLDER: &str = "PH";
 const P_SCRIPTS_FOLDER: &str = "SCF";
 const P_SCRIPT_FILE: &str = "SCR";
+const P_DEPENDENTS_FOLDER: &str = "DEPF";
+const P_DEPENDENT_ITEM: &str = "DEP";
 
 impl fmt::Display for SchemaNodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -707,6 +729,29 @@ impl fmt::Display for SchemaNodeId {
                 table,
             } => {
                 write!(f, "{}|{}|{}|{}", P_PLACEHOLDER, profile_id, schema, table)
+            }
+            Self::DependentsFolder {
+                profile_id,
+                schema,
+                table,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_DEPENDENTS_FOLDER, profile_id, schema, table
+                )
+            }
+            Self::DependentItem {
+                profile_id,
+                schema,
+                table,
+                name,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}|{}",
+                    P_DEPENDENT_ITEM, profile_id, schema, table, name
+                )
             }
             Self::ScriptsFolder { path } => match path {
                 Some(p) => write!(f, "{}|{}", P_SCRIPTS_FOLDER, p),
@@ -1191,6 +1236,32 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_DEPENDENTS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let schema = parts.get(2).ok_or_else(err)?.to_string();
+                let table = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::DependentsFolder {
+                    profile_id,
+                    schema,
+                    table,
+                })
+            }
+
+            P_DEPENDENT_ITEM => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let schema = parts.get(2).ok_or_else(err)?.to_string();
+                let table = parts.get(3).ok_or_else(err)?.to_string();
+                let name = parts.get(4).ok_or_else(err)?.to_string();
+                Ok(Self::DependentItem {
+                    profile_id,
+                    schema,
+                    table,
+                    name,
+                })
+            }
+
             P_SCRIPT_FILE => {
                 // Path may contain pipe characters, so rejoin everything after the prefix
                 let path = parts[1..].join("|");
@@ -1232,6 +1303,7 @@ impl SchemaNodeKind {
                 | Self::CustomType
                 | Self::ScriptsFolder
                 | Self::ScriptFile
+                | Self::DependentsFolder
         )
     }
 
@@ -1254,6 +1326,7 @@ impl SchemaNodeKind {
                 | Self::Database
                 | Self::CustomType
                 | Self::ScriptsFolder
+                | Self::DependentsFolder
         )
     }
 

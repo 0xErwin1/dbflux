@@ -29,6 +29,8 @@ impl Heights {
     /// Height of the active-tab indicator stripe — a 1 px absolutely-positioned
     /// child div rendered at the bottom edge of the active tab item.
     pub const TAB_STRIPE: Pixels = px(1.0);
+    /// Fixed height of the SQL results panel in Split layout.
+    pub const RESULTS_PANEL: Pixels = px(220.0);
 }
 
 pub struct FontSizes;
@@ -101,6 +103,22 @@ impl Shadows {
                 y: px(8.0),
             },
             blur_radius: px(24.0),
+            spread_radius: px(0.0),
+        }
+    }
+
+    /// Left-edge shadow for slide-in inspector panels.
+    ///
+    /// Casts the shadow to the left (negative x offset) to give the panel a
+    /// sense of depth relative to the content it overlays.
+    pub fn inspector_left() -> BoxShadow {
+        BoxShadow {
+            color: gpui::hsla(0.0, 0.0, 0.0, 0.28),
+            offset: Point {
+                x: px(-6.0),
+                y: px(0.0),
+            },
+            blur_radius: px(16.0),
             spread_radius: px(0.0),
         }
     }
@@ -221,6 +239,162 @@ impl SyntaxColors {
     pub fn schema() -> Hsla {
         rgb(0x569CD6).into()
     }
+}
+
+/// Row-state background tints for the data grid.
+///
+/// All colors are fixed RGBA values sourced from the design-token sheet
+/// (`tokens.css --c-row-*`). They are intentionally theme-invariant: the
+/// tints are chosen to read on both dark and light workspace surfaces.
+pub struct RowColors;
+
+impl RowColors {
+    /// Even-row alternating tint — delegates to the theme's built-in `table_even`.
+    pub fn even(theme: &gpui_component::Theme) -> Hsla {
+        theme.table_even
+    }
+
+    /// Odd rows use the transparent base surface (no tint).
+    pub fn odd(_theme: &gpui_component::Theme) -> Hsla {
+        gpui::hsla(0.0, 0.0, 0.0, 0.0)
+    }
+
+    /// Pending-insert row: green tint `rgba(170,217,76,0.15)`.
+    pub fn insert(_theme: &gpui_component::Theme) -> Hsla {
+        gpui::hsla(76.0 / 360.0, 0.65, 0.57, 0.15)
+    }
+
+    /// Dirty (unsaved edit) row: amber tint `rgba(255,180,84,0.20)`.
+    pub fn dirty(_theme: &gpui_component::Theme) -> Hsla {
+        gpui::hsla(33.0 / 360.0, 1.0, 0.66, 0.20)
+    }
+
+    /// Pending-delete row: red tint `rgba(240,113,120,0.10)`.
+    pub fn delete(_theme: &gpui_component::Theme) -> Hsla {
+        gpui::hsla(358.0 / 360.0, 0.82, 0.69, 0.10)
+    }
+
+    /// Row with a validation error: red tint `rgba(240,113,120,0.15)`.
+    pub fn error(_theme: &gpui_component::Theme) -> Hsla {
+        gpui::hsla(358.0 / 360.0, 0.82, 0.69, 0.15)
+    }
+
+    /// In-flight save row: faint amber `rgba(255,180,84,0.10)`.
+    pub fn saving(_theme: &gpui_component::Theme) -> Hsla {
+        gpui::hsla(33.0 / 360.0, 1.0, 0.66, 0.10)
+    }
+}
+
+/// Banner background and foreground colors for status banners.
+///
+/// Values are sourced from the design-token sheet (`tokens.css --c-banner-*`).
+/// `info` maps to `--c-banner-wait-*`, `success` to `--c-banner-ok-*`, and
+/// `danger` to `--c-banner-err-*`. `warning` derives from the theme's primary
+/// amber at reduced alpha (no separate token in tokens.css).
+pub struct BannerColors;
+
+impl BannerColors {
+    /// Info/wait banner background: `#1E3A5F`.
+    pub fn info_bg(_theme: &gpui_component::Theme) -> Hsla {
+        rgb(0x1E3A5F).into()
+    }
+
+    /// Info/wait banner foreground: `#93C5FD`.
+    pub fn info_fg(_theme: &gpui_component::Theme) -> Hsla {
+        rgb(0x93C5FD).into()
+    }
+
+    /// Success banner background: `#14532D`.
+    pub fn success_bg(_theme: &gpui_component::Theme) -> Hsla {
+        rgb(0x14532D).into()
+    }
+
+    /// Success banner foreground: `#86EFAC`.
+    pub fn success_fg(_theme: &gpui_component::Theme) -> Hsla {
+        rgb(0x86EFAC).into()
+    }
+
+    /// Warning banner background: theme primary at 0.20 alpha.
+    pub fn warning_bg(theme: &gpui_component::Theme) -> Hsla {
+        let mut color = theme.primary;
+        color.a = 0.20;
+        color
+    }
+
+    /// Warning banner foreground: theme primary at full opacity.
+    pub fn warning_fg(theme: &gpui_component::Theme) -> Hsla {
+        let mut color = theme.primary;
+        color.a = 1.0;
+        color
+    }
+
+    /// Danger banner background: `#7F1D1D`.
+    pub fn danger_bg(_theme: &gpui_component::Theme) -> Hsla {
+        rgb(0x7F1D1D).into()
+    }
+
+    /// Danger banner foreground: `#FCA5A5`.
+    pub fn danger_fg(_theme: &gpui_component::Theme) -> Hsla {
+        rgb(0xFCA5A5).into()
+    }
+}
+
+/// Status-dot palette colors for connection/task indicators.
+///
+/// The palette returns the dot color only — animation (pulsing) is the
+/// consumer's responsibility.
+pub struct StatusDotPalette;
+
+impl StatusDotPalette {
+    /// Idle dot: theme `muted_foreground`.
+    pub fn idle(theme: &gpui_component::Theme) -> Hsla {
+        theme.muted_foreground
+    }
+
+    /// Busy dot: theme `primary` (amber). Consumer drives the pulse animation.
+    pub fn busy(theme: &gpui_component::Theme) -> Hsla {
+        theme.primary
+    }
+
+    /// Success dot: theme `success`.
+    pub fn success(theme: &gpui_component::Theme) -> Hsla {
+        theme.success
+    }
+
+    /// Warning dot: theme `warning`.
+    pub fn warning(theme: &gpui_component::Theme) -> Hsla {
+        theme.warning
+    }
+
+    /// Danger dot: theme `danger`.
+    pub fn danger(theme: &gpui_component::Theme) -> Hsla {
+        theme.danger
+    }
+
+    /// Neutral dot: theme `muted_foreground` at 0.5 alpha.
+    pub fn neutral(theme: &gpui_component::Theme) -> Hsla {
+        let mut color = theme.muted_foreground;
+        color.a = 0.5;
+        color
+    }
+}
+
+/// Shared animation timing constants.
+pub struct Anim;
+
+impl Anim {
+    /// Interval between pulse steps in milliseconds.
+    pub const PULSE_INTERVAL_MS: u64 = 100;
+
+    /// Duration of a cross-fade transition in milliseconds.
+    pub const FADE_MS: u64 = 120;
+}
+
+pub struct Widths;
+
+impl Widths {
+    /// Width of the row inspector overlay panel.
+    pub const INSPECTOR: Pixels = px(320.0);
 }
 
 #[cfg(test)]

@@ -19,8 +19,9 @@ use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    AuthProfile, AuthSessionState, ConnectionHookBindings, DbDriver, DbKind, DriverFormDef,
-    FormFieldDef, FormFieldKind, GlobalOverrides, SshAuthMethod, SshTunnelProfile, ValueRef,
+    AuthProfile, AuthSessionState, ConnectionHookBindings, DbConfig, DbDriver, DbKind,
+    DriverFormDef, FormFieldDef, FormFieldKind, GlobalOverrides, SshAuthMethod, SshTunnelProfile,
+    ValueRef,
 };
 use gpui::*;
 use gpui_component::Root;
@@ -43,6 +44,18 @@ fn auth_profile_needs_login(
 
 fn uses_aws_auth_profile_dropdown(driver_id: Option<&str>) -> bool {
     matches!(driver_id, Some("dynamodb") | Some("cloudwatch"))
+}
+
+/// Extracts the current SSL mode id string from a `DbConfig` for display in the UI segmented
+/// control. Returns `None` for configs that have no `ssl_mode` field.
+fn ssl_mode_from_config(config: &DbConfig) -> Option<String> {
+    match config {
+        DbConfig::Postgres { ssl_mode, .. }
+        | DbConfig::MySQL { ssl_mode, .. }
+        | DbConfig::MongoDB { ssl_mode, .. }
+        | DbConfig::Redis { ssl_mode, .. } => ssl_mode.clone(),
+        _ => None,
+    }
 }
 
 /// Focus state for driver selection screen
@@ -152,6 +165,14 @@ enum AccessTabMode {
     ManagedSsm,
 }
 
+/// Identifies which SSL certificate slot a file picker writes into.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum SslCertSlot {
+    CaCert,
+    ClientCert,
+    ClientKey,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum TestStatus {
     None,
@@ -166,6 +187,9 @@ struct DriverInfo {
     icon: dbflux_core::Icon,
     name: String,
     description: String,
+    category: dbflux_core::DatabaseCategory,
+    default_port: Option<u16>,
+    uri_scheme: String,
 }
 
 pub struct ConnectionManagerWindow {
@@ -180,6 +204,14 @@ pub struct ConnectionManagerWindow {
     editing_profile_id: Option<uuid::Uuid>,
 
     input_name: Entity<InputState>,
+    /// Filter text for the driver-select picker. Bound to a text input that
+    /// is focused on `/` from anywhere within the picker. The query is read
+    /// directly off the input in `render_driver_select`, so no cached field
+    /// is needed.
+    driver_filter_input: Entity<InputState>,
+    /// Tracks whether the driver-picker filter input currently owns focus.
+    /// Used to decide whether Esc should blur the input or close the window.
+    driver_filter_focused: bool,
     /// Driver-specific field inputs, keyed by field ID.
     driver_inputs: HashMap<String, Entity<InputState>>,
     /// Password is separate due to visibility toggle and save checkbox UI.
@@ -210,10 +242,24 @@ pub struct ConnectionManagerWindow {
     validation_errors: Vec<String>,
     test_status: TestStatus,
     test_error: Option<String>,
+    /// Enriched test-connection result for the success banner body.
+    test_result: Option<dbflux_core::TestConnectionResult>,
+    /// Active SSL mode id for the TRANSPORT section segmented control.
+    selected_ssl_mode: String,
+    /// SSL certificate path inputs — shown conditionally based on selected_ssl_mode and driver metadata.
+    ssl_ca_cert_input: Entity<InputState>,
+    ssl_client_cert_input: Entity<InputState>,
+    ssl_client_key_input: Entity<InputState>,
     ssh_test_status: TestStatus,
     ssh_test_error: Option<String>,
     pending_ssh_key_path: Option<String>,
     pending_file_path: Option<String>,
+    /// Pending cert-file path drained into `ssl_ca_cert_input` on next render.
+    pending_ssl_ca_cert_path: Option<String>,
+    /// Pending cert-file path drained into `ssl_client_cert_input` on next render.
+    pending_ssl_client_cert_path: Option<String>,
+    /// Pending cert-file path drained into `ssl_client_key_input` on next render.
+    pending_ssl_client_key_path: Option<String>,
     pending_ssh_tunnel_selection: Option<Uuid>,
 
     show_password: bool,
@@ -306,15 +352,23 @@ impl ConnectionManagerWindow {
             .read(cx)
             .drivers()
             .iter()
-            .map(|(driver_id, driver)| DriverInfo {
-                id: driver_id.clone(),
-                icon: driver.metadata().icon,
-                name: driver.display_name().to_string(),
-                description: driver.description().to_string(),
+            .map(|(driver_id, driver)| {
+                let metadata = driver.metadata();
+                DriverInfo {
+                    id: driver_id.clone(),
+                    icon: metadata.icon,
+                    name: driver.display_name().to_string(),
+                    description: driver.description().to_string(),
+                    category: metadata.category,
+                    default_port: metadata.default_port,
+                    uri_scheme: metadata.uri_scheme.clone(),
+                }
             })
             .collect();
 
         let input_name = cx.new(|cx| InputState::new(window, cx).placeholder("Connection name"));
+        let driver_filter_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter by name, driver, port…"));
         let input_password = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Password")
@@ -349,6 +403,13 @@ impl ConnectionManagerWindow {
                 .placeholder("SSH password")
                 .masked(true)
         });
+
+        let ssl_ca_cert_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Path to CA certificate"));
+        let ssl_client_cert_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Path to client certificate"));
+        let ssl_client_key_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Path to client key"));
 
         let ssh_tunnel_dropdown =
             cx.new(|_cx| Dropdown::new("ssh-tunnel-dropdown").placeholder("Select SSH Tunnel"));
@@ -507,7 +568,24 @@ impl ConnectionManagerWindow {
             },
         );
 
+        let driver_filter_focus_sub = cx.subscribe_in(
+            &driver_filter_input,
+            window,
+            |this, _, event: &InputEvent, _window, cx| match event {
+                InputEvent::Focus => {
+                    this.driver_filter_focused = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.driver_filter_focused = false;
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+
         let subscriptions = vec![
+            driver_filter_focus_sub,
             dropdown_subscription,
             proxy_dropdown_subscription,
             auth_profile_dropdown_sub,
@@ -542,6 +620,8 @@ impl ConnectionManagerWindow {
             form_save_ssh_secret: true,
             editing_profile_id: None,
             input_name,
+            driver_filter_input,
+            driver_filter_focused: false,
             driver_inputs: HashMap::new(),
             input_password,
             host_value_source_selector,
@@ -567,10 +647,18 @@ impl ConnectionManagerWindow {
             validation_errors: Vec::new(),
             test_status: TestStatus::None,
             test_error: None,
+            test_result: None,
+            selected_ssl_mode: String::new(),
+            ssl_ca_cert_input,
+            ssl_client_cert_input,
+            ssl_client_key_input,
             ssh_test_status: TestStatus::None,
             ssh_test_error: None,
             pending_ssh_key_path: None,
             pending_file_path: None,
+            pending_ssl_ca_cert_path: None,
+            pending_ssl_client_cert_path: None,
+            pending_ssl_client_key_path: None,
             pending_ssh_tunnel_selection: None,
             show_password: false,
             show_ssh_passphrase: false,
@@ -670,10 +758,71 @@ impl ConnectionManagerWindow {
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
+            // Restore the SSL mode from the saved config; fall back to the driver's first
+            // declared mode if the config doesn't carry one (e.g. URI mode or non-SSL drivers).
+            instance.selected_ssl_mode =
+                ssl_mode_from_config(&profile.config).unwrap_or_else(|| {
+                    driver
+                        .metadata()
+                        .ssl_modes
+                        .and_then(|modes| modes.first())
+                        .map(|m| m.id.to_string())
+                        .unwrap_or_default()
+                });
+
             let form = driver.form_definition();
             instance.create_driver_inputs(form, window, cx);
             let values = driver.extract_values(&profile.config);
             instance.apply_form_values(&values, form, window, cx);
+
+            // Restore SSL cert paths from saved config.
+            let (root_cert, client_cert, client_key) = match &profile.config {
+                DbConfig::Postgres {
+                    ssl_root_cert_path,
+                    ssl_client_cert_path,
+                    ssl_client_key_path,
+                    ..
+                }
+                | DbConfig::MySQL {
+                    ssl_root_cert_path,
+                    ssl_client_cert_path,
+                    ssl_client_key_path,
+                    ..
+                }
+                | DbConfig::MongoDB {
+                    ssl_root_cert_path,
+                    ssl_client_cert_path,
+                    ssl_client_key_path,
+                    ..
+                }
+                | DbConfig::Redis {
+                    ssl_root_cert_path,
+                    ssl_client_cert_path,
+                    ssl_client_key_path,
+                    ..
+                } => (
+                    ssl_root_cert_path.clone().unwrap_or_default(),
+                    ssl_client_cert_path.clone().unwrap_or_default(),
+                    ssl_client_key_path.clone().unwrap_or_default(),
+                ),
+                _ => (String::new(), String::new(), String::new()),
+            };
+
+            if !root_cert.is_empty() {
+                instance.ssl_ca_cert_input.update(cx, |state, cx| {
+                    state.set_value(&root_cert, window, cx);
+                });
+            }
+            if !client_cert.is_empty() {
+                instance.ssl_client_cert_input.update(cx, |state, cx| {
+                    state.set_value(&client_cert, window, cx);
+                });
+            }
+            if !client_key.is_empty() {
+                instance.ssl_client_key_input.update(cx, |state, cx| {
+                    state.set_value(&client_key, window, cx);
+                });
+            }
         }
 
         instance.input_name.update(cx, |state, cx| {
@@ -836,6 +985,14 @@ impl ConnectionManagerWindow {
         });
 
         if let Some(driver) = driver {
+            // Initialize SSL mode to the driver's first declared ssl mode option, if any.
+            self.selected_ssl_mode = driver
+                .metadata()
+                .ssl_modes
+                .and_then(|modes| modes.first())
+                .map(|m| m.id.to_string())
+                .unwrap_or_default();
+
             self.create_driver_inputs(driver.form_definition(), window, cx);
         }
 
@@ -2725,6 +2882,90 @@ impl ConnectionManagerWindow {
             }
         })
         .detach();
+    }
+
+    /// Open a native file picker filtered to common cert/key extensions and write the
+    /// chosen path into the supplied `pending` slot. The slot is drained on the next
+    /// render and applied to the corresponding `InputState`.
+    pub(super) fn browse_ssl_cert(
+        &mut self,
+        slot: SslCertSlot,
+        current_value: Option<String>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let this = cx.entity().clone();
+
+        let title = match slot {
+            SslCertSlot::CaCert => "Select CA certificate",
+            SslCertSlot::ClientCert => "Select client certificate",
+            SslCertSlot::ClientKey => "Select client key",
+        };
+
+        let start_dir = current_value
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .and_then(|v| std::path::Path::new(v).parent().map(|p| p.to_path_buf()))
+            .or_else(dirs::home_dir)
+            .unwrap_or_default();
+
+        let task = cx.background_executor().spawn(async move {
+            let dialog = rfd::FileDialog::new()
+                .set_title(title)
+                .set_directory(&start_dir)
+                .add_filter("Certificates / keys", &["pem", "crt", "cer", "key", "der"])
+                .add_filter("All files", &["*"]);
+
+            dialog.pick_file()
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let path = task.await;
+
+            if let Some(path) = path
+                && let Err(error) = cx.update(|cx| {
+                    this.update(cx, |this, cx| {
+                        let path_str = path.to_string_lossy().to_string();
+                        match slot {
+                            SslCertSlot::CaCert => {
+                                this.pending_ssl_ca_cert_path = Some(path_str);
+                            }
+                            SslCertSlot::ClientCert => {
+                                this.pending_ssl_client_cert_path = Some(path_str);
+                            }
+                            SslCertSlot::ClientKey => {
+                                this.pending_ssl_client_key_path = Some(path_str);
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+            {
+                log::warn!(
+                    "Failed to apply selected SSL cert path to UI state: {:?}",
+                    error
+                );
+            }
+        })
+        .detach();
+    }
+
+    /// Clear the value of an SSL cert input.
+    pub(super) fn clear_ssl_cert(
+        &mut self,
+        slot: SslCertSlot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = match slot {
+            SslCertSlot::CaCert => &self.ssl_ca_cert_input,
+            SslCertSlot::ClientCert => &self.ssl_client_cert_input,
+            SslCertSlot::ClientKey => &self.ssl_client_key_input,
+        };
+        input.update(cx, |state, cx| {
+            state.set_value(String::new(), window, cx);
+        });
+        cx.notify();
     }
 
     pub(super) fn browse_file_path(&mut self, _window: &mut Window, cx: &mut Context<Self>) {

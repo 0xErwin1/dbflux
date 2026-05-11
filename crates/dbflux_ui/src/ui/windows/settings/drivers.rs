@@ -5,12 +5,12 @@ use super::form_section::FormSection;
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use crate::ui::components::form_renderer;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Radii;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Icon, Label};
+use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Label};
 use dbflux_components::typography::{
     Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel,
 };
@@ -590,11 +590,15 @@ impl DriversSection {
         Ok(())
     }
 
-    pub(super) fn save_driver_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn save_driver_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.drv_editor_dirty
             && let Err(message) = self.drv_sync_selected_editor(cx, true)
         {
-            cx.toast_error(message, window);
+            let toast_msg = message.to_string();
+            Toast::error(toast_msg.clone())
+                .meta_right(now_hms())
+                .action(copy_action(toast_msg))
+                .push(cx);
             return;
         }
 
@@ -609,7 +613,12 @@ impl DriversSection {
             &self.drv_settings,
         ) {
             log::error!("Failed to save driver settings to SQLite: {}", e);
-            cx.toast_error(format!("Failed to save: {}", e), window);
+            let toast_body = e.to_string();
+            Toast::error("Failed to save")
+                .meta_right(now_hms())
+                .body(toast_body.clone())
+                .action(copy_action(format!("Failed to save: {}", toast_body)))
+                .push(cx);
             return;
         }
 
@@ -657,15 +666,16 @@ impl DriversSection {
         }
 
         if all_warnings.is_empty() {
-            cx.toast_success("Driver settings saved.", window);
+            Toast::success("Driver settings saved.")
+                .meta_right(now_hms())
+                .push(cx);
         } else {
-            cx.toast_warning(
-                format!(
-                    "Driver settings saved with warnings:\n{}",
-                    all_warnings.join("\n")
-                ),
-                window,
-            );
+            let body = all_warnings.join("\n");
+            Toast::warning("Driver settings saved with warnings")
+                .meta_right(now_hms())
+                .body(body)
+                .collapsible()
+                .push(cx);
         }
     }
 
@@ -756,11 +766,18 @@ impl DriversSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
+                                            .flex_1()
                                             .child(driver_entry_name_text(
                                                 entry.metadata.display_name.clone(),
                                             ))
                                             .child(driver_entry_key_text(entry.driver_key.clone())),
-                                    ),
+                                    )
+                                    .when_some(entry.metadata.deployment_class, |row, class| {
+                                        row.child(Badge::new(
+                                            class.display_name().to_uppercase(),
+                                            BadgeVariant::Neutral,
+                                        ))
+                                    }),
                             )
                     })),
             )

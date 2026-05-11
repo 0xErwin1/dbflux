@@ -12,18 +12,18 @@ use dbflux_core::{
     CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
     CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest, DocumentConnection,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest,
-    DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest, ForeignKeyBuilder,
-    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel,
-    KeyValueConnection, MutationCapabilities, OrderByColumn, POSTGRES_FORM, PaginationStyle,
-    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TypeDefinition, Value, ViewInfo, WhereOperator, generate_create_table,
+    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest,
+    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest,
+    ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
+    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, POSTGRES_FORM,
+    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
+    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures,
+    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
+    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo,
+    TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator, generate_create_table,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
     generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri,
 };
@@ -41,6 +41,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     display_name: "PostgreSQL".into(),
     description: "Advanced open-source relational database".into(),
     category: DatabaseCategory::Relational,
+    deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
@@ -162,6 +163,36 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         max_identifier_length: 63,
         max_columns: 250,
         max_indexes_per_table: 32,
+    }),
+    ssl_modes: Some(&[
+        dbflux_core::SslModeOption {
+            id: "disable",
+            label: "disable",
+        },
+        dbflux_core::SslModeOption {
+            id: "allow",
+            label: "allow",
+        },
+        dbflux_core::SslModeOption {
+            id: "prefer",
+            label: "prefer",
+        },
+        dbflux_core::SslModeOption {
+            id: "require",
+            label: "require",
+        },
+        dbflux_core::SslModeOption {
+            id: "verify-ca",
+            label: "verify-ca",
+        },
+        dbflux_core::SslModeOption {
+            id: "verify-full",
+            label: "verify-full",
+        },
+    ]),
+    ssl_cert_fields: Some(dbflux_core::SslCertFields {
+        root_cert: true,
+        client_cert: true,
     }),
     classification_override: None,
 });
@@ -484,7 +515,7 @@ impl DbDriver for PostgresDriver {
                 &config.user,
                 &config.database,
                 password,
-                config.ssl_mode,
+                &config.ssl_mode,
             )
         } else {
             self.connect_direct(
@@ -493,7 +524,7 @@ impl DbDriver for PostgresDriver {
                 &config.user,
                 &config.database,
                 password,
-                config.ssl_mode,
+                &config.ssl_mode,
             )
         }
     }
@@ -525,7 +556,10 @@ impl DbDriver for PostgresDriver {
                 port: 5432,
                 user: String::new(),
                 database: String::new(),
-                ssl_mode: SslMode::Prefer,
+                ssl_mode: Some("prefer".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             });
@@ -563,7 +597,10 @@ impl DbDriver for PostgresDriver {
             port,
             user,
             database,
-            ssl_mode: SslMode::Prefer,
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -631,6 +668,9 @@ impl DbDriver for PostgresDriver {
                 port,
                 user,
                 ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
@@ -641,7 +681,10 @@ impl DbDriver for PostgresDriver {
                 port: *port,
                 user: user.clone(),
                 database: database.to_string(),
-                ssl_mode: *ssl_mode,
+                ssl_mode: ssl_mode.clone(),
+                ssl_root_cert_path: ssl_root_cert_path.clone(),
+                ssl_client_cert_path: ssl_client_cert_path.clone(),
+                ssl_client_key_path: ssl_client_key_path.clone(),
                 ssh_tunnel: ssh_tunnel.clone(),
                 ssh_tunnel_profile_id: *ssh_tunnel_profile_id,
             }),
@@ -703,7 +746,8 @@ struct ExtractedPostgresConfig {
     port: u16,
     user: String,
     database: String,
-    ssl_mode: SslMode,
+    /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`). Defaults to `"prefer"` when absent.
+    ssl_mode: String,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -726,7 +770,7 @@ fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig,
             port: *port,
             user: user.clone(),
             database: database.clone(),
-            ssl_mode: *ssl_mode,
+            ssl_mode: ssl_mode.clone().unwrap_or_else(|| "prefer".to_string()),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -741,9 +785,18 @@ struct PostgresConnectParams<'a> {
     user: &'a str,
     password: &'a str,
     database: &'a str,
-    ssl_mode: SslMode,
+    /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`).
+    ssl_mode: &'a str,
 }
 
+/// Establishes a PostgreSQL connection using the native sslmode identifier from the profile.
+///
+/// Maps sslmode string values directly to the appropriate TLS strategy, matching PostgreSQL's
+/// libpq semantics:
+/// - `"disable"` — no TLS
+/// - `"allow"` / `"prefer"` — try TLS first, fall back to plain
+/// - `"require"` — TLS required, self-signed certs accepted
+/// - `"verify-ca"` / `"verify-full"` — TLS required with certificate validation
 fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
     let conn_string = format!(
         "host={} port={} user={} password={} dbname={} connect_timeout=30",
@@ -751,12 +804,13 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
     );
 
     match params.ssl_mode {
-        SslMode::Disable => Client::connect(&conn_string, NoTls)
+        "disable" => Client::connect(&conn_string, NoTls)
             .map_err(|e| format_pg_error(&e, params.host, params.port)),
 
-        SslMode::Prefer | SslMode::Require => {
+        "allow" | "prefer" => {
+            // Try SSL with permissive cert checking; fall back to plain if SSL fails.
             let connector = TlsConnector::builder()
-                .danger_accept_invalid_certs(params.ssl_mode == SslMode::Prefer)
+                .danger_accept_invalid_certs(true)
                 .build()
                 .map_err(|e| {
                     DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
@@ -766,11 +820,54 @@ fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
 
             match Client::connect(&conn_string, tls) {
                 Ok(client) => Ok(client),
-                Err(_) if params.ssl_mode == SslMode::Prefer => {
-                    Client::connect(&conn_string, NoTls)
-                        .map_err(|e| format_pg_error(&e, params.host, params.port))
-                }
-                Err(e) => Err(format_pg_error(&e, params.host, params.port)),
+                Err(_) => Client::connect(&conn_string, NoTls)
+                    .map_err(|e| format_pg_error(&e, params.host, params.port)),
+            }
+        }
+
+        "require" => {
+            let connector = TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .map_err(|e| {
+                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
+                })?;
+
+            let tls = MakeTlsConnector::new(connector);
+
+            Client::connect(&conn_string, tls)
+                .map_err(|e| format_pg_error(&e, params.host, params.port))
+        }
+
+        "verify-ca" | "verify-full" => {
+            let connector = TlsConnector::builder()
+                .danger_accept_invalid_certs(false)
+                .build()
+                .map_err(|e| {
+                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
+                })?;
+
+            let tls = MakeTlsConnector::new(connector);
+
+            Client::connect(&conn_string, tls)
+                .map_err(|e| format_pg_error(&e, params.host, params.port))
+        }
+
+        // Unknown modes fall back to prefer behaviour (try TLS, allow plain fallback).
+        _ => {
+            let connector = TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .map_err(|e| {
+                    DbError::ConnectionFailed(format!("TLS setup failed: {}", e).into())
+                })?;
+
+            let tls = MakeTlsConnector::new(connector);
+
+            match Client::connect(&conn_string, tls) {
+                Ok(client) => Ok(client),
+                Err(_) => Client::connect(&conn_string, NoTls)
+                    .map_err(|e| format_pg_error(&e, params.host, params.port)),
             }
         }
     }
@@ -838,7 +935,7 @@ impl PostgresDriver {
         user: &str,
         database: &str,
         password: Option<&str>,
-        ssl_mode: SslMode,
+        ssl_mode: &str,
     ) -> Result<Box<dyn Connection>, DbError> {
         log::info!(
             "Connecting directly to PostgreSQL at {}:{} as {} (database: {})",
@@ -879,7 +976,7 @@ impl PostgresDriver {
         db_user: &str,
         database: &str,
         db_password: Option<&str>,
-        ssl_mode: SslMode,
+        ssl_mode: &str,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -1587,6 +1684,59 @@ impl Connection for PostgresConnection {
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         get_schema_foreign_keys(&mut client, schema_name)
+    }
+
+    fn fetch_dependents(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+        let schema_name = schema.unwrap_or("public");
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+        fetch_dependents(&mut client, schema_name, table)
+    }
+
+    fn fetch_row_by_pk(
+        &self,
+        _database: &str,
+        schema: &str,
+        table: &str,
+        pk_column: &str,
+        pk_value: &dbflux_core::Value,
+    ) -> Result<Option<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        let pk_literal = POSTGRES_DIALECT.value_to_literal(pk_value);
+        let sql = format!(
+            "SELECT * FROM {}.{} WHERE {} = {} LIMIT 1",
+            POSTGRES_DIALECT.quote_identifier(schema),
+            POSTGRES_DIALECT.quote_identifier(table),
+            POSTGRES_DIALECT.quote_identifier(pk_column),
+            pk_literal,
+        );
+
+        let result = self.execute(&dbflux_core::QueryRequest::new(sql))?;
+        let columns = result.columns;
+        let Some(row) = result.rows.into_iter().next() else {
+            return Ok(None);
+        };
+
+        let map = columns
+            .into_iter()
+            .zip(row)
+            .map(|(col, val)| (col.name, val))
+            .collect();
+
+        Ok(Some(map))
+    }
+
+    fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
+        Some(dbflux_core::extract_referenced_tables(query))
     }
 
     fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
@@ -3497,7 +3647,10 @@ mod tests {
             port: 5432,
             user: String::new(),
             database: String::new(),
-            ssl_mode: dbflux_core::SslMode::Prefer,
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         };
@@ -3723,4 +3876,141 @@ mod tests {
 
         assert!(generator.generate_create_type(&request).is_none());
     }
+}
+
+// =============================================================================
+// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// =============================================================================
+//
+// Wiring note: `table_details()` on the `RelationalConnection` trait returns
+// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
+// layer would need to call `fetch_dependents` in the same background task that
+// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
+// That wiring is deferred to a follow-up slice once the fetch task pattern is
+// extended to return both `TableInfo` and `Vec<RelationRef>`.
+
+/// Fetch objects that depend on `schema.table` from a live PostgreSQL client.
+///
+/// Covers:
+///  - Views (`pg_class.relkind = 'v'`) depending on the table via `pg_depend`.
+///  - Materialized views (`pg_class.relkind = 'm'`).
+///  - Tables with a foreign-key referencing this table (`information_schema`).
+///  - Triggers defined on the table.
+///
+/// Returns an error if the query fails; returns an empty `Vec` when the table
+/// has no dependents.
+pub fn fetch_dependents(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+    use dbflux_core::{RelationKind, RelationRef};
+
+    let mut deps: Vec<RelationRef> = Vec::new();
+
+    // Views and materialized views via pg_depend
+    let view_rows = client
+        .query(
+            "
+        SELECT
+            n.nspname AS dep_schema,
+            c.relname AS dep_name,
+            c.relkind  AS dep_kind
+        FROM pg_depend d
+        JOIN pg_class c  ON c.oid = d.objid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_class src ON src.oid = d.refobjid
+        JOIN pg_namespace sn ON sn.oid = src.relnamespace
+        WHERE d.deptype = 'n'
+          AND src.relname = $1
+          AND sn.nspname  = $2
+          AND c.relkind IN ('v', 'm')
+        ",
+            &[&table, &schema],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
+
+    for row in view_rows {
+        let dep_schema: &str = row.get("dep_schema");
+        let dep_name: &str = row.get("dep_name");
+        let relkind: i8 = row.get("dep_kind");
+        let kind = if relkind == b'm' as i8 {
+            RelationKind::MaterializedView
+        } else {
+            RelationKind::View
+        };
+        deps.push(RelationRef {
+            kind,
+            qualified_name: format!("{}.{}", dep_schema, dep_name),
+        });
+    }
+
+    // FK child tables via information_schema
+    let fk_rows = client
+        .query(
+            "
+        SELECT
+            kcu.table_schema AS child_schema,
+            kcu.table_name   AS child_table,
+            kcu.column_name  AS child_col
+        FROM information_schema.referential_constraints rc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_name = rc.constraint_name
+         AND kcu.constraint_schema = rc.constraint_schema
+        JOIN information_schema.key_column_usage pku
+          ON pku.constraint_name = rc.unique_constraint_name
+         AND pku.constraint_schema = rc.unique_constraint_schema
+        WHERE pku.table_schema = $1
+          AND pku.table_name   = $2
+        GROUP BY kcu.table_schema, kcu.table_name, kcu.column_name
+        ",
+            &[&schema, &table],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
+
+    for row in fk_rows {
+        let child_schema: &str = row.get("child_schema");
+        let child_table: &str = row.get("child_table");
+        let child_col: &str = row.get("child_col");
+        let qualified = format!("{}.{}.{}", child_schema, child_table, child_col);
+
+        // Deduplicate: only add the table reference once per unique table.
+        let table_qname = format!("{}.{}", child_schema, child_table);
+        if !deps
+            .iter()
+            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == table_qname)
+        {
+            let _ = child_col;
+            deps.push(RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: table_qname,
+            });
+        }
+        let _ = qualified;
+    }
+
+    // Triggers on the table
+    let trigger_rows = client
+        .query(
+            "
+        SELECT trigger_schema, trigger_name
+        FROM information_schema.triggers
+        WHERE event_object_schema = $1
+          AND event_object_table  = $2
+        GROUP BY trigger_schema, trigger_name
+        ",
+            &[&schema, &table],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents triggers: {}", e).into()))?;
+
+    for row in trigger_rows {
+        let trig_schema: &str = row.get("trigger_schema");
+        let trig_name: &str = row.get("trigger_name");
+        deps.push(RelationRef {
+            kind: RelationKind::Trigger,
+            qualified_name: format!("{}.{}", trig_schema, trig_name),
+        });
+    }
+
+    Ok(deps)
 }

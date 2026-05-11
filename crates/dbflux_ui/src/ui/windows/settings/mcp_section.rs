@@ -4,6 +4,7 @@ use crate::app::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use crate::keymap::{KeyChord, Modifiers, key_chord_from_gpui};
 use crate::ui::components::dropdown::DropdownItem;
 use crate::ui::components::multi_select::MultiSelect;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::tokens::Radii;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{InputEvent, InputState};
@@ -440,12 +441,13 @@ impl McpSection {
         }
     }
 
-    fn save_client(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    fn save_client(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let draft = self.draft_client(cx);
         if draft.id.is_empty() || draft.name.is_empty() {
-            cx.toast_error("Client ID and name are required", window);
+            Toast::error("Client ID and name are required")
+                .meta_right(now_hms())
+                .action(copy_action("Client ID and name are required"))
+                .push(cx);
             return;
         }
 
@@ -461,14 +463,16 @@ impl McpSection {
         });
 
         self.selected_client_id = Some(draft.id);
-        cx.toast_info("Trusted client saved", window);
+        Toast::info("Trusted client saved")
+            .meta_right(now_hms())
+            .push(cx);
     }
 
     fn delete_selected_client(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
         let Some(client_id) = self.selected_client_id.clone() else {
-            cx.toast_warning("Select a trusted client first", window);
+            Toast::warning("Select a trusted client first")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -484,14 +488,16 @@ impl McpSection {
         });
 
         self.clear_client_form(window, cx);
-        cx.toast_info("Trusted client deleted", window);
+        Toast::info("Trusted client deleted")
+            .meta_right(now_hms())
+            .push(cx);
     }
 
-    fn toggle_selected_client_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    fn toggle_selected_client_active(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(mut selected) = self.selected_client(cx) else {
-            cx.toast_warning("Select a trusted client first", window);
+            Toast::warning("Select a trusted client first")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -514,7 +520,7 @@ impl McpSection {
         } else {
             "Trusted client deactivated"
         };
-        cx.toast_info(msg, window);
+        Toast::info(msg).meta_right(now_hms()).push(cx);
     }
 
     // ─── Role helpers ─────────────────────────────────────────────────────────
@@ -560,16 +566,20 @@ impl McpSection {
             .collect()
     }
 
-    fn save_role(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    fn save_role(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let id = self.input_role_id.read(cx).value().trim().to_string();
         if id.is_empty() {
-            cx.toast_error("Role ID is required", window);
+            Toast::error("Role ID is required")
+                .meta_right(now_hms())
+                .action(copy_action("Role ID is required"))
+                .push(cx);
             return;
         }
         if dbflux_mcp::is_builtin(&id) {
-            cx.toast_error("Built-in roles cannot be modified", window);
+            Toast::error("Built-in roles cannot be modified")
+                .meta_right(now_hms())
+                .action(copy_action("Built-in roles cannot be modified"))
+                .push(cx);
             return;
         }
 
@@ -591,14 +601,14 @@ impl McpSection {
         });
 
         self.selected_role_id = Some(id);
-        cx.toast_info("Role saved", window);
+        Toast::info("Role saved").meta_right(now_hms()).push(cx);
     }
 
     fn delete_selected_role(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
         let Some(role_id) = self.selected_role_id.clone() else {
-            cx.toast_warning("Select a role first", window);
+            Toast::warning("Select a role first")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -614,7 +624,7 @@ impl McpSection {
         });
 
         self.clear_role_form(window, cx);
-        cx.toast_info("Role deleted", window);
+        Toast::info("Role deleted").meta_right(now_hms()).push(cx);
     }
 
     fn build_policy_multiselect_items(policies: &[ToolPolicyDto]) -> Vec<DropdownItem> {
@@ -664,16 +674,20 @@ impl McpSection {
         self.draft_policy_tools.clear();
     }
 
-    fn save_policy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
+    fn save_policy(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let id = self.input_policy_id.read(cx).value().trim().to_string();
         if id.is_empty() {
-            cx.toast_error("Policy ID is required", window);
+            Toast::error("Policy ID is required")
+                .meta_right(now_hms())
+                .action(copy_action("Policy ID is required"))
+                .push(cx);
             return;
         }
         if dbflux_mcp::is_builtin(&id) {
-            cx.toast_error("Built-in policies cannot be modified", window);
+            Toast::error("Built-in policies cannot be modified")
+                .meta_right(now_hms())
+                .action(copy_action("Built-in policies cannot be modified"))
+                .push(cx);
             return;
         }
 
@@ -700,14 +714,14 @@ impl McpSection {
         });
 
         self.selected_policy_id = Some(id);
-        cx.toast_info("Policy saved", window);
+        Toast::info("Policy saved").meta_right(now_hms()).push(cx);
     }
 
     fn delete_selected_policy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::toast::ToastExt;
-
         let Some(policy_id) = self.selected_policy_id.clone() else {
-            cx.toast_warning("Select a policy first", window);
+            Toast::warning("Select a policy first")
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -723,7 +737,7 @@ impl McpSection {
         });
 
         self.clear_policy_form(window, cx);
-        cx.toast_info("Policy deleted", window);
+        Toast::info("Policy deleted").meta_right(now_hms()).push(cx);
     }
 
     // ─── Render helpers ───────────────────────────────────────────────────────

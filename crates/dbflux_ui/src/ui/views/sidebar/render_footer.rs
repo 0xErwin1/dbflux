@@ -1,6 +1,6 @@
 use super::*;
 use crate::platform;
-use dbflux_components::primitives::Icon;
+use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
 
 impl Sidebar {
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -8,30 +8,52 @@ impl Sidebar {
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
 
+        let state = self.app_state.read(cx);
+        let connected_count = state.connections().len();
+        let total_profiles = state.profiles().len();
+        let idle_count = total_profiles.saturating_sub(connected_count);
+
+        let status_text = format!("{} connected · {} idle", connected_count, idle_count);
+        let dot_variant = if connected_count > 0 {
+            StatusDotVariant::Success
+        } else {
+            StatusDotVariant::Idle
+        };
+
         div()
             .w_full()
+            .h(px(30.0))
+            .flex()
+            .items_center()
+            .justify_between()
             .px(Spacing::SM)
-            .py(Spacing::XS)
             .border_t_1()
             .border_color(theme.border)
             .child(
                 div()
-                    .id("settings-btn")
-                    .w_full()
-                    .h(Heights::ROW)
                     .flex()
                     .items_center()
-                    .gap(Spacing::SM)
-                    .px(Spacing::SM)
+                    .gap(Spacing::XS)
+                    .child(StatusDot::new(dot_variant))
+                    .child(
+                        Text::body(status_text)
+                            .font_size(FontSizes::XS)
+                            .color(theme.muted_foreground),
+                    ),
+            )
+            .child(
+                div()
+                    .id("settings-btn")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(22.0))
                     .rounded(Radii::SM)
                     .cursor_pointer()
-                    .text_size(FontSizes::SM)
                     .hover(|d| d.bg(theme.secondary))
                     .on_click(move |_, _, cx| {
                         let sidebar = sidebar.clone();
 
-                        // Phase 3: settings_window removed from AppState - always open a new window
-                        // TODO: Phase 4 will track settings window in AppStateEntity
                         let app_state_for_window = app_state.clone();
                         let mut options = WindowOptions {
                             app_id: Some("dbflux".into()),
@@ -64,8 +86,6 @@ impl Sidebar {
                                                 crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
                                                     cx.emit(SidebarEvent::OpenScript { path: path.clone() });
                                                 }
-                                                // OpenLoginModal is handled by the workspace window
-                                                // subscription only; the sidebar does not route URLs.
                                                 crate::ui::windows::settings::SettingsEvent::OpenLoginModal { .. } => {}
                                             }
                                         });
@@ -77,8 +97,11 @@ impl Sidebar {
                             },
                         );
                     })
-                    .child(Icon::new(AppIcon::Settings).size(px(16.0)).muted())
-                    .child(Text::caption("Settings")),
+                    .child(
+                        Icon::new(AppIcon::Settings)
+                            .size(px(14.0))
+                            .color(theme.muted_foreground),
+                    ),
             )
     }
 }

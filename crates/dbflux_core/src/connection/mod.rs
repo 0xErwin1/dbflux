@@ -47,9 +47,12 @@ pub use manager::{
     OwnedCacheEntry, PendingOperation, PrepareConnectError, RedisKeyCache, RedisKeyCacheEntry,
     ResolvedProxy, SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
 };
+#[allow(deprecated)]
 pub use profile::{
     ConnectionMcpGovernance, ConnectionMcpPolicyBinding, ConnectionProfile, DbConfig, DbKind,
-    SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslMode,
+    SshAuthMethod, SshTunnelConfig, SshTunnelProfile, SslInfo, SslMode, TestConnectionResult,
+    ssl_mode_from_id, ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert,
+    ssl_mode_requires_root_cert,
 };
 pub use profile_manager::ProfileManager;
 pub use proxy::{ProxyAuth, ProxyKind, ProxyProfile, host_matches_no_proxy};

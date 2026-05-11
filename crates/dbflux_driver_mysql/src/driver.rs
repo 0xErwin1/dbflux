@@ -9,18 +9,18 @@ use dbflux_core::{
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
     ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
     ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DescribeRequest,
-    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    DropForeignKeyRequest, DropIndexRequest, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo,
-    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MYSQL_FORM, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
-    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
+    DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
+    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ExplainRequest, ForeignKeyBuilder,
+    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel,
+    KeyValueConnection, MYSQL_FORM, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
     RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo, TransactionCapabilities,
-    Value, ViewInfo, WhereOperator, generate_delete_template, generate_drop_table,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, Value,
+    ViewInfo, WhereOperator, generate_delete_template, generate_drop_table,
     generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
     render_semantic_filter_sql, sanitize_uri,
 };
@@ -34,6 +34,7 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     display_name: "MySQL".into(),
     description: "Popular open-source relational database".into(),
     category: DatabaseCategory::Relational,
+    deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
@@ -147,6 +148,32 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         max_columns: 4096,
         max_indexes_per_table: 64,
     }),
+    ssl_modes: Some(&[
+        dbflux_core::SslModeOption {
+            id: "DISABLED",
+            label: "disabled",
+        },
+        dbflux_core::SslModeOption {
+            id: "PREFERRED",
+            label: "preferred",
+        },
+        dbflux_core::SslModeOption {
+            id: "REQUIRED",
+            label: "required",
+        },
+        dbflux_core::SslModeOption {
+            id: "VERIFY_CA",
+            label: "verify-ca",
+        },
+        dbflux_core::SslModeOption {
+            id: "VERIFY_IDENTITY",
+            label: "verify-identity",
+        },
+    ]),
+    ssl_cert_fields: Some(dbflux_core::SslCertFields {
+        root_cert: true,
+        client_cert: true,
+    }),
     classification_override: None,
 });
 
@@ -156,6 +183,7 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
     display_name: "MariaDB".into(),
     description: "Community-developed fork of MySQL".into(),
     category: DatabaseCategory::Relational,
+    deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::RELATIONAL_BASE.bits()
@@ -270,6 +298,32 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
         max_identifier_length: 64,
         max_columns: 4096,
         max_indexes_per_table: 64,
+    }),
+    ssl_modes: Some(&[
+        dbflux_core::SslModeOption {
+            id: "DISABLED",
+            label: "disabled",
+        },
+        dbflux_core::SslModeOption {
+            id: "PREFERRED",
+            label: "preferred",
+        },
+        dbflux_core::SslModeOption {
+            id: "REQUIRED",
+            label: "required",
+        },
+        dbflux_core::SslModeOption {
+            id: "VERIFY_CA",
+            label: "verify-ca",
+        },
+        dbflux_core::SslModeOption {
+            id: "VERIFY_IDENTITY",
+            label: "verify-identity",
+        },
+    ]),
+    ssl_cert_fields: Some(dbflux_core::SslCertFields {
+        root_cert: true,
+        client_cert: true,
     }),
     classification_override: None,
 });
@@ -512,7 +566,7 @@ impl DbDriver for MysqlDriver {
                 &config.user,
                 config.database.as_deref(),
                 password,
-                config.ssl_mode,
+                &config.ssl_mode,
             )
         } else {
             self.connect_direct(
@@ -521,7 +575,7 @@ impl DbDriver for MysqlDriver {
                 &config.user,
                 config.database.as_deref(),
                 password,
-                config.ssl_mode,
+                &config.ssl_mode,
             )
         }
     }
@@ -553,7 +607,10 @@ impl DbDriver for MysqlDriver {
                 port: 3306,
                 user: String::new(),
                 database: None,
-                ssl_mode: SslMode::Prefer,
+                ssl_mode: Some("PREFERRED".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             });
@@ -587,7 +644,10 @@ impl DbDriver for MysqlDriver {
             port,
             user,
             database,
-            ssl_mode: SslMode::Prefer,
+            ssl_mode: Some("PREFERRED".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -704,7 +764,8 @@ struct ExtractedMysqlConfig {
     port: u16,
     user: String,
     database: Option<String>,
-    ssl_mode: SslMode,
+    /// MySQL native ssl-mode identifier (e.g. `"PREFERRED"`, `"VERIFY_CA"`). Defaults to `"PREFERRED"` when absent.
+    ssl_mode: String,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
@@ -727,7 +788,7 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
             port: *port,
             user: user.clone(),
             database: database.clone(),
-            ssl_mode: *ssl_mode,
+            ssl_mode: ssl_mode.clone().unwrap_or_else(|| "PREFERRED".to_string()),
             ssh_tunnel: ssh_tunnel.clone(),
         }),
         _ => Err(DbError::InvalidProfile(
@@ -736,13 +797,20 @@ fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbErr
     }
 }
 
+/// Builds MySQL connection options from the given parameters.
+///
+/// Maps MySQL native ssl-mode identifiers to the appropriate `SslOpts`:
+/// - `"DISABLED"` — no TLS
+/// - `"PREFERRED"` — TLS preferred, accept self-signed certs (fall back handled by the mysql crate)
+/// - `"REQUIRED"` — TLS required, self-signed certs accepted
+/// - `"VERIFY_CA"` / `"VERIFY_IDENTITY"` — TLS with full certificate validation
 fn build_mysql_opts(
     host: &str,
     port: u16,
     user: &str,
     database: Option<&str>,
     password: Option<&str>,
-    ssl_mode: SslMode,
+    ssl_mode: &str,
 ) -> Opts {
     let host = normalize_mysql_tcp_host(host);
 
@@ -757,19 +825,28 @@ fn build_mysql_opts(
         builder = builder.db_name(Some(db));
     }
 
-    // Configure SSL based on mode
     match ssl_mode {
-        SslMode::Disable => {
-            // No SSL - don't set ssl_opts
+        "DISABLED" => {
+            // No SSL — leave ssl_opts unset.
         }
-        SslMode::Prefer => {
-            // Try SSL but accept invalid certs (self-signed, expired, etc.)
+        "PREFERRED" => {
+            // TLS preferred; accept self-signed certs so the crate can fall back to plain.
             let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
             builder = builder.ssl_opts(ssl_opts);
         }
-        SslMode::Require => {
-            // SSL required with strict certificate validation
+        "REQUIRED" => {
+            // TLS required; accept self-signed certs.
+            let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
+            builder = builder.ssl_opts(ssl_opts);
+        }
+        "VERIFY_CA" | "VERIFY_IDENTITY" => {
+            // TLS required with full certificate validation.
             let ssl_opts = SslOpts::default();
+            builder = builder.ssl_opts(ssl_opts);
+        }
+        _ => {
+            // Unknown mode — treat as PREFERRED (accept-invalid, allow fallback).
+            let ssl_opts = SslOpts::default().with_danger_accept_invalid_certs(true);
             builder = builder.ssl_opts(ssl_opts);
         }
     }
@@ -835,10 +912,10 @@ impl MysqlDriver {
         user: &str,
         database: Option<&str>,
         password: Option<&str>,
-        ssl_mode: SslMode,
+        ssl_mode: &str,
     ) -> Result<Box<dyn Connection>, DbError> {
         log::info!(
-            "Connecting directly to MySQL at {}:{} as {} (database: {:?}, ssl: {:?})",
+            "Connecting directly to MySQL at {}:{} as {} (database: {:?}, ssl: {})",
             host,
             port,
             user,
@@ -846,12 +923,12 @@ impl MysqlDriver {
             ssl_mode
         );
 
-        // Create catalog connection with SSL fallback (this is the first real connection)
-        let (opts, catalog_conn) = if ssl_mode == SslMode::Prefer {
-            let ssl_opts = build_mysql_opts(host, port, user, database, password, SslMode::Prefer);
+        // For PREFERRED mode: attempt SSL first, fall back to plain on failure.
+        let (opts, catalog_conn) = if ssl_mode == "PREFERRED" {
+            let ssl_opts = build_mysql_opts(host, port, user, database, password, "PREFERRED");
             match Conn::new(ssl_opts.clone()) {
                 Ok(c) => {
-                    log::info!("[SSL] Catalog connection established with SSL (Prefer mode)");
+                    log::info!("[SSL] Catalog connection established with SSL (PREFERRED mode)");
                     (ssl_opts, c)
                 }
                 Err(ssl_err) => {
@@ -860,7 +937,7 @@ impl MysqlDriver {
                         ssl_err
                     );
                     let no_ssl_opts =
-                        build_mysql_opts(host, port, user, database, password, SslMode::Disable);
+                        build_mysql_opts(host, port, user, database, password, "DISABLED");
                     let c = Conn::new(no_ssl_opts.clone())
                         .map_err(|e| format_mysql_error(&e, host, port))?;
                     (no_ssl_opts, c)
@@ -914,7 +991,7 @@ impl MysqlDriver {
         db_user: &str,
         database: Option<&str>,
         db_password: Option<&str>,
-        ssl_mode: SslMode,
+        ssl_mode: &str,
     ) -> Result<Box<dyn Connection>, DbError> {
         let total_start = Instant::now();
 
@@ -935,21 +1012,21 @@ impl MysqlDriver {
         log::info!("[SSH] Catalog tunnel on local port {}", local_port1);
         let ssh_catalog_tunnel = Arc::new(std::sync::Mutex::new(tunnel1));
 
-        // Create catalog connection with SSL fallback
-        log::info!("[DB] Connecting catalog via tunnel (ssl: {:?})", ssl_mode);
-        let (working_ssl_mode, catalog_conn) = if ssl_mode == SslMode::Prefer {
+        // For PREFERRED mode: attempt SSL first, fall back to plain on failure.
+        log::info!("[DB] Connecting catalog via tunnel (ssl: {})", ssl_mode);
+        let (working_ssl_mode, catalog_conn) = if ssl_mode == "PREFERRED" {
             let ssl_opts = build_mysql_opts(
                 "127.0.0.1",
                 local_port1,
                 db_user,
                 database,
                 db_password,
-                SslMode::Prefer,
+                "PREFERRED",
             );
             match Conn::new(ssl_opts) {
                 Ok(c) => {
                     log::info!("[SSL] Catalog connection established with SSL");
-                    (SslMode::Prefer, c)
+                    ("PREFERRED", c)
                 }
                 Err(ssl_err) => {
                     log::info!("[SSL] SSL failed ({}), falling back to non-SSL", ssl_err);
@@ -959,11 +1036,11 @@ impl MysqlDriver {
                         db_user,
                         database,
                         db_password,
-                        SslMode::Disable,
+                        "DISABLED",
                     );
                     let c = Conn::new(no_ssl_opts)
                         .map_err(|e| format_mysql_error(&e, "127.0.0.1", local_port1))?;
-                    (SslMode::Disable, c)
+                    ("DISABLED", c)
                 }
             }
         } else {
@@ -989,7 +1066,7 @@ impl MysqlDriver {
         log::info!("[SSH] Query tunnel on local port {}", local_port2);
         let ssh_query_tunnel = Arc::new(std::sync::Mutex::new(tunnel2));
 
-        // Create query connection using the SSL mode that worked for catalog
+        // Create query connection using the SSL mode that worked for catalog.
         let query_opts = build_mysql_opts(
             "127.0.0.1",
             local_port2,
@@ -1710,6 +1787,43 @@ impl Connection for MysqlConnection {
 
     fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
         SchemaLoadingStrategy::LazyPerDatabase
+    }
+
+    fn fetch_row_by_pk(
+        &self,
+        database: &str,
+        _schema: &str,
+        table: &str,
+        pk_column: &str,
+        pk_value: &dbflux_core::Value,
+    ) -> Result<Option<std::collections::HashMap<String, dbflux_core::Value>>, dbflux_core::DbError>
+    {
+        let pk_literal = MYSQL_DIALECT.value_to_literal(pk_value);
+        let sql = format!(
+            "SELECT * FROM {}.{} WHERE {} = {} LIMIT 1",
+            MYSQL_DIALECT.quote_identifier(database),
+            MYSQL_DIALECT.quote_identifier(table),
+            MYSQL_DIALECT.quote_identifier(pk_column),
+            pk_literal,
+        );
+
+        let result = self.execute(&dbflux_core::QueryRequest::new(sql))?;
+        let columns = result.columns;
+        let Some(row) = result.rows.into_iter().next() else {
+            return Ok(None);
+        };
+
+        let map = columns
+            .into_iter()
+            .zip(row)
+            .map(|(col, val)| (col.name, val))
+            .collect();
+
+        Ok(Some(map))
+    }
+
+    fn referenced_tables(&self, query: &str) -> Option<Vec<dbflux_core::QueryTableRef>> {
+        Some(dbflux_core::extract_referenced_tables(query))
     }
 
     fn code_generators(&self) -> Vec<CodeGeneratorInfo> {
@@ -3040,13 +3154,9 @@ mod tests {
         manual_values.insert("user".to_string(), "root".to_string());
 
         let manual_config = driver.build_config(&manual_values).unwrap();
-        assert!(matches!(
-            manual_config,
-            DbConfig::MySQL {
-                ssl_mode: dbflux_core::SslMode::Prefer,
-                ..
-            }
-        ));
+        assert!(
+            matches!(&manual_config, DbConfig::MySQL { ssl_mode: Some(m), .. } if m == "PREFERRED")
+        );
 
         let mut uri_values = FormValues::new();
         uri_values.insert("use_uri".to_string(), "true".to_string());
@@ -3056,13 +3166,9 @@ mod tests {
         );
 
         let uri_config = driver.build_config(&uri_values).unwrap();
-        assert!(matches!(
-            uri_config,
-            DbConfig::MySQL {
-                ssl_mode: dbflux_core::SslMode::Prefer,
-                ..
-            }
-        ));
+        assert!(
+            matches!(&uri_config, DbConfig::MySQL { ssl_mode: Some(m), .. } if m == "PREFERRED")
+        );
     }
 
     #[test]
@@ -3075,7 +3181,10 @@ mod tests {
             port: 3306,
             user: String::new(),
             database: None,
-            ssl_mode: dbflux_core::SslMode::Disable,
+            ssl_mode: Some("DISABLED".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         };
@@ -3188,4 +3297,81 @@ mod tests {
         assert!(!mysql.form_definition().tabs.is_empty());
         assert!(!mariadb.form_definition().tabs.is_empty());
     }
+}
+
+// =============================================================================
+// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// =============================================================================
+//
+// Wiring note: `table_details()` on the `RelationalConnection` trait returns
+// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
+// layer would need to call `fetch_dependents` in the same background task that
+// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
+// That wiring is deferred to a follow-up slice once the fetch task pattern is
+// extended to return both `TableInfo` and `Vec<RelationRef>`.
+
+/// Fetch objects that depend on `database.table` from a live MySQL/MariaDB connection.
+///
+/// Covers:
+///  - Views depending on the table via `information_schema.VIEW_TABLE_USAGE`.
+///  - Tables with a foreign key referencing this table via `information_schema.KEY_COLUMN_USAGE`.
+///
+/// Note: MySQL does not support materialized views or user-defined triggers on arbitrary tables
+/// in the same way PostgreSQL does; triggers are not included here.
+pub fn fetch_dependents(
+    conn: &mut Conn,
+    database: &str,
+    table: &str,
+) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
+    use dbflux_core::{DbError, RelationKind, RelationRef};
+    use mysql::prelude::Queryable;
+
+    let mut deps: Vec<RelationRef> = Vec::new();
+
+    // Views that use this table
+    let view_rows: Vec<(String, String)> = conn
+        .exec(
+            "SELECT TABLE_SCHEMA, TABLE_NAME
+             FROM information_schema.VIEW_TABLE_USAGE
+             WHERE VIEW_TABLE_SCHEMA = ?
+               AND VIEW_TABLE_NAME   = ?",
+            (database, table),
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
+
+    for (view_schema, view_name) in view_rows {
+        deps.push(RelationRef {
+            kind: RelationKind::View,
+            qualified_name: format!("{}.{}", view_schema, view_name),
+        });
+    }
+
+    // FK child tables
+    let fk_rows: Vec<(String, String)> = conn
+        .exec(
+            "SELECT DISTINCT kcu.TABLE_SCHEMA, kcu.TABLE_NAME
+             FROM information_schema.KEY_COLUMN_USAGE kcu
+             JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+               ON rc.CONSTRAINT_NAME   = kcu.CONSTRAINT_NAME
+              AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
+             WHERE rc.REFERENCED_TABLE_NAME = ?
+               AND kcu.REFERENCED_TABLE_SCHEMA = ?",
+            (table, database),
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
+
+    for (child_schema, child_table) in fk_rows {
+        let qualified = format!("{}.{}", child_schema, child_table);
+        if !deps
+            .iter()
+            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == qualified)
+        {
+            deps.push(RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: qualified,
+            });
+        }
+    }
+
+    Ok(deps)
 }

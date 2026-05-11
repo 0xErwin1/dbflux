@@ -183,6 +183,11 @@ impl DataDocument {
         true
     }
 
+    /// Short summary of pending edits for the dirty-dot tooltip.
+    pub fn change_summary(&self, cx: &App) -> Option<String> {
+        self.data_grid.read(cx).change_summary(cx)
+    }
+
     pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
         self.focus_handle.focus(window);
     }

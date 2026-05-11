@@ -1,6 +1,6 @@
 use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount};
 use crate::ui::components::data_table::SortState as TableSortState;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
     QueryResult, TableBrowseRequest, TableCountRequest, TableRef, TaskKind, TaskTarget,
@@ -62,7 +62,7 @@ impl DataGridPanel {
         pagination: Pagination,
         order_by: Vec<OrderByColumn>,
         total_rows: Option<u64>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let filter_value = self.filter_input.read(cx).value();
@@ -76,13 +76,17 @@ impl DataGridPanel {
         let limit_str = limit_value.trim();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
-                cx.toast_warning("Limit must be greater than 0", window);
+                Toast::warning("Limit must be greater than 0")
+                    .meta_right(now_hms())
+                    .push(cx);
                 pagination
             }
             Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
             Ok(_) => pagination,
             Err(_) if !limit_str.is_empty() => {
-                cx.toast_warning("Invalid limit value", window);
+                Toast::warning("Invalid limit value")
+                    .meta_right(now_hms())
+                    .push(cx);
                 pagination
             }
             Err(_) => pagination,
@@ -99,7 +103,10 @@ impl DataGridPanel {
         let conn = {
             let state = self.app_state.read(cx);
             let Some(connected) = state.connections().get(&profile_id) else {
-                cx.toast_error("Connection not found", window);
+                Toast::error("Connection not found")
+                    .meta_right(now_hms())
+                    .action(copy_action("Connection not found"))
+                    .push(cx);
                 return;
             };
 
@@ -108,13 +115,14 @@ impl DataGridPanel {
                 Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
                     database,
                 }) => {
-                    cx.toast_error(
-                        format!(
-                            "No connection to database '{}'. Please expand it in the sidebar first.",
-                            database
-                        ),
-                        window,
+                    let msg = format!(
+                        "No connection to database '{}'. Please expand it in the sidebar first.",
+                        database
                     );
+                    Toast::error(msg.clone())
+                        .meta_right(now_hms())
+                        .action(copy_action(msg))
+                        .push(cx);
                     return;
                 }
             }
@@ -234,20 +242,24 @@ impl DataGridPanel {
         collection: CollectionRef,
         pagination: Pagination,
         total_docs: Option<u64>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let limit_value = self.limit_input.read(cx).value();
         let limit_str = limit_value.trim();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
-                cx.toast_warning("Limit must be greater than 0", window);
+                Toast::warning("Limit must be greater than 0")
+                    .meta_right(now_hms())
+                    .push(cx);
                 pagination
             }
             Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
             Ok(_) => pagination,
             Err(_) if !limit_str.is_empty() => {
-                cx.toast_warning("Invalid limit value", window);
+                Toast::warning("Invalid limit value")
+                    .meta_right(now_hms())
+                    .push(cx);
                 pagination
             }
             Err(_) => pagination,
@@ -258,14 +270,20 @@ impl DataGridPanel {
             match state.connections().get(&profile_id) {
                 Some(c) => Some(c.connection.clone()),
                 None => {
-                    cx.toast_error("Connection not found", window);
+                    Toast::error("Connection not found")
+                        .meta_right(now_hms())
+                        .action(copy_action("Connection not found"))
+                        .push(cx);
                     return;
                 }
             }
         };
 
         let Some(conn) = conn else {
-            cx.toast_error("Connection not available", window);
+            Toast::error("Connection not available")
+                .meta_right(now_hms())
+                .action(copy_action("Connection not available"))
+                .push(cx);
             return;
         };
 
@@ -277,7 +295,12 @@ impl DataGridPanel {
             match serde_json::from_str(filter_str) {
                 Ok(v) => Some(v),
                 Err(e) => {
-                    cx.toast_error(format!("Invalid JSON filter: {}", e), window);
+                    let toast_body = e.to_string();
+                    Toast::error("Invalid JSON filter")
+                        .meta_right(now_hms())
+                        .body(toast_body.clone())
+                        .action(copy_action(format!("Invalid JSON filter: {}", toast_body)))
+                        .push(cx);
                     return;
                 }
             }

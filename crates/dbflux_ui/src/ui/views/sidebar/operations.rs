@@ -15,6 +15,7 @@ use dbflux_core::{
     PrepareConnectError, ProcessExecutionError, SchemaDropTarget, SchemaObjectKind, TaskId,
     TaskKind, TaskTarget, detached_process_channel, execute_streaming_process, output_channel,
 };
+use dbflux_ssh::is_passphrase_required_error_str;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -81,7 +82,7 @@ enum DatabaseRefreshExecutionOutcome {
 }
 
 enum SchemaObjectRefreshResult {
-    TableDetails(FetchTableDetailsResult),
+    TableDetails(Box<FetchTableDetailsResult>),
     Views {
         profile_id: Uuid,
         database: String,
@@ -2525,6 +2526,32 @@ impl Sidebar {
     }
 
     pub(crate) fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        self.connect_to_profile_inner(profile_id, None, false, cx);
+    }
+
+    /// Retry a connection with an explicit SSH passphrase supplied by the user via the modal.
+    ///
+    /// If this attempt also fails with a passphrase error, the modal will reopen showing
+    /// an "Incorrect passphrase" banner (`last_attempt_failed = true`).
+    pub(crate) fn connect_to_profile_with_passphrase(
+        &mut self,
+        profile_id: Uuid,
+        passphrase: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_tunnel_auth_profile_id = None;
+        // Pass last_attempt_failed=true so that if this attempt also fails with a passphrase
+        // error, the re-opened modal shows the "Incorrect passphrase" error banner.
+        self.connect_to_profile_inner(profile_id, Some(passphrase), true, cx);
+    }
+
+    fn connect_to_profile_inner(
+        &mut self,
+        profile_id: Uuid,
+        override_passphrase: Option<String>,
+        last_attempt_failed: bool,
+        cx: &mut Context<Self>,
+    ) {
         let uses_pipeline = {
             let app_state = self.app_state.read(cx);
 
@@ -2540,6 +2567,8 @@ impl Sidebar {
             return;
         }
 
+        let passphrase_ref: Option<&str> = override_passphrase.as_deref();
+
         let (params, profile_name, pre_connect_hooks, post_connect_hooks, hook_context) =
             match self.app_state.update(cx, |state, _cx| {
                 if state.is_operation_pending(profile_id, None) {
@@ -2549,7 +2578,8 @@ impl Sidebar {
                     });
                 }
 
-                let result = state.prepare_connect_profile(profile_id);
+                let result =
+                    state.prepare_connect_profile_with_passphrase(profile_id, passphrase_ref);
 
                 if result.is_ok() && !state.start_pending_operation(profile_id, None) {
                     return Err(PendingToast {
@@ -2764,14 +2794,14 @@ impl Sidebar {
             let connected = match result {
                 Ok(value) => value,
                 Err(error) => {
-                    // Emit connection failure audit event.
                     let error_clone = error.clone();
                     let profile_name_for_audit = profile_name.clone();
                     let profile_id_for_audit = profile_id;
+                    let is_passphrase_error = is_passphrase_required_error_str(&error);
 
                     if let Err(update_error) = cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
-                            // Emit failure audit event.
+                            // Emit connection failure audit event.
                             let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
                             let driver_id = state
                                 .profiles()
@@ -2811,13 +2841,67 @@ impl Sidebar {
                             cx.notify();
                         });
 
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pending_toast = Some(PendingToast {
-                                message: error,
-                                is_error: true,
+                        if is_passphrase_error {
+                            // Evict any cached passphrase — it is wrong (or was never supplied).
+                            // This prevents a stale cached passphrase from blocking future prompts.
+                            app_state.update(cx, |state, _cx| {
+                                if let Some(tunnel_id) = state.ssh_tunnel_id_for_profile(profile_id)
+                                    && let Ok(mut guard) = state.session_passphrase_vault.write()
+                                {
+                                    guard.remove(&tunnel_id);
+                                }
                             });
-                            sidebar.refresh_tree(cx);
-                        });
+
+                            // Look up the SSH tunnel profile info for display in the modal.
+                            let tunnel_info = app_state
+                                .read(cx)
+                                .ssh_tunnel_id_for_profile(profile_id)
+                                .and_then(|tunnel_id| {
+                                    let state = app_state.read(cx);
+                                    state.ssh_tunnel_profile(tunnel_id).map(|t| {
+                                        (
+                                            tunnel_id,
+                                            t.name.clone(),
+                                            t.config.host.clone(),
+                                            t.config.port,
+                                            t.config.user.clone(),
+                                        )
+                                    })
+                                });
+
+                            if let Some((tunnel_id, tunnel_name, host, port, user)) = tunnel_info {
+                                sidebar.update(cx, |sidebar, cx| {
+                                    sidebar.pending_tunnel_auth_profile_id = Some(profile_id);
+                                    cx.emit(SidebarEvent::RequestTunnelAuth {
+                                        profile_id,
+                                        tunnel_id,
+                                        tunnel_name,
+                                        host,
+                                        port,
+                                        user,
+                                        last_attempt_failed,
+                                    });
+                                    sidebar.refresh_tree(cx);
+                                });
+                            } else {
+                                // Tunnel info not found — fall back to error toast.
+                                sidebar.update(cx, |sidebar, cx| {
+                                    sidebar.pending_toast = Some(PendingToast {
+                                        message: error,
+                                        is_error: true,
+                                    });
+                                    sidebar.refresh_tree(cx);
+                                });
+                            }
+                        } else {
+                            sidebar.update(cx, |sidebar, cx| {
+                                sidebar.pending_toast = Some(PendingToast {
+                                    message: error,
+                                    is_error: true,
+                                });
+                                sidebar.refresh_tree(cx);
+                            });
+                        }
                     }) {
                         log::warn!(
                             "Failed to apply connection failure state: {:?}",
@@ -4594,7 +4678,7 @@ impl Sidebar {
                         .spawn(async move {
                             params
                                 .execute()
-                                .map(SchemaObjectRefreshResult::TableDetails)
+                                .map(|r| SchemaObjectRefreshResult::TableDetails(Box::new(r)))
                         })
                         .await
                 }
@@ -4654,9 +4738,15 @@ impl Sidebar {
                                 state.complete_task(task_id);
                                 state.set_table_details(
                                     result.profile_id,
+                                    result.database.clone(),
+                                    result.table.clone(),
+                                    result.details,
+                                );
+                                state.set_dependents(
+                                    result.profile_id,
                                     result.database,
                                     result.table,
-                                    result.details,
+                                    result.dependents,
                                 );
                                 cx.emit(AppStateChanged);
                             });

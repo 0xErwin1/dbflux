@@ -1,9 +1,9 @@
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
     Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
-    HookContext, ProxyProfile, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo,
-    TaskTarget,
+    HookContext, ProxyProfile, RelationRef, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase,
+    SshTunnelProfile, TableInfo, TaskTarget,
 };
 use log::{error, info};
 use secrecy::SecretString;
@@ -267,6 +267,8 @@ pub struct ConnectedProfile {
     pub schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
     pub schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
     pub schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+    /// Dependent objects (views, FK children, triggers) per table, keyed by `(database, table)`.
+    pub dependents_cache: HashMap<(String, String), Vec<RelationRef>>,
     /// Active database for query context (MySQL/MariaDB USE).
     pub active_database: Option<String>,
     pub redis_key_cache: RedisKeyCache,
@@ -404,6 +406,28 @@ impl ConnectedProfile {
             .get(database)
             .map(|dc| dc.connection.clone())
             .unwrap_or_else(|| self.connection.clone())
+    }
+
+    /// Return all cached dependents for the given `(database, table)` pair.
+    ///
+    /// Returns an empty `Vec` when nothing has been populated yet, which is
+    /// correct for drivers that have not called `populate_dependents`.
+    pub fn dependents(&self, database: &str, table: &str) -> Vec<RelationRef> {
+        self.dependents_cache
+            .get(&(database.to_string(), table.to_string()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Store the dependent objects for a specific `(database, table)` pair.
+    pub fn populate_dependents(
+        &mut self,
+        database: impl Into<String>,
+        table: impl Into<String>,
+        deps: Vec<RelationRef>,
+    ) {
+        self.dependents_cache
+            .insert((database.into(), table.into()), deps);
     }
 
     /// Resolve the effective connection for query execution.
@@ -559,6 +583,7 @@ impl ConnectionManager {
                 schema_types: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
+                dependents_cache: HashMap::new(),
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
                 database_connections: HashMap::new(),
@@ -645,6 +670,18 @@ impl ConnectionManager {
                 table,
                 details,
             });
+        }
+    }
+
+    pub fn set_dependents(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        table: String,
+        deps: Vec<RelationRef>,
+    ) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.populate_dependents(database, table, deps);
         }
     }
 
@@ -1108,6 +1145,7 @@ impl ConnectionManager {
                 schema_types: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
+                dependents_cache: HashMap::new(),
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
                 database_connections: prev_db_connections,
@@ -1580,11 +1618,17 @@ impl FetchTableDetailsParams {
             .table_details(&self.database, self.schema.as_deref(), &self.table)
             .map_err(|e| e.to_string())?;
 
+        let dependents = self
+            .connection
+            .fetch_dependents(&self.database, self.schema.as_deref(), &self.table)
+            .unwrap_or_default();
+
         Ok(FetchTableDetailsResult {
             profile_id: self.profile_id,
             database: self.database,
             table: self.table,
             details,
+            dependents,
         })
     }
 }
@@ -1595,6 +1639,9 @@ pub struct FetchTableDetailsResult {
     pub database: String,
     pub table: String,
     pub details: TableInfo,
+    /// Dependent objects fetched alongside the table details (views, FK children, triggers).
+    /// Empty when the driver does not support dependent introspection.
+    pub dependents: Vec<RelationRef>,
 }
 
 pub struct FetchCollectionChildrenParams {
@@ -1743,6 +1790,7 @@ mod tests {
                     display_name: format!("{kind:?}"),
                     description: "test".to_string(),
                     category: crate::DatabaseCategory::Relational,
+                    deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
                     default_port: None,
@@ -1754,6 +1802,8 @@ mod tests {
                     ddl: None,
                     transactions: None,
                     limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
                     classification_override: None,
                 },
             }
@@ -1825,6 +1875,7 @@ mod tests {
             schema_types: HashMap::new(),
             schema_indexes: HashMap::new(),
             schema_foreign_keys: HashMap::new(),
+            dependents_cache: HashMap::new(),
             active_database: None,
             redis_key_cache: RedisKeyCache::default(),
             database_connections,
@@ -1843,7 +1894,10 @@ mod tests {
                 port: 3306,
                 user: "root".to_string(),
                 database: Some("app".to_string()),
-                ssl_mode: crate::SslMode::Disable,
+                ssl_mode: Some("prefer".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
@@ -2114,6 +2168,7 @@ mod tests {
                     display_name: "TestPG".to_string(),
                     description: "test".to_string(),
                     category: DatabaseCategory::Relational,
+                    deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
                     default_port: Some(5432),
@@ -2125,6 +2180,8 @@ mod tests {
                     ddl: None,
                     transactions: None,
                     limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
                     classification_override: None,
                 },
                 form: &POSTGRES_FORM,
@@ -2185,7 +2242,10 @@ mod tests {
                 port: 5432,
                 user: "root".to_string(),
                 database: "app".to_string(),
-                ssl_mode: crate::SslMode::Disable,
+                ssl_mode: Some("prefer".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: Some(SshTunnelConfig {
                     host: "bastion.local".to_string(),
                     port: 22,
@@ -2231,7 +2291,10 @@ mod tests {
                 port: 5432,
                 user: "root".to_string(),
                 database: "app".to_string(),
-                ssl_mode: crate::SslMode::Disable,
+                ssl_mode: Some("prefer".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             },
@@ -2306,6 +2369,7 @@ mod tests {
                     display_name: "TestSQLite".to_string(),
                     description: "test".to_string(),
                     category: DatabaseCategory::Relational,
+                    deployment_class: None,
                     query_language: QueryLanguage::Sql,
                     capabilities: DriverCapabilities::empty(),
                     default_port: None,
@@ -2317,6 +2381,8 @@ mod tests {
                     ddl: None,
                     transactions: None,
                     limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
                     classification_override: None,
                 });
                 &META
@@ -2373,6 +2439,62 @@ mod tests {
             result.is_ok(),
             "execute should succeed for SQLite (no host_port), got: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn dependents_roundtrip_returns_stored_relations() {
+        use crate::{RelationKind, RelationRef};
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut connected = connected_profile(profile, connection, None, HashMap::new());
+
+        let deps = vec![
+            RelationRef {
+                kind: RelationKind::View,
+                qualified_name: "public.user_summary".to_string(),
+            },
+            RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: "orders.user_id".to_string(),
+            },
+        ];
+
+        connected.populate_dependents("mydb", "users", deps.clone());
+
+        let retrieved = connected.dependents("mydb", "users");
+        assert_eq!(retrieved, deps);
+    }
+
+    #[test]
+    fn dependents_for_unknown_table_returns_empty() {
+        use crate::{RelationKind, RelationRef};
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut connected = connected_profile(profile, connection, None, HashMap::new());
+
+        connected.populate_dependents(
+            "mydb",
+            "users",
+            vec![RelationRef {
+                kind: RelationKind::Trigger,
+                qualified_name: "public.audit_users".to_string(),
+            }],
+        );
+
+        let retrieved = connected.dependents("mydb", "orders");
+        assert!(
+            retrieved.is_empty(),
+            "expected empty for unknown table, got {:?}",
+            retrieved
         );
     }
 }

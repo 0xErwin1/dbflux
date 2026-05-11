@@ -7,10 +7,12 @@ use crate::ui::components::context_menu::MenuItem;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii, Spacing};
 use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::BannerColors;
 use dbflux_components::typography::MonoMeta;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::tooltip::Tooltip;
 
 const TAB_BAR_HEIGHT: Pixels = Heights::TAB;
 
@@ -197,16 +199,16 @@ impl Render for TabBar {
         let active_id = manager.active_id();
         let drop_target_index = self.drop_target_index;
 
-        let tab_snapshots: Vec<_> = manager
+        let tab_data: Vec<_> = manager
             .documents()
             .iter()
-            .map(|doc| doc.meta_snapshot(cx))
+            .map(|doc| (doc.meta_snapshot(cx), doc.change_summary(cx)))
             .collect();
 
-        let mut tabs: Vec<AnyElement> = Vec::with_capacity(tab_snapshots.len());
-        for (idx, meta) in tab_snapshots.into_iter().enumerate() {
+        let mut tabs: Vec<AnyElement> = Vec::with_capacity(tab_data.len());
+        for (idx, (meta, change_summary)) in tab_data.into_iter().enumerate() {
             tabs.push(
-                self.render_tab(meta, idx, active_id, drop_target_index, cx)
+                self.render_tab(meta, change_summary, idx, active_id, drop_target_index, cx)
                     .into_any_element(),
             );
         }
@@ -253,6 +255,7 @@ impl TabBar {
     fn render_tab(
         &self,
         meta: DocumentMetaSnapshot,
+        change_summary: Option<String>,
         idx: usize,
         active_id: Option<DocumentId>,
         drop_target_index: Option<usize>,
@@ -261,6 +264,7 @@ impl TabBar {
         let id = meta.id;
         let is_active = active_id == Some(id);
         let is_executing = meta.state == DocumentState::Executing;
+        let is_dirty = meta.state == DocumentState::Modified;
         let is_drop_target = drop_target_index == Some(idx);
 
         let title = meta.title.clone();
@@ -366,6 +370,29 @@ impl TabBar {
                 is_active,
                 cx.theme(),
             )))
+            // Dirty indicator: amber dot when the document has unsaved changes.
+            // Shows the change summary in a tooltip on hover.
+            .when(is_dirty, |el| {
+                let dot_color = BannerColors::warning_bg(cx.theme());
+                let tooltip_text: SharedString = change_summary
+                    .as_deref()
+                    .unwrap_or("Unsaved changes")
+                    .to_string()
+                    .into();
+
+                el.child(
+                    div()
+                        .id(ElementId::Name(format!("dirty-dot-{}", id.0).into()))
+                        .w(px(6.0))
+                        .h(px(6.0))
+                        .rounded_full()
+                        .bg(dot_color)
+                        .flex_shrink_0()
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(tooltip_text.clone()).build(window, cx)
+                        }),
+                )
+            })
             // Spinner or close button
             .child(self.render_tab_action(id, is_executing, cx))
     }

@@ -7,7 +7,7 @@
 )]
 
 use dbflux_core::{
-    ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, IndexData, QueryRequest, SslMode, Value,
+    ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, IndexData, QueryRequest, Value,
 };
 use dbflux_driver_mysql::MysqlDriver;
 use dbflux_test_support::{containers, ddl_fixtures::MySqlFixtures};
@@ -24,7 +24,10 @@ fn connect_mysql(uri: String) -> Result<(Box<dyn dbflux_core::Connection>, Mysql
             port: 3306,
             user: String::new(),
             database: Some("testdb".to_string()),
-            ssl_mode: SslMode::Prefer,
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         },

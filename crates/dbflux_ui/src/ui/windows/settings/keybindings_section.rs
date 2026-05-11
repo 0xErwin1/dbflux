@@ -36,6 +36,12 @@ pub(super) enum KeybindingsListItem {
         ctx_idx: usize,
         binding_idx: usize,
     },
+    /// Inline warning rendered above the first binding that shares a chord
+    /// with another binding in the same context.
+    ConflictWarning {
+        chord: KeyChord,
+        other_cmd_names: Vec<String>,
+    },
 }
 
 pub(super) struct KeybindingsSection {

@@ -1,6 +1,6 @@
 use crate::app::AppStateChanged;
 use crate::keymap::{Modifiers, key_chord_from_gpui};
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Radii;
 use dbflux_components::controls::{Button, Checkbox, Input};
@@ -289,7 +289,11 @@ impl HooksSection {
         };
 
         if let Err(error) = open::that(&path) {
-            cx.toast_error(format!("Failed to open script: {error}"), window);
+            let toast_msg = (format!("Failed to open script: {error}")).to_string();
+            Toast::error(toast_msg.clone())
+                .meta_right(now_hms())
+                .action(copy_action(toast_msg))
+                .push(cx);
         }
     }
 
@@ -325,7 +329,10 @@ impl HooksSection {
         let hook_id = self.input_hook_id.read(cx).value().trim().to_string();
 
         if hook_id.is_empty() {
-            cx.toast_error("Hook ID is required", window);
+            Toast::error("Hook ID is required")
+                .meta_right(now_hms())
+                .action(copy_action("Hook ID is required"))
+                .push(cx);
             return None;
         }
 
@@ -339,7 +346,9 @@ impl HooksSection {
                 self.input_hook_script_content.read(cx).value().to_string(),
             ),
             HookKindSelection::Command => {
-                cx.toast_warning("Commands do not open in the script editor", window);
+                Toast::warning("Commands do not open in the script editor")
+                    .meta_right(now_hms())
+                    .push(cx);
                 return None;
             }
         };
@@ -348,7 +357,11 @@ impl HooksSection {
             if !path.exists()
                 && let Err(error) = std::fs::write(&path, &content)
             {
-                cx.toast_error(format!("Failed to write script file: {error}"), window);
+                let toast_msg = (format!("Failed to write script file: {error}")).to_string();
+                Toast::error(toast_msg.clone())
+                    .meta_right(now_hms())
+                    .action(copy_action(toast_msg))
+                    .push(cx);
                 return None;
             }
 
@@ -380,7 +393,11 @@ impl HooksSection {
         }) {
             Ok(path) => path,
             Err(error) => {
-                cx.toast_error(error, window);
+                let toast_msg = error.to_string();
+                Toast::error(toast_msg.clone())
+                    .meta_right(now_hms())
+                    .action(copy_action(toast_msg))
+                    .push(cx);
                 return None;
             }
         };
@@ -661,13 +678,18 @@ impl HooksSection {
         Ok(Some((hook_id, hook)))
     }
 
-    fn persist_hooks(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn persist_hooks(&self, _window: &mut Window, cx: &mut Context<Self>) {
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) =
             dbflux_app::config_loader::save_hook_definitions(runtime, &self.hook_definitions)
         {
             log::error!("Failed to save hooks to SQLite: {}", e);
-            cx.toast_error(format!("Failed to save hooks: {}", e), window);
+            let toast_body = e.to_string();
+            Toast::error("Failed to save hooks")
+                .meta_right(now_hms())
+                .body(toast_body.clone())
+                .action(copy_action(format!("Failed to save hooks: {}", toast_body)))
+                .push(cx);
             return;
         }
 
@@ -1062,7 +1084,11 @@ impl HooksSection {
             Ok(Some(hook)) => hook,
             Ok(None) => return,
             Err(error) => {
-                cx.toast_error(error, window);
+                let toast_msg = error.to_string();
+                Toast::error(toast_msg.clone())
+                    .meta_right(now_hms())
+                    .action(copy_action(toast_msg))
+                    .push(cx);
                 return;
             }
         };
@@ -1071,10 +1097,11 @@ impl HooksSection {
             && self.editing_hook_id.as_deref() != Some(hook_id.as_str());
 
         if duplicate {
-            cx.toast_error(
-                format!("A hook with ID '{}' already exists", hook_id),
-                window,
-            );
+            let msg = format!("A hook with ID '{}' already exists", hook_id);
+            Toast::error(msg.clone())
+                .meta_right(now_hms())
+                .action(copy_action(msg))
+                .push(cx);
             return;
         }
 
@@ -1089,7 +1116,7 @@ impl HooksSection {
 
         self.load_hook_into_form(&hook_id, window, cx);
         self.hook_focus = HookFocus::Form;
-        cx.toast_success("Hook saved", window);
+        Toast::success("Hook saved").meta_right(now_hms()).push(cx);
     }
 
     pub(super) fn request_delete_hook(&mut self, hook_id: String, cx: &mut Context<Self>) {
@@ -1114,7 +1141,9 @@ impl HooksSection {
         }
 
         self.persist_hooks(window, cx);
-        cx.toast_success("Hook deleted", window);
+        Toast::success("Hook deleted")
+            .meta_right(now_hms())
+            .push(cx);
         cx.notify();
     }
 

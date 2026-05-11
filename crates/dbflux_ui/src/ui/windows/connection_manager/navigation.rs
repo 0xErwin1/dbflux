@@ -852,33 +852,69 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let driver_count = self.available_drivers.len();
-        if driver_count == 0 {
-            return false;
-        }
+        use super::render_driver_select::{GridDirection, move_grid_focus, visible_drivers};
+
+        let query = self.current_driver_filter(cx);
+        let visible = visible_drivers(&self.available_drivers, &query);
+        let count = visible.len();
 
         match command {
+            Command::FocusSearch => {
+                self.driver_filter_input.update(cx, |state, cx| {
+                    state.focus(window, cx);
+                });
+                true
+            }
+            Command::Cancel if self.driver_filter_focused => {
+                window.focus(&self.focus_handle);
+                true
+            }
+            _ if count == 0 => {
+                matches!(command, Command::Cancel) && {
+                    cx.emit(DismissEvent);
+                    window.remove_window();
+                    true
+                }
+            }
             Command::SelectNext => {
-                let current = self.driver_focus.index();
-                let next = (current + 1) % driver_count;
+                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Down);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::SelectPrev => {
-                let current = self.driver_focus.index();
-                let prev = if current == 0 {
-                    driver_count - 1
-                } else {
-                    current - 1
-                };
-                self.driver_focus = DriverFocus::Index(prev);
+                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Up);
+                self.driver_focus = DriverFocus::Index(next);
+                cx.notify();
+                true
+            }
+            Command::FocusLeft | Command::ColumnLeft => {
+                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Left);
+                self.driver_focus = DriverFocus::Index(next);
+                cx.notify();
+                true
+            }
+            Command::FocusRight | Command::ColumnRight => {
+                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Right);
+                self.driver_focus = DriverFocus::Index(next);
+                cx.notify();
+                true
+            }
+            Command::FocusUp => {
+                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Up);
+                self.driver_focus = DriverFocus::Index(next);
+                cx.notify();
+                true
+            }
+            Command::FocusDown => {
+                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Down);
+                self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::Execute => {
-                let idx = self.driver_focus.index();
-                if let Some(driver_info) = self.available_drivers.get(idx) {
+                let idx = self.driver_focus.index().min(count.saturating_sub(1));
+                if let Some(driver_info) = visible.get(idx) {
                     let driver_id = driver_info.id.clone();
                     self.select_driver(&driver_id, window, cx);
                 }

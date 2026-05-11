@@ -355,7 +355,13 @@ impl Sidebar {
             "Failed to load table schema",
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
-                    state.set_table_details(res.profile_id, res.database, res.table, res.details);
+                    state.set_table_details(
+                        res.profile_id,
+                        res.database.clone(),
+                        res.table.clone(),
+                        res.details,
+                    );
+                    state.set_dependents(res.profile_id, res.database, res.table, res.dependents);
                     cx.emit(AppStateChanged);
                 });
             },

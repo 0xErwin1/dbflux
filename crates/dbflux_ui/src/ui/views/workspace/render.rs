@@ -4,7 +4,7 @@ use crate::platform;
 use crate::ui::components::modal_frame::ModalFrame;
 use crate::ui::tokens::FontSizes;
 use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
-use dbflux_components::primitives::{Icon, Text, overlay_bg};
+use dbflux_components::primitives::{Chord, Icon, Text, overlay_bg};
 use dbflux_components::typography::Body;
 use gpui_component::IconName;
 
@@ -16,6 +16,21 @@ impl Workspace {
             .active_document()
             .map(|doc| doc.render())
     }
+}
+
+/// One row of the empty-workspace placeholder: a `Chord` followed by a
+/// muted description.
+fn empty_state_shortcut<const N: usize>(
+    keys: [&'static str; N],
+    description: &'static str,
+) -> gpui::Div {
+    gpui::div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(Chord::new(keys))
+        .child(Text::dim_secondary(description))
 }
 
 impl Render for Workspace {
@@ -74,7 +89,25 @@ impl Render for Workspace {
         let child_picker_open = self.sidebar.read(cx).has_child_picker_open();
 
         // Linux CSD title bar: render only when the compositor has negotiated CSD mode.
-        let linux_title_bar = platform::render_csd_title_bar(window, cx, "DBFlux");
+        // Include the active connection name as a breadcrumb when connected.
+        let crumbs: Vec<platform::TitleCrumb> = {
+            let connection_name = self
+                .app_state
+                .read(cx)
+                .active_connection()
+                .map(|c| c.profile.name.clone());
+
+            if let Some(name) = connection_name {
+                vec![platform::TitleCrumb {
+                    icon: Some(crate::ui::icons::AppIcon::Database),
+                    label: name.into(),
+                }]
+            } else {
+                vec![]
+            }
+        };
+        let linux_title_bar =
+            platform::render_csd_title_bar_with_crumbs(window, cx, "DBFlux", &crumbs);
 
         let right_pane = if has_tabs {
             let workspace = cx.entity().clone();
@@ -208,7 +241,26 @@ impl Render for Workspace {
                                         .color(muted_fg.opacity(0.5)),
                                 )
                                 .child(Body::new("No documents open").muted(cx))
-                                .child(Text::dim_secondary("Press Ctrl+N to create a new query")),
+                                .child(
+                                    div()
+                                        .mt_4()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .child(empty_state_shortcut(["Ctrl", "N"], "new query"))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "Shift", "P"],
+                                            "command palette",
+                                        ))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "O"],
+                                            "open script from disk",
+                                        ))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "Shift", "N"],
+                                            "new connection",
+                                        )),
+                                ),
                         ),
                 )
                 .child(
@@ -526,6 +578,19 @@ impl Render for Workspace {
             .child(self.sql_preview_modal.clone())
             .child(login_modal)
             .child(sso_wizard)
+            // S8 modals — rendered as full-screen overlays using ModalShell chrome.
+            .when(self.modal_delete_connection.read(cx).is_visible(), |root| {
+                root.child(self.modal_delete_connection.clone())
+            })
+            .when(self.modal_unsaved_changes.read(cx).is_visible(), |root| {
+                root.child(self.modal_unsaved_changes.clone())
+            })
+            .when(self.modal_drop_table.read(cx).is_visible(), |root| {
+                root.child(self.modal_drop_table.clone())
+            })
+            .when(self.modal_tunnel_auth.read(cx).is_visible(), |root| {
+                root.child(self.modal_tunnel_auth.clone())
+            })
             .child(
                 div()
                     .absolute()

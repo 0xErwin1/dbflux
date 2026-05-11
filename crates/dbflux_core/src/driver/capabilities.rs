@@ -136,6 +136,9 @@ pub enum Icon {
     Redis,
     Dynamodb,
 
+    // Generic non-database data sources
+    Logs,
+
     // Generic database icon (fallback)
     Database,
 }
@@ -169,6 +172,10 @@ pub enum DatabaseCategory {
     /// Wide-column stores with keyspaces and column families.
     /// Examples: Cassandra, ScyllaDB, HBase
     WideColumn,
+
+    /// Log streaming services with log groups and queryable log events.
+    /// Examples: AWS CloudWatch Logs
+    LogStream,
 }
 
 impl DatabaseCategory {
@@ -180,6 +187,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Graph",
             DatabaseCategory::TimeSeries => "Time Series",
             DatabaseCategory::WideColumn => "Wide Column",
+            DatabaseCategory::LogStream => "Log Stream",
         }
     }
 
@@ -193,6 +201,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Measurements",
             DatabaseCategory::WideColumn => "Tables",
+            DatabaseCategory::LogStream => "Log groups",
         }
     }
 
@@ -205,6 +214,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Measurement",
             DatabaseCategory::WideColumn => "Table",
+            DatabaseCategory::LogStream => "Log group",
         }
     }
 
@@ -217,6 +227,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Points",
             DatabaseCategory::WideColumn => "Rows",
+            DatabaseCategory::LogStream => "Log events",
         }
     }
 
@@ -229,6 +240,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Point",
             DatabaseCategory::WideColumn => "Row",
+            DatabaseCategory::LogStream => "Log event",
         }
     }
 
@@ -273,12 +285,14 @@ impl DatabaseCategory {
                     | DriverCapabilities::RETURNING.bits(),
             ),
 
-            DatabaseCategory::Document => DriverCapabilities::from_bits_truncate(
-                DriverCapabilities::INDEXES.bits()
-                    | DriverCapabilities::NESTED_DOCUMENTS.bits()
-                    | DriverCapabilities::ARRAYS.bits()
-                    | DriverCapabilities::AGGREGATION.bits(),
-            ),
+            DatabaseCategory::Document | DatabaseCategory::LogStream => {
+                DriverCapabilities::from_bits_truncate(
+                    DriverCapabilities::INDEXES.bits()
+                        | DriverCapabilities::NESTED_DOCUMENTS.bits()
+                        | DriverCapabilities::ARRAYS.bits()
+                        | DriverCapabilities::AGGREGATION.bits(),
+                )
+            }
 
             DatabaseCategory::KeyValue => DriverCapabilities::from_bits_truncate(
                 DriverCapabilities::KV_SCAN.bits()
@@ -1154,6 +1168,34 @@ pub trait OperationClassifier: Send + Sync {
     fn classify_tool(&self, tool_id: &str) -> ExecutionClassification;
 }
 
+/// A single SSL mode option that a driver declares in its metadata.
+///
+/// `id` is the native string the driver uses to identify the mode (e.g. `"require"`,
+/// `"VERIFY_CA"`); `label` is the human-readable text shown in the UI segmented control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SslModeOption {
+    /// Driver-native identifier passed through to connection config (e.g. `"prefer"`, `"REQUIRED"`).
+    pub id: &'static str,
+
+    /// Human-readable label shown in the segmented control (e.g. `"prefer"`, `"verify-ca"`).
+    pub label: &'static str,
+}
+
+/// Declares which SSL certificate path fields a driver accepts.
+///
+/// Used by the UI to conditionally render cert-path inputs in the TRANSPORT
+/// section. The UI reads this from `DriverMetadata::ssl_cert_fields` rather
+/// than branching on driver IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SslCertFields {
+    /// Whether the driver accepts a root CA certificate path (`sslrootcert`).
+    pub root_cert: bool,
+
+    /// Whether the driver accepts a client certificate and key pair
+    /// (`sslcert` / `sslkey`).
+    pub client_cert: bool,
+}
+
 /// Metadata that a driver provides about itself.
 ///
 /// This is returned by `DbDriver::metadata()` and used by the UI
@@ -1171,6 +1213,13 @@ pub struct DriverMetadata {
 
     /// Database category (Relational, Document, etc.).
     pub category: DatabaseCategory,
+
+    /// Operational deployment classification (Self-hosted, Embedded, Cloud-managed).
+    ///
+    /// `None` means the driver has not declared a deployment class — UI surfaces
+    /// that surface this chip should simply omit it rather than guessing.
+    #[serde(default)]
+    pub deployment_class: Option<DeploymentClass>,
 
     /// Query language used by this database.
     pub query_language: QueryLanguage,
@@ -1207,6 +1256,27 @@ pub struct DriverMetadata {
     /// Operational limits (max params, max rows, etc.).
     pub limits: Option<DriverLimits>,
 
+    /// SSL modes offered by this driver in the connection form, in display order.
+    ///
+    /// `None` means the driver does not expose an SSL mode control (e.g. SQLite).
+    /// When `Some`, the UI renders a `SegmentedControl` whose items come from the
+    /// driver's own `SslModeOption` list.  Each option carries a native `id` (passed
+    /// through to connection config) and a `label` shown in the control.
+    ///
+    /// Not serialized — re-established via `metadata()`.
+    #[serde(skip, default)]
+    pub ssl_modes: Option<&'static [SslModeOption]>,
+
+    /// Certificate path fields that this driver accepts.
+    ///
+    /// When `Some`, the TRANSPORT section in the connection form reveals cert
+    /// path inputs based on the selected SSL mode. `None` means the driver
+    /// does not support certificate-based SSL configuration (e.g. SQLite).
+    ///
+    /// Not serialized — re-established via `metadata()`.
+    #[serde(skip, default)]
+    pub ssl_cert_fields: Option<SslCertFields>,
+
     /// Custom operation classifier override.
     /// When None, uses the default classifier from the governance service.
     /// Note: Not serialized - must be re-established on deserialization.
@@ -1221,6 +1291,7 @@ impl Debug for DriverMetadata {
             .field("display_name", &self.display_name)
             .field("description", &self.description)
             .field("category", &self.category)
+            .field("deployment_class", &self.deployment_class)
             .field("query_language", &self.query_language)
             .field("capabilities", &self.capabilities)
             .field("default_port", &self.default_port)
@@ -1232,6 +1303,8 @@ impl Debug for DriverMetadata {
             .field("ddl", &self.ddl)
             .field("transactions", &self.transactions)
             .field("limits", &self.limits)
+            .field("ssl_modes", &self.ssl_modes)
+            .field("ssl_cert_fields", &self.ssl_cert_fields)
             .field("classification_override", &"...")
             .finish()
     }
@@ -1244,6 +1317,7 @@ impl Clone for DriverMetadata {
             display_name: self.display_name.clone(),
             description: self.description.clone(),
             category: self.category,
+            deployment_class: self.deployment_class,
             query_language: self.query_language.clone(),
             capabilities: self.capabilities,
             default_port: self.default_port,
@@ -1255,6 +1329,8 @@ impl Clone for DriverMetadata {
             ddl: self.ddl.clone(),
             transactions: self.transactions.clone(),
             limits: self.limits.clone(),
+            ssl_modes: self.ssl_modes, // Copy since it's &'static
+            ssl_cert_fields: self.ssl_cert_fields,
             // Note: classification_override is not cloned as it requires
             // concrete type knowledge. Use None after clone.
             classification_override: None,
@@ -1282,6 +1358,41 @@ impl DriverMetadata {
     pub fn is_key_value(&self) -> bool {
         self.category == DatabaseCategory::KeyValue
     }
+
+    /// Check if this is a log-stream service (e.g. CloudWatch Logs).
+    pub fn is_log_stream(&self) -> bool {
+        self.category == DatabaseCategory::LogStream
+    }
+}
+
+/// How a database is operationally deployed.
+///
+/// Used by the UI (driver picker, settings, connection cards) to surface a
+/// quick recognition cue about where a driver runs, independent of its data
+/// model (`DatabaseCategory`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DeploymentClass {
+    /// Runs as its own server process, typically administered by the user.
+    /// Examples: PostgreSQL, MySQL, MongoDB, Redis.
+    SelfHosted,
+
+    /// Embedded into the host process or backed by local files.
+    /// Examples: SQLite, DuckDB.
+    Embedded,
+
+    /// Fully managed by a cloud provider; the user only sees an API endpoint.
+    /// Examples: DynamoDB, CloudWatch Logs.
+    CloudManaged,
+}
+
+impl DeploymentClass {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            DeploymentClass::SelfHosted => "Self-hosted",
+            DeploymentClass::Embedded => "Embedded",
+            DeploymentClass::CloudManaged => "Cloud-managed",
+        }
+    }
 }
 
 // ============================================================================
@@ -1294,6 +1405,7 @@ pub struct DriverMetadataBuilder {
     display_name: String,
     description: String,
     category: DatabaseCategory,
+    deployment_class: Option<DeploymentClass>,
     query_language: QueryLanguage,
     capabilities: DriverCapabilities,
     default_port: Option<u16>,
@@ -1305,6 +1417,8 @@ pub struct DriverMetadataBuilder {
     ddl_caps: Option<DdlCapabilities>,
     transaction_caps: Option<TransactionCapabilities>,
     limits: Option<DriverLimits>,
+    ssl_modes: Option<&'static [SslModeOption]>,
+    ssl_cert_fields: Option<SslCertFields>,
     classification_override: Option<Box<dyn OperationClassifier>>,
 }
 
@@ -1321,6 +1435,7 @@ impl DriverMetadataBuilder {
             display_name: display_name.into(),
             description: String::new(),
             category,
+            deployment_class: None,
             query_language,
             capabilities: DriverCapabilities::empty(),
             default_port: None,
@@ -1332,6 +1447,8 @@ impl DriverMetadataBuilder {
             ddl_caps: None,
             transaction_caps: None,
             limits: None,
+            ssl_modes: None,
+            ssl_cert_fields: None,
             classification_override: None,
         }
     }
@@ -1339,6 +1456,12 @@ impl DriverMetadataBuilder {
     /// Set the description.
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        self
+    }
+
+    /// Set the deployment class.
+    pub fn deployment_class(mut self, class: DeploymentClass) -> Self {
+        self.deployment_class = Some(class);
         self
     }
 
@@ -1402,6 +1525,21 @@ impl DriverMetadataBuilder {
         self
     }
 
+    /// Declare the SSL modes this driver exposes in the connection form.
+    ///
+    /// Each `SslModeOption` carries a native driver id and a human-readable label.
+    /// When set, the form renders a `SegmentedControl` whose items come from this list.
+    pub fn ssl_modes(mut self, modes: &'static [SslModeOption]) -> Self {
+        self.ssl_modes = Some(modes);
+        self
+    }
+
+    /// Declare the SSL certificate path fields this driver accepts.
+    pub fn ssl_cert_fields(mut self, fields: SslCertFields) -> Self {
+        self.ssl_cert_fields = Some(fields);
+        self
+    }
+
     /// Set the classification override.
     pub fn classification_override(
         mut self,
@@ -1418,6 +1556,7 @@ impl DriverMetadataBuilder {
             display_name: self.display_name,
             description: self.description,
             category: self.category,
+            deployment_class: self.deployment_class,
             query_language: self.query_language,
             capabilities: self.capabilities,
             default_port: self.default_port,
@@ -1429,6 +1568,8 @@ impl DriverMetadataBuilder {
             ddl: self.ddl_caps,
             transactions: self.transaction_caps,
             limits: self.limits,
+            ssl_modes: self.ssl_modes,
+            ssl_cert_fields: self.ssl_cert_fields,
             classification_override: self.classification_override,
         }
     }

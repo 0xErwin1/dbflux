@@ -94,6 +94,9 @@ pub enum AppIcon {
     // Database generic
     Database,
 
+    // Generic non-database data sources
+    Logs,
+
     // Database brands (SimpleIcons)
     BrandPostgres,
     BrandMysql,
@@ -184,6 +187,7 @@ impl AppIcon {
             Self::Braces => "icons/ui/braces.svg",
             Self::SquareTerminal => "icons/ui/square-terminal.svg",
             Self::Database => "icons/ui/database.svg",
+            Self::Logs => "icons/ui/logs.svg",
             Self::BrandPostgres => "icons/brand/postgresql.svg",
             Self::BrandMysql => "icons/brand/mysql.svg",
             Self::BrandMariadb => "icons/brand/mariadb.svg",
@@ -300,6 +304,7 @@ impl AppIcon {
                 include_bytes!("../../../../../resources/icons/ui/square-terminal.svg")
             }
             Self::Database => include_bytes!("../../../../../resources/icons/ui/database.svg"),
+            Self::Logs => include_bytes!("../../../../../resources/icons/ui/logs.svg"),
             Self::BrandPostgres => {
                 include_bytes!("../../../../../resources/icons/brand/postgresql.svg")
             }
@@ -364,6 +369,7 @@ impl AppIcon {
             Icon::Mongodb => Self::BrandMongodb,
             Icon::Redis => Self::BrandRedis,
             Icon::Dynamodb => Self::Database,
+            Icon::Logs => Self::Logs,
             Icon::Database => Self::Database,
         }
     }
@@ -437,6 +443,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Braces,
     AppIcon::SquareTerminal,
     AppIcon::Database,
+    AppIcon::Logs,
     AppIcon::BrainCircuit,
     AppIcon::Bot,
     AppIcon::BrandPostgres,

@@ -448,6 +448,7 @@ fn required_text_field(id: &str, label: &str, placeholder: &str) -> FormFieldDef
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
+        help: None,
     }
 }
 
@@ -461,6 +462,7 @@ fn password_field(id: &str, label: &str, placeholder: &str, required: bool) -> F
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
+        help: None,
     }
 }
 
@@ -493,6 +495,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         default_value: String::new(),
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
+                        help: None,
                     },
                     FormFieldDef {
                         id: "sso_role_name".to_string(),
@@ -508,6 +511,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         default_value: String::new(),
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
+                        help: None,
                     },
                 ],
             }],

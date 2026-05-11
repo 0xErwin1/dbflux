@@ -2,7 +2,7 @@ use super::utils::{extract_pk_columns, value_to_json};
 use super::{DataGridPanel, DataSource, PendingBatchRemaining, PendingDeleteConfirm, PendingToast};
 use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::document_tree::NodeId;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use dbflux_core::{
     CollectionRef, DocumentFilter, DocumentUpdate, Pagination, QueryResult, RowDelete, RowIdentity,
     RowInsert, RowPatch, RowState, TableRef, TaskKind, Value,

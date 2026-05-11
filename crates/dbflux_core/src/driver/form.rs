@@ -82,6 +82,9 @@ pub struct FormFieldDef {
     pub enabled_when_checked: Option<String>,
     /// Field is enabled only when this checkbox field is unchecked.
     pub enabled_when_unchecked: Option<String>,
+    /// Optional hint displayed below the input (FontSizes::XS, muted_foreground).
+    #[serde(default)]
+    pub help: Option<String>,
 }
 
 /// A section of related form fields.
@@ -122,6 +125,7 @@ fn field(id: &str, label: &str, kind: FormFieldKind, placeholder: &str) -> FormF
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
+        help: None,
     }
 }
 
@@ -130,6 +134,11 @@ fn field_required(id: &str, label: &str, kind: FormFieldKind, placeholder: &str)
         required: true,
         ..field(id, label, kind, placeholder)
     }
+}
+
+pub fn with_help(mut f: FormFieldDef, help: &str) -> FormFieldDef {
+    f.help = Some(help.to_string());
+    f
 }
 
 fn with_default(mut f: FormFieldDef, default: &str) -> FormFieldDef {
@@ -294,7 +303,10 @@ pub static POSTGRES_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
                             ),
                             "use_uri",
                         ),
-                        field_password(),
+                        with_help(
+                            field_password(),
+                            "via Auth Profile · resolved at runtime, never persisted on disk",
+                        ),
                     ],
                 },
             ],
@@ -478,10 +490,6 @@ pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
                                 field("database", "Database Index", FormFieldKind::Number, "0"),
                                 "0",
                             ),
-                            "use_uri",
-                        ),
-                        when_unchecked(
-                            field("tls", "Use TLS", FormFieldKind::Checkbox, ""),
                             "use_uri",
                         ),
                     ],

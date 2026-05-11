@@ -1,7 +1,7 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::theme::ghost_border_color;
-use dbflux_components::primitives::Icon;
-use dbflux_components::tokens::FontSizes;
+use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant};
+use dbflux_components::tokens::{Anim, ChromeColors, FontSizes};
 use dbflux_components::typography::{MonoCaption, MonoMeta};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -12,6 +12,12 @@ pub struct ToggleTasksPanel;
 
 pub struct StatusBar {
     app_state: Entity<AppStateEntity>,
+    /// Periodic notify task that drives the 100 ms busy-pulse animation.
+    /// Present only while there are running tasks. Dropping it stops the loop.
+    _pulse_task: Option<Task<()>>,
+    /// Tracks which opacity phase the pulse dot is in (on / off).
+    pulse_visible: bool,
+    /// Legacy 100 ms notify loop — kept for the elapsed-time counter on running tasks.
     _timer: Option<Task<()>>,
 }
 
@@ -34,12 +40,62 @@ impl StatusBar {
 
         Self {
             app_state,
+            _pulse_task: None,
+            pulse_visible: true,
             _timer: Some(timer),
         }
     }
 
     fn on_app_state_changed(&mut self, cx: &mut Context<Self>) {
+        let has_running = self.app_state.read(cx).tasks().has_running_tasks();
+
+        if has_running && self._pulse_task.is_none() {
+            // Spawn the pulse loop: toggles pulse_visible every PULSE_INTERVAL_MS.
+            let task = cx.spawn(async move |this, cx| {
+                Self::pulse_loop(this, cx).await;
+            });
+            self._pulse_task = Some(task);
+        } else if !has_running {
+            self._pulse_task = None;
+            self.pulse_visible = true;
+        }
+
         cx.notify();
+    }
+
+    async fn pulse_loop(this: WeakEntity<Self>, cx: &mut AsyncApp) {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(Anim::PULSE_INTERVAL_MS))
+                .await;
+
+            let keep_running = cx
+                .update(|cx| {
+                    this.upgrade().map(|entity| {
+                        entity.update(cx, |bar, cx| {
+                            let running = bar.app_state.read(cx).tasks().has_running_tasks();
+
+                            if running {
+                                bar.pulse_visible = !bar.pulse_visible;
+                                cx.notify();
+                                true
+                            } else {
+                                bar.pulse_visible = true;
+                                bar._pulse_task = None;
+                                cx.notify();
+                                false
+                            }
+                        })
+                    })
+                })
+                .ok()
+                .flatten()
+                .unwrap_or(false);
+
+            if !keep_running {
+                break;
+            }
+        }
     }
 
     async fn timer_loop(this: WeakEntity<Self>, cx: &mut AsyncApp) {
@@ -131,6 +187,7 @@ impl Render for StatusBar {
 
         let running_tasks = app_state.tasks().running_tasks();
         let running_count = running_tasks.len();
+        let is_busy = running_count > 0;
         let current_task = running_tasks.first();
 
         let last_completed = if current_task.is_none() {
@@ -139,12 +196,28 @@ impl Render for StatusBar {
             None
         };
 
+        // Pick the StatusDot variant.
+        // While busy, alternate between Busy and Idle on each pulse tick to emulate
+        // the CSS @keyframes pulse effect from the design bundle.
+        let dot_variant = if is_busy {
+            if self.pulse_visible {
+                StatusDotVariant::Busy
+            } else {
+                StatusDotVariant::Idle
+            }
+        } else if is_connected {
+            StatusDotVariant::Success
+        } else {
+            StatusDotVariant::Idle
+        };
+
+        let divider_color = ChromeColors::ghost_border();
+
         div()
             .flex()
             .items_center()
             .justify_between()
             .h(px(32.0))
-            .px_3()
             .bg(cx.theme().background)
             .border_t_1()
             .border_color(ghost_border_color())
@@ -154,99 +227,96 @@ impl Render for StatusBar {
                     .flex()
                     .flex_1()
                     .items_center()
-                    .gap_3()
                     .overflow_x_hidden()
                     .whitespace_nowrap()
-                    // Connection dot + name
+                    // Segment: StatusDot + connection name
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_1()
+                            .px(px(10.0))
+                            .h(px(22.0))
+                            .child(StatusDot::new(dot_variant))
                             .when(is_connected, |this| {
-                                this.child(
-                                    div()
-                                        .w(px(6.0))
-                                        .h(px(6.0))
-                                        .rounded_full()
-                                        .bg(cx.theme().success)
-                                        .flex_shrink_0(),
-                                )
-                                .child(div().child(Self::metadata_text(connection_name)))
+                                this.child(Self::metadata_text(connection_name))
                             })
                             .when(!is_connected, |this| {
-                                this.child(
-                                    div()
-                                        .w(px(6.0))
-                                        .h(px(6.0))
-                                        .rounded_full()
-                                        .bg(cx.theme().muted_foreground)
-                                        .flex_shrink_0(),
-                                )
-                                .child(div().child(Self::metadata_text("disconnected")))
+                                this.child(Self::metadata_text("disconnected"))
                             }),
                     )
-                    // Running task info
+                    // Running task info — shown with a divider when a task is active
                     .when_some(current_task.cloned(), |this, task| {
                         let description = Self::single_line(&task.description);
-                        this.child(
+                        this.child(Self::vertical_divider(divider_color)).child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .child(Self::status_text("|"))
+                                .px(px(10.0))
+                                .h(px(22.0))
                                 .child(Self::status_text(description))
                                 .child(
-                                    div().child(
-                                        Self::metadata_text(format!(
-                                            "({})",
-                                            Self::format_elapsed(task.elapsed_secs)
-                                        ))
-                                        .color(cx.theme().primary),
-                                    ),
+                                    Self::metadata_text(format!(
+                                        "({})",
+                                        Self::format_elapsed(task.elapsed_secs)
+                                    ))
+                                    .color(cx.theme().primary),
                                 ),
                         )
                     })
                     .when_some(last_completed, |this, task| {
-                        this.child(
+                        this.child(Self::vertical_divider(divider_color)).child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .child(Self::status_text("|"))
+                                .px(px(10.0))
+                                .h(px(22.0))
                                 .child(Self::status_text(Self::format_completed_task(&task))),
                         )
                     }),
             )
             // Right section: tasks toggle
             .child(
-                div().flex().flex_shrink_0().items_center().gap_4().child(
-                    div()
-                        .id("tasks-toggle")
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .h(px(22.0))
-                        .rounded(px(3.0))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(cx.theme().secondary))
-                        .on_click(cx.listener(|_this, _, _, cx| {
-                            cx.emit(ToggleTasksPanel);
-                        }))
-                        .when(running_count > 0, |this| {
-                            this.child(
-                                Icon::new(crate::ui::icons::AppIcon::Loader)
-                                    .size(px(12.0))
-                                    .primary(),
-                            )
-                            .child(Self::status_text(format!("{} running", running_count)))
-                        })
-                        .when(running_count == 0, |this| {
-                            this.child(Self::status_text("Tasks"))
-                        }),
-                ),
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .child(Self::vertical_divider(divider_color))
+                    .child(
+                        div()
+                            .id("tasks-toggle")
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px(px(10.0))
+                            .h(px(22.0))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(cx.theme().secondary))
+                            .on_click(cx.listener(|_this, _, _, cx| {
+                                cx.emit(ToggleTasksPanel);
+                            }))
+                            .when(running_count > 0, |this| {
+                                this.child(
+                                    Icon::new(crate::ui::icons::AppIcon::Loader)
+                                        .size(px(12.0))
+                                        .primary(),
+                                )
+                                .child(Self::status_text(format!("{} running", running_count)))
+                            })
+                            .when(running_count == 0, |this| {
+                                this.child(Self::status_text("Tasks"))
+                            }),
+                    ),
             )
+    }
+}
+
+impl StatusBar {
+    /// Renders a 1 px vertical ghost-border separator between status bar sections.
+    fn vertical_divider(color: gpui::Hsla) -> impl IntoElement {
+        div().w(px(1.0)).h(px(16.0)).bg(color).flex_shrink_0()
     }
 }
 

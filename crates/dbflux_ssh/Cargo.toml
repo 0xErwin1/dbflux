@@ -18,6 +18,7 @@ dbflux_tunnel_core = { path = "../dbflux_tunnel_core" }
 dirs = "6"
 log = "0.4"
 ssh2 = "0.9"
+uuid = { workspace = true }
 
 [features]
 vendored-openssl = ["ssh2/vendored-openssl"]

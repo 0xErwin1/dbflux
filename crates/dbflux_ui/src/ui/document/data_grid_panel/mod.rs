@@ -3,6 +3,7 @@ mod mutations;
 mod navigation;
 mod query;
 mod render;
+pub mod row_inspector;
 mod utils;
 
 use super::result_view::ResultViewMode;
@@ -16,7 +17,7 @@ use crate::ui::components::data_table::{
 use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, DocumentTreeState};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::PendingToast;
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::overlays::cell_editor_modal::{
     CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
 };
@@ -358,6 +359,13 @@ pub struct DataGridPanel {
     document_preview_modal: Entity<DocumentPreviewModal>,
     pending_document_preview: Option<PendingDocumentPreview>,
 
+    // Row inspector overlay panel
+    row_inspector: Option<Entity<row_inspector::RowInspector>>,
+    /// Retains the subscription to the inspector's close events.
+    /// Without storage the RAII Subscription drops immediately and the
+    /// X button (and Esc) silently fail to close the panel.
+    row_inspector_subscription: Option<Subscription>,
+
     export_menu_open: bool,
 }
 
@@ -490,9 +498,15 @@ impl DataGridPanel {
                 app_state.update(cx, |state, _| {
                     state.set_table_details(
                         fetch_result.profile_id,
+                        fetch_result.database.clone(),
+                        fetch_result.table.clone(),
+                        fetch_result.details,
+                    );
+                    state.set_dependents(
+                        fetch_result.profile_id,
                         fetch_result.database,
                         fetch_result.table,
-                        fetch_result.details,
+                        fetch_result.dependents,
                     );
                 });
 
@@ -665,14 +679,16 @@ impl DataGridPanel {
         let refresh_policy_sub = cx.subscribe_in(
             &refresh_dropdown,
             window,
-            |this, _, event: &DropdownSelectionChanged, window, cx| {
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
                 let policy = RefreshPolicy::from_index(event.index);
 
                 if policy.is_auto() && !this.supports_auto_refresh() {
                     this.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
-                    cx.toast_warning("Auto-refresh not available for query results", window);
+                    Toast::warning("Auto-refresh not available for query results")
+                        .meta_right(now_hms())
+                        .push(cx);
                     return;
                 }
 
@@ -744,6 +760,8 @@ impl DataGridPanel {
             document_tree_subscription: None,
             document_preview_modal,
             pending_document_preview: None,
+            row_inspector: None,
+            row_inspector_subscription: None,
             export_menu_open: false,
         }
     }
@@ -1036,6 +1054,20 @@ impl DataGridPanel {
 
         let column_details = self.get_column_details(cx);
 
+        // Compute FK column indices before entering the cx.new closure.
+        let fk_names = self.get_fk_column_names(cx);
+        let fk_indices: std::collections::HashSet<usize> = if fk_names.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            self.result
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(_, col)| fk_names.contains(&col.name))
+                .map(|(ix, _)| ix)
+                .collect()
+        };
+
         let table_model = Arc::new(TableModel::from(&self.result));
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(table_model, cx);
@@ -1044,6 +1076,10 @@ impl DataGridPanel {
             }
             state.set_pk_columns(pk_indices.clone());
             state.set_insertable(is_insertable);
+
+            if !fk_indices.is_empty() {
+                state.set_fk_columns(fk_indices);
+            }
 
             if let Some(columns) = &column_details {
                 for (col_ix, result_col) in self.result.columns.iter().enumerate() {
@@ -1351,6 +1387,40 @@ impl DataGridPanel {
     pub fn source(&self) -> &DataSource {
         &self.source
     }
+
+    /// Returns `(inserts, updates, deletes)` counts from the pending edit buffer.
+    ///
+    /// Returns `(0, 0, 0)` when the table has no edit state or no pending changes.
+    pub fn pending_edit_counts(&self, cx: &App) -> (usize, usize, usize) {
+        let Some(table_state) = &self.table_state else {
+            return (0, 0, 0);
+        };
+
+        let state = table_state.read(cx);
+        let buffer = state.edit_buffer();
+
+        let inserts = buffer.pending_insert_rows().len();
+        let updates = buffer.dirty_row_count();
+        let deletes = buffer.pending_delete_rows().len();
+
+        (inserts, updates, deletes)
+    }
+
+    /// Short summary of pending edits for the dirty-dot tooltip.
+    ///
+    /// Returns `None` when no changes are staged.
+    pub fn change_summary(&self, cx: &App) -> Option<String> {
+        let (inserts, updates, deletes) = self.pending_edit_counts(cx);
+
+        if inserts == 0 && updates == 0 && deletes == 0 {
+            None
+        } else {
+            Some(format!(
+                "{} inserts · {} updates · {} deletes",
+                inserts, updates, deletes
+            ))
+        }
+    }
 }
 
 impl EventEmitter<DataGridEvent> for DataGridPanel {}
@@ -1656,5 +1726,107 @@ mod tests {
         );
         assert_eq!(row_count, 0, "filtered refresh may still be visually empty");
         assert_eq!(col_count, 2, "filtered refresh should keep headers visible");
+    }
+
+    #[gpui::test]
+    fn pending_edit_counts_empty_buffer_returns_zeros(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: Some(0),
+                };
+
+                let mut panel = DataGridPanel::new_internal(
+                    source,
+                    app_state.clone(),
+                    vec!["id".to_string()],
+                    window,
+                    cx,
+                );
+
+                panel.set_result(zero_row_result(), cx);
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        let counts = window.update(|_, app| panel.read(app).pending_edit_counts(app));
+
+        assert_eq!(
+            counts,
+            (0, 0, 0),
+            "fresh panel should have no pending changes"
+        );
+    }
+
+    #[gpui::test]
+    fn pending_edit_counts_only_inserts(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: Some(0),
+                };
+
+                let mut panel = DataGridPanel::new_internal(
+                    source,
+                    app_state.clone(),
+                    vec!["id".to_string()],
+                    window,
+                    cx,
+                );
+
+                panel.set_result(zero_row_result(), cx);
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.handle_add_row(0, false, cx);
+            });
+        });
+
+        let counts = window.update(|_, app| panel.read(app).pending_edit_counts(app));
+
+        assert_eq!(counts.0, 1, "should have 1 pending insert");
+        assert_eq!(counts.1, 0, "should have 0 pending updates");
+        assert_eq!(counts.2, 0, "should have 0 pending deletes");
     }
 }

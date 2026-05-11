@@ -1,4 +1,4 @@
-use crate::ui::components::toast::ToastExt;
+use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Radii};
 use dbflux_components::controls::{GpuiInput as Input, InputState};
@@ -369,7 +369,10 @@ impl ServicesSection {
     pub(super) fn save_service(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let socket_id = self.input_socket_id.read(cx).value().trim().to_string();
         if socket_id.is_empty() {
-            cx.toast_error("Socket ID is required", window);
+            Toast::error("Socket ID is required")
+                .meta_right(now_hms())
+                .action(copy_action("Socket ID is required"))
+                .push(cx);
             return;
         }
 
@@ -379,10 +382,11 @@ impl ServicesSection {
             .enumerate()
             .any(|(i, s)| s.socket_id == socket_id && Some(i) != self.editing_svc_idx);
         if is_duplicate {
-            cx.toast_error(
-                format!("A service with socket ID \"{}\" already exists", socket_id),
-                window,
-            );
+            let msg = format!("A service with socket ID \"{}\" already exists", socket_id);
+            Toast::error(msg.clone())
+                .meta_right(now_hms())
+                .action(copy_action(msg))
+                .push(cx);
             return;
         }
 
@@ -393,7 +397,10 @@ impl ServicesSection {
             match timeout_str.parse::<u64>() {
                 Ok(v) => Some(v),
                 Err(_) => {
-                    cx.toast_error("Timeout must be a valid number (milliseconds)", window);
+                    Toast::error("Timeout must be a valid number (milliseconds)")
+                        .meta_right(now_hms())
+                        .action(copy_action("Timeout must be a valid number (milliseconds)"))
+                        .push(cx);
                     return;
                 }
             }
@@ -453,13 +460,20 @@ impl ServicesSection {
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) = dbflux_app::config_loader::save_services(runtime, &self.svc_services) {
             log::error!("Failed to save services to SQLite: {}", e);
-            cx.toast_error(format!("Failed to save config: {}", e), window);
+            let toast_body = e.to_string();
+            Toast::error("Failed to save config")
+                .meta_right(now_hms())
+                .body(toast_body.clone())
+                .action(copy_action(format!(
+                    "Failed to save config: {}",
+                    toast_body
+                )))
+                .push(cx);
             return;
         }
-        cx.toast_info(
-            "RPC service saved. Restart required to apply changes.",
-            window,
-        );
+        Toast::info("RPC service saved. Restart required to apply changes.")
+            .meta_right(now_hms())
+            .push(cx);
 
         self.svc_selected_idx = Some(saved_idx);
         self.edit_service(saved_idx, window, cx);
@@ -505,13 +519,17 @@ impl ServicesSection {
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) = dbflux_app::config_loader::save_services(runtime, &self.svc_services) {
             log::error!("Failed to save services to SQLite: {}", e);
-            cx.toast_error(format!("Failed to save config: {}", e), window);
+            let body = e.to_string();
+            Toast::error("Failed to save config")
+                .meta_right(now_hms())
+                .body(body.clone())
+                .action(copy_action(format!("Failed to save config: {}", body)))
+                .push(cx);
             return;
         }
-        cx.toast_info(
-            "RPC service deleted. Restart required to apply changes.",
-            window,
-        );
+        Toast::info("RPC service deleted. Restart required to apply changes.")
+            .meta_right(now_hms())
+            .push(cx);
         cx.notify();
     }
 

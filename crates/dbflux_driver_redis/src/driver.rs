@@ -9,11 +9,11 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DefaultSqlDialect, Diagnostic, DiagnosticSeverity, DocumentConnection,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
-    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError,
-    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
-    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    DdlCapabilities, DefaultSqlDialect, DeploymentClass, Diagnostic, DiagnosticSeverity,
+    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    EditorDiagnostic, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
+    FormattedError, HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest,
+    KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
     KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema, LanguageService,
     ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
@@ -58,6 +58,7 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
     display_name: "Redis".into(),
     description: "In-memory key-value database".into(),
     category: DatabaseCategory::KeyValue,
+    deployment_class: Some(DeploymentClass::SelfHosted),
     query_language: QueryLanguage::RedisCommands,
     capabilities: DriverCapabilities::from_bits_truncate(
         DriverCapabilities::KEYVALUE_BASE.bits()
@@ -150,6 +151,24 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
         max_columns: 0,
         max_indexes_per_table: 0,
     }),
+    ssl_modes: Some(&[
+        dbflux_core::SslModeOption {
+            id: "off",
+            label: "off",
+        },
+        dbflux_core::SslModeOption {
+            id: "on",
+            label: "on",
+        },
+        dbflux_core::SslModeOption {
+            id: "verify",
+            label: "verify",
+        },
+    ]),
+    ssl_cert_fields: Some(dbflux_core::SslCertFields {
+        root_cert: true,
+        client_cert: true,
+    }),
     classification_override: None,
 });
 
@@ -164,10 +183,44 @@ impl RedisDriver {
         &self,
         params: DirectConnectParams<'_>,
     ) -> Result<Box<dyn Connection>, DbError> {
-        let scheme = if params.tls { "rediss" } else { "redis" };
-        let uri = format!("{}://{}:{}/", scheme, params.host, params.port);
-        let client = redis::Client::open(uri.as_str())
-            .map_err(|e| format_redis_error(&e, params.host, params.port))?;
+        let tls = redis_ssl_mode_to_config(
+            params.ssl_mode,
+            params.ssl_root_cert_path,
+            params.ssl_client_cert_path,
+            params.ssl_client_key_path,
+        )
+        .map_err(DbError::InvalidProfile)?;
+
+        // Build the base URI according to the selected TLS mode. The Redis crate
+        // accepts the `#insecure` fragment to skip certificate verification when
+        // using `rediss://`. For `verify` mode we feed PEM bytes through
+        // `Client::build_with_tls` so the rustls config trusts the supplied root
+        // CA and / or sends the client certificate.
+        let scheme = if matches!(tls, RedisTlsConfig::Plain) {
+            "redis"
+        } else {
+            "rediss"
+        };
+        let mut uri = format!("{}://{}:{}/", scheme, params.host, params.port);
+        if matches!(tls, RedisTlsConfig::TlsInsecure) {
+            uri.push_str("#insecure");
+        }
+
+        let client = match &tls {
+            RedisTlsConfig::Plain | RedisTlsConfig::TlsInsecure => {
+                redis::Client::open(uri.as_str())
+                    .map_err(|e| format_redis_error(&e, params.host, params.port))?
+            }
+            RedisTlsConfig::TlsVerify(certs) => redis::Client::build_with_tls(
+                uri.as_str(),
+                redis::TlsCertificates {
+                    client_tls: certs.client_tls.clone(),
+                    root_cert: certs.root_cert.clone(),
+                },
+            )
+            .map_err(|e| format_redis_error(&e, params.host, params.port))?,
+        };
+
         let mut connection = client
             .get_connection()
             .map_err(|e| format_redis_error(&e, params.host, params.port))?;
@@ -238,7 +291,10 @@ impl RedisDriver {
         self.connect_direct(DirectConnectParams {
             host: "127.0.0.1",
             port: local_port,
-            tls: config.tls,
+            ssl_mode: config.ssl_mode.as_deref(),
+            ssl_root_cert_path: config.ssl_root_cert_path.as_deref(),
+            ssl_client_cert_path: config.ssl_client_cert_path.as_deref(),
+            ssl_client_key_path: config.ssl_client_key_path.as_deref(),
             user: config.user.as_deref(),
             password,
             database: config.database,
@@ -284,6 +340,7 @@ impl DbDriver for RedisDriver {
                                 default_value: "100".into(),
                                 enabled_when_checked: None,
                                 enabled_when_unchecked: None,
+                                help: None,
                             },
                             FormFieldDef {
                                 id: "stream_preview_limit".into(),
@@ -294,6 +351,7 @@ impl DbDriver for RedisDriver {
                                 default_value: "50".into(),
                                 enabled_when_checked: None,
                                 enabled_when_unchecked: None,
+                                help: None,
                             },
                         ],
                     },
@@ -308,6 +366,7 @@ impl DbDriver for RedisDriver {
                             default_value: "false".into(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            help: None,
                         }],
                     },
                 ],
@@ -329,7 +388,6 @@ impl DbDriver for RedisDriver {
             .map(|s| s.parse::<u32>())
             .transpose()
             .map_err(|_| DbError::InvalidProfile("Invalid database index".to_string()))?;
-        let tls = values.get("tls").map(|s| s == "true").unwrap_or(false);
 
         if use_uri {
             if uri.is_none() {
@@ -345,7 +403,11 @@ impl DbDriver for RedisDriver {
                 port: 6379,
                 user,
                 database,
-                tls,
+                tls: false,
+                ssl_mode: None,
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
             });
@@ -370,7 +432,11 @@ impl DbDriver for RedisDriver {
             port,
             user,
             database,
-            tls,
+            tls: false,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         })
@@ -386,7 +452,6 @@ impl DbDriver for RedisDriver {
             port,
             user,
             database,
-            tls,
             ..
         } = config
         {
@@ -402,10 +467,6 @@ impl DbDriver for RedisDriver {
                 "database".to_string(),
                 database.map(|d| d.to_string()).unwrap_or_default(),
             );
-            values.insert(
-                "tls".to_string(),
-                if *tls { "true" } else { "" }.to_string(),
-            );
         }
 
         values
@@ -419,9 +480,11 @@ impl DbDriver for RedisDriver {
         let port = values.get("port").map(String::as_str).unwrap_or("6379");
         let user = values.get("user").map(String::as_str).unwrap_or("");
         let db_index = values.get("database").map(String::as_str).unwrap_or("");
-        let tls = values.get("tls").map(|s| s == "true").unwrap_or(false);
 
-        let scheme = if tls { "rediss" } else { "redis" };
+        // The form no longer carries a `tls` checkbox — TLS is determined by the
+        // driver-level SSL mode selection (see `connect_with_secrets`). When
+        // building a preview URI we default to plain `redis://`.
+        let scheme = "redis";
         let auth = if !user.is_empty() {
             if password.is_empty() {
                 format!("{}@", urlencoding::encode(user))
@@ -456,10 +519,6 @@ impl DbDriver for RedisDriver {
         let mut values = HashMap::new();
         values.insert("use_uri".to_string(), "true".to_string());
         values.insert("uri".to_string(), uri.to_string());
-        values.insert(
-            "tls".to_string(),
-            if scheme == "rediss" { "true" } else { "" }.to_string(),
-        );
 
         let (authority, path) = match rest.split_once('/') {
             Some((a, p)) => (a, p),
@@ -525,7 +584,10 @@ impl DbDriver for RedisDriver {
             self.connect_direct(DirectConnectParams {
                 host: &config.host,
                 port: config.port,
-                tls: config.tls,
+                ssl_mode: config.ssl_mode.as_deref(),
+                ssl_root_cert_path: config.ssl_root_cert_path.as_deref(),
+                ssl_client_cert_path: config.ssl_client_cert_path.as_deref(),
+                ssl_client_key_path: config.ssl_client_key_path.as_deref(),
                 user: config.user.as_deref(),
                 password,
                 database: config.database,
@@ -547,14 +609,20 @@ struct ExtractedRedisConfig {
     port: u16,
     user: Option<String>,
     database: Option<u32>,
-    tls: bool,
+    ssl_mode: Option<String>,
+    ssl_root_cert_path: Option<String>,
+    ssl_client_cert_path: Option<String>,
+    ssl_client_key_path: Option<String>,
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
 struct DirectConnectParams<'a> {
     host: &'a str,
     port: u16,
-    tls: bool,
+    ssl_mode: Option<&'a str>,
+    ssl_root_cert_path: Option<&'a str>,
+    ssl_client_cert_path: Option<&'a str>,
+    ssl_client_key_path: Option<&'a str>,
     user: Option<&'a str>,
     password: Option<&'a str>,
     database: Option<u32>,
@@ -571,21 +639,139 @@ fn extract_redis_config(config: &DbConfig) -> Result<ExtractedRedisConfig, DbErr
             user,
             database,
             tls,
+            ssl_mode,
+            ssl_root_cert_path,
+            ssl_client_cert_path,
+            ssl_client_key_path,
             ssh_tunnel,
             ..
-        } => Ok(ExtractedRedisConfig {
-            use_uri: *use_uri,
-            uri: uri.clone(),
-            host: host.clone(),
-            port: *port,
-            user: user.clone(),
-            database: *database,
-            tls: *tls,
-            ssh_tunnel: ssh_tunnel.clone(),
-        }),
+        } => {
+            // Migrate the legacy boolean `tls` flag: when older saves don't carry
+            // an `ssl_mode`, fall back to the previous TLS-without-verification
+            // semantics (`tls=true` → `"on"`, `tls=false` → `"off"`).
+            let resolved_ssl_mode = match ssl_mode.clone() {
+                Some(mode) => Some(mode),
+                None => Some(if *tls {
+                    "on".to_string()
+                } else {
+                    "off".to_string()
+                }),
+            };
+
+            Ok(ExtractedRedisConfig {
+                use_uri: *use_uri,
+                uri: uri.clone(),
+                host: host.clone(),
+                port: *port,
+                user: user.clone(),
+                database: *database,
+                ssl_mode: resolved_ssl_mode,
+                ssl_root_cert_path: ssl_root_cert_path.clone(),
+                ssl_client_cert_path: ssl_client_cert_path.clone(),
+                ssl_client_key_path: ssl_client_key_path.clone(),
+                ssh_tunnel: ssh_tunnel.clone(),
+            })
+        }
         _ => Err(DbError::InvalidProfile(
             "Expected Redis configuration".to_string(),
         )),
+    }
+}
+
+/// Native TLS configuration derived from an SSL mode id and optional cert paths.
+///
+/// Returned by `redis_ssl_mode_to_config` and consumed by `connect_direct`.
+enum RedisTlsConfig {
+    /// Plain TCP (`redis://`). Used when the mode is `"off"`.
+    Plain,
+    /// TLS without certificate verification (`rediss://...#insecure`). Used when
+    /// the mode is `"on"`.
+    TlsInsecure,
+    /// TLS with verification, optionally with a custom root CA and / or mTLS.
+    TlsVerify(RedisTlsCerts),
+}
+
+impl std::fmt::Debug for RedisTlsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RedisTlsConfig::Plain => f.write_str("Plain"),
+            RedisTlsConfig::TlsInsecure => f.write_str("TlsInsecure"),
+            RedisTlsConfig::TlsVerify(_) => f.write_str("TlsVerify"),
+        }
+    }
+}
+
+#[derive(Default)]
+struct RedisTlsCerts {
+    client_tls: Option<redis::ClientTlsConfig>,
+    root_cert: Option<Vec<u8>>,
+}
+
+/// Maps a Redis driver SSL mode id (`"off"` / `"on"` / `"verify"`) to a native
+/// `RedisTlsConfig`. Optional certificate paths are loaded from disk when the
+/// mode requires them.
+///
+/// Returns `Err` with a static message for unknown mode ids or unreadable cert
+/// files.
+fn redis_ssl_mode_to_config(
+    mode_id: Option<&str>,
+    root_cert_path: Option<&str>,
+    client_cert_path: Option<&str>,
+    client_key_path: Option<&str>,
+) -> Result<RedisTlsConfig, String> {
+    let mode = mode_id.unwrap_or("off");
+
+    match mode {
+        "" | "off" => Ok(RedisTlsConfig::Plain),
+        "on" => Ok(RedisTlsConfig::TlsInsecure),
+        "verify" => {
+            let root_cert =
+                match root_cert_path.and_then(non_empty) {
+                    Some(path) => Some(std::fs::read(path).map_err(|e| {
+                        format!("Failed to read Redis root CA at '{}': {}", path, e)
+                    })?),
+                    None => None,
+                };
+
+            let client_tls = match (
+                client_cert_path.and_then(non_empty),
+                client_key_path.and_then(non_empty),
+            ) {
+                (Some(cert), Some(key)) => {
+                    let client_cert = std::fs::read(cert).map_err(|e| {
+                        format!("Failed to read Redis client cert at '{}': {}", cert, e)
+                    })?;
+                    let client_key = std::fs::read(key).map_err(|e| {
+                        format!("Failed to read Redis client key at '{}': {}", key, e)
+                    })?;
+                    Some(redis::ClientTlsConfig {
+                        client_cert,
+                        client_key,
+                    })
+                }
+                (None, None) => None,
+                _ => {
+                    return Err(
+                        "Redis mTLS requires both a client cert and a client key".to_string()
+                    );
+                }
+            };
+
+            Ok(RedisTlsConfig::TlsVerify(RedisTlsCerts {
+                client_tls,
+                root_cert,
+            }))
+        }
+        other => Err(format!("Unknown Redis SSL mode: '{}'", other)),
+    }
+}
+
+fn non_empty(s: &str) -> Option<&str> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
     }
 }
 
@@ -2313,7 +2499,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_values_includes_tls_and_database() {
+    fn extract_values_includes_database_and_omits_tls() {
         let driver = RedisDriver::new();
         let config = DbConfig::Redis {
             use_uri: false,
@@ -2322,7 +2508,11 @@ mod tests {
             port: 6380,
             user: Some("svc".to_string()),
             database: Some(3),
-            tls: true,
+            tls: false,
+            ssl_mode: Some("on".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         };
@@ -2331,26 +2521,25 @@ mod tests {
         assert_eq!(values.get("host").map(String::as_str), Some("cache.local"));
         assert_eq!(values.get("port").map(String::as_str), Some("6380"));
         assert_eq!(values.get("database").map(String::as_str), Some("3"));
-        assert_eq!(values.get("tls").map(String::as_str), Some("true"));
+        // SSL mode is owned by the generic TRANSPORT control, not by the form values.
+        assert!(!values.contains_key("tls"));
     }
 
     #[test]
-    fn build_uri_and_parse_uri_keep_tls_user_and_db() {
+    fn build_uri_keeps_user_and_db_without_tls_field() {
         let driver = RedisDriver::new();
         let mut values = FormValues::new();
         values.insert("host".to_string(), "cache.local".to_string());
         values.insert("port".to_string(), "6380".to_string());
         values.insert("user".to_string(), "service user".to_string());
         values.insert("database".to_string(), "2".to_string());
-        values.insert("tls".to_string(), "true".to_string());
 
         let uri = driver
             .build_uri(&values, "s3cr@t")
             .expect("redis driver should support uri build");
-        assert_eq!(uri, "rediss://service%20user:s3cr%40t@cache.local:6380/2");
+        assert_eq!(uri, "redis://service%20user:s3cr%40t@cache.local:6380/2");
 
         let parsed = driver.parse_uri(&uri).expect("uri should parse");
-        assert_eq!(parsed.get("tls").map(String::as_str), Some("true"));
         assert_eq!(parsed.get("host").map(String::as_str), Some("cache.local"));
         assert_eq!(parsed.get("port").map(String::as_str), Some("6380"));
         assert_eq!(
@@ -2358,6 +2547,117 @@ mod tests {
             Some("service%20user")
         );
         assert_eq!(parsed.get("database").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn ssl_mode_off_returns_plain() {
+        let cfg = redis_ssl_mode_to_config(Some("off"), None, None, None)
+            .expect("off should map to plain");
+        assert!(matches!(cfg, RedisTlsConfig::Plain));
+    }
+
+    #[test]
+    fn ssl_mode_default_when_none_is_plain() {
+        let cfg =
+            redis_ssl_mode_to_config(None, None, None, None).expect("None should map to plain");
+        assert!(matches!(cfg, RedisTlsConfig::Plain));
+    }
+
+    #[test]
+    fn ssl_mode_on_returns_tls_insecure() {
+        let cfg = redis_ssl_mode_to_config(Some("on"), None, None, None)
+            .expect("on should map to insecure TLS");
+        assert!(matches!(cfg, RedisTlsConfig::TlsInsecure));
+    }
+
+    #[test]
+    fn ssl_mode_verify_without_certs_is_verify_with_no_overrides() {
+        let cfg = redis_ssl_mode_to_config(Some("verify"), None, None, None)
+            .expect("verify without certs should be valid");
+        let certs = match cfg {
+            RedisTlsConfig::TlsVerify(c) => c,
+            other => panic!("expected TlsVerify, got {:?}", other),
+        };
+        assert!(certs.client_tls.is_none());
+        assert!(certs.root_cert.is_none());
+    }
+
+    #[test]
+    fn ssl_mode_verify_rejects_partial_client_cert() {
+        let err = redis_ssl_mode_to_config(Some("verify"), None, Some("/tmp/cert.pem"), None)
+            .expect_err("client cert without key should fail");
+        assert!(err.contains("client cert and a client key"));
+    }
+
+    #[test]
+    fn ssl_mode_unknown_id_returns_error() {
+        let err = redis_ssl_mode_to_config(Some("bogus"), None, None, None)
+            .expect_err("unknown mode should fail");
+        assert!(err.contains("Unknown Redis SSL mode"));
+    }
+
+    #[test]
+    fn extract_redis_config_migrates_legacy_tls_true() {
+        let config = DbConfig::Redis {
+            use_uri: false,
+            uri: None,
+            host: "localhost".to_string(),
+            port: 6379,
+            user: None,
+            database: Some(0),
+            tls: true,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+        let extracted = extract_redis_config(&config).expect("redis config should extract");
+        assert_eq!(extracted.ssl_mode.as_deref(), Some("on"));
+    }
+
+    #[test]
+    fn extract_redis_config_migrates_legacy_tls_false() {
+        let config = DbConfig::Redis {
+            use_uri: false,
+            uri: None,
+            host: "localhost".to_string(),
+            port: 6379,
+            user: None,
+            database: Some(0),
+            tls: false,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+        let extracted = extract_redis_config(&config).expect("redis config should extract");
+        assert_eq!(extracted.ssl_mode.as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn extract_redis_config_prefers_explicit_ssl_mode_over_legacy_tls() {
+        let config = DbConfig::Redis {
+            use_uri: false,
+            uri: None,
+            host: "localhost".to_string(),
+            port: 6379,
+            user: None,
+            database: Some(0),
+            // Legacy `tls: true` but explicit `ssl_mode: "verify"` — the new field wins.
+            tls: true,
+            ssl_mode: Some("verify".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+        let extracted = extract_redis_config(&config).expect("redis config should extract");
+        assert_eq!(extracted.ssl_mode.as_deref(), Some("verify"));
     }
 
     #[test]

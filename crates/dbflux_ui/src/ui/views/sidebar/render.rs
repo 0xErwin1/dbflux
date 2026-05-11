@@ -1,6 +1,6 @@
 use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::SyntaxColors;
 use dbflux_components::typography::{Body, MonoCaption};
 use gpui::FontWeight;
@@ -14,7 +14,10 @@ fn sidebar_tab_text(label: &'static str, active: bool, focused: bool, color: Hsl
         FontWeight::MEDIUM
     };
 
-    MonoCaption::new(label).font_weight(weight).color(color)
+    MonoCaption::new(label)
+        .font_weight(weight)
+        .color(color)
+        .font_size(FontSizes::SM)
 }
 
 impl Sidebar {
@@ -45,28 +48,31 @@ impl Sidebar {
             }
         };
 
+        // Tab strip: uppercase mono caption, active gets a 2px primary
+        // underline, no hover background (per design).
         div()
             .flex()
             .items_center()
             .justify_between()
-            .h(Heights::TOOLBAR)
+            .px(Spacing::MD)
+            .h(px(40.0))
             .border_b_1()
             .border_color(theme.border)
             .child(
                 div()
                     .flex()
                     .items_center()
+                    .gap(Spacing::LG)
+                    .h_full()
                     .child(
                         div()
                             .id("tab-connections")
-                            .px(Spacing::SM)
                             .h_full()
                             .flex()
                             .items_center()
                             .cursor_pointer()
                             .border_b_2()
                             .border_color(tab_border_color(active_tab == SidebarTab::Connections))
-                            .hover(|d| d.bg(theme.secondary))
                             .on_click(move |_, _, cx| {
                                 sidebar.update(cx, |this, cx| {
                                     this.set_active_tab(SidebarTab::Connections, cx);
@@ -82,14 +88,12 @@ impl Sidebar {
                     .child(
                         div()
                             .id("tab-scripts")
-                            .px(Spacing::SM)
                             .h_full()
                             .flex()
                             .items_center()
                             .cursor_pointer()
                             .border_b_2()
                             .border_color(tab_border_color(active_tab == SidebarTab::Scripts))
-                            .hover(|d| d.bg(theme.secondary))
                             .on_click(move |_, _, cx| {
                                 sidebar2.update(cx, |this, cx| {
                                     this.set_active_tab(SidebarTab::Scripts, cx);
@@ -108,8 +112,8 @@ impl Sidebar {
                 let hover_bg = theme.secondary;
                 div()
                     .id("add-button")
-                    .w(Heights::ICON_LG)
-                    .h(Heights::ICON_LG)
+                    .w(px(18.0))
+                    .h(px(18.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -156,9 +160,9 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let has_entries = self.visible_entry_count > 0;
-        let theme = cx.theme();
         let sidebar_for_root_drop = sidebar_entity.clone();
         let sidebar_for_clear_drop = sidebar_entity.clone();
+        let sidebar_for_hover_clear = sidebar_entity.clone();
 
         div()
             .flex_1()
@@ -169,12 +173,21 @@ impl Sidebar {
                 div()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
-                    .border_b_1()
-                    .border_color(theme.border)
+                    // Clear row hover when the pointer enters the search bar.
+                    // Workaround for GPUI 0.2.2 lacking on_mouse_leave.
+                    .on_mouse_move(move |_, _, cx| {
+                        sidebar_for_hover_clear.update(cx, |this, cx| {
+                            if this.hovered_item_id.is_some() {
+                                this.hovered_item_id = None;
+                                cx.notify();
+                            }
+                        });
+                    })
                     .child(
                         Input::new(&self.connections_search_input)
                             .xsmall()
-                            .cleanable(true),
+                            .cleanable(true)
+                            .prefix(Icon::new(AppIcon::Search).size(Heights::ICON_SM)),
                     ),
             )
             .when(has_entries, |el| {
@@ -252,6 +265,7 @@ impl Sidebar {
             rename_input: self.rename_input.clone(),
             gutter_metadata: self.scripts_gutter_metadata.clone(),
             line_color: tree_nav::tree_line_color(theme),
+            hovered_item_id: self.hovered_item_id.clone(),
             color_teal: SyntaxColors::table(),
             color_yellow: SyntaxColors::view(),
             color_blue: SyntaxColors::column(),
@@ -269,12 +283,12 @@ impl Sidebar {
             .overflow_hidden()
             // Search bar
             .child(
-                div()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(Input::new(&search_input).xsmall().cleanable(true)),
+                div().px(Spacing::SM).py(Spacing::XS).child(
+                    Input::new(&search_input)
+                        .xsmall()
+                        .cleanable(true)
+                        .prefix(Icon::new(AppIcon::Search).size(Heights::ICON_SM)),
+                ),
             )
             // Tree or empty state
             .when(has_entries || has_search, |el| {
@@ -338,7 +352,10 @@ mod tests {
         for inspection in [inactive, active, focused] {
             assert_eq!(inspection.family, Some(AppFonts::MONO));
             assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            // Tab labels use SM (13px) — the bigger size matches the
+            // design after the visual review pass; the original XS was
+            // judged too cramped against the rest of the chrome.
+            assert_eq!(inspection.size_override, Some(FontSizes::SM));
             assert!(inspection.has_custom_color_override);
         }
 
@@ -396,6 +413,7 @@ impl Render for Sidebar {
             rename_input: self.rename_input.clone(),
             gutter_metadata: self.gutter_metadata.clone(),
             line_color: tree_nav::tree_line_color(theme),
+            hovered_item_id: self.hovered_item_id.clone(),
             color_teal: SyntaxColors::table(),
             color_yellow: SyntaxColors::view(),
             color_blue: SyntaxColors::column(),
@@ -408,15 +426,31 @@ impl Render for Sidebar {
 
         let active_tab = self.active_tab;
 
+        let sidebar_for_footer_hover = sidebar_entity.clone();
+        let sidebar_for_tabbar_hover = sidebar_entity.clone();
+
+        // No right border here — the outer `SidebarDock` already paints
+        // `border_r_1`. A second border on this inner container produced the
+        // visible double-line between the sidebar and the workspace.
         div()
             .relative()
             .flex()
             .flex_col()
             .size_full()
-            .border_r_1()
-            .border_color(theme.border)
             .bg(theme.sidebar)
-            .child(self.render_tab_bar(cx))
+            .child(
+                // Tab bar: clear row hover when mouse enters this region.
+                div()
+                    .on_mouse_move(move |_, _, cx| {
+                        sidebar_for_tabbar_hover.update(cx, |this, cx| {
+                            if this.hovered_item_id.is_some() {
+                                this.hovered_item_id = None;
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .child(self.render_tab_bar(cx)),
+            )
             .child(self.render_action_bars(cx))
             .when(active_tab == SidebarTab::Connections, |el| {
                 el.child(self.render_connections_content(tree_params, &sidebar_entity, cx))
@@ -424,7 +458,19 @@ impl Render for Sidebar {
             .when(active_tab == SidebarTab::Scripts, |el| {
                 el.child(self.render_scripts_content(cx))
             })
-            .child(self.render_footer(cx))
+            .child(
+                // Footer: clear row hover when mouse enters this region.
+                div()
+                    .on_mouse_move(move |_, _, cx| {
+                        sidebar_for_footer_hover.update(cx, |this, cx| {
+                            if this.hovered_item_id.is_some() {
+                                this.hovered_item_id = None;
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .child(self.render_footer(cx)),
+            )
             .when(self.add_menu_open, |el| el.child(self.render_add_menu(cx)))
     }
 }
