@@ -76,6 +76,9 @@ impl Render for Workspace {
         let tab_bar = self.tab_bar.clone();
         let has_tabs = !self.tab_manager.read(cx).is_empty();
         let active_doc_element = self.render_active_document(cx);
+        let inspector_open = self.workspace_inspector.read(cx).is_open();
+        let inspector_resizing = self.workspace_inspector.read(cx).is_resizing();
+        let inspector_entity = self.workspace_inspector.clone();
 
         let tasks_expanded = self.tasks_state.is_expanded();
         let tasks_focused = self.focus_target == FocusTarget::BackgroundTasks;
@@ -154,17 +157,30 @@ impl Render for Workspace {
                                     }),
                                 )
                                 .child(tab_bar)
-                                .when_some(active_doc_element, |el, doc| {
-                                    el.child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .flex_1()
-                                            .min_h_0()
-                                            .overflow_hidden()
-                                            .child(doc),
-                                    )
-                                }),
+                                // doc + inspector live in a flex_row under the tab bar.
+                                .child(
+                                    div()
+                                        .id("document-content-row")
+                                        .flex()
+                                        .flex_row()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .overflow_hidden()
+                                        .when_some(active_doc_element, |el, doc| {
+                                            el.child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .flex_1()
+                                                    .min_h_0()
+                                                    .overflow_hidden()
+                                                    .child(doc),
+                                            )
+                                        })
+                                        .when(inspector_open, |el| {
+                                            el.child(inspector_entity.clone())
+                                        }),
+                                ),
                         ),
                 )
                 .child(
@@ -600,6 +616,31 @@ impl Render for Workspace {
                     .bottom_0()
                     .child(toast_host),
             )
+            // Drag mask — rendered only while inspector grip is being dragged.
+            // Sits above document/inspector content so cursor tracking works
+            // anywhere on screen, but below toast host and shutdown overlay.
+            .when(inspector_resizing, |root| {
+                root.child(
+                    div()
+                        .id("workspace-inspector-drag-mask")
+                        .absolute()
+                        .inset_0()
+                        .cursor_col_resize()
+                        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                            this.workspace_inspector.update(cx, |insp, cx| {
+                                insp.update_resize(event.position.x, cx);
+                            });
+                        }))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                this.workspace_inspector.update(cx, |insp, cx| {
+                                    insp.finish_resize(cx);
+                                });
+                            }),
+                        ),
+                )
+            })
             // Shutdown overlay (rendered above everything during shutdown)
             .child(self.shutdown_overlay.clone())
             .when(cfg!(feature = "mcp"), |root| {

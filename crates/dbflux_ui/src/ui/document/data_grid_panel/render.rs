@@ -374,10 +374,6 @@ impl Render for DataGridPanel {
             .when(self.document_preview_modal.read(cx).is_visible(), |d| {
                 d.child(self.document_preview_modal.clone())
             })
-            // Row inspector overlay — rendered as an absolute panel on the right edge
-            .when_some(self.row_inspector.clone(), |d, inspector| {
-                d.child(inspector)
-            })
     }
 }
 

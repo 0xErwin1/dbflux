@@ -31,6 +31,11 @@ pub enum DataDocumentEvent {
         context: Box<SqlPreviewContext>,
         generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
+    /// Request to mount content into the workspace-level inspector rail.
+    OpenInspector {
+        title: SharedString,
+        content: AnyView,
+    },
 }
 
 impl DataDocument {
@@ -61,6 +66,12 @@ impl DataDocument {
                         cx.emit(DataDocumentEvent::RequestSqlPreview {
                             context: context.clone(),
                             generation_type: *generation_type,
+                        });
+                    }
+                    DataGridEvent::OpenInspector { title, content } => {
+                        cx.emit(DataDocumentEvent::OpenInspector {
+                            title: title.clone(),
+                            content: content.clone(),
                         });
                     }
                     _ => {}
@@ -105,6 +116,12 @@ impl DataDocument {
                             generation_type: *generation_type,
                         });
                     }
+                    DataGridEvent::OpenInspector { title, content } => {
+                        cx.emit(DataDocumentEvent::OpenInspector {
+                            title: title.clone(),
+                            content: content.clone(),
+                        });
+                    }
                     _ => {}
                 },
             );
@@ -145,6 +162,12 @@ impl DataDocument {
                         cx.emit(DataDocumentEvent::RequestSqlPreview {
                             context: context.clone(),
                             generation_type: *generation_type,
+                        });
+                    }
+                    DataGridEvent::OpenInspector { title, content } => {
+                        cx.emit(DataDocumentEvent::OpenInspector {
+                            title: title.clone(),
+                            content: content.clone(),
                         });
                     }
                     _ => {}

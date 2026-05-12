@@ -344,6 +344,12 @@ pub struct GeneralSettings {
 
     #[serde(default)]
     pub dangerous_requires_preview: bool,
+
+    // -- Inspector --
+    /// Persisted width (in CSS pixels) of the workspace-level inspector rail.
+    /// `None` → use `INSPECTOR_DEFAULT_WIDTH`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_inspector_width_px: Option<f32>,
 }
 
 impl Default for GeneralSettings {
@@ -366,6 +372,7 @@ impl Default for GeneralSettings {
             confirm_dangerous_queries: true,
             dangerous_requires_where: true,
             dangerous_requires_preview: false,
+            workspace_inspector_width_px: None,
         }
     }
 }
@@ -1625,6 +1632,32 @@ mod tests {
                 &HashMap::new(),
             ),
             "caller is responsible for stripping empty-string values before calling"
+        );
+    }
+
+    #[test]
+    fn general_settings_inspector_width_round_trips() {
+        let settings = super::GeneralSettings {
+            workspace_inspector_width_px: Some(400.0),
+            ..super::GeneralSettings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize");
+        let deserialized: super::GeneralSettings =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            deserialized.workspace_inspector_width_px,
+            Some(400.0),
+            "width must round-trip through JSON"
+        );
+    }
+
+    #[test]
+    fn general_settings_inspector_width_defaults_to_none_when_missing() {
+        let json = r#"{"theme":"dark","style":"default","restore_session_on_startup":true,"reopen_last_connections":false,"default_focus_on_startup":"sidebar","max_history_entries":1000,"auto_save_interval_ms":2000,"default_refresh_policy":"manual","default_refresh_interval_secs":5,"max_concurrent_background_tasks":8,"auto_refresh_pause_on_error":true,"auto_refresh_only_if_visible":false,"confirm_dangerous_queries":true,"dangerous_requires_where":true}"#;
+        let settings: super::GeneralSettings = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(
+            settings.workspace_inspector_width_px, None,
+            "missing field must deserialize to None"
         );
     }
 }
