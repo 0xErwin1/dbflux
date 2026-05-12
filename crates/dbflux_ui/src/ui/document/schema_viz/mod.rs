@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
-use crate::ui::components::toast::{PendingToast, ToastExt, flush_pending_toast};
+use crate::ui::components::toast::{PendingToast, flush_pending_toast};
 use crate::ui::document::handle::DocumentEvent;
 use crate::ui::document::types::{DocumentId, DocumentState};
 use crate::ui::icons::AppIcon;

@@ -763,7 +763,7 @@ impl ConnectionManagerWindow {
                                         } else {
                                             SshAuthSelection::Password
                                         };
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                         cx.notify();
                                     }),
                                 )

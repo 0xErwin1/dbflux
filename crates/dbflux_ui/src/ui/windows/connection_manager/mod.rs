@@ -2904,8 +2904,8 @@ impl ConnectionManagerWindow {
         cx.spawn(async move |_this, cx| {
             let path = task.await;
 
-            if let Some(path) = path
-                && let Err(error) = cx.update(|cx| {
+            if let Some(path) = path {
+                cx.update(|cx| {
                     this.update(cx, |this, cx| {
                         let path_str = path.to_string_lossy().to_string();
                         match slot {
@@ -2921,12 +2921,7 @@ impl ConnectionManagerWindow {
                         }
                         cx.notify();
                     });
-                })
-            {
-                log::warn!(
-                    "Failed to apply selected SSL cert path to UI state: {:?}",
-                    error
-                );
+                });
             }
         })
         .detach();
