@@ -970,6 +970,7 @@ fn load_general_settings(
         confirm_dangerous_queries: dto.confirm_dangerous_queries != 0,
         dangerous_requires_where: dto.dangerous_requires_where != 0,
         dangerous_requires_preview: dto.dangerous_requires_preview != 0,
+        workspace_inspector_width_px: None,
     }
 }
 
