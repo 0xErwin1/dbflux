@@ -1101,6 +1101,12 @@ impl CodeDocument {
                         generation_type: *generation_type,
                     });
                 }
+                DataGridEvent::OpenInspector { title, content } => {
+                    cx.emit(DocumentEvent::OpenInspector {
+                        title: title.clone(),
+                        content: content.clone(),
+                    });
+                }
             },
         );
 

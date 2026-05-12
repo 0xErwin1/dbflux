@@ -133,6 +133,11 @@ pub enum DataGridEvent {
         context: Box<SqlPreviewContext>,
         generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
     },
+    /// Request to mount arbitrary content into the workspace-level inspector rail.
+    OpenInspector {
+        title: SharedString,
+        content: AnyView,
+    },
 }
 
 /// Internal state for grid loading/ready/error.
@@ -359,12 +364,8 @@ pub struct DataGridPanel {
     document_preview_modal: Entity<DocumentPreviewModal>,
     pending_document_preview: Option<PendingDocumentPreview>,
 
-    // Row inspector overlay panel
-    row_inspector: Option<Entity<row_inspector::RowInspector>>,
-    /// Retains the subscription to the inspector's close events.
-    /// Without storage the RAII Subscription drops immediately and the
-    /// X button (and Esc) silently fail to close the panel.
-    row_inspector_subscription: Option<Subscription>,
+    // Row inspector content entity (workspace owns the chrome/lifecycle).
+    row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
 
     export_menu_open: bool,
 }
@@ -760,8 +761,7 @@ impl DataGridPanel {
             document_tree_subscription: None,
             document_preview_modal,
             pending_document_preview: None,
-            row_inspector: None,
-            row_inspector_subscription: None,
+            row_inspector_content: None,
             export_menu_open: false,
         }
     }

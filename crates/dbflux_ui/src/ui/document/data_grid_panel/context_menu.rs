@@ -2295,10 +2295,10 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// Build an `InspectorSnapshot` from the given row/col and open or update
-    /// the `RowInspector` overlay.
+    /// Build an `InspectorSnapshot` from the given row/col and emit
+    /// `DataGridEvent::OpenInspector` so the workspace mounts the content.
     pub(super) fn open_row_inspector(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        use super::row_inspector::{InspectorCell, InspectorSnapshot, RowInspector};
+        use super::row_inspector::{InspectorCell, InspectorSnapshot, RowInspectorContent};
         use crate::ui::components::data_table::model::ColumnKind;
 
         let Some(table_state) = &self.table_state else {
@@ -2349,47 +2349,39 @@ impl DataGridPanel {
         let snapshot = InspectorSnapshot {
             cells: cells.clone(),
             focused_col: col,
-            row_label,
         };
 
         // Build per-FK reference entries from the cached TableInfo.foreign_keys.
         let fk_references = self.build_fk_references(&cells, cx);
         let has_fk_lookups = !fk_references.is_empty();
 
-        if let Some(inspector) = &self.row_inspector {
-            inspector.update(cx, |insp, cx| {
-                insp.open(snapshot, cx);
-            });
-            let inspector_entity = inspector.clone();
-            self.fire_fk_resolution(fk_references, inspector_entity, cx);
-        } else {
-            let inspector = cx.new(|cx| RowInspector::new(snapshot, cx));
-
-            if !has_fk_lookups {
-                // No FK columns: mark references as ready (empty).
-                inspector.update(cx, |insp, cx| {
-                    insp.set_references(Vec::new(), cx);
-                });
+        // Reuse the existing content entity or create a new one.
+        let content = match &self.row_inspector_content {
+            Some(existing) => {
+                existing.update(cx, |c, cx| c.open(snapshot, cx));
+                existing.clone()
             }
-            // When has_fk_lookups, fire_fk_resolution below sets references.
+            None => {
+                let new_content = cx.new(|cx| RowInspectorContent::new(snapshot, cx));
+                if !has_fk_lookups {
+                    new_content.update(cx, |c, cx| c.set_references(Vec::new(), cx));
+                }
+                self.row_inspector_content = Some(new_content.clone());
+                new_content
+            }
+        };
 
-            let close_subscription = cx.subscribe(
-                &inspector,
-                |this, _, event: &super::row_inspector::RowInspectorEvent, cx| match event {
-                    super::row_inspector::RowInspectorEvent::CloseRequested => {
-                        this.row_inspector = None;
-                        this.row_inspector_subscription = None;
-                        cx.notify();
-                    }
-                },
-            );
+        // Fire FK resolution against the (possibly reused) content entity.
+        self.fire_fk_resolution(fk_references, content.clone(), cx);
 
-            let inspector_entity = inspector.clone();
-            self.row_inspector = Some(inspector);
-            self.row_inspector_subscription = Some(close_subscription);
-            self.fire_fk_resolution(fk_references, inspector_entity, cx);
-            cx.notify();
-        }
+        // Tell the workspace to mount/replace the inspector rail.
+        let title = SharedString::from(row_label);
+        let content_view = AnyView::from(content);
+        cx.emit(DataGridEvent::OpenInspector {
+            title,
+            content: content_view,
+        });
+        cx.notify();
     }
 
     /// Build the list of FK lookups for the current row from the schema cache.
@@ -2467,7 +2459,7 @@ impl DataGridPanel {
     fn fire_fk_resolution(
         &self,
         references: Vec<super::row_inspector::FkReference>,
-        inspector_entity: Entity<super::row_inspector::RowInspector>,
+        inspector_entity: Entity<super::row_inspector::RowInspectorContent>,
         cx: &mut Context<Self>,
     ) {
         use super::row_inspector::FkReference;
