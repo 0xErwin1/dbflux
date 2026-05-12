@@ -2,6 +2,24 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [Unreleased]
+
+### Features
+
+* Logger now initialises at the very start of `run_gui()` so startup
+  diagnostics (IPC socket binding, auth token init) reach the log sink.
+  Setting `DBFLUX_LOG_FILE` redirects all `log::*!` output to the given
+  file in append mode — useful on Windows where the GUI subsystem hides
+  stderr.
+
+### Fixes
+
+* SQL editor keeps focus after dismissing the completion popup with Esc.
+  gpui-component's `CompletionMenu::hide` clears the menu but the
+  follow-up re-render drops `window.focus` even though the input still
+  owned it synchronously; the editor pane now re-focuses its input on
+  the next tick so typing keeps working.
+
 ## [0.5.0] – 2026-05-11
 
 ### Features

@@ -20,83 +20,130 @@
       flake-utils,
       ...
     }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ (import rust-overlay) ];
-        };
+    let
+      releaseInfo = import ./nix/release-info.nix;
 
-        rustToolchain = pkgs.pkgsBuildHost.rust-bin.stable.latest.default.override {
-          extensions = [
-            "rust-src"
-            "rust-analyzer"
-          ];
-        };
+      # Systems that ship a prebuilt binary in the matching GitHub Release.
+      # Other systems can still use the source build.
+      prebuiltSystems = builtins.attrNames releaseInfo.artifacts;
 
-        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+      # Per-system outputs (packages, devShells, apps).
+      perSystem = flake-utils.lib.eachDefaultSystem (
+        system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ (import rust-overlay) ];
+          };
 
-        # OpenSSL built with static libraries for portable binaries.
-        # The default nixpkgs openssl only ships shared objects; this override
-        # enables the static output so OPENSSL_STATIC=1 works at build time.
-        opensslStatic = pkgs.openssl.override { static = true; };
+          rustToolchain = pkgs.pkgsBuildHost.rust-bin.stable.latest.default.override {
+            extensions = [
+              "rust-src"
+              "rust-analyzer"
+            ];
+          };
 
-        # Import default.nix with crane support
-        dbflux = import ./default.nix {
-          inherit pkgs craneLib;
-          version = "0.5.0-dev.3";
-        };
+          craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-        # Main package built with crane
-        dbfluxPackage = dbflux.buildWithCrane craneLib;
+          # OpenSSL built with static libraries for portable binaries.
+          # The default nixpkgs openssl only ships shared objects; this override
+          # enables the static output so OPENSSL_STATIC=1 works at build time.
+          opensslStatic = pkgs.openssl.override { static = true; };
 
-      in
-      {
-        # Development shell
-        devShells.default = pkgs.mkShell {
-          nativeBuildInputs = dbflux.nativeBuildInputs ++ [
-            rustToolchain
-            pkgs.rust-analyzer
-            opensslStatic.dev
-          ];
+          # Import default.nix with crane support
+          dbflux = import ./default.nix {
+            inherit pkgs craneLib;
+            version = "0.5.0-dev.3";
+          };
 
-          buildInputs = dbflux.buildInputs;
+          # Source build (current behavior, compiles locally via crane).
+          dbfluxSource = dbflux.buildWithCrane craneLib;
 
-          LD_LIBRARY_PATH = dbflux.runtimeLibraryPath;
-          ZSTD_SYS_USE_PKG_CONFIG = "1";
+          # Prebuilt-binary build, only when an artifact exists for this system.
+          hasPrebuilt = builtins.elem system prebuiltSystems;
+          dbfluxBin =
+            if hasPrebuilt then
+              pkgs.callPackage ./nix/binary.nix { }
+            else
+              null;
 
-          # Link OpenSSL statically so the binary runs outside the Nix store
-          # (e.g. on Arch Linux without /nix/store available at runtime).
-          OPENSSL_STATIC = "1";
-          OPENSSL_LIB_DIR = "${opensslStatic.out}/lib";
-          OPENSSL_INCLUDE_DIR = "${opensslStatic.dev}/include";
+          # Default package: prefer the prebuilt binary when available
+          # (fast install for end users), fall back to the source build.
+          dbfluxDefault = if hasPrebuilt then dbfluxBin else dbfluxSource;
+        in
+        {
+          # Development shell
+          devShells.default = pkgs.mkShell {
+            nativeBuildInputs = dbflux.nativeBuildInputs ++ [
+              rustToolchain
+              pkgs.rust-analyzer
+              opensslStatic.dev
+            ];
 
-          shellHook = ''
-            echo "DBFlux development environment loaded (Nix flake)"
-            echo "Run 'cargo build' to build the project"
-            echo "Run 'nix build' to build the default package"
-            echo "Run 'nix flake check' to run all checks"
-          '';
-        };
+            buildInputs = dbflux.buildInputs;
 
-        # Packages
-        packages.default = dbfluxPackage;
-        packages.dbflux = dbfluxPackage;
+            LD_LIBRARY_PATH = dbflux.runtimeLibraryPath;
+            ZSTD_SYS_USE_PKG_CONFIG = "1";
 
-        # Formatter
-        formatter = pkgs.nixpkgs-fmt;
+            # Link OpenSSL statically so the binary runs outside the Nix store
+            # (e.g. on Arch Linux without /nix/store available at runtime).
+            OPENSSL_STATIC = "1";
+            OPENSSL_LIB_DIR = "${opensslStatic.out}/lib";
+            OPENSSL_INCLUDE_DIR = "${opensslStatic.dev}/include";
 
-        # Apps
-        apps.default = flake-utils.lib.mkApp {
-          drv = dbfluxPackage;
-          exePath = "/bin/dbflux";
-        };
+            shellHook = ''
+              echo "DBFlux development environment loaded (Nix flake)"
+              echo "Run 'cargo build' to build the project"
+              echo "Run 'nix build' to build the default package"
+              echo "Run 'nix flake check' to run all checks"
+            '';
+          };
 
-        apps.dbflux = flake-utils.lib.mkApp {
-          drv = dbfluxPackage;
-          exePath = "/bin/dbflux";
-        };
-      }
-    );
+          # Packages:
+          #   .default       -> prebuilt when available, source otherwise
+          #   .dbflux        -> alias for .default
+          #   .dbflux-bin    -> explicit prebuilt (only on supported systems)
+          #   .dbflux-source -> explicit source build
+          packages = {
+            default = dbfluxDefault;
+            dbflux = dbfluxDefault;
+            dbflux-source = dbfluxSource;
+          } // (if hasPrebuilt then { dbflux-bin = dbfluxBin; } else { });
+
+          formatter = pkgs.nixpkgs-fmt;
+
+          # Apps
+          apps.default = flake-utils.lib.mkApp {
+            drv = dbfluxDefault;
+            exePath = "/bin/dbflux";
+          };
+
+          apps.dbflux = flake-utils.lib.mkApp {
+            drv = dbfluxDefault;
+            exePath = "/bin/dbflux";
+          };
+        }
+      );
+    in
+    perSystem // {
+      # Overlay for downstream consumers:
+      #
+      #   nixpkgs.overlays = [ inputs.dbflux.overlays.default ];
+      #   environment.systemPackages = [ pkgs.dbflux ];
+      #
+      # `pkgs.dbflux`        -> prebuilt binary (fast)
+      # `pkgs.dbflux-source` -> built from source via crane
+      overlays.default = final: prev:
+        let
+          system = prev.stdenv.hostPlatform.system;
+          hasSystem = perSystem.packages ? ${system};
+        in
+        if hasSystem then
+          {
+            dbflux = perSystem.packages.${system}.dbflux;
+            dbflux-source = perSystem.packages.${system}.dbflux-source;
+          }
+        else
+          { };
+    };
 }
