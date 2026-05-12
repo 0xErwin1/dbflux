@@ -431,9 +431,8 @@ impl DocumentHandle {
                     }
                 })
             }
-            Self::SchemaViz { entity, .. } => cx.subscribe(entity, move |_entity, _event, cx| {
-                // SchemaVizDocument currently doesn't emit events - this is a no-op
-                let _ = cx;
+            Self::SchemaViz { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
+                callback(event, cx);
             }),
         }
     }

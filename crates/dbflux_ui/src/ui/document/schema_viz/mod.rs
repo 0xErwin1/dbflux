@@ -1,3 +1,5 @@
+pub mod inspector;
+
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -46,6 +48,7 @@ enum SchemaVizMenuAction {
     LayoutSubmenu,
     CopyAsSubmenu,
     FocusOnTable,
+    InspectTable,
     // Submenu actions
     LayoutLeftRight,
     LayoutSnowflake,
@@ -79,6 +82,9 @@ impl SchemaVizMenuAction {
             }
             SchemaVizMenuAction::FocusOnTable => {
                 MenuItem::new("Focus on this table").icon(AppIcon::Maximize2)
+            }
+            SchemaVizMenuAction::InspectTable => {
+                MenuItem::new("Inspect schema").icon(AppIcon::Table)
             }
             SchemaVizMenuAction::LayoutLeftRight => {
                 MenuItem::new("Left-Right").icon(AppIcon::ArrowLeftRight)
@@ -120,6 +126,7 @@ impl SchemaVizContextMenuState {
 
         if has_selected_node {
             actions.push(SchemaVizMenuAction::Separator);
+            actions.push(SchemaVizMenuAction::InspectTable);
             actions.push(SchemaVizMenuAction::FocusOnTable);
         }
 
@@ -306,6 +313,8 @@ pub struct SchemaVizDocument {
     // viewport-local.
     viewport_origin: Point<Pixels>,
     viewport_size: Size<Pixels>,
+    // Schema inspector content reused across opens.
+    schema_inspector_content: Option<Entity<inspector::SchemaInspector>>,
 }
 
 impl SchemaVizDocument {
@@ -384,6 +393,7 @@ impl SchemaVizDocument {
             panel_origin: Point::default(),
             viewport_origin: Point::default(),
             viewport_size: Size::default(),
+            schema_inspector_content: None,
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -1532,6 +1542,44 @@ impl SchemaVizDocument {
     }
 
     /// Executes the action at the given index in the current context menu.
+    /// Builds (or reuses) a `SchemaInspector` for the given table node and
+    /// emits a `DocumentEvent::OpenInspector` so the workspace mounts it in
+    /// the right-side rail.
+    fn open_schema_inspector(
+        &mut self,
+        node_idx: petgraph::graph::NodeIndex,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let Some(snapshot) = inspector::snapshot_for_node(graph, node_idx) else {
+            return;
+        };
+
+        let title = match &snapshot.node.id.schema {
+            Some(s) => format!("{}.{}", s, snapshot.node.id.name),
+            None => snapshot.node.id.name.clone(),
+        };
+
+        let content = match self.schema_inspector_content.clone() {
+            Some(existing) => {
+                existing.update(cx, |c, cx| c.open(snapshot, cx));
+                existing
+            }
+            None => {
+                let new_content = cx.new(|cx| inspector::SchemaInspector::new(snapshot, cx));
+                self.schema_inspector_content = Some(new_content.clone());
+                new_content
+            }
+        };
+
+        cx.emit(DocumentEvent::OpenInspector {
+            title: SharedString::from(title),
+            content: content.into(),
+        });
+    }
+
     fn context_menu_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
         let action = match self.context_menu.as_mut() {
             Some(menu) => {
@@ -1566,6 +1614,13 @@ impl SchemaVizDocument {
                 cx.notify();
             }
             SchemaVizMenuAction::FocusOnTable => {
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::InspectTable => {
+                if let Some(node_idx) = self.selected_node {
+                    self.open_schema_inspector(node_idx, cx);
+                }
                 self.context_menu = None;
                 cx.notify();
             }
@@ -2667,7 +2722,12 @@ impl SchemaVizDocument {
             .cursor(cursor_style)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, _, _cx| {
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    if event.click_count >= 2 {
+                        this.selected_node = Some(node_idx_clone);
+                        this.open_schema_inspector(node_idx_clone, cx);
+                        return;
+                    }
                     if event.click_count == 1 {
                         this.selected_node = Some(node_idx_clone);
                         this.pending_details_panel = Some(node_idx_clone);
