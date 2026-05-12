@@ -28,9 +28,39 @@ use interprocess::local_socket::{
     prelude::*,
 };
 use log::info;
+use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+/// Initialise the global logger early — before any code that calls `log::*!`
+/// macros, otherwise those records are silently dropped.
+///
+/// When `DBFLUX_LOG_FILE` is set, log lines are appended to that file (created
+/// if missing) instead of stderr. Useful on Windows where the GUI subsystem
+/// makes stderr invisible.
+fn init_logging() {
+    let mut builder =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    builder.format_timestamp_millis();
+
+    if let Some(path) = std::env::var_os("DBFLUX_LOG_FILE").map(PathBuf::from) {
+        match OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(file) => {
+                builder.target(env_logger::Target::Pipe(Box::new(file)));
+            }
+            Err(err) => {
+                eprintln!(
+                    "Failed to open DBFLUX_LOG_FILE={:?}: {} — falling back to stderr",
+                    path, err
+                );
+            }
+        }
+    }
+
+    builder.init();
+}
 
 /// Global holder for the audit service, used by the panic hook.
 /// The panic hook needs access to the audit service, which is created
@@ -212,6 +242,8 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
 }
 
 fn run_gui() {
+    init_logging();
+
     let auth_token = match init_process_auth_tokens() {
         Ok(token) => token,
         Err(error) => {
@@ -224,10 +256,6 @@ fn run_gui() {
         Ok(l) => l,
         Err(()) => std::process::exit(1),
     };
-
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_millis()
-        .init();
 
     info!("IPC socket bound successfully");
 
