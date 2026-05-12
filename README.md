@@ -13,6 +13,8 @@ The long-term goal is to provide a fully open-source alternative to DBeaver, sup
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md)
+- [Contributing](CONTRIBUTING.md)
+- [Release Process](docs/RELEASE.md)
 - [Code Style](CODE_STYLE.md)
 - [Agent Instructions](AGENTS.md)
 - [Claude Instructions](CLAUDE.md)
@@ -77,24 +79,46 @@ sudo dnf install https://github.com/0xErwin1/dbflux/releases/latest/download/dbf
 
 #### Nix
 
-Using flakes:
+Using flakes (the default package is a **prebuilt binary** for Linux x86_64 / aarch64, no compilation):
 
 ```bash
-# Run directly
+# Run directly (prebuilt)
 nix run github:0xErwin1/dbflux
 
-# Install to profile
+# Install to profile (prebuilt)
 nix profile install github:0xErwin1/dbflux
 
 # Development shell
 nix develop github:0xErwin1/dbflux
 ```
 
-Or with the traditional approach:
+Build from source instead of using the prebuilt binary:
 
 ```bash
-nix-build
-./result/bin/dbflux
+nix run    github:0xErwin1/dbflux#dbflux-source
+nix build  github:0xErwin1/dbflux#dbflux-source
+```
+
+NixOS / nix-darwin via overlay:
+
+```nix
+{
+  inputs.dbflux.url = "github:0xErwin1/dbflux";
+
+  outputs = { nixpkgs, dbflux, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        ({ pkgs, ... }: {
+          nixpkgs.overlays = [ dbflux.overlays.default ];
+          environment.systemPackages = [
+            pkgs.dbflux         # prebuilt binary, no local compile
+            # pkgs.dbflux-source  # alternative: build from source
+          ];
+        })
+      ];
+    };
+  };
+}
 ```
 
 ### macOS

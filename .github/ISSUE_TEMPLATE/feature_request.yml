@@ -1,0 +1,52 @@
+name: Feature request
+description: Propose a new capability or enhancement for DBFlux.
+title: "[feature] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the proposal. Please apply the relevant `*:feature` label and any
+        subsystem / driver labels — see
+        [CONTRIBUTING.md → Label Guide](../blob/main/CONTRIBUTING.md#label-guide).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user-facing problem or limitation motivates this feature?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should it work from the user's perspective?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you weighed and why they fall short.
+
+  - type: input
+    id: area
+    attributes:
+      label: Primary area
+      description: UI, MCP, audit, query, a specific driver, RPC, proxy, ssh, etc.
+      placeholder: "driver:postgres"
+
+  - type: checkboxes
+    id: labels
+    attributes:
+      label: Labels I plan to apply
+      description: |
+        Pick a kind label (`*:feature`) for the affected area. Add driver / platform / kind labels as relevant.
+      options:
+        - label: "Kind label (e.g. `driver:feature`, `ui:feature`, `query:feature`, `mcp:feature`, `rpc:feature`, …)"
+        - label: "Driver label if applicable (`driver:postgres`, `driver:mongodb`, …)"
+        - label: "Platform label if platform-specific (`platform:linux`, `platform:macos`, `platform:windows`)"
+        - label: "Data-model label if relevant (`kind:sql`, `kind:document`, `kind:kv`, `kind:log`)"

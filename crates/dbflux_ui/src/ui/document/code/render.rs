@@ -314,6 +314,34 @@ impl CodeDocument {
                         cx.emit(DocumentEvent::RequestFocus);
                     }),
                 )
+                // gpui-component's completion menu hides itself on Esc via
+                // InputState::escape but never restores focus to the editor
+                // input. Synchronously the input still owns focus when we
+                // observe Esc, but the menu's cx.notify() + the resulting
+                // re-render reset window.focus before the next paint — so we
+                // refocus on the next tick rather than inline.
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                    if event.keystroke.key != "escape"
+                        || event.keystroke.modifiers.alt
+                        || event.keystroke.modifiers.control
+                        || event.keystroke.modifiers.shift
+                        || event.keystroke.modifiers.platform
+                        || event.keystroke.modifiers.function
+                    {
+                        return;
+                    }
+                    if this.focus_mode != SqlQueryFocus::Editor {
+                        return;
+                    }
+                    let input = this.input_state.clone();
+                    cx.spawn_in(window, async move |_this, cx| {
+                        cx.update(|window, cx| {
+                            input.update(cx, |state, cx| state.focus(window, cx));
+                        })
+                        .ok();
+                    })
+                    .detach();
+                }))
                 .child(
                     div().flex_1().min_h_0().overflow_hidden().child(
                         Input::new(&self.input_state)

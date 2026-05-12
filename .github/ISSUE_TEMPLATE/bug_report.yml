@@ -1,0 +1,105 @@
+name: Bug report
+description: Report a defect, regression, or unexpected behavior in DBFlux.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug.
+        Please apply the relevant subsystem and driver labels after submitting — see
+        [CONTRIBUTING.md → Label Guide](../blob/main/CONTRIBUTING.md#label-guide).
+
+  - type: input
+    id: version
+    attributes:
+      label: DBFlux version
+      description: Output of `dbflux --version` (or the installed package version).
+      placeholder: "0.5.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      multiple: false
+      options:
+        - Linux (X11)
+        - Linux (Wayland)
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os_detail
+    attributes:
+      label: OS / distro detail
+      description: Distribution and version, kernel, display server, etc.
+      placeholder: "Arch Linux, kernel 6.10, Wayland (Hyprland)"
+
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Architecture
+      options:
+        - amd64 / x86_64
+        - arm64 / aarch64
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: driver
+    attributes:
+      label: Affected driver (if any)
+      description: e.g. postgres, mongodb, sqlite, mysql/mariadb, dynamodb, redis, cloudwatch
+      placeholder: "postgres 16.2"
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, deterministic steps. Numbered list preferred.
+      placeholder: |
+        1. Open a PostgreSQL connection.
+        2. Run query `SELECT …`.
+        3. Observe …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / stack traces
+      description: Paste relevant output. **Redact secrets, tokens, and connection strings.**
+      render: shell
+
+  - type: checkboxes
+    id: labels
+    attributes:
+      label: Labels I plan to apply
+      description: |
+        Pick a kind label (`*:bug`) for the affected area. Add driver / platform / kind labels as relevant.
+        Full guide in CONTRIBUTING.md.
+      options:
+        - label: "Kind label (e.g. `driver:bug`, `ui:bug`, `query:bug`, `mcp:bug`, `rpc:bug`, …)"
+        - label: "Driver label if applicable (`driver:postgres`, `driver:mongodb`, …)"
+        - label: "Platform label if platform-specific (`platform:linux`, `platform:macos`, `platform:windows`)"
+        - label: "Data-model label if relevant (`kind:sql`, `kind:document`, `kind:kv`, `kind:log`)"
