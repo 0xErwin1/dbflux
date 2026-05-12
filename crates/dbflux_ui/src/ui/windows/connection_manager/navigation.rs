@@ -866,7 +866,7 @@ impl ConnectionManagerWindow {
                 true
             }
             Command::Cancel if self.driver_filter_focused => {
-                window.focus(&self.focus_handle);
+                window.focus(&self.focus_handle, cx);
                 true
             }
             _ if count == 0 => {

@@ -22,7 +22,7 @@ use dbflux_core::{
     RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures,
     SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
     SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SslMode, SyntaxInfo, TableInfo,
+    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo,
     TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator, generate_create_table,
     generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
     generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri,

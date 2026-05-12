@@ -80,18 +80,16 @@ impl ModalActiveQuery {
         let task = cx.spawn(async move |_, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
-                let should_continue = cx
-                    .update(|cx| {
-                        entity.update(cx, |this, cx| {
-                            if !this.visible {
-                                return false;
-                            }
-                            this.elapsed_secs += 1;
-                            cx.notify();
-                            true
-                        })
+                let should_continue = cx.update(|cx| {
+                    entity.update(cx, |this, cx| {
+                        if !this.visible {
+                            return false;
+                        }
+                        this.elapsed_secs += 1;
+                        cx.notify();
+                        true
                     })
-                    .unwrap_or(false);
+                });
                 if !should_continue {
                     break;
                 }

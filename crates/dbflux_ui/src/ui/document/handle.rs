@@ -384,7 +384,7 @@ impl DocumentHandle {
         match self {
             Self::Code { entity, .. } => entity.read(cx).change_summary(cx),
             Self::Data { entity, .. } => entity.read(cx).change_summary(cx),
-            Self::KeyValue { .. } | Self::Audit { .. } => None,
+            Self::KeyValue { .. } | Self::Audit { .. } | Self::SchemaViz { .. } => None,
         }
     }
 

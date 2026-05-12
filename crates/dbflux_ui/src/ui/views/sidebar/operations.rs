@@ -2711,7 +2711,7 @@ impl Sidebar {
                     let profile_id_for_audit = profile_id;
                     let is_passphrase_error = is_passphrase_required_error_str(&error);
 
-                    if let Err(update_error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             // Emit connection failure audit event.
                             let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
@@ -2814,12 +2814,7 @@ impl Sidebar {
                                 sidebar.refresh_tree(cx);
                             });
                         }
-                    }) {
-                        log::warn!(
-                            "Failed to apply connection failure state: {:?}",
-                            update_error
-                        );
-                    }
+                    });
                     return;
                 }
             };

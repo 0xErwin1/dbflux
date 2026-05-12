@@ -88,8 +88,6 @@ impl StatusBar {
                         })
                     })
                 })
-                .ok()
-                .flatten()
                 .unwrap_or(false);
 
             if !keep_running {

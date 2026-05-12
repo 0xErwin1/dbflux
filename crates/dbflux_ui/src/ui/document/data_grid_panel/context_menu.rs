@@ -2564,8 +2564,7 @@ impl DataGridPanel {
                             insp.resolve_reference(index, Err(e.to_string()), cx);
                         }
                     })
-                })
-                .ok();
+                });
             })
             .detach();
         }
