@@ -360,6 +360,12 @@ impl DocumentHandle {
                         context: context.clone(),
                         generation_type: *generation_type,
                     },
+                    DataDocumentEvent::OpenInspector { title, content } => {
+                        DocumentEvent::OpenInspector {
+                            title: title.clone(),
+                            content: content.clone(),
+                        }
+                    }
                 };
                 callback(&doc_event, cx);
             }),
@@ -395,5 +401,10 @@ pub enum DocumentEvent {
     RequestSqlPreview {
         context: Box<SqlPreviewContext>,
         generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
+    },
+    /// Request to mount content into the workspace-level inspector rail.
+    OpenInspector {
+        title: gpui::SharedString,
+        content: gpui::AnyView,
     },
 }

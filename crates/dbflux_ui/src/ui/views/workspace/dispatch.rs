@@ -280,10 +280,19 @@ impl CommandDispatcher for Workspace {
                     return true;
                 }
 
-                // Route Cancel to active document (handles modals, edit modes, etc.)
+                // Route Cancel to active document (handles modals, edit modes, etc.).
                 if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
                     && doc.dispatch_command(Command::Cancel, window, cx)
                 {
+                    return true;
+                }
+
+                // Workspace-level inspector close fallback.
+                // Only fires after the document has declined Cancel.
+                if self.workspace_inspector.read(cx).is_open() {
+                    self.workspace_inspector.update(cx, |insp, cx| {
+                        insp.close(cx);
+                    });
                     return true;
                 }
 

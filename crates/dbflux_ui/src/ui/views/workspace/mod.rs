@@ -1,7 +1,10 @@
 mod actions;
 mod dispatch;
+pub mod inspector;
 pub mod pipeline;
 mod render;
+
+pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_core::observability::actions::CONFIG_CHANGE;
@@ -246,6 +249,9 @@ pub struct Workspace {
 
     tab_manager: Entity<TabManager>,
     tab_bar: Entity<TabBar>,
+
+    workspace_inspector: Entity<inspector::WorkspaceInspector>,
+    _workspace_inspector_subscription: Subscription,
 
     #[cfg(feature = "mcp")]
     mcp_approvals_view: Entity<McpApprovalsView>,
@@ -820,6 +826,29 @@ impl Workspace {
         )
         .detach();
 
+        // Create the workspace inspector with the persisted width (or default).
+        let initial_inspector_width = {
+            let settings = app_state.read(cx).general_settings();
+            settings
+                .workspace_inspector_width_px
+                .map(px)
+                .unwrap_or(inspector::INSPECTOR_DEFAULT_WIDTH)
+        };
+        let workspace_inspector =
+            cx.new(|cx| inspector::WorkspaceInspector::new(initial_inspector_width, cx));
+
+        let workspace_inspector_subscription = cx.subscribe(
+            &workspace_inspector,
+            |this, _, event: &inspector::WorkspaceInspectorEvent, cx| match event {
+                inspector::WorkspaceInspectorEvent::ResizeCommitted(px_width) => {
+                    this.persist_inspector_width(*px_width, cx);
+                }
+                inspector::WorkspaceInspectorEvent::Closed => {
+                    cx.notify();
+                }
+            },
+        );
+
         cx.subscribe_in(
             &tab_manager,
             window,
@@ -835,6 +864,11 @@ impl Workspace {
                     } => {
                         this.sql_preview_modal.update(cx, |modal, cx| {
                             modal.open(context.as_ref().clone(), *generation_type, window, cx);
+                        });
+                    }
+                    TabManagerEvent::OpenInspector { title, content } => {
+                        this.workspace_inspector.update(cx, |insp, cx| {
+                            insp.open_with(content.clone(), title.clone(), cx);
                         });
                     }
                     TabManagerEvent::Activated(new_id) => {
@@ -879,6 +913,8 @@ impl Workspace {
             shutdown_overlay,
             tab_manager,
             tab_bar,
+            workspace_inspector,
+            _workspace_inspector_subscription: workspace_inspector_subscription,
             #[cfg(feature = "mcp")]
             mcp_approvals_view,
             modal_delete_connection,
@@ -1339,6 +1375,21 @@ impl Workspace {
         self.pipeline_progress = Some(progress);
         self._pipeline_subscription = Some(subscription);
         cx.notify();
+    }
+
+    /// Persist the inspector width to `GeneralSettings` and save to disk.
+    fn persist_inspector_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        let runtime = self.app_state.read(cx).storage_runtime();
+        let mut settings = self.app_state.read(cx).general_settings().clone();
+        settings.workspace_inspector_width_px = Some(f32::from(width));
+
+        if let Err(e) = dbflux_app::config_loader::save_general_settings(runtime, &settings) {
+            log::warn!("Failed to persist inspector width: {}", e);
+        }
+
+        self.app_state.update(cx, |state, _cx| {
+            state.update_general_settings(settings);
+        });
     }
 
     /// Get next focus target, skipping sidebar if collapsed

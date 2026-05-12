@@ -59,6 +59,12 @@ impl TabManager {
                         generation_type: *generation_type,
                     });
                 }
+                DocumentEvent::OpenInspector { title, content } => {
+                    cx.emit(TabManagerEvent::OpenInspector {
+                        title: title.clone(),
+                        content: content.clone(),
+                    });
+                }
                 _ => {}
             });
         });
@@ -373,6 +379,11 @@ pub enum TabManagerEvent {
     RequestSqlPreview {
         context: Box<crate::ui::overlays::sql_preview_modal::SqlPreviewContext>,
         generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
+    },
+    /// Request to mount content into the workspace-level inspector rail.
+    OpenInspector {
+        title: gpui::SharedString,
+        content: gpui::AnyView,
     },
 }
 
