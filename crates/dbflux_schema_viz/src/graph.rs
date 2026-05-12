@@ -18,13 +18,24 @@ pub struct ColumnSummary {
     pub type_name: String,
     pub is_pk: bool,
     pub is_fk: bool,
+    /// Whether the column accepts NULL values.
+    pub nullable: bool,
 }
 
-/// Node weight: a table with its column summaries.
+/// Summary of an index for schema visualization purposes.
+#[derive(Clone, Debug)]
+pub struct IndexSummary {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+}
+
+/// Node weight: a table with its column summaries and index summaries.
 #[derive(Clone, Debug)]
 pub struct TableNode {
     pub id: TableNodeId,
     pub columns: Vec<ColumnSummary>,
+    pub indexes: Vec<IndexSummary>,
 }
 
 /// Edge weight: a foreign key relationship between two tables.
@@ -91,6 +102,7 @@ impl SchemaGraph {
                             type_name: col.type_name.clone(),
                             is_pk: col.is_primary_key,
                             is_fk,
+                            nullable: col.nullable,
                         }
                     })
                     .collect()
@@ -98,9 +110,22 @@ impl SchemaGraph {
                 Vec::new()
             };
 
+            let indexes = match &table.indexes {
+                Some(dbflux_core::IndexData::Relational(index_list)) => index_list
+                    .iter()
+                    .map(|idx| IndexSummary {
+                        name: idx.name.clone(),
+                        columns: idx.columns.clone(),
+                        unique: idx.is_unique,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+
             let node = TableNode {
                 id: id.clone(),
                 columns,
+                indexes,
             };
             let node_idx = graph.add_node(node);
             node_index_by_id.insert(id, node_idx);
@@ -396,6 +421,83 @@ mod tests {
     }
 
     // ── 9.1: isolated node ─────────────────────────────────────────────────────
+
+    // ── T3: ColumnSummary.nullable round-trips from ColumnInfo.nullable ─────────
+
+    #[test]
+    fn test_column_summary_nullable_roundtrip() {
+        let tables = vec![make_table(
+            "users",
+            None,
+            vec![
+                ("id", "integer", true),  // pk => nullable: false in make_table
+                ("email", "text", false), // not pk => nullable: true in make_table
+            ],
+            vec![],
+        )];
+        let graph = SchemaGraph::build(&tables);
+        let (_, node) = graph.nodes().next().expect("test: one node");
+
+        let id_col = node.columns.iter().find(|c| c.name == "id").expect("id");
+        let email_col = node
+            .columns
+            .iter()
+            .find(|c| c.name == "email")
+            .expect("email");
+
+        // make_table sets nullable = !pk, so id.nullable == false, email.nullable == true
+        assert!(!id_col.nullable, "pk column must not be nullable");
+        assert!(email_col.nullable, "non-pk column must be nullable");
+    }
+
+    // ── T4: IndexSummary round-trip including unique ─────────────────────────
+
+    #[test]
+    fn test_index_summary_roundtrip() {
+        use dbflux_core::{IndexData, IndexInfo};
+
+        let mut table = make_table(
+            "products",
+            None,
+            vec![("id", "integer", true), ("sku", "text", false)],
+            vec![],
+        );
+        // Inject index data
+        table.indexes = Some(IndexData::Relational(vec![
+            IndexInfo {
+                name: "products_sku_idx".to_owned(),
+                columns: vec!["sku".to_owned()],
+                is_unique: true,
+                is_primary: false,
+            },
+            IndexInfo {
+                name: "products_id_pkey".to_owned(),
+                columns: vec!["id".to_owned()],
+                is_unique: true,
+                is_primary: true,
+            },
+        ]));
+
+        let graph = SchemaGraph::build(&[table]);
+        let (_, node) = graph.nodes().next().expect("test: one node");
+
+        assert_eq!(node.indexes.len(), 2, "both indexes should be captured");
+
+        let sku_idx = node
+            .indexes
+            .iter()
+            .find(|i| i.name == "products_sku_idx")
+            .expect("sku idx");
+        assert!(sku_idx.unique, "sku index should be unique");
+        assert_eq!(sku_idx.columns, vec!["sku"]);
+
+        let pk_idx = node
+            .indexes
+            .iter()
+            .find(|i| i.name == "products_id_pkey")
+            .expect("pk idx");
+        assert!(pk_idx.unique, "pk index should be unique");
+    }
 
     #[test]
     fn test_build_isolated_node() {

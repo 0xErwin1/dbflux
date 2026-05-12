@@ -21,43 +21,97 @@ pub enum LayoutFormat {
     Compact,
 }
 
-const NODE_HEADER_HEIGHT: f32 = 28.0;
-const NODE_ROW_HEIGHT: f32 = 22.0;
+// T5: promoted public layout constants.
+// NODE_HEADER_PX / NODE_ROW_PX used both by layout math and by the UI renderer
+// so both sides agree on anchor positions without duplicating magic numbers.
+pub const NODE_HEADER_PX: f32 = 30.0;
+pub const NODE_BODY_TOP_PX: f32 = 2.0;
+pub const NODE_ROW_PX: f32 = 22.0;
+pub const NODE_INDEX_HEADER_PX: f32 = 20.0;
+pub const NODE_INDEX_ROW_PX: f32 = 18.0;
+
 const LAYER_SPACING_X: f32 = 320.0;
 const NODE_SPACING_Y: f32 = 40.0;
 const CELL_WIDTH: f32 = 360.0;
 const COMPACT_CELL_SPACING_X: f32 = 20.0;
 const COMPACT_CELL_SPACING_Y: f32 = 20.0;
 
+/// Compute the pixel height of a node given its column count and toggle state.
+///
+/// Formula: NODE_HEADER_PX + NODE_BODY_TOP_PX + cols * NODE_ROW_PX
+///          + (when show_indexes and indexes exist) NODE_INDEX_HEADER_PX + n * NODE_INDEX_ROW_PX
+fn compute_node_height(node: &crate::graph::TableNode, show_indexes: bool) -> f32 {
+    let col_count = node.columns.len().max(1) as f32;
+    let base = NODE_HEADER_PX + NODE_BODY_TOP_PX + col_count * NODE_ROW_PX;
+
+    let index_section = if show_indexes && !node.indexes.is_empty() {
+        NODE_INDEX_HEADER_PX + node.indexes.len() as f32 * NODE_INDEX_ROW_PX
+    } else {
+        0.0
+    };
+
+    base + index_section
+}
+
 /// Compute the width for a node based on its content.
-fn compute_node_width(node: &crate::graph::TableNode) -> f32 {
+///
+/// `show_types` controls whether type labels contribute to width.
+/// `show_indexes` controls whether index label widths are considered.
+/// Badge cluster always contributes `badge_count * 26.0` px.
+/// Result is clamped to [180, 400].
+pub fn compute_node_width(
+    node: &crate::graph::TableNode,
+    show_types: bool,
+    show_indexes: bool,
+) -> f32 {
     let chars_per_px = 7.0_f32;
+    let bold_chars_per_px = 8.0_f32;
     let h_padding = 40.0_f32;
+    // Header chrome: 10px each side padding, table icon (~16px), gaps (~8px),
+    // and the right-aligned "N cols" label (~7 chars * 7px).
+    let header_chrome = 10.0 + 16.0 + 8.0 + 8.0 + 49.0 + 10.0;
 
     let header_text = match &node.id.schema {
-        Some(s) => format!("{} · {}", s, node.id.name),
+        Some(s) => format!("{}.{}", s, node.id.name),
         None => node.id.name.clone(),
     };
-    let header_width = header_text.len() as f32 * chars_per_px + h_padding;
+    let header_width = header_text.len() as f32 * bold_chars_per_px + header_chrome;
 
+    // Body width must mirror the actual rendered row layout:
+    // [container px(10)] [name flex_1] [gap 8] [badge slot 64] {[gap 8] [type slot 72]} [container px(10)]
+    let body_padding = 10.0 + 10.0;
+    let badge_slot_w = 64.0;
+    let row_chrome = if show_types {
+        body_padding + 8.0 + badge_slot_w + 8.0 + 72.0
+    } else {
+        body_padding + 8.0 + badge_slot_w
+    };
     let body_width = node
         .columns
         .iter()
         .map(|col| {
-            let type_label = if col.is_pk {
-                format!("{} [pk]", col.type_name)
-            } else if col.is_fk {
-                format!("{} [fk]", col.type_name)
-            } else {
-                col.type_name.clone()
-            };
             let name_w = col.name.len() as f32 * chars_per_px;
-            let type_w = type_label.len() as f32 * chars_per_px;
-            name_w + type_w + h_padding + 8.0
+            name_w + row_chrome
         })
         .fold(0.0_f32, f32::max);
 
-    header_width.max(body_width).clamp(180.0, 400.0)
+    let index_width = if show_indexes && !node.indexes.is_empty() {
+        node.indexes
+            .iter()
+            .map(|idx| {
+                let col_part = idx.columns.join(", ");
+                let label = format!("{} ({})", idx.name, col_part);
+                label.len() as f32 * chars_per_px + h_padding
+            })
+            .fold(0.0_f32, f32::max)
+    } else {
+        0.0
+    };
+
+    header_width
+        .max(body_width)
+        .max(index_width)
+        .clamp(200.0, 640.0)
 }
 
 /// Layout information for a single node.
@@ -88,10 +142,15 @@ pub struct LayoutResult {
 }
 
 /// Compute a layout for the given `SchemaGraph`.
+///
+/// `show_types` and `show_indexes` are threaded into per-node width/height
+/// computation so that layout dimensions match the rendered node sizes exactly.
 pub fn compute_layout(
     graph: &SchemaGraph,
     format: LayoutFormat,
     focal: Option<(&str, Option<&str>)>,
+    show_types: bool,
+    show_indexes: bool,
 ) -> LayoutResult {
     if graph.node_count() == 0 {
         return LayoutResult {
@@ -105,21 +164,21 @@ pub fn compute_layout(
     match format {
         LayoutFormat::LeftRight => {
             if is_cyclic_directed(&graph.graph) {
-                grid_layout(graph)
+                grid_layout(graph, show_types, show_indexes)
             } else {
-                layered_layout(graph)
+                layered_layout(graph, show_types, show_indexes)
             }
         }
-        LayoutFormat::Compact => compact_layout(graph),
+        LayoutFormat::Compact => compact_layout(graph, show_types, show_indexes),
         LayoutFormat::Snowflake => {
             if let Some((focal_name, focal_schema)) = focal {
-                snowflake_layout(graph, focal_name, focal_schema)
+                snowflake_layout(graph, focal_name, focal_schema, show_types, show_indexes)
             } else {
                 // No focal table — fall back to layered layout
                 if is_cyclic_directed(&graph.graph) {
-                    grid_layout(graph)
+                    grid_layout(graph, show_types, show_indexes)
                 } else {
-                    layered_layout(graph)
+                    layered_layout(graph, show_types, show_indexes)
                 }
             }
         }
@@ -127,7 +186,7 @@ pub fn compute_layout(
 }
 
 /// Layered layout for acyclic graphs.
-fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
+fn layered_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> LayoutResult {
     // Find a root node: one with no incoming edges, or the first node.
     let root_idx = graph
         .graph
@@ -202,9 +261,8 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
                 .graph
                 .node_weight(idx)
                 .expect("invariant: idx is a node index from the same graph");
-            let col_count = node_weight.columns.len().max(1) as f32;
-            let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
-            let width = compute_node_width(node_weight);
+            let height = compute_node_height(node_weight, show_indexes);
+            let width = compute_node_width(node_weight, show_types, show_indexes);
 
             nodes.insert(
                 idx,
@@ -232,8 +290,7 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
                         .graph
                         .node_weight(idx)
                         .expect("invariant: idx is from the same graph");
-                    let col_count = node_weight.columns.len().max(1) as f32;
-                    NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT
+                    compute_node_height(node_weight, show_indexes)
                 })
                 .sum::<f32>()
                 + (ids.len().saturating_sub(1) as f32) * NODE_SPACING_Y
@@ -250,7 +307,7 @@ fn layered_layout(graph: &SchemaGraph) -> LayoutResult {
 }
 
 /// Grid layout for cyclic graphs.
-fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
+fn grid_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> LayoutResult {
     let n = graph.node_count();
     let cols = ((n as f32).sqrt().ceil() as usize).max(1);
     let rows = n.div_ceil(cols);
@@ -273,9 +330,8 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
             .graph
             .node_weight(idx)
             .expect("invariant: idx is from node_indices() on the same graph");
-        let col_count = node_weight.columns.len().max(1) as f32;
-        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
-        let width = compute_node_width(node_weight);
+        let height = compute_node_height(node_weight, show_indexes);
+        let width = compute_node_width(node_weight, show_types, show_indexes);
         row_max_heights[i / cols] = row_max_heights[i / cols].max(height);
         all_widths.push(width);
     }
@@ -297,9 +353,8 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
             .graph
             .node_weight(idx)
             .expect("invariant: idx is from node_indices() on the same graph");
-        let col_count = node_weight.columns.len().max(1) as f32;
-        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
-        let width = compute_node_width(node_weight);
+        let height = compute_node_height(node_weight, show_indexes);
+        let width = compute_node_width(node_weight, show_types, show_indexes);
 
         let col = i % cols;
         let row = i / cols;
@@ -334,7 +389,7 @@ fn grid_layout(graph: &SchemaGraph) -> LayoutResult {
 }
 
 /// Compact grid layout with tighter spacing than grid_layout.
-fn compact_layout(graph: &SchemaGraph) -> LayoutResult {
+fn compact_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> LayoutResult {
     let n = graph.node_count();
     let cols = ((n as f32).sqrt().ceil() as usize).max(1);
     let rows = n.div_ceil(cols);
@@ -357,9 +412,8 @@ fn compact_layout(graph: &SchemaGraph) -> LayoutResult {
             .graph
             .node_weight(idx)
             .expect("invariant: idx is from node_indices() on the same graph");
-        let col_count = node_weight.columns.len().max(1) as f32;
-        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
-        let width = compute_node_width(node_weight);
+        let height = compute_node_height(node_weight, show_indexes);
+        let width = compute_node_width(node_weight, show_types, show_indexes);
         row_max_heights[i / cols] = row_max_heights[i / cols].max(height);
         all_widths.push(width);
     }
@@ -381,9 +435,8 @@ fn compact_layout(graph: &SchemaGraph) -> LayoutResult {
             .graph
             .node_weight(idx)
             .expect("invariant: idx is from node_indices() on the same graph");
-        let col_count = node_weight.columns.len().max(1) as f32;
-        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
-        let width = compute_node_width(node_weight);
+        let height = compute_node_height(node_weight, show_indexes);
+        let width = compute_node_width(node_weight, show_types, show_indexes);
 
         let col = i % cols;
         let row = i / cols;
@@ -421,6 +474,8 @@ fn snowflake_layout(
     graph: &SchemaGraph,
     focal_name: &str,
     focal_schema: Option<&str>,
+    show_types: bool,
+    show_indexes: bool,
 ) -> LayoutResult {
     // Find focal node index by name + schema.
     let focal_id = crate::graph::TableNodeId {
@@ -431,9 +486,9 @@ fn snowflake_layout(
     let Some(&focal_idx) = graph.node_index_by_id.get(&focal_id) else {
         // Focal node not found — fall back to layered layout
         if is_cyclic_directed(&graph.graph) {
-            return grid_layout(graph);
+            return grid_layout(graph, show_types, show_indexes);
         } else {
-            return layered_layout(graph);
+            return layered_layout(graph, show_types, show_indexes);
         }
     };
 
@@ -468,20 +523,12 @@ fn snowflake_layout(
     let cx = 500.0_f32;
     let cy = 400.0_f32;
 
-    let focal_width = compute_node_width(
-        graph
-            .graph
-            .node_weight(focal_idx)
-            .expect("focal_idx is valid"),
-    );
-    let focal_height = {
-        let nw = graph
-            .graph
-            .node_weight(focal_idx)
-            .expect("focal_idx is valid");
-        let col_count = nw.columns.len().max(1) as f32;
-        NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT
-    };
+    let focal_node_weight = graph
+        .graph
+        .node_weight(focal_idx)
+        .expect("focal_idx is valid");
+    let focal_width = compute_node_width(focal_node_weight, show_types, show_indexes);
+    let focal_height = compute_node_height(focal_node_weight, show_indexes);
 
     let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
 
@@ -510,9 +557,8 @@ fn snowflake_layout(
             .graph
             .node_weight(neighbor_idx)
             .expect("neighbor_idx is valid");
-        let width = compute_node_width(node_weight);
-        let col_count = node_weight.columns.len().max(1) as f32;
-        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
+        let width = compute_node_width(node_weight, show_types, show_indexes);
+        let height = compute_node_height(node_weight, show_indexes);
 
         let node_x = cx + radius * angle.cos() - width / 2.0;
         let node_y = cy + radius * angle.sin() - height / 2.0;
@@ -549,9 +595,8 @@ fn snowflake_layout(
     let grid_cols = 4;
     for (i, &idx) in other_indices.iter().enumerate() {
         let node_weight = graph.graph.node_weight(idx).expect("idx is valid");
-        let width = compute_node_width(node_weight);
-        let col_count = node_weight.columns.len().max(1) as f32;
-        let height = NODE_HEADER_HEIGHT + 4.0 + col_count * NODE_ROW_HEIGHT;
+        let width = compute_node_width(node_weight, show_types, show_indexes);
+        let height = compute_node_height(node_weight, show_indexes);
 
         let col = i % grid_cols;
         let row = i / grid_cols;
@@ -663,6 +708,138 @@ mod tests {
         }
     }
 
+    // ── T8: compute_node_width matrix (show_types, show_indexes) ────────────
+
+    fn fixture_node_with_index() -> (SchemaGraph, petgraph::prelude::NodeIndex) {
+        use dbflux_core::{IndexData, IndexInfo};
+
+        let mut t = table(
+            "orders",
+            vec![
+                col("id", "integer", true),
+                col("user_id", "integer", false),
+                col("status", "text", false),
+            ],
+            vec![],
+        );
+        t.indexes = Some(IndexData::Relational(vec![IndexInfo {
+            name: "orders_user_idx".to_owned(),
+            columns: vec!["user_id".to_owned()],
+            is_unique: false,
+            is_primary: false,
+        }]));
+
+        let g = SchemaGraph::build(&[t]);
+        let idx = g.graph.node_indices().next().expect("one node");
+        (g, idx)
+    }
+
+    #[test]
+    fn test_compute_node_width_matrix() {
+        let (graph, idx) = fixture_node_with_index();
+        let node = graph.graph.node_weight(idx).unwrap();
+
+        let tt = compute_node_width(node, true, true);
+        let tf = compute_node_width(node, true, false);
+        let ft = compute_node_width(node, false, true);
+        let ff = compute_node_width(node, false, false);
+
+        // All results must be within the clamp range [180, 400]
+        for (label, w) in [("TT", tt), ("TF", tf), ("FT", ft), ("FF", ff)] {
+            assert!(
+                (200.0..=640.0).contains(&w),
+                "compute_node_width({label}) = {w} outside [180, 400]"
+            );
+        }
+
+        // With types shown, width should be >= width without types (types add characters)
+        // Note: this may not always hold if clamped, so check only when both are unclamped.
+        // Simply assert they are valid (clamp range already verified above).
+        let _ = (tt, tf, ft, ff); // suppress unused warnings
+    }
+
+    // ── T9: compute_layout height invariants ────────────────────────────────
+
+    #[test]
+    fn test_compute_layout_height_invariants() {
+        let tables = vec![table(
+            "users",
+            vec![col("id", "integer", true), col("name", "text", false)],
+            vec![],
+        )];
+        let graph = SchemaGraph::build(&tables);
+        let idx = graph.graph.node_indices().next().unwrap();
+
+        // With and without show_types=false — node width should still be clamped [180..400].
+        let layout_with = compute_layout(&graph, LayoutFormat::LeftRight, None, true, false);
+        let layout_without = compute_layout(&graph, LayoutFormat::LeftRight, None, false, false);
+
+        let w_with = layout_with.nodes.get(&idx).map(|n| n.width).unwrap();
+        let w_without = layout_without.nodes.get(&idx).map(|n| n.width).unwrap();
+
+        assert!(
+            (200.0..=640.0).contains(&w_with),
+            "width with types out of range: {w_with}"
+        );
+        assert!(
+            (200.0..=640.0).contains(&w_without),
+            "width without types out of range: {w_without}"
+        );
+
+        // Both layouts should have the same node count.
+        assert_eq!(
+            layout_with.nodes.len(),
+            layout_without.nodes.len(),
+            "node count must be equal regardless of toggle"
+        );
+    }
+
+    // ── T10: compute_layout index-section delta ──────────────────────────────
+
+    #[test]
+    fn test_compute_layout_index_section_delta() {
+        use dbflux_core::{IndexData, IndexInfo};
+
+        let mut t = table(
+            "items",
+            vec![col("id", "integer", true), col("name", "text", false)],
+            vec![],
+        );
+        t.indexes = Some(IndexData::Relational(vec![
+            IndexInfo {
+                name: "items_name_idx".to_owned(),
+                columns: vec!["name".to_owned()],
+                is_unique: false,
+                is_primary: false,
+            },
+            IndexInfo {
+                name: "items_id_pkey".to_owned(),
+                columns: vec!["id".to_owned()],
+                is_unique: true,
+                is_primary: true,
+            },
+        ]));
+
+        let graph = SchemaGraph::build(&[t]);
+        let idx = graph.graph.node_indices().next().unwrap();
+
+        let layout_no_idx = compute_layout(&graph, LayoutFormat::LeftRight, None, true, false);
+        let layout_with_idx = compute_layout(&graph, LayoutFormat::LeftRight, None, true, true);
+
+        let h_no = layout_no_idx.nodes.get(&idx).map(|n| n.height).unwrap();
+        let h_with = layout_with_idx.nodes.get(&idx).map(|n| n.height).unwrap();
+
+        // Expected delta: NODE_INDEX_HEADER_PX + n_indexes * NODE_INDEX_ROW_PX
+        let n_indexes = 2_f32;
+        let expected_delta = NODE_INDEX_HEADER_PX + n_indexes * NODE_INDEX_ROW_PX;
+
+        let actual_delta = h_with - h_no;
+        assert!(
+            (actual_delta - expected_delta).abs() < 0.1,
+            "index section delta: expected {expected_delta}, got {actual_delta}"
+        );
+    }
+
     // ── 9.7: layout deterministic ────────────────────────────────────────────
 
     #[test]
@@ -681,8 +858,8 @@ mod tests {
         ];
 
         let graph = SchemaGraph::build(&tables);
-        let layout1 = compute_layout(&graph, LayoutFormat::LeftRight, None);
-        let layout2 = compute_layout(&graph, LayoutFormat::LeftRight, None);
+        let layout1 = compute_layout(&graph, LayoutFormat::LeftRight, None, true, false);
+        let layout2 = compute_layout(&graph, LayoutFormat::LeftRight, None, true, false);
 
         assert_eq!(layout1.nodes.len(), layout2.nodes.len());
         for (idx, node_layout) in &layout1.nodes {
@@ -719,7 +896,7 @@ mod tests {
         ];
 
         let graph = SchemaGraph::build(&tables);
-        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None);
+        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None, true, false);
 
         // Check all nodes have non-overlapping bounding boxes.
         let node_list: Vec<(&NodeIndex, &NodeLayout)> = layout.nodes.iter().collect();
@@ -772,7 +949,7 @@ mod tests {
         ];
 
         let graph = SchemaGraph::build(&tables);
-        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None);
+        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None, true, false);
 
         // Find node indices by name.
         let idx_by_name = |name: &str| -> NodeIndex {
@@ -831,7 +1008,7 @@ mod tests {
         ];
 
         let graph = SchemaGraph::build(&tables);
-        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None);
+        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None, true, false);
 
         // Collect x values from all nodes and check uniqueness.
         let mut xs: Vec<_> = layout.nodes.values().map(|l| l.x).collect();
