@@ -10,7 +10,10 @@ use dbflux_core::observability::{
 use dbflux_core::{CancelToken, Connection, DbSchemaInfo, TableInfo, TaskKind, TaskTarget};
 use dbflux_schema_viz::{
     graph::SchemaGraph,
-    layout::{LayoutFormat, LayoutResult, NodeLayout},
+    layout::{
+        LayoutFormat, LayoutResult, NODE_BODY_TOP_PX, NODE_HEADER_PX, NODE_INDEX_HEADER_PX,
+        NODE_INDEX_ROW_PX, NODE_ROW_PX, NodeLayout,
+    },
 };
 use petgraph::graph::NodeIndex;
 use std::collections::HashSet;
@@ -224,13 +227,9 @@ impl SchemaVizContextMenuState {
     }
 }
 
-// Node layout constants — shared between render_node and render_edges_overlay
-// so that edge anchors always match rendered positions exactly.
-//
-// These must stay in sync with the padding/height values used in render_node.
-const NODE_HEADER_PX: f32 = 30.0; // py(6)*2 + line-height(SM 12px ~18px) + border(1px) = ~31, round to 30
-const NODE_BODY_TOP_PX: f32 = 2.0; // py(2) on the body container, top side
-const NODE_ROW_PX: f32 = 18.0; // explicit h() given to each column row div
+// Node layout constants are imported from dbflux_schema_viz::layout so that
+// render_node, render_edges_overlay, and the layout engine always agree on anchor
+// positions without duplicating magic numbers.
 
 /// Display mode for the schema diagram.
 #[derive(Clone)]
@@ -281,6 +280,8 @@ pub struct SchemaVizDocument {
     node_position_overrides: std::collections::HashMap<petgraph::graph::NodeIndex, Point<f32>>,
     // Layout
     pub layout_format: LayoutFormat,
+    pub show_types: bool,
+    pub show_indexes: bool,
     pub table_cap_warning: bool,
     // Cancellation
     cancel_token: Option<Arc<CancelToken>>,
@@ -370,6 +371,8 @@ impl SchemaVizDocument {
             drag_offset: Point::default(),
             node_position_overrides: std::collections::HashMap::new(),
             layout_format: LayoutFormat::LeftRight,
+            show_types: true,
+            show_indexes: false,
             table_cap_warning: false,
             cancel_token: None,
             pending_toast: None,
@@ -744,6 +747,8 @@ impl SchemaVizDocument {
                     &focused_graph,
                     LayoutFormat::LeftRight,
                     Some((table.as_str(), schema.as_deref())),
+                    true,
+                    false,
                 );
 
                 Ok((all_tables, focused_graph, layout, false, tables_loaded))
@@ -789,8 +794,13 @@ impl SchemaVizDocument {
                 }
 
                 let graph = SchemaGraph::build(&all_table_details);
-                let layout =
-                    dbflux_schema_viz::layout::compute_layout(&graph, LayoutFormat::Compact, None);
+                let layout = dbflux_schema_viz::layout::compute_layout(
+                    &graph,
+                    LayoutFormat::Compact,
+                    None,
+                    true,
+                    false,
+                );
 
                 Ok((all_table_details, graph, layout, capped, tables_loaded))
             }
@@ -842,6 +852,48 @@ impl SchemaVizDocument {
         self.focus_handle.focus(window, cx);
     }
 
+    /// Recomputes layout using the current format, focal, show_types, and show_indexes.
+    fn recompute_layout(&mut self) {
+        let Some(ref graph) = self.graph else {
+            return;
+        };
+
+        let focal = match &self.mode {
+            SchemaVizMode::Focused { table, schema } => Some((table.as_str(), schema.as_deref())),
+            SchemaVizMode::Global => {
+                if self.layout_format == LayoutFormat::Snowflake {
+                    graph
+                        .most_connected_node()
+                        .map(|(_, node)| (node.id.name.as_str(), node.id.schema.as_deref()))
+                } else {
+                    None
+                }
+            }
+        };
+
+        self.layout = Some(dbflux_schema_viz::layout::compute_layout(
+            graph,
+            self.layout_format,
+            focal,
+            self.show_types,
+            self.show_indexes,
+        ));
+    }
+
+    /// Updates the `show_types` toggle, recomputes layout, and notifies.
+    pub fn set_show_types(&mut self, value: bool, cx: &mut Context<Self>) {
+        self.show_types = value;
+        self.recompute_layout();
+        cx.notify();
+    }
+
+    /// Updates the `show_indexes` toggle, recomputes layout, and notifies.
+    pub fn set_show_indexes(&mut self, value: bool, cx: &mut Context<Self>) {
+        self.show_indexes = value;
+        self.recompute_layout();
+        cx.notify();
+    }
+
     pub fn set_layout_format(&mut self, format: LayoutFormat, cx: &mut Context<Self>) {
         let old_format = self.layout_format;
         self.layout_format = format;
@@ -862,7 +914,11 @@ impl SchemaVizDocument {
                 }
             };
             self.layout = Some(dbflux_schema_viz::layout::compute_layout(
-                graph, format, focal,
+                graph,
+                format,
+                focal,
+                self.show_types,
+                self.show_indexes,
             ));
             self.zoom = 1.0;
             self.pan_offset = Point::default();
@@ -1288,11 +1344,11 @@ impl SchemaVizDocument {
             .child("Schema diagram is not available for this database type")
     }
 
-    fn layout_label(format: LayoutFormat) -> &'static str {
+    pub(crate) fn layout_label(format: LayoutFormat) -> &'static str {
         match format {
-            LayoutFormat::LeftRight => "Layout",
-            LayoutFormat::Snowflake => "Layout",
-            LayoutFormat::Compact => "Layout",
+            LayoutFormat::LeftRight => "Left-Right",
+            LayoutFormat::Snowflake => "Snowflake",
+            LayoutFormat::Compact => "Compact",
         }
     }
 
@@ -1664,39 +1720,44 @@ impl SchemaVizDocument {
 
         let diagram_canvas = match &self.layout {
             Some(layout) => {
-                let grid_size = 60.0_f32;
-                let grid_visible = 3000.0_f32;
-                let grid_count = (grid_visible / grid_size) as usize + 1;
-                let grid_color = border.opacity(0.15);
+                // T20: dot-grid background rendered via a single canvas element.
+                // Each dot is a 1.5px square painted at 24px lattice intersections.
+                let dot_color = border.opacity(0.35);
+                let dot_lattice = 24.0_f32;
+                let dot_extent = 3000.0_f32;
+                let dot_size = px(1.5_f32);
+                let dot_grid = canvas(
+                    |_bounds, _, _cx| {},
+                    move |bounds, _, window, _cx| {
+                        let ox: f32 = bounds.origin.x.into();
+                        let oy: f32 = bounds.origin.y.into();
+                        let cols = (dot_extent / dot_lattice) as usize + 1;
+                        let rows = (dot_extent / dot_lattice) as usize + 1;
+                        for col in 0..cols {
+                            for row in 0..rows {
+                                let cx_f = col as f32 * dot_lattice + ox;
+                                let cy_f = row as f32 * dot_lattice + oy;
+                                let dot_bounds = gpui::Bounds::centered_at(
+                                    gpui::Point::new(px(cx_f), px(cy_f)),
+                                    gpui::Size {
+                                        width: dot_size,
+                                        height: dot_size,
+                                    },
+                                );
+                                window.paint_quad(gpui::fill(dot_bounds, dot_color));
+                            }
+                        }
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(px(dot_extent))
+                .h(px(dot_extent));
 
                 let mut canvas_children: Vec<AnyElement> = Vec::new();
 
-                for i in 0..grid_count {
-                    let x = i as f32 * grid_size;
-                    canvas_children.push(
-                        div()
-                            .absolute()
-                            .left(px(x))
-                            .top(px(0.0))
-                            .w(px(1.0))
-                            .h(px(grid_visible))
-                            .bg(grid_color)
-                            .into_any_element(),
-                    );
-                }
-                for i in 0..grid_count {
-                    let y = i as f32 * grid_size;
-                    canvas_children.push(
-                        div()
-                            .absolute()
-                            .left(px(0.0))
-                            .top(px(y))
-                            .w(px(grid_visible))
-                            .h(px(1.0))
-                            .bg(grid_color)
-                            .into_any_element(),
-                    );
-                }
+                canvas_children.push(dot_grid.into_any_element());
 
                 for seg in self.render_edges_overlay(layout, &theme) {
                     canvas_children.push(seg.into_any_element());
@@ -1718,144 +1779,216 @@ impl SchemaVizDocument {
                 .child(self.render_error("No layout computed")),
         };
 
-        let zoom_controls = div()
+        // T22: Toolbar — left group (zoom, layout, export) + flex-1 spacer + right group (counter + toggles)
+        let n_tables = self.layout.as_ref().map(|l| l.nodes.len()).unwrap_or(0);
+        let n_relations = self.layout.as_ref().map(|l| l.edges.len()).unwrap_or(0);
+        let counter_label = format!("{} tables · {} relations", n_tables, n_relations);
+
+        // Clone entity once before building the toolbar so Checkbox closures can
+        // call back into self via update().
+        let entity_for_types = cx.entity().clone();
+        let entity_for_indexes = cx.entity().clone();
+
+        let show_types_val = self.show_types;
+        let show_indexes_val = self.show_indexes;
+
+        use dbflux_components::controls::Checkbox;
+
+        let right_group = div()
             .flex()
             .items_center()
             .gap(Spacing::SM)
+            .child(
+                div()
+                    .text_size(FontSizes::XS)
+                    .text_color(muted_foreground)
+                    .child(counter_label),
+            )
+            .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+            .child(
+                Checkbox::new("schema-viz-show-types")
+                    .checked(show_types_val)
+                    .label("Types")
+                    .on_click(move |checked: &bool, _window: &mut Window, cx: &mut App| {
+                        entity_for_types.update(cx, |this, cx| {
+                            this.set_show_types(*checked, cx);
+                        });
+                    }),
+            )
+            .child(
+                Checkbox::new("schema-viz-show-indexes")
+                    .checked(show_indexes_val)
+                    .label("Indexes")
+                    .on_click(move |checked: &bool, _window: &mut Window, cx: &mut App| {
+                        entity_for_indexes.update(cx, |this, cx| {
+                            this.set_show_indexes(*checked, cx);
+                        });
+                    }),
+            );
+
+        let zoom_controls = div()
+            .flex()
+            .items_center()
+            .w_full()
             .px(Spacing::MD)
             .py(px(6.0))
             .bg(tab_bar)
             .border_b_1()
             .border_color(border)
-            .children(vec![
-                div().flex().items_center().gap(px(4.0)).child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(muted_foreground)
-                        .child(format!("Zoom: {:.0}%", zoom * 100.0)),
-                ),
-                div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)),
+            // Left group
+            .child(
                 div()
-                    .cursor_pointer()
-                    .px(px(8.0))
-                    .py(px(2.0))
-                    .rounded_sm()
-                    .when(self.zoom < 4.0, |d| {
-                        d.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.zoom = (this.zoom * 1.25).min(4.0);
-                                cx.notify();
-                            }),
-                        )
-                    })
-                    .child("+"),
-                div()
-                    .cursor_pointer()
-                    .px(px(8.0))
-                    .py(px(2.0))
-                    .rounded_sm()
-                    .when(self.zoom > 0.25, |d| {
-                        d.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.zoom = (this.zoom / 1.25).max(0.25);
-                                cx.notify();
-                            }),
-                        )
-                    })
-                    .child("-"),
-                div()
-                    .cursor_pointer()
-                    .px(px(8.0))
-                    .py(px(2.0))
-                    .rounded_sm()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.zoom = 1.0;
-                            this.pan_offset = Point::default();
-                            cx.notify();
-                        }),
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .child(
+                        div().flex().items_center().gap(px(4.0)).child(
+                            div()
+                                .text_size(FontSizes::SM)
+                                .text_color(muted_foreground)
+                                .child(format!("{:.0}%", zoom * 100.0)),
+                        ),
                     )
-                    .child("Reset"),
-                div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)),
-                // Layout dropdown
-                div()
-                    .relative()
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
+                            .cursor_pointer()
                             .px(px(8.0))
                             .py(px(2.0))
                             .rounded_sm()
-                            .cursor_pointer()
-                            .when(self.layout_menu_open, |d| d.bg(theme.primary.opacity(0.15)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.layout_menu_open = !this.layout_menu_open;
-                                    this.export_menu_open = false;
-                                    cx.notify();
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
-                                    .child(Self::layout_label(self.layout_format)),
-                            )
-                            .child(
-                                svg()
-                                    .path(AppIcon::ChevronDown.path())
-                                    .size_3()
-                                    .text_color(theme.muted_foreground),
-                            ),
+                            .when(self.zoom < 4.0, |d| {
+                                d.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.zoom = (this.zoom * 1.25).min(4.0);
+                                        cx.notify();
+                                    }),
+                                )
+                            })
+                            .child("+"),
                     )
-                    .when(self.layout_menu_open, |d| {
-                        d.child(self.render_layout_menu(&theme, cx))
-                    }),
-                div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)),
-                // Export dropdown
-                div()
-                    .relative()
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
+                            .cursor_pointer()
                             .px(px(8.0))
                             .py(px(2.0))
                             .rounded_sm()
+                            .when(self.zoom > 0.25, |d| {
+                                d.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.zoom = (this.zoom / 1.25).max(0.25);
+                                        cx.notify();
+                                    }),
+                                )
+                            })
+                            .child("-"),
+                    )
+                    .child(
+                        div()
                             .cursor_pointer()
-                            .when(self.export_menu_open, |d| d.bg(theme.primary.opacity(0.15)))
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .rounded_sm()
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
-                                    this.export_menu_open = !this.export_menu_open;
-                                    this.layout_menu_open = false;
+                                    this.zoom = 1.0;
+                                    this.pan_offset = Point::default();
                                     cx.notify();
                                 }),
                             )
+                            .child("Reset"),
+                    )
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+                    // Layout dropdown
+                    .child(
+                        div()
+                            .relative()
                             .child(
                                 div()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
-                                    .child("Export"),
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(px(8.0))
+                                    .py(px(2.0))
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .when(self.layout_menu_open, |d| {
+                                        d.bg(theme.primary.opacity(0.15))
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.layout_menu_open = !this.layout_menu_open;
+                                            this.export_menu_open = false;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.foreground)
+                                            .child(Self::layout_label(self.layout_format)),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::ChevronDown.path())
+                                            .size_3()
+                                            .text_color(theme.muted_foreground),
+                                    ),
                             )
-                            .child(
-                                svg()
-                                    .path(AppIcon::ChevronDown.path())
-                                    .size_3()
-                                    .text_color(theme.muted_foreground),
-                            ),
+                            .when(self.layout_menu_open, |d| {
+                                d.child(self.render_layout_menu(&theme, cx))
+                            }),
                     )
-                    .when(self.export_menu_open, |d| {
-                        d.child(self.render_export_menu(&theme, cx))
-                    }),
-            ]);
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+                    // Export dropdown
+                    .child(
+                        div()
+                            .relative()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(px(8.0))
+                                    .py(px(2.0))
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .when(self.export_menu_open, |d| {
+                                        d.bg(theme.primary.opacity(0.15))
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.export_menu_open = !this.export_menu_open;
+                                            this.layout_menu_open = false;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.foreground)
+                                            .child("Export"),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::ChevronDown.path())
+                                            .size_3()
+                                            .text_color(theme.muted_foreground),
+                                    ),
+                            )
+                            .when(self.export_menu_open, |d| {
+                                d.child(self.render_export_menu(&theme, cx))
+                            }),
+                    ),
+            )
+            // Flex-1 spacer
+            .child(div().flex_1())
+            // Right group
+            .child(right_group);
 
         // The viewport handles all pointer and scroll events.
         // It is `relative()` so child `absolute()` elements are anchored to it.
@@ -2301,6 +2434,26 @@ impl SchemaVizDocument {
             .collect()
     }
 
+    /// Renders a small inline badge for a column attribute (PK, FK, NN).
+    ///
+    /// `filled=true`: solid background badge. `filled=false`: outlined badge.
+    fn render_column_badge(&self, label: &str, filled: bool, color: Hsla) -> impl IntoElement {
+        let base = div()
+            .px(px(5.0))
+            .py(px(1.0))
+            .rounded_full()
+            .text_size(FontSizes::XS)
+            .font_weight(gpui::FontWeight::BOLD)
+            .line_height(px(14.0));
+
+        if filled {
+            base.bg(color).text_color(gpui::white())
+        } else {
+            base.border_1().border_color(color).text_color(color)
+        }
+        .child(label.to_owned())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_node(
         &self,
@@ -2329,7 +2482,6 @@ impl SchemaVizDocument {
         };
 
         let node_bg = theme.secondary;
-        let header_text = theme.foreground;
         let muted_fg = theme.muted_foreground;
 
         let is_dragging = dragging_node == Some(node_idx);
@@ -2341,66 +2493,164 @@ impl SchemaVizDocument {
 
         let node_idx_clone = node_idx;
 
-        let type_color = |type_name: &str, theme: &gpui_component::theme::Theme| -> Hsla {
-            let lower = type_name.to_lowercase();
-            if lower.contains("int")
-                || lower.contains("serial")
-                || lower.contains("numeric")
-                || lower.contains("float")
-                || lower.contains("double")
-                || lower.contains("real")
-                || lower.contains("decimal")
-            {
-                theme.primary
-            } else if lower.contains("bool") {
-                theme.muted_foreground.opacity(0.8)
-            } else if lower.contains("timestamp")
-                || lower.contains("date")
-                || lower.contains("time")
-                || lower.contains("interval")
-            {
-                theme.primary.opacity(0.7)
-            } else if lower.contains("json")
-                || lower.contains("xml")
-                || lower.contains("array")
-                || lower.contains("[]")
-            {
-                theme.accent_foreground
-            } else {
-                theme.muted_foreground
-            }
+        // T16: Redesigned node header — table icon + schema.name + col count badge
+        let table_name = match &node.id.schema {
+            Some(s) => format!("{}.{}", s, node.id.name),
+            None => node.id.name.clone(),
         };
+        let col_count_label = format!("{} cols", node.columns.len());
 
-        let header_title = if let Some(ref schema) = node.id.schema {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(0.0))
-                .child(
+        let node_header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px(px(10.0))
+            .h(px(NODE_HEADER_PX))
+            .bg(theme.tab_bar)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                svg()
+                    .path(AppIcon::Table.path())
+                    .size_3()
+                    .text_color(muted_fg),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.foreground)
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(table_name),
+            )
+            .child(
+                div()
+                    .text_size(FontSizes::XS)
+                    .text_color(muted_fg)
+                    .child(col_count_label),
+            );
+
+        // T18: Column rows with badge cluster
+        let show_types = self.show_types;
+        let col_rows: Vec<_> = node
+            .columns
+            .iter()
+            .map(|col| {
+                let pk_color = theme.primary;
+                let fk_color = theme.primary;
+                let nn_color = muted_fg.opacity(0.5);
+
+                let is_nn = !col.nullable && !col.is_pk;
+
+                // Fixed-width slots so badges and types align in a column
+                // regardless of the column name's width.
+                let badge_slot = div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .flex_shrink_0()
+                    .w(px(64.0))
+                    .gap(px(4.0))
+                    .when(col.is_pk, |d| {
+                        d.child(self.render_column_badge("PK", true, pk_color))
+                    })
+                    .when(col.is_fk, |d| {
+                        d.child(self.render_column_badge("FK", false, fk_color))
+                    })
+                    .when(is_nn, |d| {
+                        d.child(self.render_column_badge("NN", true, nn_color))
+                    });
+
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(NODE_ROW_PX))
+                    .gap(px(8.0))
+                    .overflow_hidden()
+                    .text_size(FontSizes::XS)
+                    .text_color(theme.foreground)
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(col.name.clone()),
+                    )
+                    .child(badge_slot)
+                    .when(show_types, |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .w(px(72.0))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .text_color(muted_fg)
+                                .child(col.type_name.clone()),
+                        )
+                    })
+            })
+            .collect();
+
+        // T19: Indexes section (only when show_indexes is true and there are indexes)
+        let show_indexes = self.show_indexes;
+        let indexes_section = if show_indexes && !node.indexes.is_empty() {
+            let index_rows: Vec<_> = node
+                .indexes
+                .iter()
+                .map(|idx| {
+                    let col_part = idx.columns.join(", ");
+                    let label = format!("{} ({})", idx.name, col_part);
                     div()
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.primary)
-                        .child(schema.clone()),
-                )
-                .child(
-                    div()
+                        .flex()
+                        .items_center()
+                        .h(px(NODE_INDEX_ROW_PX))
+                        .gap(px(4.0))
+                        .overflow_hidden()
                         .text_size(FontSizes::XS)
                         .text_color(muted_fg)
-                        .child(" · "),
-                )
-                .child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .text_color(header_text)
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .child(node.id.name.clone()),
-                )
+                        .child(
+                            div()
+                                .flex_1()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(label),
+                        )
+                        .when(idx.unique, |d| {
+                            d.child(
+                                svg()
+                                    .path(AppIcon::KeyRound.path())
+                                    .size_3()
+                                    .text_color(theme.primary),
+                            )
+                        })
+                })
+                .collect::<Vec<_>>();
+
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .px(px(10.0))
+                    .py(px(2.0))
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .h(px(NODE_INDEX_HEADER_PX))
+                            .flex()
+                            .items_center()
+                            .text_size(FontSizes::XS)
+                            .text_color(muted_fg)
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child("Indexes"),
+                    )
+                    .children(index_rows),
+            )
         } else {
-            div()
-                .text_size(FontSizes::SM)
-                .text_color(header_text)
-                .font_weight(gpui::FontWeight::BOLD)
-                .child(node.id.name.clone())
+            None
         };
 
         div()
@@ -2462,68 +2712,46 @@ impl SchemaVizDocument {
             )
             .flex()
             .flex_col()
+            .child(node_header)
             .child(
                 div()
                     .flex()
-                    .items_center()
+                    .flex_col()
                     .px(px(10.0))
-                    .py(px(6.0))
-                    .bg(theme.tab_bar)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(header_title),
+                    .py(px(NODE_BODY_TOP_PX))
+                    .children(col_rows),
             )
-            .child(div().flex().flex_col().px(px(10.0)).py(px(2.0)).children(
-                node.columns.iter().map(|col| {
-                    let type_label = if col.is_pk {
-                        format!("{} [pk]", col.type_name)
-                    } else if col.is_fk {
-                        format!("{} [fk]", col.type_name)
-                    } else {
-                        col.type_name.clone()
-                    };
-                    let col_type_color = type_color(&col.type_name, theme);
-                    div()
-                        .flex()
-                        .items_center()
-                        .h(px(NODE_ROW_PX))
-                        .gap(px(4.0))
-                        .overflow_hidden()
-                        .text_size(FontSizes::XS)
-                        .text_color(header_text)
-                        .child(
-                            div()
-                                .flex_1()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(col.name.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .text_color(col_type_color)
-                                .child(type_label),
-                        )
-                }),
-            ))
+            .when_some(indexes_section, |d, sec| d.child(sec))
     }
 
-    /// Renders edges as L-shaped CSS connectors.
-    /// Uses node_position_overrides to get current node positions during drag.
+    /// Renders edges as cubic bezier curves on a canvas element.
+    ///
+    /// Column-level anchor Y positions are computed using the same formula as
+    /// `compute_node_height` so that edge endpoints always hit the correct row.
+    /// Edges that connect off-screen nodes are rendered dashed.
     fn render_edges_overlay(
         &self,
         layout: &LayoutResult,
         theme: &gpui_component::theme::Theme,
     ) -> Vec<Div> {
-        let edge_color = theme.muted_foreground.opacity(0.5);
+        let edge_color = theme.primary;
+        let edge_color_dim = theme.primary.opacity(0.5);
 
         let Some(graph) = &self.graph else {
             return Vec::new();
         };
 
-        let mut segments = Vec::new();
+        // Collect all edge data before moving into the canvas closure.
+        struct EdgeData {
+            from_x: f32,
+            from_y: f32,
+            to_x: f32,
+            to_y: f32,
+            dashed: bool,
+        }
+
+        let mut edges: Vec<EdgeData> = Vec::new();
+        let row_center = NODE_ROW_PX / 2.0;
 
         for edge_idx in graph.edge_indices() {
             let (source, target) = match graph.edge_endpoints(edge_idx) {
@@ -2542,20 +2770,6 @@ impl SchemaVizDocument {
                 Some(l) => l,
                 None => continue,
             };
-
-            let (from_x_base, from_y_base) =
-                if let Some(pos) = self.node_position_overrides.get(&source) {
-                    (pos.x, pos.y)
-                } else {
-                    (from_layout.x, from_layout.y)
-                };
-            let (to_x_base, to_y_base) =
-                if let Some(pos) = self.node_position_overrides.get(&target) {
-                    (pos.x, pos.y)
-                } else {
-                    (to_layout.x, to_layout.y)
-                };
-
             let from_node_weight = match graph.node_weight(source) {
                 Some(n) => n,
                 None => continue,
@@ -2565,11 +2779,16 @@ impl SchemaVizDocument {
                 None => continue,
             };
 
-            // NODE_HEADER_PX, NODE_BODY_TOP_PX, NODE_ROW_PX must match render_node exactly.
-            // Each column row has an explicit h(px(NODE_ROW_PX)) so the position is deterministic.
-            let row_center = NODE_ROW_PX / 2.0;
+            let (from_x_base, from_y_base) = self
+                .node_position_overrides
+                .get(&source)
+                .map_or((from_layout.x, from_layout.y), |pos| (pos.x, pos.y));
+            let (to_x_base, to_y_base) = self
+                .node_position_overrides
+                .get(&target)
+                .map_or((to_layout.x, to_layout.y), |pos| (pos.x, pos.y));
 
-            let from_col_y_px = edge_weight
+            let from_col_y = edge_weight
                 .from_columns
                 .first()
                 .and_then(|col_name| {
@@ -2583,7 +2802,7 @@ impl SchemaVizDocument {
                 })
                 .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
 
-            let to_col_y_px = edge_weight
+            let to_col_y = edge_weight
                 .to_columns
                 .first()
                 .and_then(|col_name| {
@@ -2597,57 +2816,116 @@ impl SchemaVizDocument {
                 })
                 .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
 
-            let from_x = from_x_base + from_layout.width;
-            let from_y = from_y_base + from_col_y_px;
-            let to_x = to_x_base;
-            let to_y = to_y_base + to_col_y_px;
+            // Anchor a few px outside the node so the curve and arrowhead never
+            // visually overlap the FK / PK badges inside the row.
+            let edge_anchor_gap = 6.0_f32;
+            let from_x = from_x_base + from_layout.width + edge_anchor_gap;
+            let from_y = from_y_base + from_col_y;
+            let to_x = to_x_base - edge_anchor_gap;
+            let to_y = to_y_base + to_col_y;
 
-            let mid_x = (from_x + to_x) / 2.0;
-
-            if (mid_x - from_x).abs() > 0.5 {
-                let seg_left = from_x.min(mid_x);
-                let seg_width = (mid_x - from_x).abs().max(1.0);
-                segments.push(
-                    div()
-                        .absolute()
-                        .left(px(seg_left))
-                        .top(px(from_y - 1.0))
-                        .w(px(seg_width))
-                        .h(px(2.0))
-                        .bg(edge_color),
-                );
-            }
-
-            let vert_top = from_y.min(to_y);
-            let vert_height = (to_y - from_y).abs().max(1.0);
-            segments.push(
-                div()
-                    .absolute()
-                    .left(px(mid_x - 1.0))
-                    .top(px(vert_top))
-                    .w(px(2.0))
-                    .h(px(vert_height))
-                    .bg(edge_color),
-            );
-
-            if (to_x - mid_x).abs() > 0.5 {
-                let seg_left = mid_x.min(to_x);
-                let seg_width = (to_x - mid_x).abs().max(1.0);
-                segments.push(
-                    div()
-                        .absolute()
-                        .left(px(seg_left))
-                        .top(px(to_y - 1.0))
-                        .w(px(seg_width))
-                        .h(px(2.0))
-                        .bg(edge_color),
-                );
-            }
+            // All edges render solid; the off-screen dashed variant was dropped.
+            edges.push(EdgeData {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                dashed: false,
+            });
         }
 
-        segments
+        if edges.is_empty() {
+            return Vec::new();
+        }
+
+        // Paint all edges on a single canvas element covering the full canvas area.
+        // `paint_path` works in window-absolute coordinates, so every point must be
+        // offset by the canvas element's `bounds.origin`.
+        let canvas_el = canvas(
+            |_bounds, _, _cx| {},
+            move |bounds, _, window, _cx| {
+                use gpui::PathBuilder;
+
+                let ox: f32 = bounds.origin.x.into();
+                let oy: f32 = bounds.origin.y.into();
+
+                for e in &edges {
+                    let fx = e.from_x + ox;
+                    let fy = e.from_y + oy;
+                    let tx = e.to_x + ox;
+                    let ty = e.to_y + oy;
+
+                    let dx = (tx - fx).abs() / 2.0;
+                    let ctrl1 = gpui::point(px(fx + dx), px(fy));
+                    let ctrl2 = gpui::point(px(tx - dx), px(ty));
+                    let from = gpui::point(px(fx), px(fy));
+                    let to = gpui::point(px(tx), px(ty));
+
+                    let mut builder = PathBuilder::stroke(px(1.5));
+                    if e.dashed {
+                        builder = builder.dash_array(&[px(6.0), px(4.0)]);
+                    }
+                    builder.move_to(from);
+                    builder.cubic_bezier_to(to, ctrl1, ctrl2);
+
+                    if let Ok(path) = builder.build() {
+                        let color = if e.dashed { edge_color_dim } else { edge_color };
+                        window.paint_path(path, color);
+                    }
+
+                    // Arrowhead: small filled triangle at `to`, pointing from ctrl2 direction.
+                    let arrow_len = 8.0_f32;
+                    let arrow_half_base = 3.0_f32;
+                    let ctrl2_x: f32 = f32::from(ctrl2.x);
+                    let ctrl2_y: f32 = f32::from(ctrl2.y);
+                    let dx_arrow = tx - ctrl2_x;
+                    let dy_arrow = ty - ctrl2_y;
+                    let mag = (dx_arrow * dx_arrow + dy_arrow * dy_arrow)
+                        .sqrt()
+                        .max(0.001);
+                    let ux = dx_arrow / mag;
+                    let uy = dy_arrow / mag;
+
+                    let tip = gpui::point(px(tx), px(ty));
+                    let base_center_x = tx - ux * arrow_len;
+                    let base_center_y = ty - uy * arrow_len;
+                    let left = gpui::point(
+                        px(base_center_x - uy * arrow_half_base),
+                        px(base_center_y + ux * arrow_half_base),
+                    );
+                    let right = gpui::point(
+                        px(base_center_x + uy * arrow_half_base),
+                        px(base_center_y - ux * arrow_half_base),
+                    );
+
+                    let mut arrow_builder = PathBuilder::fill();
+                    arrow_builder.move_to(tip);
+                    arrow_builder.line_to(left);
+                    arrow_builder.line_to(right);
+                    arrow_builder.close();
+
+                    if let Ok(arrow_path) = arrow_builder.build() {
+                        let color = if e.dashed { edge_color_dim } else { edge_color };
+                        window.paint_path(arrow_path, color);
+                    }
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(px(10000.0))
+        .h(px(10000.0));
+
+        vec![div().absolute().top_0().left_0().child(canvas_el)]
     }
 }
+
+/// Tests for SchemaVizDocument logic (pure unit tests — no GPUI harness required).
+/// Kept in a separate file to avoid rustc stack overflow during compilation of
+/// this large module (see crates/dbflux_ui/src/ui/document/schema_viz/tests.rs).
+#[cfg(test)]
+mod tests;
 
 impl EventEmitter<DocumentEvent> for SchemaVizDocument {}
 
