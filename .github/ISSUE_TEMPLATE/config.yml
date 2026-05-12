@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions / discussion
+    url: https://github.com/0xErwin1/dbflux/discussions
+    about: General questions and ideas belong in Discussions, not Issues.

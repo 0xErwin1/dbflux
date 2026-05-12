@@ -13,6 +13,8 @@ The long-term goal is to provide a fully open-source alternative to DBeaver, sup
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md)
+- [Contributing](CONTRIBUTING.md)
+- [Release Process](docs/RELEASE.md)
 - [Code Style](CODE_STYLE.md)
 - [Agent Instructions](AGENTS.md)
 - [Claude Instructions](CLAUDE.md)

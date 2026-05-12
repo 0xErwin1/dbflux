@@ -8,6 +8,8 @@ DBFlux is a keyboard-first database client built with Rust and GPUI (Zed's UI fr
 
 For project structure, crate boundaries, key files, and subsystem overviews, use `ARCHITECTURE.md` as the canonical reference.
 
+For the branching model, version rules, tag flow, and release procedure, use `docs/RELEASE.md` as the canonical reference. For contributor workflow and the label taxonomy, use `CONTRIBUTING.md`. The automated release skill (`skills/dbflux-release/SKILL.md`) follows the same rules.
+
 ## Build & Run Commands
 
 ```bash
