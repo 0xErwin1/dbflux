@@ -4,6 +4,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixes
+
+* Results data grid shows the horizontal scrollbar immediately when
+  the columns are wider than the viewport. gpui-component scrollbars
+  render fully transparent at idle and only fade in after a scroll
+  event; the horizontal axis is driven by a 1px phantom scroller that
+  never receives the wheel, so previously the bar stayed invisible
+  until the user arrowed past the right edge. The horizontal scrollbar
+  is now configured with `ScrollbarShow::Always`.
+
 ## [0.6.0-dev.0] - 2026-05-12
 
 ### Features

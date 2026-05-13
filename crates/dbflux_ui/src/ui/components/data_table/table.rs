@@ -12,7 +12,7 @@ use gpui::{
     ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement,
     Styled, Window, actions, canvas, div, px, uniform_list,
 };
-use gpui_component::scroll::Scrollbar;
+use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use gpui_component::{ActiveTheme, Sizable};
 
 use super::events::{DataTableEvent, Direction, Edge};
@@ -598,7 +598,7 @@ impl gpui::Render for DataTable {
                     .track_scroll(&horizontal_scroll_handle)
                     .child(div().min_w(px(total_width)).h(px(1.0))),
             )
-            // Scrollbars as absolute overlays
+            // Scrollbars as absolute overlays.
             .child(
                 div()
                     .absolute()
@@ -610,6 +610,10 @@ impl gpui::Render for DataTable {
                         this.child(Scrollbar::vertical(&vertical_scroll_handle))
                     }),
             )
+            // Horizontal scrollbar uses `ScrollbarShow::Always` because the phantom
+            // scroller that owns the handle is 1px tall and never captures the wheel,
+            // so the bar would otherwise stay transparent until the user navigates
+            // off-screen with the keyboard.
             .child(
                 div()
                     .absolute()
@@ -617,7 +621,10 @@ impl gpui::Render for DataTable {
                     .right_0()
                     .bottom_0()
                     .h(SCROLLBAR_WIDTH)
-                    .child(Scrollbar::horizontal(&horizontal_scroll_handle)),
+                    .child(
+                        Scrollbar::horizontal(&horizontal_scroll_handle)
+                            .scrollbar_show(ScrollbarShow::Always),
+                    ),
             )
     }
 }
