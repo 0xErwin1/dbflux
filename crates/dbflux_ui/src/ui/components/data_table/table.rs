@@ -107,8 +107,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-end", SelectToBottom, Some(CONTEXT)),
         KeyBinding::new("ctrl-a", SelectAll, Some(CONTEXT)),
         KeyBinding::new("escape", ClearSelection, Some(CONTEXT)),
-        // Copy
-        KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
+        // Copy — `secondary-c` resolves to Cmd+C on macOS and Ctrl+C
+        // elsewhere, matching platform conventions. A literal `ctrl-c` here
+        // would fire on macOS Ctrl+C too, which is wrong.
+        KeyBinding::new("secondary-c", Copy, Some(CONTEXT)),
         KeyBinding::new("y y", Copy, Some(CONTEXT)),
         KeyBinding::new("shift-y shift-y", CopyRow, Some(CONTEXT)),
         // Edit mode

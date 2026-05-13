@@ -389,6 +389,27 @@ fn results_layer() -> KeymapLayer {
         Command::ResultsCopyRow,
     );
 
+    // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
+    // GPUI reports cmd vs ctrl on separate modifier fields, so we pick one
+    // per platform rather than binding both (which would let Ctrl+C trigger
+    // copy on macOS, violating the platform convention).
+    #[cfg(target_os = "macos")]
+    layer.bind(
+        KeyChord {
+            key: "c".to_string(),
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::none()
+            },
+        },
+        Command::ResultsCopyCell,
+    );
+    #[cfg(not(target_os = "macos"))]
+    layer.bind(
+        KeyChord::new("c", Modifiers::ctrl()),
+        Command::ResultsCopyCell,
+    );
+
     // Toggle panel collapse
     layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
 

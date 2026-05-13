@@ -2,6 +2,13 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.5.3] - 2026-05-13
+
+### Features
+
+* Ctrl+C / Cmd+C now copies the selected cell (or range) from the Results
+  grid to the clipboard, matching the right-click → Copy behavior.
+
 ## [0.5.2] - 2026-05-13
 
 ### Fixes
