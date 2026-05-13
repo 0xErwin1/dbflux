@@ -4,6 +4,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixes
+
+* Toast bubble no longer overflows the screen when the subtitle is long.
+  The title and subtitle now stack vertically inside a `flex_1 min_w_0`
+  column so the subtitle wraps within the card's `max_w` (raised from
+  26rem to 28rem) instead of pushing the whole toast past the workspace
+  edge. The card also calls `.occlude()` so clicks on its empty area no
+  longer fall through to the sidebar or document underneath.
+
 ## [0.6.0-dev.0] - 2026-05-12
 
 ### Features
