@@ -9,8 +9,8 @@ use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
-    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement,
-    Styled, Window, actions, canvas, div, px, uniform_list,
+    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, ScrollWheelEvent,
+    StatefulInteractiveElement, Styled, Window, actions, canvas, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use gpui_component::{ActiveTheme, Sizable};
@@ -441,11 +441,34 @@ impl gpui::Render for DataTable {
         let state_for_resize_move = self.state.clone();
         let resize_drag_for_up = self.resize_drag.clone();
 
+        // Forward horizontal wheel/trackpad deltas to the horizontal scroll
+        // handle. The handle is owned by a 1px phantom scroller at the bottom
+        // (so the gpui-component scrollbar can drive it), which means
+        // horizontal wheel events landing on the header or body would
+        // otherwise be lost. Trackpads and Magic Mouse emit a non-zero
+        // delta.x for horizontal gestures. Vertical deltas are left untouched
+        // so the body's uniform_list keeps handling them; we deliberately do
+        // not synthesise a horizontal delta from shift+wheel because the
+        // uniform_list consumes delta.y first and we would end up scrolling
+        // both axes at once.
+        let state_for_wheel = self.state.clone();
+        let on_scroll_wheel =
+            move |event: &ScrollWheelEvent, _window: &mut Window, cx: &mut App| {
+                let delta_x = event.delta.pixel_delta(px(16.0)).x;
+                if delta_x == px(0.0) {
+                    return;
+                }
+                state_for_wheel.update(cx, |state, _| {
+                    state.apply_horizontal_wheel_delta(delta_x);
+                });
+            };
+
         let inner_table = div()
             .id("table-inner")
             .flex()
             .flex_col()
             .size_full()
+            .on_scroll_wheel(on_scroll_wheel)
             .child(header)
             .when(row_count > 0, |this| this.child(body))
             .when(row_count == 0 && col_count > 0, |this| {
@@ -809,46 +832,55 @@ impl DataTable {
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
         // uniform_list handles vertical scrolling.
+        let mut list = uniform_list(
+            "table-rows",
+            row_count,
+            move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
+                let theme = cx.theme();
+                // Read state INSIDE closure - only when actually rendering
+                let state = state_entity.read(cx);
+
+                let editing_cell = state.editing_cell();
+                let cell_input = state.cell_input().cloned();
+                let enum_dropdown = state.enum_dropdown().cloned();
+                let edit_buffer = state.edit_buffer();
+
+                render_rows(
+                    &state_entity,
+                    visible_range,
+                    &model,
+                    state.column_widths(),
+                    state.selection(),
+                    editing_cell,
+                    cell_input.as_ref(),
+                    enum_dropdown.as_ref(),
+                    edit_buffer,
+                    total_width,
+                    theme,
+                )
+            },
+        )
+        .size_full()
+        .min_w(px(total_width))
+        .ml(-h_offset)
+        .with_sizing_behavior(ListSizingBehavior::Auto)
+        .track_scroll(vertical_scroll_handle);
+
+        // Stop GPUI's paint_scroll_listener from translating a non-zero delta.x
+        // into delta.y on this vertical-only list. The platform layer maps
+        // shift+wheel to delta.x with delta.y == 0, and without this flag the
+        // list would scroll vertically using that delta.x while the outer
+        // on_scroll_wheel handler also scrolls horizontally — both axes move
+        // at once. With restrict_scroll_to_axis set, shift+wheel becomes a
+        // pure horizontal scroll driven by the outer handler.
+        list.style().restrict_scroll_to_axis = Some(true);
+
         div()
             .id("table-body")
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .child(
-                uniform_list(
-                    "table-rows",
-                    row_count,
-                    move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
-                        let theme = cx.theme();
-                        // Read state INSIDE closure - only when actually rendering
-                        let state = state_entity.read(cx);
-
-                        let editing_cell = state.editing_cell();
-                        let cell_input = state.cell_input().cloned();
-                        let enum_dropdown = state.enum_dropdown().cloned();
-                        let edit_buffer = state.edit_buffer();
-
-                        render_rows(
-                            &state_entity,
-                            visible_range,
-                            &model,
-                            state.column_widths(),
-                            state.selection(),
-                            editing_cell,
-                            cell_input.as_ref(),
-                            enum_dropdown.as_ref(),
-                            edit_buffer,
-                            total_width,
-                            theme,
-                        )
-                    },
-                )
-                .size_full()
-                .min_w(px(total_width))
-                .ml(-h_offset)
-                .with_sizing_behavior(ListSizingBehavior::Auto)
-                .track_scroll(vertical_scroll_handle),
-            )
+            .child(list)
     }
 }
 
