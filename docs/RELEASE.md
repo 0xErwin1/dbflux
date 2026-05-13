@@ -66,22 +66,23 @@ The workspace version (`Cargo.toml` `[workspace.package].version`) is the source
 When stabilization begins:
 
 1. Verify you are on `main`, clean tree, up to date with `origin/main`.
-2. Confirm the target minor `vX.Y`.
-3. Create the branch:
+2. Verify `.github/workflows/release.yml` on `main` contains the `Classify release` step. Without it, stable tags from the new release branch will publish as drafts (this happened to `v0.5.1`). If the step is missing, fix on `main` first.
+3. Confirm the target minor `vX.Y`.
+4. Create the branch:
    ```bash
    git checkout -b release/vX.Y
    ```
-4. On `release/vX.Y`:
+5. On `release/vX.Y`:
    - In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.0] - YYYY-MM-DD`.
    - Bump every versioned artifact to `X.Y.0-rc.1` (see below).
    - Commit: `chore(release): cut release/vX.Y at vX.Y.0-rc.1`.
    - Push: `git push -u origin release/vX.Y`.
-5. Back on `main`:
+6. Back on `main`:
    - Open a fresh `## [Unreleased]` block in `CHANGELOG.md`.
    - Bump every versioned artifact to `X.(Y+1).0-dev.0`.
    - Commit: `chore(version): begin X.(Y+1).0-dev cycle`.
    - Push.
-6. Tag `vX.Y.0-rc.1` on the release branch.
+7. Tag `vX.Y.0-rc.1` on the release branch.
 
 ## Files to Bump
 
@@ -105,8 +106,9 @@ The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It
 - When `release/vX.Y` is cut, the `Unreleased` block is "split":
   - On the release branch, the snapshot becomes `## [X.Y.0] - YYYY-MM-DD`.
   - On `main`, a new empty `Unreleased` block opens.
-- Cherry-picks into `release/vX.Y` bring their changelog entry too. If the entry was added back to `main`'s new `Unreleased`, leave it there as well — duplication is intentional, since each shipped tag advertises its own notes.
+- Cherry-picks into `release/vX.Y` bring their changelog entry too. **After the cherry-pick, the same entry must be removed from main's `[Unreleased]` block** — once shipped on a release branch, the change is no longer "unreleased" in main's history. Skipping this step is what caused main's `[Unreleased]` to keep stale `v0.5.1` content after that release went out.
 - The release workflow extracts the section by header (`## [X.Y.Z]`). Keep that format exactly.
+- Invariant after every stable release: no entry present in `[X.Y.Z]` (on the release branch) should still appear in main's `[Unreleased]`.
 
 ## Cherry-Pick Discipline
 
@@ -127,6 +129,19 @@ Audit: every non-release commit on `release/vX.Y` since branch-off should mentio
 ```bash
 git log --grep='cherry picked from' release/vX.Y
 ```
+
+### CHANGELOG cleanup after cherry-pick (MANDATORY)
+
+When the cherry-picked commit carries a `CHANGELOG.md` entry, finish the cherry-pick with a follow-up commit on `main` that **removes the same entry from `[Unreleased]`**:
+
+```bash
+git checkout main
+# edit CHANGELOG.md: delete the matching bullet(s) under [Unreleased]
+git commit -am "chore(changelog): move <short summary> to vX.Y.(Z+1)"
+git push
+```
+
+Batch the cleanup into a single commit on `main` once the release branch is tagged if several entries cherry-picked together.
 
 ## Downstream Channels
 
@@ -180,6 +195,8 @@ Not yet upstream. When it is, only stable tags will get a PR to `NixOS/nixpkgs` 
 - Bumping minor or major version inside a `release/*` branch.
 - Pushing a tag without a clean working tree.
 - Pushing the AUR bump with `pkgver` containing a hyphen.
+- Cherry-picking a commit with a `CHANGELOG.md` entry into a release branch without then removing that entry from main's `[Unreleased]` block.
+- Cutting `release/vX.Y` from a `main` HEAD that does not contain the `Classify release` step in `release.yml` (stable tags from that branch will publish as drafts).
 
 ## Local Validation Before Tagging
 
