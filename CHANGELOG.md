@@ -2,6 +2,16 @@
 
 All notable changes to DBFlux will be documented in this file.
 
+## [0.5.4] - 2026-05-13
+
+### Fixes
+
+* Results table horizontal trackpad / wheel scroll now respects the
+  platform sign convention (macOS "natural scrolling" preference,
+  Linux / Windows scroll direction) and the body shifts on the same
+  frame as the scrollbar, removing the one-frame lag that read as
+  jitter during trackpad momentum. Follow-up to #60.
+
 ## [0.5.3] - 2026-05-13
 
 ### Features

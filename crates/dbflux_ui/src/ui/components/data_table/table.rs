@@ -445,23 +445,34 @@ impl gpui::Render for DataTable {
         // handle. The handle is owned by a 1px phantom scroller at the bottom
         // (so the gpui-component scrollbar can drive it), which means
         // horizontal wheel events landing on the header or body would
-        // otherwise be lost. Trackpads and Magic Mouse emit a non-zero
-        // delta.x for horizontal gestures. Vertical deltas are left untouched
-        // so the body's uniform_list keeps handling them; we deliberately do
-        // not synthesise a horizontal delta from shift+wheel because the
-        // uniform_list consumes delta.y first and we would end up scrolling
-        // both axes at once.
+        // otherwise be lost. The body's uniform_list still consumes delta.y
+        // natively. We deliberately do not synthesise a horizontal delta
+        // from shift+wheel because the list consumes delta.y first and we
+        // would end up scrolling both axes at once.
+        //
+        // After updating the scroll handle we synchronously bump
+        // `state.horizontal_offset` so the body shift (`ml(-h_offset)`) and
+        // the scrollbar move on the same frame; otherwise the canvas-based
+        // sync runs one frame later and the table reads as jittery during
+        // trackpad momentum.
         let state_for_wheel = self.state.clone();
-        let on_scroll_wheel =
-            move |event: &ScrollWheelEvent, _window: &mut Window, cx: &mut App| {
-                let delta_x = event.delta.pixel_delta(px(16.0)).x;
-                if delta_x == px(0.0) {
-                    return;
+        let on_scroll_wheel = move |event: &ScrollWheelEvent, window: &mut Window, cx: &mut App| {
+            let delta_x = event.delta.pixel_delta(window.line_height()).x;
+            if delta_x == px(0.0) {
+                return;
+            }
+            let consumed = state_for_wheel.update(cx, |state, cx| {
+                if state.apply_horizontal_wheel_delta(delta_x) {
+                    state.sync_horizontal_offset(cx);
+                    true
+                } else {
+                    false
                 }
-                state_for_wheel.update(cx, |state, _| {
-                    state.apply_horizontal_wheel_delta(delta_x);
-                });
-            };
+            });
+            if consumed {
+                cx.stop_propagation();
+            }
+        };
 
         let inner_table = div()
             .id("table-inner")
