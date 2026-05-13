@@ -2770,6 +2770,22 @@ impl SchemaVizDocument {
                     }
                 }),
             )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    // Always retarget the selection to the node under the cursor
+                    // before opening the menu so the menu actions apply to the
+                    // table the user actually right-clicked on (not a stale
+                    // previously-selected table).
+                    this.selected_node = Some(node_idx_clone);
+                    let local = Point::new(
+                        event.position.x - this.panel_origin.x,
+                        event.position.y - this.panel_origin.y,
+                    );
+                    this.open_context_menu(local, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .flex()
             .flex_col()
             .child(node_header)
