@@ -209,6 +209,7 @@ impl Sidebar {
             let strategy = connected.connection.schema_loading_strategy();
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
             let is_document_db = schema.is_document();
+            let is_time_series_db = schema.is_time_series();
 
             if schema.is_key_value() {
                 let mut database_names: Vec<String> = schema
@@ -276,6 +277,12 @@ impl Sidebar {
                                     &connected.table_details,
                                     &connected.collection_children,
                                 )
+                            } else if is_time_series_db {
+                                // Time-series lazy schemas are stored in database_schemas
+                                // as a DbSchemaInfo whose tables carry measurement names.
+                                // Route through the time-series builder the same way document
+                                // databases route through build_document_db_content.
+                                Self::build_time_series_db_content(profile_id, &db.name, schema)
                             } else {
                                 Self::build_db_schema_content(
                                     profile_id,
@@ -353,6 +360,10 @@ impl Sidebar {
                                 &connected.table_details,
                                 &connected.collection_children,
                             )
+                        } else if is_time_series_db {
+                            // InfluxDB uses SingleDatabase loading: the connection-level
+                            // schema already contains all measurements for this bucket.
+                            Self::build_time_series_db_content(profile_id, &db.name, schema)
                         } else {
                             Self::build_schema_children(
                                 profile_id,
@@ -642,6 +653,51 @@ impl Sidebar {
         }
 
         content
+    }
+
+    /// Build sidebar children for a time-series database node (e.g. an InfluxDB bucket).
+    ///
+    /// Measurements are rendered as `Collection` nodes under a "Measurements (N)" folder so they
+    /// participate in the existing open/query/context-menu flows without requiring new node-kind
+    /// variants. The `DatabaseCategory::TimeSeries.container_name()` already returns "Measurements".
+    fn build_time_series_db_content(
+        profile_id: Uuid,
+        database_name: &str,
+        schema: &dbflux_core::SchemaSnapshot,
+    ) -> Vec<TreeItem> {
+        let measurements = schema.measurements();
+
+        if measurements.is_empty() {
+            return Vec::new();
+        }
+
+        let measurement_items: Vec<TreeItem> = measurements
+            .iter()
+            .map(|measurement| {
+                TreeItem::new(
+                    SchemaNodeId::Collection {
+                        profile_id,
+                        database: database_name.to_string(),
+                        name: measurement.name.clone(),
+                    }
+                    .to_string(),
+                    measurement.name.clone(),
+                )
+            })
+            .collect();
+
+        vec![
+            TreeItem::new(
+                SchemaNodeId::CollectionsFolder {
+                    profile_id,
+                    database: database_name.to_string(),
+                }
+                .to_string(),
+                format!("Measurements ({})", measurements.len()),
+            )
+            .expanded(true)
+            .children(measurement_items),
+        ]
     }
 
     fn build_collection_item(
@@ -1482,6 +1538,78 @@ mod tests {
         );
 
         assert!(item.children.is_empty());
+    }
+
+    #[test]
+    fn time_series_db_content_produces_measurements_folder_with_collection_leaves() {
+        use dbflux_core::{
+            DatabaseInfo, MeasurementInfo, SchemaNodeId, SchemaNodeKind, SchemaSnapshot,
+            TimeSeriesSchema,
+        };
+
+        let profile_id = Uuid::new_v4();
+        let schema = SchemaSnapshot::time_series(TimeSeriesSchema {
+            databases: vec![DatabaseInfo {
+                name: "monitoring".to_string(),
+                is_current: true,
+            }],
+            current_database: Some("monitoring".to_string()),
+            measurements: vec![
+                MeasurementInfo {
+                    name: "cpu".to_string(),
+                    tags: vec!["host".to_string()],
+                    fields: vec![],
+                },
+                MeasurementInfo {
+                    name: "mem".to_string(),
+                    tags: vec![],
+                    fields: vec![],
+                },
+            ],
+            retention_policies: vec![],
+        });
+
+        let result = Sidebar::build_time_series_db_content(profile_id, "monitoring", &schema);
+
+        // Should produce exactly one "Measurements (N)" folder
+        assert_eq!(result.len(), 1);
+        let folder = &result[0];
+        assert_eq!(folder.label.as_ref(), "Measurements (2)");
+        assert!(folder.is_expanded());
+
+        // Each measurement becomes a Collection leaf
+        assert_eq!(folder.children.len(), 2);
+        assert_eq!(folder.children[0].label.as_ref(), "cpu");
+        assert_eq!(folder.children[1].label.as_ref(), "mem");
+
+        // Verify children parse back as Collection nodes with the correct fields
+        let id0: SchemaNodeId = folder.children[0].id.as_ref().parse().unwrap();
+        let id1: SchemaNodeId = folder.children[1].id.as_ref().parse().unwrap();
+        assert_eq!(id0.kind(), SchemaNodeKind::Collection);
+        assert_eq!(id1.kind(), SchemaNodeKind::Collection);
+
+        if let SchemaNodeId::Collection { database, name, .. } = id0 {
+            assert_eq!(database, "monitoring");
+            assert_eq!(name, "cpu");
+        } else {
+            panic!("expected Collection variant");
+        }
+    }
+
+    #[test]
+    fn time_series_db_content_returns_empty_when_no_measurements() {
+        use dbflux_core::{SchemaSnapshot, TimeSeriesSchema};
+
+        let profile_id = Uuid::new_v4();
+        let schema = SchemaSnapshot::time_series(TimeSeriesSchema {
+            databases: vec![],
+            current_database: None,
+            measurements: vec![],
+            retention_policies: vec![],
+        });
+
+        let result = Sidebar::build_time_series_db_content(profile_id, "empty_bucket", &schema);
+        assert!(result.is_empty());
     }
 }
 

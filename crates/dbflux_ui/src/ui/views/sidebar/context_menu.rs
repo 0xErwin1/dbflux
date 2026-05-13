@@ -209,7 +209,12 @@ impl Sidebar {
                     )],
                 );
 
-                if !self.collection_is_event_stream(item_id, cx) {
+                // The Generate Query submenu contains MongoDB-specific operation names.
+                // Time-series measurements share the Collection node kind but do not use
+                // this submenu — their query model is Flux/InfluxQL, not MQL.
+                if !self.collection_is_event_stream(item_id, cx)
+                    && !self.collection_is_time_series(item_id, cx)
+                {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
@@ -245,10 +250,12 @@ impl Sidebar {
                     );
                 }
 
-                // Drop collection gated on DDL capabilities
-                if self
-                    .get_ddl_capabilities(item_id, cx)
-                    .is_some_and(|ddl| ddl.supports_drop_table)
+                // Drop collection gated on DDL capabilities; not applicable to time-series
+                // measurements which are not directly droppable through the collection abstraction.
+                if !self.collection_is_time_series(item_id, cx)
+                    && self
+                        .get_ddl_capabilities(item_id, cx)
+                        .is_some_and(|ddl| ddl.supports_drop_table)
                 {
                     Self::append_menu_section(
                         &mut items,
@@ -793,6 +800,22 @@ impl Sidebar {
             .is_some_and(|collection| {
                 collection.presentation == CollectionPresentation::EventStream
             })
+    }
+
+    /// Returns true when the collection node belongs to a time-series connection.
+    ///
+    /// Used to suppress document-database-specific menu items (e.g. MongoDB generate
+    /// query submenu) for measurements that are rendered as Collection nodes.
+    fn collection_is_time_series(&self, item_id: &str, cx: &App) -> bool {
+        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+            return false;
+        };
+        let state = self.app_state.read(cx);
+        state
+            .connections()
+            .get(&profile_id)
+            .and_then(|conn| conn.schema.as_ref())
+            .is_some_and(|schema| schema.is_time_series())
     }
 
     fn open_child_picker(&mut self, item_id: &str, cx: &mut Context<Self>) {
