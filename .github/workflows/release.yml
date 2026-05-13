@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 env:
-  FEATURES: "sqlite,postgres,mysql,mongodb,redis"
+  FEATURES: "sqlite,postgres,mysql,mongodb,redis,influxdb"
 
 jobs:
   tests:

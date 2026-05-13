@@ -181,7 +181,7 @@ git clone https://github.com/0xErwin1/dbflux.git
 cd dbflux
 
 # Recommended: build with the full default feature set
-cargo build --release --features sqlite,postgres,mysql,mongodb,redis,dynamodb,cloudwatch,lua,aws,mcp
+cargo build --release --features sqlite,postgres,mysql,mongodb,redis,dynamodb,cloudwatch,influxdb,lua,aws,mcp
 
 # Minimal build (relational drivers only, no AI/MCP, no Lua)
 cargo build --release --no-default-features --features sqlite,postgres,mysql
