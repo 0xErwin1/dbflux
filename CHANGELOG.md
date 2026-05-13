@@ -29,6 +29,65 @@ All notable changes to DBFlux will be documented in this file.
   release branch, and the cut procedure verifies the release workflow
   has the `Classify release` step before tagging.
 
+## [0.5.5] - 2026-05-13
+
+### Fixes
+
+* Schema-drift preflight no longer reports phantom "all columns removed"
+  for queries whose table lives outside `public`. The fresh fetch is now
+  steered to the right schema via a layered precedence (query qualifier
+  → cached `TableInfo.schema` → editor toolbar's schema → `public`
+  fallback), and the checker defensively skips any entry whose driver
+  lookup returns zero columns — preventing the empty `TableInfo` from
+  poisoning the autocomplete and table-detail caches via the
+  "Refresh & re-run" path.
+
+### Chores
+
+* Pin EOL to LF via `.gitattributes` (`* text=auto eol=lf`) so
+  `cargo fmt` no longer desyncs Windows working trees that default to
+  `core.autocrlf=true`.
+
+## [0.5.4] - 2026-05-13
+
+### Fixes
+
+* Results table horizontal trackpad / wheel scroll now respects the
+  platform sign convention (macOS "natural scrolling" preference,
+  Linux / Windows scroll direction) and the body shifts on the same
+  frame as the scrollbar, removing the one-frame lag that read as
+  jitter during trackpad momentum. Follow-up to #60.
+
+## [0.5.3] - 2026-05-13
+
+### Features
+
+* Ctrl+C / Cmd+C now copies the selected cell (or range) from the Results
+  grid to the clipboard, matching the right-click → Copy behavior.
+
+### Fixes
+
+* Results table now scrolls horizontally with trackpad / Magic Mouse
+  gestures and `Shift+Wheel`. The horizontal scroll handle is owned by
+  a 1px phantom scroller so the scrollbar widget can drive it, which
+  meant horizontal wheel deltas landing on the header or body were
+  dropped; the table now forwards those deltas to the handle, and the
+  vertical-only uniform list is restricted to its axis so GPUI's
+  built-in delta.x → delta.y fallback no longer double-scrolls on
+  shift+wheel (#58).
+
+## [0.5.2] - 2026-05-13
+
+### Fixes
+
+* Results data grid shows the horizontal scrollbar immediately when
+  the columns are wider than the viewport. gpui-component scrollbars
+  render fully transparent at idle and only fade in after a scroll
+  event; the horizontal axis is driven by a 1px phantom scroller that
+  never receives the wheel, so previously the bar stayed invisible
+  until the user arrowed past the right edge. The horizontal scrollbar
+  is now configured with `ScrollbarShow::Always`.
+
 ## [0.5.1] - 2026-05-12
 
 ### Features
