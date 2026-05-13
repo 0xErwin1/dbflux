@@ -434,8 +434,12 @@ impl DataTableState {
     /// dropped. Trackpads and Magic Mouse emit horizontal deltas that users
     /// expect to scroll the table sideways, so we forward them here.
     ///
-    /// `delta_x` follows the standard convention: positive moves content
-    /// left (scrolls right). Returns true if the offset actually changed.
+    /// `delta_x` is the raw platform delta in pixels and is added directly
+    /// to `handle.offset.x`, matching `gpui::paint_scroll_listener` and
+    /// `gpui_component::scroll::ScrollableMask`. On macOS this means the
+    /// system's "natural scrolling" preference is respected automatically
+    /// because AppKit already encodes the user's preferred sign into
+    /// `NSEvent.scrollingDeltaX`. Returns true if the offset actually changed.
     pub fn apply_horizontal_wheel_delta(&self, delta_x: Pixels) -> bool {
         if delta_x == px(0.0) {
             return false;
@@ -443,19 +447,19 @@ impl DataTableState {
 
         let viewport_width = self.viewport_size.width - SCROLLBAR_WIDTH;
         let content_width = px(self.total_content_width());
-        let max_offset = (content_width - viewport_width).max(px(0.0));
-        if max_offset <= px(0.0) {
+        let min_offset_x = -(content_width - viewport_width).max(px(0.0));
+        if min_offset_x >= px(0.0) {
             return false;
         }
 
-        let current_offset = -self.horizontal_scroll_handle.offset().x;
-        let new_offset = (current_offset + delta_x).clamp(px(0.0), max_offset);
-        if (new_offset - current_offset).abs() <= px(0.0) {
+        let current = self.horizontal_scroll_handle.offset();
+        let new_x = (current.x + delta_x).clamp(min_offset_x, px(0.0));
+        if new_x == current.x {
             return false;
         }
 
         self.horizontal_scroll_handle
-            .set_offset(Point::new(-new_offset, px(0.0)));
+            .set_offset(Point::new(new_x, current.y));
         true
     }
 
