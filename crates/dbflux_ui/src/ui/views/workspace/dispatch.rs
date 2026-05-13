@@ -767,7 +767,7 @@ impl CommandDispatcher for Workspace {
                 false
             }
 
-            Command::ResultsAddRow | Command::ResultsCopyRow => {
+            Command::ResultsAddRow | Command::ResultsCopyRow | Command::ResultsCopyCell => {
                 if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
                     doc.dispatch_command(cmd, window, cx);
                 }

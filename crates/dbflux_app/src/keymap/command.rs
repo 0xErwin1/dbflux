@@ -75,6 +75,7 @@ pub enum Command {
     ResultsAddRow,
     ResultsDuplicateRow,
     ResultsCopyRow,
+    ResultsCopyCell,
     ResultsSetNull,
     // Context menu
     OpenContextMenu,
@@ -208,6 +209,7 @@ impl Command {
             Command::ResultsAddRow => "Add Row",
             Command::ResultsDuplicateRow => "Duplicate Row",
             Command::ResultsCopyRow => "Copy Row",
+            Command::ResultsCopyCell => "Copy Cell",
             Command::ResultsSetNull => "Set Cell to NULL",
             Command::OpenContextMenu => "Open Context Menu",
             Command::MenuUp => "Menu Up",
@@ -299,6 +301,7 @@ impl Command {
             | Command::ResultsAddRow
             | Command::ResultsDuplicateRow
             | Command::ResultsCopyRow
+            | Command::ResultsCopyCell
             | Command::ResultsSetNull
             | Command::OpenContextMenu
             | Command::MenuUp
