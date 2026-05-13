@@ -173,11 +173,22 @@ impl CodeDocument {
             return Vec::new();
         };
 
-        let mut items = schema
-            .collections()
-            .iter()
-            .map(|collection| DropdownItem::with_value(&collection.name, &collection.name))
-            .collect::<Vec<_>>();
+        // For time-series databases (e.g. InfluxDB) the schema stores
+        // measurements rather than document collections.  Both cases produce
+        // target items in the same way — no driver-id branching needed.
+        let mut items: Vec<DropdownItem> = if schema.is_time_series() {
+            schema
+                .measurements()
+                .iter()
+                .map(|m| DropdownItem::with_value(&m.name, &m.name))
+                .collect()
+        } else {
+            schema
+                .collections()
+                .iter()
+                .map(|c| DropdownItem::with_value(&c.name, &c.name))
+                .collect()
+        };
 
         items.sort_by(|left, right| left.label.as_ref().cmp(right.label.as_ref()));
         items
@@ -1217,12 +1228,14 @@ impl CodeDocument {
                             can_apply,
                         )) = custom
                         {
-                            el.child(
+                            // Constrain the date picker to a fixed width so the context bar
+                            // doesn't stretch to fill the editor width when Custom is selected.
+                            el.child(div().w(px(320.0)).child(
                                 DatePicker::new(&date_picker)
                                     .small()
                                     .placeholder("Select date range")
                                     .number_of_months(2),
-                            )
+                            ))
                             .child(Text::caption("from"))
                             .child(div().w(px(72.0)).child(control_shell(start_hour, cx)))
                             .child(div().w(px(72.0)).child(control_shell(start_minute, cx)))
