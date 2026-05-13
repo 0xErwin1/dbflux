@@ -173,14 +173,19 @@ impl CodeDocument {
             return Vec::new();
         };
 
-        // For time-series databases (e.g. InfluxDB) the schema stores
-        // measurements rather than document collections.  Both cases produce
-        // target items in the same way — no driver-id branching needed.
+        // For time-series databases (e.g. InfluxDB) the source-context
+        // dropdown represents the top-level container (bucket for v2,
+        // database for v1) rather than individual measurements.  Measurements
+        // live inside a bucket and are filter predicates in the query, not
+        // things a user switches between in the context bar.
+        //
+        // `SchemaSnapshot::databases()` returns the accessible buckets/
+        // databases enumerated by the driver — no driver-id branching needed.
         let mut items: Vec<DropdownItem> = if schema.is_time_series() {
             schema
-                .measurements()
+                .databases()
                 .iter()
-                .map(|m| DropdownItem::with_value(&m.name, &m.name))
+                .map(|db| DropdownItem::with_value(&db.name, &db.name))
                 .collect()
         } else {
             schema
@@ -1116,16 +1121,31 @@ impl CodeDocument {
         let show_schema = self.should_show_schema_dropdown(cx);
         let source_spec = self.current_source_context_spec(cx);
 
-        div()
-            .id("exec-context-bar")
+        // Determine whether the custom date-range picker is active.  When it
+        // is, the picker + hour/minute dropdowns + Apply button are rendered
+        // on a dedicated second row so they don't overflow the bar width.
+        let custom_range_info = self.source_time_range_panel.as_ref().and_then(|p| {
+            let panel = p.read(cx);
+            let is_custom = panel.selected_time_range == Some(TimeRange::Custom);
+
+            is_custom.then(|| {
+                (
+                    p.clone(),
+                    panel.custom_date_range_picker.clone(),
+                    panel.custom_start_hour_dropdown.clone(),
+                    panel.custom_start_minute_dropdown.clone(),
+                    panel.custom_end_hour_dropdown.clone(),
+                    panel.custom_end_minute_dropdown.clone(),
+                    panel.can_apply_custom_range(cx),
+                )
+            })
+        });
+
+        // Build the primary (always-visible) controls row.
+        let main_row = div()
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .px(Spacing::SM)
-            .py(Spacing::XS)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
             .child(
                 div()
                     .flex()
@@ -1151,120 +1171,63 @@ impl CodeDocument {
             .when(show_source_controls, |el| {
                 let source_spec = source_spec.as_ref();
 
-                el.when(
-                    source_spec.is_some_and(|spec| !spec.query_modes.is_empty()),
-                    |el| {
-                        el.child(Text::caption(
-                            source_spec
-                                .and_then(|spec| spec.query_mode_label.clone())
-                                .unwrap_or_else(|| "Syntax".to_string()),
-                        ))
-                        .child(div().min_w(px(180.0)).child(focus_frame(
-                            context_slot_is_keyboard_focused(
-                                self.focus_mode,
-                                self.context_bar_slot,
-                                ContextBarSlot::SourceQueryMode,
-                            ),
-                            Some(theme.ring),
-                            control_shell(self.source_query_mode_dropdown.clone(), cx),
-                            cx,
-                        )))
-                    },
-                )
-                .child(Text::caption(
-                    source_spec
-                        .map(|spec| spec.targets_label.clone())
-                        .unwrap_or_else(|| "Sources".to_string()),
-                ))
-                .child(div().min_w(px(260.0)).child(focus_frame(
-                    context_slot_is_keyboard_focused(
-                        self.focus_mode,
-                        self.context_bar_slot,
-                        ContextBarSlot::SourceTargets,
-                    ),
-                    Some(theme.ring),
-                    control_shell(self.source_targets.clone(), cx),
-                    cx,
-                )))
-                // When the spec declares labelled start/end inputs and the
-                // time-range panel has been created, render the panel's
-                // preset dropdown.  When Custom mode is active, also render
-                // the date picker, hour/minute dropdowns, and Apply button
-                // inline.  This is generic — no driver-id branching.
-                .when_some(
+                let el = el
+                    .when(
+                        source_spec.is_some_and(|spec| !spec.query_modes.is_empty()),
+                        |el| {
+                            el.child(Text::caption(
+                                source_spec
+                                    .and_then(|spec| spec.query_mode_label.clone())
+                                    .unwrap_or_else(|| "Syntax".to_string()),
+                            ))
+                            .child(div().min_w(px(180.0)).child(focus_frame(
+                                context_slot_is_keyboard_focused(
+                                    self.focus_mode,
+                                    self.context_bar_slot,
+                                    ContextBarSlot::SourceQueryMode,
+                                ),
+                                Some(theme.ring),
+                                control_shell(self.source_query_mode_dropdown.clone(), cx),
+                                cx,
+                            )))
+                        },
+                    )
+                    .child(Text::caption(
+                        source_spec
+                            .map(|spec| spec.targets_label.clone())
+                            .unwrap_or_else(|| "Sources".to_string()),
+                    ))
+                    .child(div().min_w(px(260.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::SourceTargets,
+                        ),
+                        Some(theme.ring),
+                        control_shell(self.source_targets.clone(), cx),
+                        cx,
+                    )));
+
+                // Time-range preset dropdown — always on the main row.
+                // The custom date-range controls are on the second row (below).
+                let el = el.when_some(
                     self.source_time_range_panel.as_ref().map(|p| {
                         let panel = p.read(cx);
-                        let is_custom = panel.selected_time_range == Some(TimeRange::Custom);
                         let dropdown = panel.dropdown_time_range.clone();
                         let label = source_spec
                             .map(|s| s.start_label.clone())
                             .unwrap_or_else(|| "Time".to_string());
-
-                        // Collect sub-entities needed for the inline custom picker.
-                        let custom = is_custom.then(|| {
-                            (
-                                panel.custom_date_range_picker.clone(),
-                                panel.custom_start_hour_dropdown.clone(),
-                                panel.custom_start_minute_dropdown.clone(),
-                                panel.custom_end_hour_dropdown.clone(),
-                                panel.custom_end_minute_dropdown.clone(),
-                                panel.can_apply_custom_range(cx),
-                            )
-                        });
-
-                        (p.clone(), dropdown, label, custom)
+                        (dropdown, label)
                     }),
-                    |el, (panel, dropdown, label, custom)| {
-                        let el = el
-                            .child(Text::caption(label))
-                            .child(div().min_w(px(220.0)).child(control_shell(dropdown, cx)));
-
-                        if let Some((
-                            date_picker,
-                            start_hour,
-                            start_minute,
-                            end_hour,
-                            end_minute,
-                            can_apply,
-                        )) = custom
-                        {
-                            // Constrain the date picker to a fixed width so the context bar
-                            // doesn't stretch to fill the editor width when Custom is selected.
-                            el.child(div().w(px(320.0)).child(
-                                DatePicker::new(&date_picker)
-                                    .small()
-                                    .placeholder("Select date range")
-                                    .number_of_months(2),
-                            ))
-                            .child(Text::caption("from"))
-                            .child(div().w(px(72.0)).child(control_shell(start_hour, cx)))
-                            .child(div().w(px(72.0)).child(control_shell(start_minute, cx)))
-                            .child(Text::caption("to"))
-                            .child(div().w(px(72.0)).child(control_shell(end_hour, cx)))
-                            .child(div().w(px(72.0)).child(control_shell(end_minute, cx)))
-                            .child(
-                                Button::new("ctx-time-range-apply", "Apply")
-                                    .small()
-                                    .disabled(!can_apply)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        panel.update(cx, |p, cx| {
-                                            // Ignore the returned bounds — the panel emits
-                                            // TimeRangeChanged which is the authoritative signal.
-                                            let _ = p.apply_custom_range(cx);
-                                        });
-                                        this.sync_source_exec_context(cx);
-                                        cx.emit(DocumentEvent::MetaChanged);
-                                        cx.notify();
-                                    })),
-                            )
-                        } else {
-                            el
-                        }
+                    |el, (dropdown, label)| {
+                        el.child(Text::caption(label))
+                            .child(div().min_w(px(220.0)).child(control_shell(dropdown, cx)))
                     },
-                )
-                // Fall back to the text inputs when no time-range panel is
-                // available (connections whose spec omits start/end labels).
-                .when(self.source_time_range_panel.is_none(), |el| {
+                );
+
+                // Text-input fallback when there is no time-range panel (specs
+                // without start/end labels — not InfluxDB but kept for generality).
+                el.when(self.source_time_range_panel.is_none(), |el| {
                     el.child(Text::caption(
                         source_spec
                             .map(|spec| spec.start_label.clone())
@@ -1335,6 +1298,58 @@ impl CodeDocument {
                     div()
                         .overflow_x_hidden()
                         .child(Text::caption(path.display().to_string())),
+                )
+            });
+
+        // Outer bar: column layout so the custom date-range row can sit below
+        // the main controls without stretching the bar's width.
+        div()
+            .id("exec-context-bar")
+            .flex()
+            .flex_col()
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .child(main_row)
+            // Custom date-range second row — only visible when Custom is active.
+            // This avoids overflowing the single-line bar with the date picker,
+            // four time dropdowns, and Apply button all pushed onto one row.
+            .when_some(custom_range_info, |el, (panel, date_picker, start_hour, start_minute, end_hour, end_minute, can_apply)| {
+                el.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .pt(Spacing::XS)
+                        .child(div().w(px(320.0)).child(
+                            DatePicker::new(&date_picker)
+                                .small()
+                                .placeholder("Select date range")
+                                .number_of_months(2),
+                        ))
+                        .child(Text::caption("from"))
+                        .child(div().w(px(72.0)).child(control_shell(start_hour, cx)))
+                        .child(div().w(px(72.0)).child(control_shell(start_minute, cx)))
+                        .child(Text::caption("to"))
+                        .child(div().w(px(72.0)).child(control_shell(end_hour, cx)))
+                        .child(div().w(px(72.0)).child(control_shell(end_minute, cx)))
+                        .child(
+                            Button::new("ctx-time-range-apply", "Apply")
+                                .small()
+                                .disabled(!can_apply)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    panel.update(cx, |p, cx| {
+                                        // Ignore the returned bounds — the panel emits
+                                        // TimeRangeChanged which is the authoritative signal.
+                                        let _ = p.apply_custom_range(cx);
+                                    });
+                                    this.sync_source_exec_context(cx);
+                                    cx.emit(DocumentEvent::MetaChanged);
+                                    cx.notify();
+                                })),
+                        ),
                 )
             })
             .into_any_element()

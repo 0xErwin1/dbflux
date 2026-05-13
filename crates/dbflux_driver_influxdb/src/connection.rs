@@ -361,11 +361,29 @@ impl Connection for InfluxConnection {
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
         let measurements = self.fetch_measurements()?;
 
-        let schema = TimeSeriesSchema {
-            databases: vec![DatabaseInfo {
+        // Enumerate all accessible buckets/databases so the UI can populate
+        // the "Bucket"/"Database" source-context dropdown with every reachable
+        // target, not just the one from the connection profile.  The currently
+        // connected bucket is marked `is_current` so the UI can pre-select it.
+        let databases = self.list_databases().unwrap_or_else(|_| {
+            vec![DatabaseInfo {
                 name: self.bucket_or_db.clone(),
                 is_current: true,
-            }],
+            }]
+        });
+
+        // Ensure the current bucket is marked even when list_databases does
+        // not set is_current (e.g. the API returns a flat list without state).
+        let databases = databases
+            .into_iter()
+            .map(|mut db| {
+                db.is_current = db.name == self.bucket_or_db;
+                db
+            })
+            .collect();
+
+        let schema = TimeSeriesSchema {
+            databases,
             current_database: Some(self.bucket_or_db.clone()),
             measurements,
             retention_policies: Vec::new(),
