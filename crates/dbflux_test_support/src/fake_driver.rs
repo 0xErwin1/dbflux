@@ -234,6 +234,7 @@ impl DbDriver for FakeDriver {
                 org: get_optional_string(values, "org"),
                 bucket_or_database: get_string(values, "bucket_or_database", ""),
                 retention_policy: get_optional_string(values, "retention_policy"),
+                user: get_optional_string(values, "user"),
                 request_timeout_seconds: None,
             },
         };

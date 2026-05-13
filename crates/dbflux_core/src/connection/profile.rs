@@ -457,6 +457,9 @@ pub enum DbConfig {
         /// Retention policy name (v1 only; ignored for v2).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retention_policy: Option<String>,
+        /// Username for HTTP Basic auth (v1 only; ignored for v2 which uses token).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
         /// Request timeout override in seconds (both versions).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_timeout_seconds: Option<u64>,
@@ -581,6 +584,7 @@ impl DbConfig {
             org: None,
             bucket_or_database: String::new(),
             retention_policy: None,
+            user: None,
             request_timeout_seconds: None,
         }
     }

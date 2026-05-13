@@ -26,4 +26,6 @@ pub use table_browser::{
     ExplainRequest, OrderByColumn, Pagination, SortDirection, TableBrowseRequest,
     TableCountRequest, TableRef,
 };
-pub use types::{ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape, Row};
+pub use types::{
+    ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape, ResolvedWindow, Row,
+};

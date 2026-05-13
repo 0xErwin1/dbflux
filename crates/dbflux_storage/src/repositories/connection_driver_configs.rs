@@ -254,6 +254,7 @@ impl ConnectionDriverConfigDto {
                 org,
                 bucket_or_database,
                 retention_policy,
+                user,
                 request_timeout_seconds,
             } => {
                 // No dedicated InfluxDB columns exist yet; serialize to the generic JSON field.
@@ -263,6 +264,7 @@ impl ConnectionDriverConfigDto {
                     "org": org,
                     "bucket_or_database": bucket_or_database,
                     "retention_policy": retention_policy,
+                    "user": user,
                     "request_timeout_seconds": request_timeout_seconds,
                 });
                 dto.external_values_json = Some(values.to_string());
@@ -414,6 +416,7 @@ impl ConnectionDriverConfigDto {
                         .get("retention_policy")
                         .and_then(|v| v.as_str())
                         .map(String::from),
+                    user: json.get("user").and_then(|v| v.as_str()).map(String::from),
                     request_timeout_seconds: json
                         .get("request_timeout_seconds")
                         .and_then(|v| v.as_u64()),
