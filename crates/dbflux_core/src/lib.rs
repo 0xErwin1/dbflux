@@ -47,8 +47,8 @@ pub use connection::{
     FetchSchemaTypesParams, FetchSchemaTypesResult, FetchTableDetailsParams,
     FetchTableDetailsResult, HookContext, HookExecution, HookExecutionContext, HookExecutionMode,
     HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
-    Identifiable, ItemManager, LuaCapabilities, OutputEvent, OutputReceiver, OutputSender,
-    OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
+    Identifiable, InfluxVersion, ItemManager, LuaCapabilities, OutputEvent, OutputReceiver,
+    OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
     ProcessExecutionError, ProcessExecutor, ProfileManager, ProxyAuth, ProxyKind, ProxyManager,
     ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage,
     ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo,
@@ -84,11 +84,12 @@ pub use data::{
 pub use driver::{
     CLOUDWATCH_FORM, DYNAMODB_FORM, DatabaseCategory, DdlCapabilities, DeploymentClass,
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DriverMetadataBuilder,
-    ExecutionClassification, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, Icon,
-    IsolationLevel, MONGODB_FORM, MYSQL_FORM, MutationCapabilities, OperationClassifier,
-    POSTGRES_FORM, PaginationStyle, QueryCapabilities, QueryLanguage, REDIS_FORM, RefreshTrigger,
-    SQLITE_FORM, SelectOption, SslCertFields, SslModeOption, SyntaxInfo, TransactionCapabilities,
-    WhereOperator, field_file_path, field_password, field_use_uri, ssh_tab,
+    ExecutionClassification, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
+    INFLUXDB_FORM, Icon, IsolationLevel, MONGODB_FORM, MYSQL_FORM, MutationCapabilities,
+    OperationClassifier, POSTGRES_FORM, PaginationStyle, QueryCapabilities, QueryLanguage,
+    REDIS_FORM, RefreshTrigger, SQLITE_FORM, SelectOption, SslCertFields, SslModeOption,
+    SyntaxInfo, TransactionCapabilities, WhereOperator, field_file_path, field_password,
+    field_use_uri, ssh_tab,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};

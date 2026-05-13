@@ -136,6 +136,9 @@ pub enum Icon {
     Redis,
     Dynamodb,
 
+    // Time-series brands
+    Influxdb,
+
     // Generic non-database data sources
     Logs,
 
@@ -584,8 +587,11 @@ pub enum QueryLanguage {
     /// Cypher query language (Neo4j).
     Cypher,
 
-    /// InfluxQL or Flux for time-series.
+    /// InfluxQL for time-series (v1 compatible query language).
     InfluxQuery,
+
+    /// Flux query language for InfluxDB v2+.
+    Flux,
 
     /// CQL (Cassandra Query Language).
     Cql,
@@ -617,7 +623,8 @@ impl QueryLanguage {
             "js" | "mongodb" => Some(Self::MongoQuery),
             "redis" | "red" => Some(Self::RedisCommands),
             "cypher" | "cyp" => Some(Self::Cypher),
-            "influxql" | "flux" => Some(Self::InfluxQuery),
+            "influxql" => Some(Self::InfluxQuery),
+            "flux" => Some(Self::Flux),
             "cql" => Some(Self::Cql),
             "lua" => Some(Self::Lua),
             "py" => Some(Self::Python),
@@ -636,6 +643,7 @@ impl QueryLanguage {
             Self::RedisCommands => "redis",
             Self::Cypher => "cypher",
             Self::InfluxQuery => "influxql",
+            Self::Flux => "flux",
             Self::Lua => "lua",
             Self::Python => "py",
             Self::Bash => "sh",
@@ -653,7 +661,8 @@ impl QueryLanguage {
             Self::MongoQuery => &["js", "mongodb"],
             Self::RedisCommands => &["redis", "red"],
             Self::Cypher => &["cypher", "cyp"],
-            Self::InfluxQuery => &["influxql", "flux"],
+            Self::InfluxQuery => &["influxql"],
+            Self::Flux => &["flux"],
             Self::Cql => &["cql"],
             Self::Lua => &["lua"],
             Self::Python => &["py"],
@@ -672,6 +681,7 @@ impl QueryLanguage {
             QueryLanguage::RedisCommands => "Redis Commands",
             QueryLanguage::Cypher => "Cypher",
             QueryLanguage::InfluxQuery => "InfluxQL",
+            QueryLanguage::Flux => "Flux",
             QueryLanguage::Cql => "CQL",
             QueryLanguage::Lua => "Lua",
             QueryLanguage::Python => "Python",
@@ -691,6 +701,7 @@ impl QueryLanguage {
             QueryLanguage::RedisCommands => "redis",
             QueryLanguage::Cypher => "cypher",
             QueryLanguage::InfluxQuery => "influxql",
+            QueryLanguage::Flux => "flux",
             QueryLanguage::Cql => "cql",
             QueryLanguage::Lua => "lua",
             QueryLanguage::Python => "py",
@@ -708,6 +719,7 @@ impl QueryLanguage {
             QueryLanguage::RedisCommands => "plaintext",
             QueryLanguage::Cypher => "cypher",
             QueryLanguage::InfluxQuery => "sql",
+            QueryLanguage::Flux => "plaintext",
             QueryLanguage::Lua => "lua",
             QueryLanguage::Python => "python",
             QueryLanguage::Bash => "bash",
@@ -732,6 +744,7 @@ impl QueryLanguage {
             QueryLanguage::RedisCommands => "# Enter Redis command...",
             QueryLanguage::Cypher => "// Enter Cypher query...",
             QueryLanguage::InfluxQuery => "-- Enter InfluxQL...",
+            QueryLanguage::Flux => "// Enter Flux query...",
             QueryLanguage::Cql => "-- Enter CQL...",
             QueryLanguage::Lua => "-- Enter Lua script...",
             QueryLanguage::Python => "# Enter Python script...",
@@ -748,7 +761,7 @@ impl QueryLanguage {
             | QueryLanguage::InfluxQuery
             | QueryLanguage::Cql => "--",
             QueryLanguage::CloudWatchLogsInsightsQl | QueryLanguage::OpenSearchPpl => "#",
-            QueryLanguage::MongoQuery | QueryLanguage::Cypher => "//",
+            QueryLanguage::MongoQuery | QueryLanguage::Cypher | QueryLanguage::Flux => "//",
             QueryLanguage::RedisCommands | QueryLanguage::Python | QueryLanguage::Bash => "#",
             QueryLanguage::Lua => "--",
             QueryLanguage::Custom(_) => "#",
@@ -766,6 +779,7 @@ impl QueryLanguage {
                 | QueryLanguage::RedisCommands
                 | QueryLanguage::Cypher
                 | QueryLanguage::InfluxQuery
+                | QueryLanguage::Flux
                 | QueryLanguage::Cql
         )
     }

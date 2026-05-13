@@ -2,10 +2,10 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CLOUDWATCH_FORM, Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig,
     DbDriver, DbError, DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits,
-    DriverMetadata, FormValues, Icon, MONGODB_FORM, MYSQL_FORM, MutationCapabilities,
-    POSTGRES_FORM, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    REDIS_FORM, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService,
-    SyntaxInfo, TransactionCapabilities,
+    DriverMetadata, FormValues, INFLUXDB_FORM, Icon, MONGODB_FORM, MYSQL_FORM,
+    MutationCapabilities, POSTGRES_FORM, QueryCapabilities, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, REDIS_FORM, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot,
+    SqlDialect, SqlLanguageService, SyntaxInfo, TransactionCapabilities,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_driver_redis::RedisLanguageService;
@@ -228,6 +228,14 @@ impl DbDriver for FakeDriver {
                 profile: get_optional_string(values, "profile"),
                 endpoint: get_optional_string(values, "endpoint"),
             },
+            DbKind::InfluxDB => DbConfig::InfluxDB {
+                version: dbflux_core::InfluxVersion::V2,
+                url: get_string(values, "url", "http://localhost:8086"),
+                org: get_optional_string(values, "org"),
+                bucket_or_database: get_string(values, "bucket_or_database", ""),
+                retention_policy: get_optional_string(values, "retention_policy"),
+                request_timeout_seconds: None,
+            },
         };
 
         Ok(config)
@@ -315,6 +323,21 @@ impl DbDriver for FakeDriver {
                 values.insert("region".to_string(), region.clone());
                 values.insert("profile".to_string(), profile.clone().unwrap_or_default());
                 values.insert("endpoint".to_string(), endpoint.clone().unwrap_or_default());
+            }
+            DbConfig::InfluxDB {
+                url,
+                org,
+                bucket_or_database,
+                retention_policy,
+                ..
+            } => {
+                values.insert("url".to_string(), url.clone());
+                values.insert("org".to_string(), org.clone().unwrap_or_default());
+                values.insert("bucket_or_database".to_string(), bucket_or_database.clone());
+                values.insert(
+                    "retention_policy".to_string(),
+                    retention_policy.clone().unwrap_or_default(),
+                );
             }
             DbConfig::External { values: vals, .. } => {
                 values.extend(vals.clone());
@@ -458,7 +481,9 @@ impl Connection for FakeConnection {
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
             }
-            DbKind::DynamoDB | DbKind::CloudWatchLogs => SchemaLoadingStrategy::SingleDatabase,
+            DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::InfluxDB => {
+                SchemaLoadingStrategy::SingleDatabase
+            }
         }
     }
 
@@ -483,6 +508,9 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::Redis { database, .. } => database.map(|value| value.to_string()),
         DbConfig::DynamoDB { table, .. } => table.clone(),
         DbConfig::CloudWatchLogs { .. } => None,
+        DbConfig::InfluxDB {
+            bucket_or_database, ..
+        } => Some(bucket_or_database.clone()),
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
@@ -497,6 +525,7 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::Redis => &FAKE_REDIS_METADATA,
         DbKind::DynamoDB => &FAKE_DYNAMODB_METADATA,
         DbKind::CloudWatchLogs => &FAKE_CLOUDWATCH_METADATA,
+        DbKind::InfluxDB => &FAKE_INFLUXDB_METADATA,
     }
 }
 
@@ -509,6 +538,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::Redis => &REDIS_FORM,
         DbKind::DynamoDB => &DYNAMODB_FORM,
         DbKind::CloudWatchLogs => &CLOUDWATCH_FORM,
+        DbKind::InfluxDB => &INFLUXDB_FORM,
     }
 }
 
@@ -907,6 +937,36 @@ static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
     classification_override: None,
 });
 
+static FAKE_INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-influxdb".into(),
+    display_name: "Fake InfluxDB".into(),
+    description: "Deterministic fake driver for tests".into(),
+    category: dbflux_core::DatabaseCategory::TimeSeries,
+    deployment_class: None,
+    query_language: QueryLanguage::Flux,
+    capabilities: DriverCapabilities::AUTHENTICATION,
+    default_port: Some(8086),
+    uri_scheme: "http".into(),
+    icon: Icon::Influxdb,
+    syntax: None,
+    query: None,
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
+    limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
+    classification_override: None,
+});
+
 #[cfg(test)]
 mod tests {
     use super::{FakeDriver, FakeQueryOutcome};
@@ -1079,6 +1139,7 @@ mod tests {
                 DbKind::Redis => DbConfig::default_redis(),
                 DbKind::DynamoDB => DbConfig::default_dynamodb(),
                 DbKind::CloudWatchLogs => DbConfig::default_cloudwatch_logs(),
+                DbKind::InfluxDB => DbConfig::default_influxdb(),
             };
 
             let profile = ConnectionProfile::new("fake", config);

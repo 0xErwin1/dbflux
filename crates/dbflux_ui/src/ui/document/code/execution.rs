@@ -1399,6 +1399,7 @@ impl CodeDocument {
                         text_body: Some(output),
                         raw_bytes: None,
                         next_page_token: None,
+                        resolved_window: None,
                     })
                 }
                 Err(error) => Err(DbError::query_failed(error)),

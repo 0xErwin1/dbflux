@@ -568,6 +568,83 @@ pub static CLOUDWATCH_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFor
     }],
 });
 
+/// InfluxDB connection form.
+///
+/// Uses a `use_v2` checkbox to toggle between v1 (InfluxQL, user/password) and
+/// v2 (Flux/InfluxQL, token-based) modes. The form framework only supports checkbox-based
+/// conditional visibility, so a Select field cannot drive field show/hide directly.
+pub static INFLUXDB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![
+            FormSection {
+                title: "Version".into(),
+                fields: vec![with_help(
+                    with_default(
+                        field(
+                            "use_v2",
+                            "Use InfluxDB v2 (token auth / Flux)",
+                            FormFieldKind::Checkbox,
+                            "",
+                        ),
+                        "true",
+                    ),
+                    "Enable for InfluxDB v2+ (token-based auth). Disable for InfluxDB v1 (username/password).",
+                )],
+            },
+            FormSection {
+                title: "Connection".into(),
+                fields: vec![
+                    field_required("url", "URL", FormFieldKind::Text, "http://localhost:8086"),
+                    // v2-only: org
+                    when_checked(
+                        field("org", "Organization", FormFieldKind::Text, "my-org"),
+                        "use_v2",
+                    ),
+                    // v2-only: bucket
+                    when_checked(
+                        field_required("bucket", "Bucket", FormFieldKind::Text, "my-bucket"),
+                        "use_v2",
+                    ),
+                    // v1-only: database
+                    when_unchecked(
+                        field_required("database", "Database", FormFieldKind::Text, "mydb"),
+                        "use_v2",
+                    ),
+                    // v1-only: retention policy
+                    when_unchecked(
+                        field(
+                            "retention_policy",
+                            "Retention Policy",
+                            FormFieldKind::Text,
+                            "autogen",
+                        ),
+                        "use_v2",
+                    ),
+                ],
+            },
+            FormSection {
+                title: "Authentication".into(),
+                fields: vec![
+                    // v2-only: API token
+                    when_checked(
+                        field("token", "API Token", FormFieldKind::Password, ""),
+                        "use_v2",
+                    ),
+                    // v1-only: username
+                    when_unchecked(
+                        field("user", "User", FormFieldKind::Text, "optional"),
+                        "use_v2",
+                    ),
+                    // v1-only: password
+                    when_unchecked(field_password(), "use_v2"),
+                ],
+            },
+        ],
+    }],
+});
+
 // ---------------------------------------------------------------------------
 // Impl blocks
 // ---------------------------------------------------------------------------
@@ -686,5 +763,102 @@ mod tests {
         );
         assert!(CLOUDWATCH_FORM.field("profile").is_some());
         assert!(CLOUDWATCH_FORM.field("endpoint").is_some());
+    }
+
+    // --- INFLUXDB_FORM tests ---
+
+    /// v2 mode: org, bucket, and token are gated on `use_v2` being checked;
+    /// database, retention_policy, user, and password are gated on it being unchecked.
+    #[test]
+    fn influxdb_form_v2_fields_are_gated_on_use_v2_checkbox() {
+        // url is always required (no gating)
+        let url_field = INFLUXDB_FORM.field("url").expect("url field must exist");
+        assert!(url_field.required, "url must be required");
+        assert!(
+            url_field.enabled_when_checked.is_none() && url_field.enabled_when_unchecked.is_none(),
+            "url must not be version-gated"
+        );
+
+        // v2-only fields: gated on use_v2 being checked
+        for v2_field_id in &["org", "bucket", "token"] {
+            let field = INFLUXDB_FORM
+                .field(v2_field_id)
+                .unwrap_or_else(|| panic!("field '{}' must exist in INFLUXDB_FORM", v2_field_id));
+
+            assert_eq!(
+                field.enabled_when_checked.as_deref(),
+                Some("use_v2"),
+                "field '{}' must be visible only when use_v2 is checked",
+                v2_field_id
+            );
+        }
+
+        // v1-only fields: gated on use_v2 being unchecked
+        for v1_field_id in &["database", "retention_policy", "user", "password"] {
+            let field = INFLUXDB_FORM
+                .field(v1_field_id)
+                .unwrap_or_else(|| panic!("field '{}' must exist in INFLUXDB_FORM", v1_field_id));
+
+            assert_eq!(
+                field.enabled_when_unchecked.as_deref(),
+                Some("use_v2"),
+                "field '{}' must be visible only when use_v2 is unchecked",
+                v1_field_id
+            );
+        }
+    }
+
+    /// v2 mode: bucket is required (gated but required within its gate);
+    /// org and token are optional (convenience).
+    #[test]
+    fn influxdb_form_bucket_is_required_in_v2_mode() {
+        let bucket_field = INFLUXDB_FORM
+            .field("bucket")
+            .expect("bucket field must exist");
+        assert!(
+            bucket_field.required,
+            "bucket must be required for v2 connections"
+        );
+    }
+
+    /// v1 mode: database is required; retention_policy and user are optional.
+    #[test]
+    fn influxdb_form_database_is_required_in_v1_mode() {
+        let db_field = INFLUXDB_FORM
+            .field("database")
+            .expect("database field must exist");
+        assert!(
+            db_field.required,
+            "database must be required for v1 connections"
+        );
+
+        let rp_field = INFLUXDB_FORM
+            .field("retention_policy")
+            .expect("retention_policy field must exist");
+        assert!(
+            !rp_field.required,
+            "retention_policy must be optional (v1 default is 'autogen')"
+        );
+    }
+
+    /// The form must not have an SSH tab (InfluxDB uses HTTP, no tunnel in Phase A).
+    #[test]
+    fn influxdb_form_has_no_ssh_tab() {
+        assert!(
+            !INFLUXDB_FORM.supports_ssh(),
+            "INFLUXDB_FORM must not include an SSH tab in Phase A"
+        );
+    }
+
+    /// The use_v2 checkbox should default to true (V2 is the current standard).
+    #[test]
+    fn influxdb_form_use_v2_defaults_to_true() {
+        let use_v2 = INFLUXDB_FORM
+            .field("use_v2")
+            .expect("use_v2 checkbox must exist");
+        assert_eq!(
+            use_v2.default_value, "true",
+            "use_v2 must default to true (V2 is default)"
+        );
     }
 }

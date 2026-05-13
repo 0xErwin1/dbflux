@@ -248,6 +248,7 @@ impl SecretManager {
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => {
                 return None;
             }

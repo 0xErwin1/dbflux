@@ -181,6 +181,20 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             _ => {}
         },
 
+        DbConfig::InfluxDB {
+            url,
+            org,
+            bucket_or_database,
+            retention_policy,
+            ..
+        } => match field {
+            "url" => *url = val.to_string(),
+            "org" => *org = Some(val.to_string()),
+            "bucket_or_database" => *bucket_or_database = val.to_string(),
+            "retention_policy" => *retention_policy = Some(val.to_string()),
+            _ => {}
+        },
+
         DbConfig::External { values, .. } => {
             values.insert(field.to_string(), val.to_string());
         }
