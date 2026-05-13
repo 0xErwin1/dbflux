@@ -624,22 +624,17 @@ pub static INFLUXDB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
                     ),
                 ],
             },
+            // The actual secret (API token for v2 / password for v1) is collected by the
+            // generic password section the connection manager renders for any driver
+            // declaring AUTHENTICATION. That section already provides masking, an eye
+            // toggle, the "save to keyring" checkbox, and the literal/keyring source
+            // selector. We only expose the v1 username here.
             FormSection {
                 title: "Authentication".into(),
-                fields: vec![
-                    // v2-only: API token
-                    when_checked(
-                        field("token", "API Token", FormFieldKind::Password, ""),
-                        "use_v2",
-                    ),
-                    // v1-only: username
-                    when_unchecked(
-                        field("user", "User", FormFieldKind::Text, "optional"),
-                        "use_v2",
-                    ),
-                    // v1-only: password
-                    when_unchecked(field_password(), "use_v2"),
-                ],
+                fields: vec![when_unchecked(
+                    field("user", "User", FormFieldKind::Text, "optional"),
+                    "use_v2",
+                )],
             },
         ],
     }],
@@ -767,11 +762,13 @@ mod tests {
 
     // --- INFLUXDB_FORM tests ---
 
-    /// v2 mode: org, bucket, and token are gated on `use_v2` being checked;
-    /// database, retention_policy, user, and password are gated on it being unchecked.
+    /// v2 mode: org and bucket are gated on `use_v2` being checked;
+    /// database, retention_policy, and user are gated on it being unchecked.
+    /// The actual secret (token / password) lives in the generic password section
+    /// the connection manager renders for any driver declaring AUTHENTICATION, so
+    /// the form itself owns no Password field.
     #[test]
     fn influxdb_form_v2_fields_are_gated_on_use_v2_checkbox() {
-        // url is always required (no gating)
         let url_field = INFLUXDB_FORM.field("url").expect("url field must exist");
         assert!(url_field.required, "url must be required");
         assert!(
@@ -779,8 +776,7 @@ mod tests {
             "url must not be version-gated"
         );
 
-        // v2-only fields: gated on use_v2 being checked
-        for v2_field_id in &["org", "bucket", "token"] {
+        for v2_field_id in &["org", "bucket"] {
             let field = INFLUXDB_FORM
                 .field(v2_field_id)
                 .unwrap_or_else(|| panic!("field '{}' must exist in INFLUXDB_FORM", v2_field_id));
@@ -793,8 +789,7 @@ mod tests {
             );
         }
 
-        // v1-only fields: gated on use_v2 being unchecked
-        for v1_field_id in &["database", "retention_policy", "user", "password"] {
+        for v1_field_id in &["database", "retention_policy", "user"] {
             let field = INFLUXDB_FORM
                 .field(v1_field_id)
                 .unwrap_or_else(|| panic!("field '{}' must exist in INFLUXDB_FORM", v1_field_id));
@@ -804,6 +799,16 @@ mod tests {
                 Some("use_v2"),
                 "field '{}' must be visible only when use_v2 is unchecked",
                 v1_field_id
+            );
+        }
+
+        // The form must NOT define its own Password fields — that responsibility is
+        // delegated to the generic password section.
+        for delegated_id in &["token", "password"] {
+            assert!(
+                INFLUXDB_FORM.field(delegated_id).is_none(),
+                "field '{}' should NOT live in INFLUXDB_FORM (handled by the generic password section)",
+                delegated_id
             );
         }
     }
