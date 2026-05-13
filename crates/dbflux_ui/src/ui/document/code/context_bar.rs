@@ -111,7 +111,10 @@ impl CodeDocument {
         });
     }
 
-    fn current_source_context_spec(&self, cx: &App) -> Option<dbflux_core::SourceContextSpec> {
+    pub(super) fn current_source_context_spec(
+        &self,
+        cx: &App,
+    ) -> Option<dbflux_core::SourceContextSpec> {
         let connection_id = self.exec_ctx.connection_id.or(self.connection_id)?;
 
         self.app_state
@@ -243,6 +246,20 @@ impl CodeDocument {
         };
 
         let source_spec = self.current_source_context_spec(cx);
+
+        // Tear down the time-range panel when the spec no longer declares
+        // labelled start/end inputs.  Creation is deferred to render because
+        // the DatePickerState constructor requires a Window reference.
+        // B.3.1: the canonical site for SourceContextSpec start_label / end_label consumption.
+        let wants_panel = source_spec
+            .as_ref()
+            .is_some_and(|spec| !spec.start_label.is_empty() && !spec.end_label.is_empty());
+
+        if !wants_panel {
+            self.source_time_range_panel = None;
+            self._source_time_range_sub = None;
+        }
+
         let query_mode_items = source_spec
             .as_ref()
             .map(|spec| {
@@ -314,6 +331,34 @@ impl CodeDocument {
 
     pub(super) fn on_source_time_range_changed(&mut self, cx: &mut Context<Self>) {
         self.sync_source_exec_context(cx);
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
+    /// Called when the embedded `TimeRangePanel` emits `TimeRangeChanged`.
+    ///
+    /// Updates `exec_ctx.source` with the epoch-ms bounds produced by the
+    /// panel, preserving the existing targets and query-mode selections.
+    /// Only a preset selection produces a valid (start, end) pair; Custom
+    /// mode defers to the user pressing Apply inside the panel.
+    pub(super) fn on_source_time_range_panel_changed(
+        &mut self,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        let query_mode = self.current_source_query_mode_value(cx);
+        let targets = self.current_source_targets(cx);
+
+        if let (Some(start_ms), Some(end_ms)) = (start_ms, end_ms) {
+            self.exec_ctx.source = Some(ExecutionSourceContext::CollectionWindow {
+                targets,
+                start_ms,
+                end_ms,
+                query_mode,
+            });
+        }
+
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
@@ -1130,36 +1175,114 @@ impl CodeDocument {
                     control_shell(self.source_targets.clone(), cx),
                     cx,
                 )))
-                .child(Text::caption(
-                    source_spec
-                        .map(|spec| spec.start_label.clone())
-                        .unwrap_or_else(|| "Start".to_string()),
-                ))
-                .child(div().min_w(px(180.0)).child(focus_frame(
-                    context_slot_is_keyboard_focused(
-                        self.focus_mode,
-                        self.context_bar_slot,
-                        ContextBarSlot::SourceStart,
-                    ),
-                    Some(theme.ring),
-                    control_shell(Input::new(&self.source_start_input), cx),
-                    cx,
-                )))
-                .child(Text::caption(
-                    source_spec
-                        .map(|spec| spec.end_label.clone())
-                        .unwrap_or_else(|| "End".to_string()),
-                ))
-                .child(div().min_w(px(180.0)).child(focus_frame(
-                    context_slot_is_keyboard_focused(
-                        self.focus_mode,
-                        self.context_bar_slot,
-                        ContextBarSlot::SourceEnd,
-                    ),
-                    Some(theme.ring),
-                    control_shell(Input::new(&self.source_end_input), cx),
-                    cx,
-                )))
+                // When the spec declares labelled start/end inputs and the
+                // time-range panel has been created, render the panel's
+                // preset dropdown.  When Custom mode is active, also render
+                // the date picker, hour/minute dropdowns, and Apply button
+                // inline.  This is generic — no driver-id branching.
+                .when_some(
+                    self.source_time_range_panel.as_ref().map(|p| {
+                        let panel = p.read(cx);
+                        let is_custom = panel.selected_time_range == Some(TimeRange::Custom);
+                        let dropdown = panel.dropdown_time_range.clone();
+                        let label = source_spec
+                            .map(|s| s.start_label.clone())
+                            .unwrap_or_else(|| "Time".to_string());
+
+                        // Collect sub-entities needed for the inline custom picker.
+                        let custom = is_custom.then(|| {
+                            (
+                                panel.custom_date_range_picker.clone(),
+                                panel.custom_start_hour_dropdown.clone(),
+                                panel.custom_start_minute_dropdown.clone(),
+                                panel.custom_end_hour_dropdown.clone(),
+                                panel.custom_end_minute_dropdown.clone(),
+                                panel.can_apply_custom_range(cx),
+                            )
+                        });
+
+                        (p.clone(), dropdown, label, custom)
+                    }),
+                    |el, (panel, dropdown, label, custom)| {
+                        let el = el
+                            .child(Text::caption(label))
+                            .child(div().min_w(px(220.0)).child(control_shell(dropdown, cx)));
+
+                        if let Some((
+                            date_picker,
+                            start_hour,
+                            start_minute,
+                            end_hour,
+                            end_minute,
+                            can_apply,
+                        )) = custom
+                        {
+                            el.child(
+                                DatePicker::new(&date_picker)
+                                    .small()
+                                    .placeholder("Select date range")
+                                    .number_of_months(2),
+                            )
+                            .child(Text::caption("from"))
+                            .child(div().w(px(72.0)).child(control_shell(start_hour, cx)))
+                            .child(div().w(px(72.0)).child(control_shell(start_minute, cx)))
+                            .child(Text::caption("to"))
+                            .child(div().w(px(72.0)).child(control_shell(end_hour, cx)))
+                            .child(div().w(px(72.0)).child(control_shell(end_minute, cx)))
+                            .child(
+                                Button::new("ctx-time-range-apply", "Apply")
+                                    .small()
+                                    .disabled(!can_apply)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        panel.update(cx, |p, cx| {
+                                            // Ignore the returned bounds — the panel emits
+                                            // TimeRangeChanged which is the authoritative signal.
+                                            let _ = p.apply_custom_range(cx);
+                                        });
+                                        this.sync_source_exec_context(cx);
+                                        cx.emit(DocumentEvent::MetaChanged);
+                                        cx.notify();
+                                    })),
+                            )
+                        } else {
+                            el
+                        }
+                    },
+                )
+                // Fall back to the text inputs when no time-range panel is
+                // available (connections whose spec omits start/end labels).
+                .when(self.source_time_range_panel.is_none(), |el| {
+                    el.child(Text::caption(
+                        source_spec
+                            .map(|spec| spec.start_label.clone())
+                            .unwrap_or_else(|| "Start".to_string()),
+                    ))
+                    .child(div().min_w(px(180.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::SourceStart,
+                        ),
+                        Some(theme.ring),
+                        control_shell(Input::new(&self.source_start_input), cx),
+                        cx,
+                    )))
+                    .child(Text::caption(
+                        source_spec
+                            .map(|spec| spec.end_label.clone())
+                            .unwrap_or_else(|| "End".to_string()),
+                    ))
+                    .child(div().min_w(px(180.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::SourceEnd,
+                        ),
+                        Some(theme.ring),
+                        control_shell(Input::new(&self.source_end_input), cx),
+                        cx,
+                    )))
+                })
             })
             .when(!show_source_controls && show_db, |el| {
                 el.child(Text::caption("Database:")).child(

@@ -4,6 +4,8 @@ use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Command, ContextId};
+use crate::ui::common::time_range::state::TimeRange;
+use crate::ui::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
@@ -14,7 +16,7 @@ use crate::ui::overlays::modals::schema_drift::{
 };
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{
-    CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
+    Button, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
 };
 use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
@@ -31,6 +33,8 @@ use dbflux_core::{
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
+use gpui_component::date_picker::DatePicker;
 use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
 };
@@ -207,6 +211,14 @@ pub struct CodeDocument {
     source_start_input: Entity<InputState>,
     source_end_input: Entity<InputState>,
     pending_source_input_values: Option<(String, String)>,
+    /// Present when the active connection's `SourceContextSpec` declares both
+    /// a non-empty `start_label` and `end_label`. The panel replaces the raw
+    /// RFC3339 text inputs and forwards epoch-ms bounds into `exec_ctx.source`.
+    /// `None` for connections that use text-based time inputs or have no spec.
+    source_time_range_panel: Option<Entity<TimeRangePanel>>,
+    /// Subscription to `TimeRangeChanged` from `source_time_range_panel`.
+    /// Stored separately so it can be replaced when the panel is recreated.
+    _source_time_range_sub: Option<Subscription>,
     _context_subscriptions: Vec<Subscription>,
 
     // Execution
@@ -607,6 +619,8 @@ impl CodeDocument {
             source_start_input,
             source_end_input,
             pending_source_input_values: None,
+            source_time_range_panel: None,
+            _source_time_range_sub: None,
             _context_subscriptions: vec![
                 conn_sub,
                 db_sub,

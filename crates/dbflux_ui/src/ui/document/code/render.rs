@@ -776,6 +776,25 @@ impl Render for CodeDocument {
                 .update(cx, |state, cx| state.set_value(&end_value, window, cx));
         }
 
+        // Lazily create the source-context time-range panel the first time a
+        // connection with labelled start/end inputs is active.  Panel creation
+        // requires a Window reference (for DatePickerState), so it is deferred
+        // here from sync_source_controls which runs in a subscription context.
+        if self.source_time_range_panel.is_none() && self.should_show_source_controls(cx) {
+            let spec = self.current_source_context_spec(cx);
+            if spec.is_some_and(|s| !s.start_label.is_empty() && !s.end_label.is_empty()) {
+                let panel = cx.new(|cx| {
+                    // Index 4 = Last 12 h (sensible default for time-series sources).
+                    TimeRangePanel::new("Last 12 h", Some(4), window, cx)
+                });
+                let sub = cx.subscribe(&panel, |this, _panel, event: &TimeRangeChanged, cx| {
+                    this.on_source_time_range_panel_changed(event.start_ms, event.end_ms, cx);
+                });
+                self.source_time_range_panel = Some(panel);
+                self._source_time_range_sub = Some(sub);
+            }
+        }
+
         if let Some(error) = self.pending_error.take() {
             let toast_msg = error.to_string();
             Toast::error(toast_msg.clone())
