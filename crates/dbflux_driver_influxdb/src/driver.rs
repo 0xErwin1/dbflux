@@ -234,6 +234,21 @@ impl DbDriver for InfluxDriver {
         let conn = self.connect_with_secrets(profile, None, None)?;
         conn.ping()
     }
+
+    fn secret_field_label(&self, values: &FormValues) -> Option<String> {
+        // v2 carries an API token in the secret field; v1 carries a real password.
+        let use_v2 = values
+            .get("use_v2")
+            .map(|s| s.as_str())
+            .map(|s| s == "true" || s == "1")
+            .unwrap_or(true);
+
+        Some(if use_v2 {
+            "API Token".to_string()
+        } else {
+            "Password".to_string()
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

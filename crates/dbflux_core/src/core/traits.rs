@@ -349,6 +349,16 @@ pub trait DbDriver: Send + Sync {
         self.supports(DriverCapabilities::AUTHENTICATION)
     }
 
+    /// Optional label override for the canonical secret input rendered by the
+    /// connection manager. Default returns `None`, which keeps the generic
+    /// "Password" label. Drivers whose secret is conceptually something other
+    /// than a password (e.g. an API token) can return a more accurate label.
+    /// Receives the current form values so the override can depend on toggles
+    /// such as a version selector.
+    fn secret_field_label(&self, _values: &FormValues) -> Option<String> {
+        None
+    }
+
     /// Create a connection without providing a password.
     ///
     /// Delegates to `connect_with_password(profile, None)`.
