@@ -82,17 +82,18 @@ Source-of-truth for the workspace version is `Cargo.toml` (`[workspace.package].
 When stabilization for a minor begins:
 
 1. Verify you are on `main`, clean tree, up to date with `origin/main`.
-2. Confirm the target minor `vX.Y` with the user.
-3. Create the branch:
+2. Verify `.github/workflows/release.yml` on `main` contains the `Classify release` step (responsible for setting `draft`/`prerelease` from the tag pattern). If missing, fix on `main` first; otherwise the release branch will inherit a broken workflow and stable tags will publish as drafts. If a release branch already exists without this step, cherry-pick the fix into it before tagging.
+3. Confirm the target minor `vX.Y` with the user.
+4. Create the branch:
    ```bash
    git checkout -b release/vX.Y
    ```
-4. On `release/vX.Y`:
+5. On `release/vX.Y`:
    - In `CHANGELOG.md`, rename the `## [Unreleased]` section to `## [X.Y.0] - YYYY-MM-DD`.
    - Bump every versioned artifact to `X.Y.0-rc.1` (see "Files to Bump").
    - Commit: `chore(release): cut release/vX.Y at vX.Y.0-rc.1`.
    - Push: `git push -u origin release/vX.Y`.
-5. Back on `main`:
+6. Back on `main`:
    ```bash
    git checkout main
    ```
@@ -100,7 +101,7 @@ When stabilization for a minor begins:
    - Bump every versioned artifact to `X.(Y+1).0-dev.0`.
    - Commit: `chore(version): begin X.(Y+1).0-dev cycle`.
    - Push.
-6. Tag `vX.Y.0-rc.1` on the release branch (see "Tag Procedure").
+7. Tag `vX.Y.0-rc.1` on the release branch (see "Tag Procedure").
 
 ## Tag Procedure (any tag)
 
@@ -153,6 +154,29 @@ git cherry-pick -x <sha>
 ```
 
 Sanity check: every non-release commit on `release/vX.Y` since branch-off should mention `(cherry picked from commit ...)` in its message.
+
+### CHANGELOG sync on cherry-pick (MANDATORY)
+
+When a cherry-picked commit carries a `CHANGELOG.md` entry, the cherry-pick is incomplete until you also **remove that entry from main's `[Unreleased]` block**. Rationale: once the fix is on a release branch heading for `vX.Y.(Z+1)`, it is no longer "unreleased" in main's history — leaving the entry in `[Unreleased]` causes main's changelog to drift into a duplicate of what already shipped (the exact bug seen between v0.5.0 → v0.5.1, where the Esc-focus fix and Logger-init feature stayed in main's `[Unreleased]` after shipping in v0.5.1).
+
+Procedure for a fix `<sha>` whose changelog entry was committed to `main`:
+
+```bash
+# 1) Cherry-pick into the release branch.
+git checkout release/vX.Y
+git cherry-pick -x <sha>
+git push
+
+# 2) Back on main, remove the now-released entry from [Unreleased].
+git checkout main
+# edit CHANGELOG.md: delete the matching bullet(s) under [Unreleased]
+git commit -am "chore(changelog): move <short summary> to vX.Y.(Z+1)"
+git push
+```
+
+If a release ships multiple cherry-picked entries, batch the cleanup into a single commit on `main` once the release branch is tagged. Either way, the rule is invariant: when `vX.Y.Z` is published, no item present in its `[X.Y.Z]` section should remain in main's `[Unreleased]`.
+
+A passive way to audit: after a stable release, the union of entries across `[X.Y.Z]` (on the release branch) and the historical entries on main should be empty intersected with main's `[Unreleased]`.
 
 ## Nix Bump
 
@@ -245,6 +269,8 @@ Refuse, with a clear message, if any of these are requested:
 - Bumping minor or major version inside a `release/*` branch.
 - Pushing a tag without the working tree being clean.
 - Pushing the AUR bump with `pkgver` containing a hyphen.
+- Cherry-picking a commit with a `CHANGELOG.md` entry into a release branch **without** also removing that entry from main's `[Unreleased]` block in a follow-up commit on `main`.
+- Cutting a `release/vX.Y` branch from a `main` HEAD where `.github/workflows/release.yml` is missing the `Classify release` step (any stable tag on that branch will publish as draft).
 
 ## Local Validation Commands
 
