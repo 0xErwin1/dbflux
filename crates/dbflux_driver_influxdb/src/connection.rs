@@ -60,6 +60,62 @@ impl InfluxConnection {
         self.last_metadata.read().ok()?.clone()
     }
 
+    /// Build a flat map of driver-specific audit fields from query metadata.
+    ///
+    /// The returned map is attached to `QueryResult.metadata_extra` and merged
+    /// into `details_json` by the generic runner — no driver-id branching needed.
+    pub fn build_metadata_extra_fields(
+        meta: &InfluxQueryMetadata,
+    ) -> std::collections::HashMap<String, serde_json::Value> {
+        let language_str = match meta.language {
+            QueryLanguage::Flux => "flux",
+            QueryLanguage::InfluxQuery => "influxql",
+            _ => "unknown",
+        };
+
+        let version_str = match meta.version {
+            InfluxVersion::V1 => "v1",
+            InfluxVersion::V2 => "v2",
+        };
+
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "language".to_string(),
+            serde_json::Value::String(language_str.to_string()),
+        );
+        map.insert(
+            "version".to_string(),
+            serde_json::Value::String(version_str.to_string()),
+        );
+        map.insert(
+            "bucket_or_database".to_string(),
+            serde_json::Value::String(meta.bucket_or_database.clone()),
+        );
+        map.insert(
+            "injected_window".to_string(),
+            serde_json::Value::Bool(meta.injected_window),
+        );
+
+        // Include start/end ms only when the window was actually injected.
+        if let Some(ref rw) = meta.resolved_window
+            && let (Some(start_str), Some(end_str)) =
+                (rw.start_rfc3339.as_deref(), rw.end_rfc3339.as_deref())
+            && let (Some(start_ms), Some(end_ms)) =
+                (rfc3339_to_ms(start_str), rfc3339_to_ms(end_str))
+        {
+            map.insert(
+                "resolved_window_start_ms".to_string(),
+                serde_json::Value::Number(start_ms.into()),
+            );
+            map.insert(
+                "resolved_window_end_ms".to_string(),
+                serde_json::Value::Number(end_ms.into()),
+            );
+        }
+
+        map
+    }
+
     // -----------------------------------------------------------------------
     // Internal query dispatch
     // -----------------------------------------------------------------------
@@ -272,18 +328,24 @@ impl Connection for InfluxConnection {
             result.resolved_window = Some(rw.clone());
         }
 
-        // Store metadata for this query.
+        // Build and store per-query metadata for both audit forwarding and UI inspection.
+        let meta = InfluxQueryMetadata {
+            version: self.version,
+            language,
+            resolved_window: resolved_window.as_ref().map(|rw| InjectionWindow {
+                start_rfc3339: Some(rfc3339_from_ms(rw.start_ms)),
+                end_rfc3339: Some(rfc3339_from_ms(rw.end_ms)),
+            }),
+            bucket_or_database: self.bucket_or_db.clone(),
+            injected_window,
+        };
+
+        // Attach audit fields to the result so the generic runner can forward them
+        // into details_json without any driver-id branching.
+        result.metadata_extra = Some(Self::build_metadata_extra_fields(&meta));
+
         if let Ok(mut guard) = self.last_metadata.write() {
-            *guard = Some(InfluxQueryMetadata {
-                version: self.version,
-                language,
-                resolved_window: resolved_window.as_ref().map(|rw| InjectionWindow {
-                    start_rfc3339: Some(rfc3339_from_ms(rw.start_ms)),
-                    end_rfc3339: Some(rfc3339_from_ms(rw.end_ms)),
-                }),
-                bucket_or_database: self.bucket_or_db.clone(),
-                injected_window,
-            });
+            *guard = Some(meta);
         }
 
         Ok(result)
@@ -664,6 +726,68 @@ mod tests {
         let window = InfluxConnection::extract_window(&req);
         assert!(window.start_rfc3339.is_some(), "start must be present");
         assert!(window.end_rfc3339.is_some(), "end must be present");
+    }
+
+    // D.3.2 — metadata_extra produced by build_metadata_extra_fields contains required audit keys
+    #[test]
+    fn metadata_extra_fields_contains_required_audit_keys_with_injection() {
+        use crate::injection::ResolvedWindow as InjectionWindow;
+
+        let meta = InfluxQueryMetadata {
+            version: InfluxVersion::V2,
+            language: QueryLanguage::InfluxQuery,
+            resolved_window: Some(InjectionWindow {
+                start_rfc3339: Some("2024-01-01T00:00:00Z".to_string()),
+                end_rfc3339: Some("2024-01-01T01:00:00Z".to_string()),
+            }),
+            bucket_or_database: "my_bucket".to_string(),
+            injected_window: true,
+        };
+
+        let extra = InfluxConnection::build_metadata_extra_fields(&meta);
+
+        assert_eq!(
+            extra.get("language").and_then(|v| v.as_str()),
+            Some("influxql")
+        );
+        assert_eq!(extra.get("version").and_then(|v| v.as_str()), Some("v2"));
+        assert_eq!(
+            extra.get("bucket_or_database").and_then(|v| v.as_str()),
+            Some("my_bucket")
+        );
+        assert_eq!(
+            extra.get("injected_window").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(
+            extra.contains_key("resolved_window_start_ms"),
+            "must have start_ms"
+        );
+        assert!(
+            extra.contains_key("resolved_window_end_ms"),
+            "must have end_ms"
+        );
+    }
+
+    #[test]
+    fn metadata_extra_fields_no_window_when_not_injected() {
+        let meta = InfluxQueryMetadata {
+            version: InfluxVersion::V1,
+            language: QueryLanguage::InfluxQuery,
+            resolved_window: None,
+            bucket_or_database: "testdb".to_string(),
+            injected_window: false,
+        };
+
+        let extra = InfluxConnection::build_metadata_extra_fields(&meta);
+
+        assert_eq!(extra.get("version").and_then(|v| v.as_str()), Some("v1"));
+        assert_eq!(
+            extra.get("injected_window").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert!(!extra.contains_key("resolved_window_start_ms"));
+        assert!(!extra.contains_key("resolved_window_end_ms"));
     }
 
     fn build_stub_http() -> HttpClient {

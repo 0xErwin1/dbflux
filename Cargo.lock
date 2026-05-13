@@ -2354,6 +2354,7 @@ dependencies = [
  "dbflux_core",
  "dbflux_driver_cloudwatch",
  "dbflux_driver_dynamodb",
+ "dbflux_driver_influxdb",
  "dbflux_driver_ipc",
  "dbflux_driver_mongodb",
  "dbflux_driver_mysql",
@@ -2777,6 +2778,7 @@ dependencies = [
  "dbflux_driver_redis",
  "dbflux_ipc",
  "interprocess",
+ "reqwest",
  "serde_json",
  "testcontainers",
 ]

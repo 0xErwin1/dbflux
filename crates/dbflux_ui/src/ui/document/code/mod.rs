@@ -1128,6 +1128,7 @@ impl CodeDocument {
         query: Option<&str>,
         duration_ms: Option<i64>,
         error: Option<&str>,
+        metadata_extra: Option<&std::collections::HashMap<String, serde_json::Value>>,
     ) {
         // Scripts don't require a connection context
         let (conn_id, database_name, driver_id) = if category == EventCategory::Script {
@@ -1178,9 +1179,29 @@ impl CodeDocument {
             event = event.with_origin(EventOrigin::local());
         }
 
-        if let Some(query) = query {
-            event.details_json = Some(serde_json::json!({ "query": query }).to_string());
-        }
+        // Build details_json from the query text and any driver-provided extra fields.
+        // The extra fields let drivers surface structured context (e.g., language, version,
+        // injected window) without requiring driver-id branching here.
+        let details = {
+            let mut obj = serde_json::Map::new();
+            if let Some(q) = query {
+                obj.insert(
+                    "query".to_string(),
+                    serde_json::Value::String(q.to_string()),
+                );
+            }
+            if let Some(extra) = metadata_extra {
+                for (key, value) in extra {
+                    obj.insert(key.clone(), value.clone());
+                }
+            }
+            if !obj.is_empty() {
+                Some(serde_json::Value::Object(obj).to_string())
+            } else {
+                None
+            }
+        };
+        event.details_json = details;
 
         if let Some(duration) = duration_ms {
             event.duration_ms = Some(duration);

@@ -16,16 +16,21 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuar
 
 #[derive(Debug, Clone)]
 pub enum FakeQueryOutcome {
-    Success(QueryResult),
+    // Box to keep all variants at a similar size; QueryResult grew with metadata_extra.
+    Success(Box<QueryResult>),
     Error(String),
     Timeout,
     Cancelled,
 }
 
 impl FakeQueryOutcome {
+    pub fn success(result: QueryResult) -> Self {
+        Self::Success(Box::new(result))
+    }
+
     fn to_result(&self) -> Result<QueryResult, Box<DbError>> {
         match self {
-            Self::Success(result) => Ok(result.clone()),
+            Self::Success(result) => Ok(*result.clone()),
             Self::Error(message) => Err(Box::new(DbError::query_failed(message.clone()))),
             Self::Timeout => Err(Box::new(DbError::Timeout)),
             Self::Cancelled => Err(Box::new(DbError::Cancelled)),
@@ -78,7 +83,7 @@ impl FakeDriver {
 
     pub fn with_query_result(self, sql: impl Into<String>, result: QueryResult) -> Self {
         rwlock_write(&self.state.query_outcomes)
-            .insert(sql.into(), FakeQueryOutcome::Success(result));
+            .insert(sql.into(), FakeQueryOutcome::success(result));
         self
     }
 
@@ -89,7 +94,7 @@ impl FakeDriver {
     }
 
     pub fn with_default_result(self, result: QueryResult) -> Self {
-        *rwlock_write(&self.state.default_outcome) = Some(FakeQueryOutcome::Success(result));
+        *rwlock_write(&self.state.default_outcome) = Some(FakeQueryOutcome::success(result));
         self
     }
 
@@ -995,7 +1000,7 @@ mod tests {
 
         driver.set_query_outcome(
             "SELECT 1",
-            FakeQueryOutcome::Success(dbflux_core::QueryResult::table(
+            FakeQueryOutcome::success(dbflux_core::QueryResult::table(
                 vec![],
                 vec![],
                 None,

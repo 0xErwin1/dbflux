@@ -27,6 +27,8 @@ base64 = { workspace = true }
 
 [dev-dependencies]
 dbflux_test_support.workspace = true
+reqwest = { workspace = true, default-features = false, features = ["blocking", "rustls-tls"] }
+serde_json.workspace = true
 
 [lints]
 workspace = true

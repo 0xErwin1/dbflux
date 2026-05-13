@@ -162,8 +162,9 @@ impl From<QueryResultDto> for QueryResult {
             text_body: value.text_body,
             raw_bytes: value.raw_bytes,
             next_page_token: value.next_page_token,
-            // Resolved window is not part of the IPC DTO; drivers set it locally.
+            // Resolved window and metadata_extra are not part of the IPC DTO; drivers set them locally.
             resolved_window: None,
+            metadata_extra: None,
         }
     }
 }

@@ -150,6 +150,11 @@ pub struct QueryResult {
     pub next_page_token: Option<String>,
     /// Resolved time window for time-series queries. `None` for non-time-series results.
     pub resolved_window: Option<ResolvedWindow>,
+    /// Driver-provided structured fields forwarded verbatim into the audit event's
+    /// `details_json`. Drivers that need extra audit context (e.g., language, version,
+    /// injected_window) populate this map; the runner merges it into the event without
+    /// any driver-id branching.
+    pub metadata_extra: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 impl QueryResult {
@@ -164,6 +169,7 @@ impl QueryResult {
             raw_bytes: None,
             next_page_token: None,
             resolved_window: None,
+            metadata_extra: None,
         }
     }
 
@@ -189,6 +195,7 @@ impl QueryResult {
             raw_bytes: None,
             next_page_token: None,
             resolved_window: None,
+            metadata_extra: None,
         }
     }
 
@@ -203,6 +210,7 @@ impl QueryResult {
             raw_bytes: None,
             next_page_token: None,
             resolved_window: None,
+            metadata_extra: None,
         }
     }
 
@@ -217,6 +225,7 @@ impl QueryResult {
             raw_bytes: None,
             next_page_token: None,
             resolved_window: None,
+            metadata_extra: None,
         }
     }
 
@@ -231,6 +240,7 @@ impl QueryResult {
             raw_bytes: Some(data),
             next_page_token: None,
             resolved_window: None,
+            metadata_extra: None,
         }
     }
 
