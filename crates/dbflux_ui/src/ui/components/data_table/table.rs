@@ -450,19 +450,20 @@ impl gpui::Render for DataTable {
         // common desktop expectations. Vertical deltas are left untouched so
         // the body's uniform_list keeps handling them.
         let state_for_wheel = self.state.clone();
-        let on_scroll_wheel = move |event: &ScrollWheelEvent, _window: &mut Window, cx: &mut App| {
-            let delta = event.delta.pixel_delta(px(16.0));
-            let mut delta_x = delta.x;
-            if event.modifiers.shift && delta_x == px(0.0) {
-                delta_x = delta.y;
-            }
-            if delta_x == px(0.0) {
-                return;
-            }
-            state_for_wheel.update(cx, |state, _| {
-                state.apply_horizontal_wheel_delta(delta_x);
-            });
-        };
+        let on_scroll_wheel =
+            move |event: &ScrollWheelEvent, _window: &mut Window, cx: &mut App| {
+                let delta = event.delta.pixel_delta(px(16.0));
+                let mut delta_x = delta.x;
+                if event.modifiers.shift && delta_x == px(0.0) {
+                    delta_x = delta.y;
+                }
+                if delta_x == px(0.0) {
+                    return;
+                }
+                state_for_wheel.update(cx, |state, _| {
+                    state.apply_horizontal_wheel_delta(delta_x);
+                });
+            };
 
         let inner_table = div()
             .id("table-inner")
