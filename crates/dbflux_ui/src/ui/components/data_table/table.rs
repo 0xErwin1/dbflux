@@ -454,14 +454,6 @@ impl gpui::Render for DataTable {
         let state_for_wheel = self.state.clone();
         let on_scroll_wheel =
             move |event: &ScrollWheelEvent, _window: &mut Window, cx: &mut App| {
-                // Skip when shift is held: GPUI/the platform may translate
-                // shift+wheel into a non-zero delta.x while the inner
-                // uniform_list still reads delta.y, which causes the table to
-                // scroll on both axes at once. Leaving shift+wheel alone keeps
-                // it as a pure vertical scroll handled by uniform_list.
-                if event.modifiers.shift {
-                    return;
-                }
                 let delta_x = event.delta.pixel_delta(px(16.0)).x;
                 if delta_x == px(0.0) {
                     return;
@@ -840,46 +832,55 @@ impl DataTable {
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
         // uniform_list handles vertical scrolling.
+        let mut list = uniform_list(
+            "table-rows",
+            row_count,
+            move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
+                let theme = cx.theme();
+                // Read state INSIDE closure - only when actually rendering
+                let state = state_entity.read(cx);
+
+                let editing_cell = state.editing_cell();
+                let cell_input = state.cell_input().cloned();
+                let enum_dropdown = state.enum_dropdown().cloned();
+                let edit_buffer = state.edit_buffer();
+
+                render_rows(
+                    &state_entity,
+                    visible_range,
+                    &model,
+                    state.column_widths(),
+                    state.selection(),
+                    editing_cell,
+                    cell_input.as_ref(),
+                    enum_dropdown.as_ref(),
+                    edit_buffer,
+                    total_width,
+                    theme,
+                )
+            },
+        )
+        .size_full()
+        .min_w(px(total_width))
+        .ml(-h_offset)
+        .with_sizing_behavior(ListSizingBehavior::Auto)
+        .track_scroll(vertical_scroll_handle);
+
+        // Stop GPUI's paint_scroll_listener from translating a non-zero delta.x
+        // into delta.y on this vertical-only list. The platform layer maps
+        // shift+wheel to delta.x with delta.y == 0, and without this flag the
+        // list would scroll vertically using that delta.x while the outer
+        // on_scroll_wheel handler also scrolls horizontally — both axes move
+        // at once. With restrict_scroll_to_axis set, shift+wheel becomes a
+        // pure horizontal scroll driven by the outer handler.
+        list.style().restrict_scroll_to_axis = Some(true);
+
         div()
             .id("table-body")
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .child(
-                uniform_list(
-                    "table-rows",
-                    row_count,
-                    move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
-                        let theme = cx.theme();
-                        // Read state INSIDE closure - only when actually rendering
-                        let state = state_entity.read(cx);
-
-                        let editing_cell = state.editing_cell();
-                        let cell_input = state.cell_input().cloned();
-                        let enum_dropdown = state.enum_dropdown().cloned();
-                        let edit_buffer = state.edit_buffer();
-
-                        render_rows(
-                            &state_entity,
-                            visible_range,
-                            &model,
-                            state.column_widths(),
-                            state.selection(),
-                            editing_cell,
-                            cell_input.as_ref(),
-                            enum_dropdown.as_ref(),
-                            edit_buffer,
-                            total_width,
-                            theme,
-                        )
-                    },
-                )
-                .size_full()
-                .min_w(px(total_width))
-                .ml(-h_offset)
-                .with_sizing_behavior(ListSizingBehavior::Auto)
-                .track_scroll(vertical_scroll_handle),
-            )
+            .child(list)
     }
 }
 
