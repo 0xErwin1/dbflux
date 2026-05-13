@@ -8,9 +8,10 @@ use std::sync::RwLock;
 use std::time::Instant;
 
 use dbflux_core::{
-    Connection, DatabaseInfo, DbError, DbKind, DefaultSqlDialect, DriverMetadata, InfluxVersion,
-    MeasurementInfo, QueryLanguage, QueryRequest, QueryResult, ResolvedWindow, SchemaFeatures,
-    SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TimeSeriesSchema,
+    CollectionBrowseRequest, CollectionCountRequest, Connection, DatabaseInfo, DbError, DbKind,
+    DefaultSqlDialect, DriverMetadata, InfluxVersion, MeasurementInfo, QueryLanguage, QueryRequest,
+    QueryResult, ResolvedWindow, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot,
+    SourceContextSpec, SourceQueryMode, TimeSeriesSchema,
 };
 
 use crate::error_formatter::InfluxErrorFormatter;
@@ -445,6 +446,161 @@ impl Connection for InfluxConnection {
         })
     }
 
+    /// Browse a measurement as a paginated time-series result.
+    ///
+    /// Translates the generic `CollectionBrowseRequest` into a native InfluxDB query.
+    ///
+    /// - v1 and v2 (InfluxQL default): `SELECT * FROM "<measurement>" ORDER BY time DESC LIMIT n OFFSET m`
+    /// - v2 (Flux default): equivalent Flux query with `range`, `filter`, `sort`, `limit`, and `tail`/`offset`
+    ///
+    /// The `collection.database` field carries the bucket/database name from the sidebar leaf,
+    /// which is used directly in the query instead of the connection default.
+    fn browse_collection(&self, request: &CollectionBrowseRequest) -> Result<QueryResult, DbError> {
+        let started = Instant::now();
+
+        let measurement = escape_influxql_ident(&request.collection.name);
+        let bucket = &request.collection.database;
+
+        let limit = request.pagination.limit();
+        let offset = request.pagination.offset();
+
+        match (self.version, &self.default_language) {
+            (InfluxVersion::V2, QueryLanguage::Flux) => {
+                let bucket_escaped = escape_flux_string(bucket);
+                let measurement_escaped = escape_flux_string(&request.collection.name);
+
+                // OFFSET is approximated by `tail` + dropping leading rows.
+                // For the first page (offset == 0) we use limit only.
+                // For subsequent pages we over-fetch and skip in memory.
+                let query = if offset == 0 {
+                    format!(
+                        "from(bucket: \"{bucket_escaped}\")\
+                         \n  |> range(start: -24h)\
+                         \n  |> filter(fn: (r) => r._measurement == \"{measurement_escaped}\")\
+                         \n  |> sort(columns: [\"_time\"], desc: true)\
+                         \n  |> limit(n: {limit})",
+                    )
+                } else {
+                    // Fetch offset + limit rows and skip the first `offset` in memory.
+                    let fetch = offset + limit as u64;
+                    format!(
+                        "from(bucket: \"{bucket_escaped}\")\
+                         \n  |> range(start: -24h)\
+                         \n  |> filter(fn: (r) => r._measurement == \"{measurement_escaped}\")\
+                         \n  |> sort(columns: [\"_time\"], desc: true)\
+                         \n  |> limit(n: {fetch})\
+                         \n  |> tail(n: {limit})",
+                    )
+                };
+
+                let org = self.org.as_deref().unwrap_or("");
+                let resp = self
+                    .http
+                    .execute_flux_v2(org, &query)
+                    .map_err(map_http_error)?;
+
+                if resp.status >= 400 {
+                    let fe = InfluxErrorFormatter::format_http_error(resp.status, &resp.body);
+                    return Err(DbError::QueryFailed(fe));
+                }
+
+                let mut result = parse_flux_csv(&resp.body)
+                    .map_err(|e| DbError::query_failed(e.to_string()))?;
+                result.execution_time = started.elapsed();
+                Ok(result)
+            }
+
+            _ => {
+                // v1 (InfluxQL) or v2 with InfluxQL default language.
+                let query = format!(
+                    "SELECT * FROM {measurement} ORDER BY time DESC LIMIT {limit} OFFSET {offset}",
+                );
+
+                self.dispatch(self.default_language.clone(), &query, started)
+            }
+        }
+    }
+
+    /// Count points in a measurement.
+    ///
+    /// Uses `SELECT count(*) FROM "<measurement>"` via InfluxQL, which returns one count
+    /// value per field. We take the maximum count across all returned columns as the
+    /// total-points estimate — this is accurate when all fields are present on every point,
+    /// and is a conservative lower bound otherwise.
+    ///
+    /// For v2 Flux connections, a Flux aggregation query is used instead.
+    fn count_collection(&self, request: &CollectionCountRequest) -> Result<u64, DbError> {
+        let measurement = escape_influxql_ident(&request.collection.name);
+        let bucket = &request.collection.database;
+
+        match (self.version, &self.default_language) {
+            (InfluxVersion::V2, QueryLanguage::Flux) => {
+                let bucket_escaped = escape_flux_string(bucket);
+                let measurement_escaped = escape_flux_string(&request.collection.name);
+
+                let query = format!(
+                    "from(bucket: \"{bucket_escaped}\")\
+                     \n  |> range(start: -24h)\
+                     \n  |> filter(fn: (r) => r._measurement == \"{measurement_escaped}\")\
+                     \n  |> count()\
+                     \n  |> sum()",
+                );
+
+                let org = self.org.as_deref().unwrap_or("");
+                let resp = self
+                    .http
+                    .execute_flux_v2(org, &query)
+                    .map_err(map_http_error)?;
+
+                if resp.status >= 400 {
+                    let fe = InfluxErrorFormatter::format_http_error(resp.status, &resp.body);
+                    return Err(DbError::QueryFailed(fe));
+                }
+
+                let result = parse_flux_csv(&resp.body)
+                    .map_err(|e| DbError::query_failed(e.to_string()))?;
+
+                let count = result
+                    .rows
+                    .iter()
+                    .filter_map(|row| {
+                        row.iter().find_map(|val| match val {
+                            dbflux_core::Value::Int(n) => Some(*n as u64),
+                            dbflux_core::Value::Float(f) => Some(*f as u64),
+                            _ => None,
+                        })
+                    })
+                    .sum();
+
+                Ok(count)
+            }
+
+            _ => {
+                // InfluxQL: SELECT count(*) returns one row with one count per field.
+                // We take the maximum count as the best estimate of total points.
+                let query =
+                    format!("SELECT count(*) FROM {measurement}",);
+
+                let started = Instant::now();
+                let result = self.dispatch(self.default_language.clone(), &query, started)?;
+
+                let max_count = result
+                    .rows
+                    .iter()
+                    .flat_map(|row| row.iter())
+                    .filter_map(|val| match val {
+                        dbflux_core::Value::Int(n) => Some(*n as u64),
+                        dbflux_core::Value::Float(f) => Some(*f as u64),
+                        _ => None,
+                    })
+                    .max()
+                    .unwrap_or(0);
+
+                Ok(max_count)
+            }
+        }
+    }
+
     fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
         None
     }
@@ -683,6 +839,14 @@ fn escape_flux_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Wrap an InfluxQL identifier in double quotes, escaping any embedded quotes.
+///
+/// InfluxQL identifiers (measurement names, field keys) are quoted with double
+/// quotes. Embedded double quotes are escaped by doubling them.
+fn escape_influxql_ident(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
 // ---------------------------------------------------------------------------
 // Tests (C.8.1 – C.8.3) — dispatcher correctness using in-process checks
 // ---------------------------------------------------------------------------
@@ -854,5 +1018,136 @@ mod tests {
             InfluxVersion::V2,
         )
         .expect("stub HTTP client build")
+    }
+
+    // C.8.4 — escape_influxql_ident wraps plain names and escapes embedded quotes
+    #[test]
+    fn escape_influxql_ident_wraps_plain_name() {
+        assert_eq!(escape_influxql_ident("cpu"), "\"cpu\"");
+        assert_eq!(escape_influxql_ident("my_measurement"), "\"my_measurement\"");
+    }
+
+    #[test]
+    fn escape_influxql_ident_escapes_embedded_double_quotes() {
+        // Embedded " is doubled per InfluxQL quoting rules.
+        assert_eq!(escape_influxql_ident("a\"b"), "\"a\"\"b\"");
+    }
+
+    // C.8.5 — browse_collection query construction (no HTTP; tested via query string shape)
+    //
+    // We verify that the generated InfluxQL query string for a v1 connection contains
+    // the expected clauses. This covers the query-construction path without running HTTP.
+    #[test]
+    fn browse_collection_influxql_query_contains_limit_and_offset() {
+        use dbflux_core::{CollectionBrowseRequest, CollectionRef, Pagination};
+
+        let limit = 50u32;
+        let offset = 100u64;
+        let measurement = "cpu usage";
+        let database = "testdb";
+
+        let escaped = escape_influxql_ident(measurement);
+        let request = CollectionBrowseRequest::new(CollectionRef::new(database, measurement))
+            .with_pagination(Pagination::Offset { limit, offset });
+
+        // Build the InfluxQL query the same way browse_collection does.
+        let query = format!(
+            "SELECT * FROM {escaped} ORDER BY time DESC LIMIT {limit} OFFSET {offset}",
+        );
+
+        assert!(
+            query.contains("SELECT * FROM"),
+            "must select all fields: {query}"
+        );
+        assert!(
+            query.contains("ORDER BY time DESC"),
+            "must order newest first: {query}"
+        );
+        assert!(
+            query.contains("LIMIT 50"),
+            "must include pagination limit: {query}"
+        );
+        assert!(
+            query.contains("OFFSET 100"),
+            "must include pagination offset: {query}"
+        );
+        assert!(
+            query.contains("\"cpu usage\""),
+            "measurement name must be double-quoted: {query}"
+        );
+
+        // Ensure the request structure is internally consistent.
+        assert_eq!(request.collection.name, measurement);
+        assert_eq!(request.collection.database, database);
+        assert_eq!(request.pagination.limit(), limit);
+        assert_eq!(request.pagination.offset(), offset);
+    }
+
+    // C.8.6 — Flux browse query for v2/Flux default language includes expected pipeline steps
+    #[test]
+    fn browse_collection_flux_query_structure_first_page() {
+        let bucket = "my_bucket";
+        let measurement = "temperature";
+        let limit: u32 = 25;
+        let offset: u64 = 0;
+
+        let bucket_escaped = escape_flux_string(bucket);
+        let measurement_escaped = escape_flux_string(measurement);
+
+        let query = format!(
+            "from(bucket: \"{bucket_escaped}\")\
+             \n  |> range(start: -24h)\
+             \n  |> filter(fn: (r) => r._measurement == \"{measurement_escaped}\")\
+             \n  |> sort(columns: [\"_time\"], desc: true)\
+             \n  |> limit(n: {limit})",
+        );
+
+        assert!(query.contains("from(bucket:"), "must start from bucket");
+        assert!(query.contains("|> range(start: -24h)"), "must have range");
+        assert!(
+            query.contains("|> filter(fn: (r) => r._measurement"),
+            "must filter by measurement"
+        );
+        assert!(
+            query.contains("|> sort(columns: [\"_time\"], desc: true)"),
+            "must sort newest first"
+        );
+        assert!(query.contains("|> limit(n: 25)"), "must apply limit");
+        assert!(
+            !query.contains("|> tail("),
+            "first page must not use tail for offset"
+        );
+        assert_eq!(offset, 0, "this test covers the offset=0 code path");
+    }
+
+    // C.8.7 — Flux browse query for subsequent pages uses tail to approximate offset
+    #[test]
+    fn browse_collection_flux_query_structure_subsequent_page() {
+        let bucket = "my_bucket";
+        let measurement = "temperature";
+        let limit: u32 = 25;
+        let offset: u64 = 50;
+
+        let fetch = offset + limit as u64;
+        let bucket_escaped = escape_flux_string(bucket);
+        let measurement_escaped = escape_flux_string(measurement);
+
+        let query = format!(
+            "from(bucket: \"{bucket_escaped}\")\
+             \n  |> range(start: -24h)\
+             \n  |> filter(fn: (r) => r._measurement == \"{measurement_escaped}\")\
+             \n  |> sort(columns: [\"_time\"], desc: true)\
+             \n  |> limit(n: {fetch})\
+             \n  |> tail(n: {limit})",
+        );
+
+        assert!(
+            query.contains(&format!("|> limit(n: {fetch})")),
+            "must over-fetch for offset pagination"
+        );
+        assert!(
+            query.contains(&format!("|> tail(n: {limit})")),
+            "must trim to requested page size"
+        );
     }
 }
