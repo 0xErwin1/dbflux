@@ -9,8 +9,8 @@ use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
-    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement,
-    Styled, Window, actions, canvas, div, px, uniform_list,
+    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, ScrollWheelEvent,
+    StatefulInteractiveElement, Styled, Window, actions, canvas, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use gpui_component::{ActiveTheme, Sizable};
@@ -441,11 +441,35 @@ impl gpui::Render for DataTable {
         let state_for_resize_move = self.state.clone();
         let resize_drag_for_up = self.resize_drag.clone();
 
+        // Forward horizontal wheel/trackpad deltas to the horizontal scroll
+        // handle. The handle is owned by a 1px phantom scroller at the bottom
+        // (so the gpui-component scrollbar can drive it), which means
+        // horizontal wheel events landing on the header or body would
+        // otherwise be lost. Trackpads and Magic Mouse emit a non-zero
+        // delta.x; we also treat shift+wheel as horizontal, which matches
+        // common desktop expectations. Vertical deltas are left untouched so
+        // the body's uniform_list keeps handling them.
+        let state_for_wheel = self.state.clone();
+        let on_scroll_wheel = move |event: &ScrollWheelEvent, _window: &mut Window, cx: &mut App| {
+            let delta = event.delta.pixel_delta(px(16.0));
+            let mut delta_x = delta.x;
+            if event.modifiers.shift && delta_x == px(0.0) {
+                delta_x = delta.y;
+            }
+            if delta_x == px(0.0) {
+                return;
+            }
+            state_for_wheel.update(cx, |state, _| {
+                state.apply_horizontal_wheel_delta(delta_x);
+            });
+        };
+
         let inner_table = div()
             .id("table-inner")
             .flex()
             .flex_col()
             .size_full()
+            .on_scroll_wheel(on_scroll_wheel)
             .child(header)
             .when(row_count > 0, |this| this.child(body))
             .when(row_count == 0 && col_count > 0, |this| {

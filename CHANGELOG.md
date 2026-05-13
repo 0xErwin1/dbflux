@@ -9,6 +9,14 @@ All notable changes to DBFlux will be documented in this file.
 * Ctrl+C / Cmd+C now copies the selected cell (or range) from the Results
   grid to the clipboard, matching the right-click → Copy behavior.
 
+### Fixes
+
+* Results table now scrolls horizontally with trackpad / Magic Mouse
+  gestures and `Shift+Wheel`. The horizontal scroll handle is owned by
+  a 1px phantom scroller so the scrollbar widget can drive it, which
+  meant horizontal wheel deltas landing on the header or body were
+  dropped; the table now forwards those deltas to the handle (#58).
+
 ## [0.6.0-dev.0] - 2026-05-12
 
 ### Features

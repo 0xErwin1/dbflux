@@ -426,6 +426,39 @@ impl DataTableState {
         self.scroll_to_column(col);
     }
 
+    /// Apply a horizontal wheel/trackpad delta to the horizontal scroll handle.
+    ///
+    /// The body and header don't own the horizontal scroll handle (a 1px
+    /// phantom scroller does, so the scrollbar widget can drive it), so
+    /// horizontal wheel events that land on the body would otherwise be
+    /// dropped. Trackpads and Magic Mouse emit horizontal deltas that users
+    /// expect to scroll the table sideways, so we forward them here.
+    ///
+    /// `delta_x` follows the standard convention: positive moves content
+    /// left (scrolls right). Returns true if the offset actually changed.
+    pub fn apply_horizontal_wheel_delta(&self, delta_x: Pixels) -> bool {
+        if delta_x == px(0.0) {
+            return false;
+        }
+
+        let viewport_width = self.viewport_size.width - SCROLLBAR_WIDTH;
+        let content_width = px(self.total_content_width());
+        let max_offset = (content_width - viewport_width).max(px(0.0));
+        if max_offset <= px(0.0) {
+            return false;
+        }
+
+        let current_offset = -self.horizontal_scroll_handle.offset().x;
+        let new_offset = (current_offset + delta_x).clamp(px(0.0), max_offset);
+        if (new_offset - current_offset).abs() <= px(0.0) {
+            return false;
+        }
+
+        self.horizontal_scroll_handle
+            .set_offset(Point::new(-new_offset, px(0.0)));
+        true
+    }
+
     // --- Edit Mode ---
 
     /// Check if the table is editable (has primary key columns).
