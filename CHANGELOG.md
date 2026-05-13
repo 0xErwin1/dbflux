@@ -4,6 +4,33 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-dev.0] - 2026-05-12
+
+### Features
+
+* **Workspace-level inspector rail** — row inspector promoted to a
+  workspace-wide rail and migrated off the per-document overlay (#52).
+* **Nix prebuilt-binary package** — `pkgs.dbflux` is now a prebuilt
+  binary fetched from the matching GitHub Release (pinned by
+  `nix/release-info.nix` and built via `nix/binary.nix`), with a
+  fallback `pkgs.dbflux-source` for compiling locally. The flake also
+  exposes `overlays.default` so downstream flakes can consume the
+  package directly.
+
+### Chores
+
+* Adopt trunk + short-lived release-branch model: add `CONTRIBUTING.md`,
+  label-aware PR/issue templates, and `docs/RELEASE.md` documenting the
+  cut and tag procedures.
+* Release workflow publishes stable tags (`vX.Y.Z`) directly and marks
+  `-dev.N` / `-rc.N` tags as prereleases.
+* Cherry-pick discipline now requires removing the corresponding entry
+  from main's `[Unreleased]` block after the picked commit lands on the
+  release branch, and the cut procedure verifies the release workflow
+  has the `Classify release` step before tagging.
+
+## [0.5.1] - 2026-05-12
+
 ### Features
 
 * Logger now initialises at the very start of `run_gui()` so startup
