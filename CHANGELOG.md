@@ -2,7 +2,7 @@
 
 All notable changes to DBFlux will be documented in this file.
 
-## [Unreleased]
+## [0.5.2] - 2026-05-13
 
 ### Fixes
 
