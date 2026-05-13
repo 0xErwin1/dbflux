@@ -1,7 +1,5 @@
 //! InfluxDB driver for DBFlux.
 
-// Regex literals compiled at init time via LazyLock use `.expect()` / `.unwrap()`
-// intentionally — invalid regex literals are a programming error, not a runtime condition.
 #![allow(clippy::result_large_err)]
 #![cfg_attr(
     test,
