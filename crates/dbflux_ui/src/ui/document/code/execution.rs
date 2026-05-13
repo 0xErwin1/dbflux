@@ -310,13 +310,21 @@ impl CodeDocument {
             })
             .unwrap_or_else(|| "default".to_string());
 
+        let default_schema = self.exec_ctx.schema.clone();
+
         self.drift_preflight_running = true;
         cx.notify();
 
         let query_capture = query.clone();
 
         let task = cx.background_executor().spawn(async move {
-            check_schema_drift(&connection, &table_details, &query, &database)
+            check_schema_drift(
+                &connection,
+                &table_details,
+                &query,
+                &database,
+                default_schema.as_deref(),
+            )
         });
 
         cx.spawn(async move |this, cx| {
