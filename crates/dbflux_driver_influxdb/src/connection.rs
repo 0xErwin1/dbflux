@@ -456,39 +456,79 @@ impl Connection for InfluxConnection {
 
 impl InfluxConnection {
     fn fetch_measurements(&self) -> Result<Vec<MeasurementInfo>, DbError> {
-        let query = "SHOW MEASUREMENTS";
-        let resp = match self.version {
-            InfluxVersion::V1 => self
-                .http
-                .execute_influxql_v1(&self.bucket_or_db, query)
-                .map_err(map_http_error)?,
-            InfluxVersion::V2 => {
-                let org = self.org.as_deref().unwrap_or("");
-                self.http
-                    .execute_influxql_v2(&self.bucket_or_db, org, query)
-                    .map_err(map_http_error)?
-            }
+        // v1 uses native InfluxQL `SHOW MEASUREMENTS`. v2 cannot rely on the InfluxQL
+        // compatibility endpoint here because it requires a DBRP mapping between the
+        // bucket and a v1 database name — those mappings are not created automatically
+        // for every bucket. The Flux `schema.measurements` query works against any v2
+        // bucket regardless of DBRP configuration.
+        let names = match self.version {
+            InfluxVersion::V1 => self.fetch_measurements_v1()?,
+            InfluxVersion::V2 => self.fetch_measurements_v2_flux()?,
         };
+
+        Ok(names
+            .into_iter()
+            .map(|name| MeasurementInfo {
+                name,
+                tags: Vec::new(),
+                fields: Vec::new(),
+            })
+            .collect())
+    }
+
+    fn fetch_measurements_v1(&self) -> Result<Vec<String>, DbError> {
+        let resp = self
+            .http
+            .execute_influxql_v1(&self.bucket_or_db, "SHOW MEASUREMENTS")
+            .map_err(map_http_error)?;
 
         let result =
             parse_influxql_json(&resp.body).map_err(|e| DbError::query_failed(e.to_string()))?;
 
-        let measurements = result
+        Ok(result
             .rows
             .iter()
             .filter_map(|row| {
                 row.first().and_then(|v| match v {
-                    dbflux_core::Value::Text(s) => Some(MeasurementInfo {
-                        name: s.clone(),
-                        tags: Vec::new(),
-                        fields: Vec::new(),
-                    }),
+                    dbflux_core::Value::Text(s) => Some(s.clone()),
                     _ => None,
                 })
             })
-            .collect();
+            .collect())
+    }
 
-        Ok(measurements)
+    fn fetch_measurements_v2_flux(&self) -> Result<Vec<String>, DbError> {
+        let org = self.org.as_deref().unwrap_or("");
+        let query = format!(
+            "import \"influxdata/influxdb/schema\"\nschema.measurements(bucket: \"{}\")",
+            escape_flux_string(&self.bucket_or_db)
+        );
+
+        let resp = self
+            .http
+            .execute_flux_v2(org, &query)
+            .map_err(map_http_error)?;
+
+        let result =
+            parse_flux_csv(&resp.body).map_err(|e| DbError::query_failed(e.to_string()))?;
+
+        // schema.measurements emits a `_value` column with the measurement names.
+        let value_idx = result
+            .columns
+            .iter()
+            .position(|c| c.name == "_value")
+            .unwrap_or(0);
+
+        Ok(result
+            .rows
+            .iter()
+            .filter_map(|row| {
+                row.get(value_idx).and_then(|v| match v {
+                    dbflux_core::Value::Text(s) => Some(s.clone()),
+                    _ => None,
+                })
+            })
+            .collect())
     }
 
     /// Issue a raw GET request using the embedded HTTP client (for v2 REST APIs
@@ -638,6 +678,11 @@ fn rfc3339_from_ms(ms: i64) -> String {
     ms_to_rfc3339(ms)
 }
 
+/// Escape a string for safe interpolation inside a Flux double-quoted literal.
+fn escape_flux_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 // ---------------------------------------------------------------------------
 // Tests (C.8.1 – C.8.3) — dispatcher correctness using in-process checks
 // ---------------------------------------------------------------------------
@@ -645,6 +690,17 @@ fn rfc3339_from_ms(ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_flux_string_escapes_quotes_and_backslashes() {
+        assert_eq!(escape_flux_string("plain"), "plain");
+        assert_eq!(escape_flux_string("a\"b"), "a\\\"b");
+        assert_eq!(escape_flux_string("a\\b"), "a\\\\b");
+        // Backslash must be doubled BEFORE quote escaping so the order matters:
+        // input  a\"b  →  a\\\"b (4 chars in, 6 chars out)
+        assert_eq!(escape_flux_string("a\\\"b"), "a\\\\\\\"b");
+    }
+
     use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryRequest};
 
     fn make_request_with_mode(sql: &str, mode: Option<&str>) -> QueryRequest {
