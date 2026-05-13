@@ -454,6 +454,14 @@ impl gpui::Render for DataTable {
         let state_for_wheel = self.state.clone();
         let on_scroll_wheel =
             move |event: &ScrollWheelEvent, _window: &mut Window, cx: &mut App| {
+                // Skip when shift is held: GPUI/the platform may translate
+                // shift+wheel into a non-zero delta.x while the inner
+                // uniform_list still reads delta.y, which causes the table to
+                // scroll on both axes at once. Leaving shift+wheel alone keeps
+                // it as a pure vertical scroll handled by uniform_list.
+                if event.modifiers.shift {
+                    return;
+                }
                 let delta_x = event.delta.pixel_delta(px(16.0)).x;
                 if delta_x == px(0.0) {
                     return;
