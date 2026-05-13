@@ -4,6 +4,23 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixes
+
+* Schema-drift preflight no longer reports phantom "all columns removed"
+  for queries whose table lives outside `public`. The fresh fetch is now
+  steered to the right schema via a layered precedence (query qualifier
+  → cached `TableInfo.schema` → editor toolbar's schema → `public`
+  fallback), and the checker defensively skips any entry whose driver
+  lookup returns zero columns — preventing the empty `TableInfo` from
+  poisoning the autocomplete and table-detail caches via the
+  "Refresh & re-run" path.
+
+### Chores
+
+* Pin EOL to LF via `.gitattributes` (`* text=auto eol=lf`) so
+  `cargo fmt` no longer desyncs Windows working trees that default to
+  `core.autocrlf=true`.
+
 ## [0.6.0-dev.0] - 2026-05-12
 
 ### Features
