@@ -32,18 +32,24 @@ pub fn default_keymap() -> &'static KeymapStack {
 fn global_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Global);
 
-    // Command palette
+    // Command palette — Cmd+Shift+P on macOS, Ctrl+Shift+P elsewhere.
     layer.bind(
-        KeyChord::new("p", Modifiers::ctrl_shift()),
+        KeyChord::new("p", Modifiers::primary_shift()),
         Command::ToggleCommandPalette,
     );
 
-    // Tab management
-    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    // Tab management — primary modifier (Cmd on macOS, Ctrl elsewhere).
     layer.bind(
-        KeyChord::new("w", Modifiers::ctrl()),
+        KeyChord::new("n", Modifiers::primary()),
+        Command::NewQueryTab,
+    );
+    layer.bind(
+        KeyChord::new("w", Modifiers::primary()),
         Command::CloseCurrentTab,
     );
+    // Ctrl+Tab / Ctrl+Shift+Tab stay literal Ctrl on every platform — that is
+    // the long-standing tabbed-UI idiom (browsers, terminals). Cmd+Tab on
+    // macOS is the system app switcher and must not be shadowed.
     layer.bind(KeyChord::new("tab", Modifiers::ctrl()), Command::NextTab);
     layer.bind(
         KeyChord::new("tab", Modifiers::ctrl_shift()),
@@ -51,21 +57,24 @@ fn global_layer() -> KeymapLayer {
     );
     for i in 1..=9 {
         layer.bind(
-            KeyChord::new(i.to_string(), Modifiers::ctrl()),
+            KeyChord::new(i.to_string(), Modifiers::primary()),
             Command::SwitchToTab(i),
         );
     }
 
     // File operations
     layer.bind(
-        KeyChord::new("o", Modifiers::ctrl()),
+        KeyChord::new("o", Modifiers::primary()),
         Command::OpenScriptFile,
     );
 
     // Query execution
-    layer.bind(KeyChord::new("enter", Modifiers::ctrl()), Command::RunQuery);
     layer.bind(
-        KeyChord::new("enter", Modifiers::ctrl_shift()),
+        KeyChord::new("enter", Modifiers::primary()),
+        Command::RunQuery,
+    );
+    layer.bind(
+        KeyChord::new("enter", Modifiers::primary_shift()),
         Command::RunQueryInNewTab,
     );
 
@@ -82,7 +91,10 @@ fn global_layer() -> KeymapLayer {
         Command::CycleFocusBackward,
     );
 
-    // Direct focus shortcuts
+    // Direct focus shortcuts — stay Ctrl+Shift+1..4 on every platform.
+    // Cmd+Shift+3 and Cmd+Shift+4 are reserved by macOS for screenshots, so
+    // switching the whole group to the primary modifier would silently break
+    // two of the four bindings on Mac.
     layer.bind(
         KeyChord::new("1", Modifiers::ctrl_shift()),
         Command::FocusSidebar,
@@ -100,19 +112,20 @@ fn global_layer() -> KeymapLayer {
         Command::FocusBackgroundTasks,
     );
 
-    // Open audit viewer (Ctrl+Shift+A)
+    // Open audit viewer
     layer.bind(
-        KeyChord::new("a", Modifiers::ctrl_shift()),
+        KeyChord::new("a", Modifiers::primary_shift()),
         Command::OpenAuditViewer,
     );
 
-    // Toggle sidebar (Ctrl+B)
+    // Toggle sidebar
     layer.bind(
-        KeyChord::new("b", Modifiers::ctrl()),
+        KeyChord::new("b", Modifiers::primary()),
         Command::ToggleSidebar,
     );
 
-    // Tab context menu
+    // Tab context menu — stays Ctrl+M everywhere: Cmd+M is the system
+    // "minimize window" shortcut on macOS.
     layer.bind(KeyChord::new("m", Modifiers::ctrl()), Command::OpenTabMenu);
 
     layer
@@ -121,7 +134,10 @@ fn global_layer() -> KeymapLayer {
 fn sidebar_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Sidebar);
 
-    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(
+        KeyChord::new("n", Modifiers::primary()),
+        Command::NewQueryTab,
+    );
     layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
     layer.bind(
         KeyChord::new("q", Modifiers::none()),
@@ -243,12 +259,12 @@ fn editor_layer() -> KeymapLayer {
         Command::ToggleHistoryDropdown,
     );
     layer.bind(
-        KeyChord::new("p", Modifiers::ctrl()),
+        KeyChord::new("p", Modifiers::primary()),
         Command::OpenSavedQueries,
     );
-    layer.bind(KeyChord::new("s", Modifiers::ctrl()), Command::SaveQuery);
+    layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
     layer.bind(
-        KeyChord::new("s", Modifiers::ctrl_shift()),
+        KeyChord::new("s", Modifiers::primary_shift()),
         Command::SaveFileAs,
     );
 
@@ -295,6 +311,10 @@ fn history_modal_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
+    // Local mnemonics — Ctrl on every platform. Mapping these to the primary
+    // modifier would clash with macOS conventions (Cmd+F = system Find,
+    // Cmd+R = reload/run) without giving the user anything they didn't already
+    // have via the standard Save command below.
     layer.bind(KeyChord::new("d", Modifiers::ctrl()), Command::Delete);
     layer.bind(
         KeyChord::new("f", Modifiers::ctrl()),
@@ -302,7 +322,7 @@ fn history_modal_layer() -> KeymapLayer {
     );
     layer.bind(KeyChord::new("r", Modifiers::ctrl()), Command::Rename);
     layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
-    layer.bind(KeyChord::new("s", Modifiers::ctrl()), Command::SaveQuery);
+    layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
 
     layer
 }
@@ -310,9 +330,12 @@ fn history_modal_layer() -> KeymapLayer {
 fn results_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Results);
 
-    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(
+        KeyChord::new("n", Modifiers::primary()),
+        Command::NewQueryTab,
+    );
 
-    // Panel navigation (Ctrl+hjkl)
+    // Panel navigation (Ctrl+hjkl) — vim-style, literal Ctrl on every platform.
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusToolbar);
     layer.bind(KeyChord::new("k", Modifiers::ctrl()), Command::FocusUp);
@@ -366,7 +389,7 @@ fn results_layer() -> KeymapLayer {
 
     // Export
     layer.bind(
-        KeyChord::new("e", Modifiers::ctrl()),
+        KeyChord::new("e", Modifiers::primary()),
         Command::ExportResults,
     );
 
@@ -390,23 +413,10 @@ fn results_layer() -> KeymapLayer {
     );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
-    // GPUI reports cmd vs ctrl on separate modifier fields, so we pick one
-    // per platform rather than binding both (which would let Ctrl+C trigger
-    // copy on macOS, violating the platform convention).
-    #[cfg(target_os = "macos")]
+    // GPUI reports cmd vs ctrl on separate modifier fields, so binding only
+    // the platform-correct chord keeps Ctrl+C on macOS from triggering copy.
     layer.bind(
-        KeyChord {
-            key: "c".to_string(),
-            modifiers: Modifiers {
-                platform: true,
-                ..Modifiers::none()
-            },
-        },
-        Command::ResultsCopyCell,
-    );
-    #[cfg(not(target_os = "macos"))]
-    layer.bind(
-        KeyChord::new("c", Modifiers::ctrl()),
+        KeyChord::new("c", Modifiers::primary()),
         Command::ResultsCopyCell,
     );
 
@@ -460,9 +470,12 @@ fn context_menu_layer() -> KeymapLayer {
 fn background_tasks_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::BackgroundTasks);
 
-    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(
+        KeyChord::new("n", Modifiers::primary()),
+        Command::NewQueryTab,
+    );
 
-    // Panel navigation (Ctrl+hjkl)
+    // Panel navigation (Ctrl+hjkl) — vim-style, literal Ctrl on every platform.
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::FocusDown);
     layer.bind(KeyChord::new("k", Modifiers::ctrl()), Command::FocusUp);
@@ -550,7 +563,10 @@ fn connection_manager_layer() -> KeymapLayer {
 fn form_navigation_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::FormNavigation);
 
-    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(
+        KeyChord::new("n", Modifiers::primary()),
+        Command::NewQueryTab,
+    );
 
     layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
     layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
@@ -565,7 +581,10 @@ fn form_navigation_layer() -> KeymapLayer {
 fn text_input_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::TextInput);
 
-    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(
+        KeyChord::new("n", Modifiers::primary()),
+        Command::NewQueryTab,
+    );
 
     // Escape exits text input mode
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
@@ -576,20 +595,26 @@ fn text_input_layer() -> KeymapLayer {
 fn context_bar_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::ContextBar);
 
-    // Commands that should pass through to the workspace/document
-    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
-    layer.bind(KeyChord::new("enter", Modifiers::ctrl()), Command::RunQuery);
+    // Commands that should pass through to the workspace/document.
     layer.bind(
-        KeyChord::new("enter", Modifiers::ctrl_shift()),
+        KeyChord::new("n", Modifiers::primary()),
+        Command::NewQueryTab,
+    );
+    layer.bind(
+        KeyChord::new("enter", Modifiers::primary()),
+        Command::RunQuery,
+    );
+    layer.bind(
+        KeyChord::new("enter", Modifiers::primary_shift()),
         Command::RunQueryInNewTab,
     );
     layer.bind(
-        KeyChord::new("w", Modifiers::ctrl()),
+        KeyChord::new("w", Modifiers::primary()),
         Command::CloseCurrentTab,
     );
-    layer.bind(KeyChord::new("s", Modifiers::ctrl()), Command::SaveQuery);
+    layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
     layer.bind(
-        KeyChord::new("s", Modifiers::ctrl_shift()),
+        KeyChord::new("s", Modifiers::primary_shift()),
         Command::SaveFileAs,
     );
 
@@ -721,7 +746,10 @@ fn audit_layer() -> KeymapLayer {
 fn dropdown_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Dropdown);
 
-    layer.bind(KeyChord::new("n", Modifiers::ctrl()), Command::NewQueryTab);
+    layer.bind(
+        KeyChord::new("n", Modifiers::primary()),
+        Command::NewQueryTab,
+    );
 
     // Navigation within dropdown
     layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
@@ -748,7 +776,7 @@ mod tests {
     fn test_default_keymap_resolves_global() {
         let keymap = default_keymap();
 
-        let chord = KeyChord::new("p", Modifiers::ctrl_shift());
+        let chord = KeyChord::new("p", Modifiers::primary_shift());
         assert_eq!(
             keymap.resolve(ContextId::Global, &chord),
             Some(Command::ToggleCommandPalette)
@@ -777,19 +805,19 @@ mod tests {
         let keymap = default_keymap();
 
         let alt_h = KeyChord::new("h", Modifiers::alt());
-        let ctrl_p = KeyChord::new("p", Modifiers::ctrl());
-        let ctrl_s = KeyChord::new("s", Modifiers::ctrl());
+        let primary_p = KeyChord::new("p", Modifiers::primary());
+        let primary_s = KeyChord::new("s", Modifiers::primary());
 
         assert_eq!(
             keymap.resolve(ContextId::Editor, &alt_h),
             Some(Command::ToggleHistoryDropdown)
         );
         assert_eq!(
-            keymap.resolve(ContextId::Editor, &ctrl_p),
+            keymap.resolve(ContextId::Editor, &primary_p),
             Some(Command::OpenSavedQueries)
         );
         assert_eq!(
-            keymap.resolve(ContextId::Editor, &ctrl_s),
+            keymap.resolve(ContextId::Editor, &primary_s),
             Some(Command::SaveQuery)
         );
     }
@@ -798,25 +826,25 @@ mod tests {
     fn test_global_fallback_from_sidebar() {
         let keymap = default_keymap();
 
-        let ctrl_enter = KeyChord::new("enter", Modifiers::ctrl());
+        let primary_enter = KeyChord::new("enter", Modifiers::primary());
         assert_eq!(
-            keymap.resolve(ContextId::Sidebar, &ctrl_enter),
+            keymap.resolve(ContextId::Sidebar, &primary_enter),
             Some(Command::RunQuery)
         );
     }
 
     #[test]
-    fn test_ctrl_n_available_in_sidebar_and_text_input() {
+    fn test_primary_n_available_in_sidebar_and_text_input() {
         let keymap = default_keymap();
 
-        let ctrl_n = KeyChord::new("n", Modifiers::ctrl());
+        let primary_n = KeyChord::new("n", Modifiers::primary());
 
         assert_eq!(
-            keymap.resolve(ContextId::Sidebar, &ctrl_n),
+            keymap.resolve(ContextId::Sidebar, &primary_n),
             Some(Command::NewQueryTab)
         );
         assert_eq!(
-            keymap.resolve(ContextId::TextInput, &ctrl_n),
+            keymap.resolve(ContextId::TextInput, &primary_n),
             Some(Command::NewQueryTab)
         );
     }
@@ -825,8 +853,34 @@ mod tests {
     fn test_command_palette_no_fallback() {
         let keymap = default_keymap();
 
-        let ctrl_enter = KeyChord::new("enter", Modifiers::ctrl());
-        assert_eq!(keymap.resolve(ContextId::CommandPalette, &ctrl_enter), None);
+        let primary_enter = KeyChord::new("enter", Modifiers::primary());
+        assert_eq!(
+            keymap.resolve(ContextId::CommandPalette, &primary_enter),
+            None
+        );
+    }
+
+    /// On macOS the literal Ctrl+C must not trigger ResultsCopyCell — the
+    /// platform convention is Cmd+C, and Ctrl+C is reserved for editor
+    /// interrupt semantics. See the per-platform branch in `results_layer`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_results_copy_uses_cmd_not_ctrl() {
+        let keymap = default_keymap();
+        let ctrl_c = KeyChord::new("c", Modifiers::ctrl());
+        assert_eq!(keymap.resolve(ContextId::Results, &ctrl_c), None);
+
+        let cmd_c = KeyChord {
+            key: "c".to_string(),
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::none()
+            },
+        };
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &cmd_c),
+            Some(Command::ResultsCopyCell)
+        );
     }
 
     /// Regression test for the "missing letters in the SQL editor after

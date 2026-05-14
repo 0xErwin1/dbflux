@@ -68,19 +68,35 @@ actions!(
 );
 
 /// Keybindings that shadow `gpui-component` input defaults inside the "Input"
-/// context so that Ctrl+Enter / Ctrl+Shift+Enter run the active query instead of
-/// inserting a newline.
+/// context so that the primary modifier + Enter runs the active query instead
+/// of inserting a newline.
 ///
 /// `gpui-component` binds `secondary-enter` (== Ctrl+Enter on Linux/Windows,
-/// Cmd+Enter on macOS) to its internal `Enter` action, which in multi-line mode
-/// inserts a newline. Registering these bindings after `gpui_component::init`
-/// makes them take precedence at the same context depth.
+/// Cmd+Enter on macOS) to its internal `Enter` action, which in multi-line
+/// mode inserts a newline. Registering these bindings after
+/// `gpui_component::init` makes them take precedence at the same context
+/// depth.
+///
+/// We bind the platform-appropriate keystroke directly (`cmd-enter` on macOS,
+/// `ctrl-enter` elsewhere) rather than the abstract `secondary-` form so the
+/// macOS Ctrl+Enter stays free for editor interrupt semantics and matches the
+/// Cmd convention used by `results_layer` for ResultsCopyCell.
 pub fn input_context_keybindings() -> Vec<KeyBinding> {
     let ctx = Some("Input");
-    vec![
-        KeyBinding::new("ctrl-enter", RunQuery, ctx),
-        KeyBinding::new("ctrl-shift-enter", RunQueryInNewTab, ctx),
-    ]
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            KeyBinding::new("cmd-enter", RunQuery, ctx),
+            KeyBinding::new("cmd-shift-enter", RunQueryInNewTab, ctx),
+        ]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec![
+            KeyBinding::new("ctrl-enter", RunQuery, ctx),
+            KeyBinding::new("ctrl-shift-enter", RunQueryInNewTab, ctx),
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -98,29 +114,32 @@ mod tests {
         let bindings = input_context_keybindings();
         assert_eq!(bindings.len(), 2);
 
-        let ctrl_enter = Keystroke::parse("ctrl-enter").unwrap();
-        let ctrl_shift_enter = Keystroke::parse("ctrl-shift-enter").unwrap();
+        #[cfg(target_os = "macos")]
+        let (run, run_new) = (
+            Keystroke::parse("cmd-enter").unwrap(),
+            Keystroke::parse("cmd-shift-enter").unwrap(),
+        );
+        #[cfg(not(target_os = "macos"))]
+        let (run, run_new) = (
+            Keystroke::parse("ctrl-enter").unwrap(),
+            Keystroke::parse("ctrl-shift-enter").unwrap(),
+        );
 
         assert!(
-            bindings[0].match_keystrokes(&[ctrl_enter]) == Some(false)
+            bindings[0].match_keystrokes(&[run]) == Some(false)
                 && bindings[0].action().partial_eq(&RunQuery),
         );
         assert!(
-            bindings[1].match_keystrokes(&[ctrl_shift_enter]) == Some(false)
+            bindings[1].match_keystrokes(&[run_new]) == Some(false)
                 && bindings[1].action().partial_eq(&RunQueryInNewTab),
         );
     }
 
-    // Regression test for the Ctrl+Enter conflict on Linux/Windows:
-    // `gpui-component` registers `secondary-enter` (== ctrl-enter on non-mac)
-    // in the "Input" context, which would otherwise consume Ctrl+Enter and
-    // insert a newline. Adding our binding afterwards at the same context
-    // depth must win.
-    //
-    // On macOS `secondary` resolves to `cmd`, so the two keystrokes don't
-    // collide and the override is unnecessary — the precedence claim here
-    // doesn't apply, hence the cfg gate.
-    #[cfg(not(target_os = "macos"))]
+    // Regression test for the run-query / newline conflict:
+    // `gpui-component` registers `secondary-enter` in the "Input" context
+    // (== Ctrl+Enter on Linux/Windows, Cmd+Enter on macOS), which would
+    // otherwise consume the run-query chord and insert a newline. Our binding
+    // is registered afterwards at the same context depth so it must win.
     #[test]
     fn input_context_keybindings_override_secondary_enter() {
         gpui::actions!(dbflux_test_only, [PriorEnterBinding]);
@@ -135,13 +154,19 @@ mod tests {
         // Our override, registered later.
         keymap.add_bindings(input_context_keybindings());
 
-        let typed = [Keystroke::parse("ctrl-enter").unwrap()];
+        #[cfg(target_os = "macos")]
+        let run_keystroke = "cmd-enter";
+        #[cfg(not(target_os = "macos"))]
+        let run_keystroke = "ctrl-enter";
+
+        let typed = [Keystroke::parse(run_keystroke).unwrap()];
         let context_stack = [KeyContext::parse("Input").unwrap()];
         let (matches, _pending) = keymap.bindings_for_input(&typed, &context_stack);
 
-        let top = matches
-            .first()
-            .expect("ctrl-enter should match at least one binding in the Input context");
+        let top = matches.first().expect(
+            "the primary-modifier+Enter chord should match at least one binding in the \
+             Input context",
+        );
         assert!(
             top.action().partial_eq(&RunQuery),
             "RunQuery must take precedence over the earlier secondary-enter binding",

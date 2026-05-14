@@ -43,6 +43,43 @@ impl Modifiers {
         }
     }
 
+    /// Platform-aware "primary" modifier: Cmd on macOS, Ctrl elsewhere.
+    ///
+    /// Use this for application-level commands (palette, save, copy, new tab,
+    /// run query, …) where the convention is Cmd on macOS but Ctrl everywhere
+    /// else. For vim-style navigation (Ctrl+hjkl, Ctrl+u/d) and bindings that
+    /// would clash with macOS system shortcuts (Cmd+M, Cmd+Shift+3/4), keep
+    /// using [`Modifiers::ctrl`] / [`Modifiers::ctrl_shift`] instead.
+    pub fn primary() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                platform: true,
+                ..Default::default()
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self::ctrl()
+        }
+    }
+
+    /// Primary + Shift: Cmd+Shift on macOS, Ctrl+Shift elsewhere.
+    pub fn primary_shift() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                platform: true,
+                shift: true,
+                ..Default::default()
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self::ctrl_shift()
+        }
+    }
+
     #[allow(dead_code)]
     pub fn has_any(&self) -> bool {
         self.ctrl || self.alt || self.shift || self.platform
@@ -128,8 +165,13 @@ impl KeyChord {
 
 impl fmt::Display for KeyChord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Order: Cmd, Ctrl, Alt, Shift — matches the convention used in
+        // user-facing docs (e.g. "Cmd+Shift+P", "Ctrl+Shift+P").
         let mut parts = Vec::new();
 
+        if self.modifiers.platform {
+            parts.push("Cmd");
+        }
         if self.modifiers.ctrl {
             parts.push("Ctrl");
         }
@@ -138,9 +180,6 @@ impl fmt::Display for KeyChord {
         }
         if self.modifiers.shift {
             parts.push("Shift");
-        }
-        if self.modifiers.platform {
-            parts.push("Cmd");
         }
 
         let key_display = match self.key.as_str() {
@@ -215,5 +254,33 @@ mod tests {
     fn test_display() {
         let chord = KeyChord::new("p", Modifiers::ctrl_shift());
         assert_eq!(chord.to_string(), "Ctrl+Shift+p");
+    }
+
+    #[test]
+    fn test_display_cmd_first() {
+        let chord = KeyChord {
+            key: "p".to_string(),
+            modifiers: Modifiers {
+                platform: true,
+                shift: true,
+                ..Modifiers::none()
+            },
+        };
+        assert_eq!(chord.to_string(), "Cmd+Shift+p");
+    }
+
+    #[test]
+    fn test_primary_modifier_per_platform() {
+        let m = Modifiers::primary();
+        #[cfg(target_os = "macos")]
+        {
+            assert!(m.platform);
+            assert!(!m.ctrl);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(m.ctrl);
+            assert!(!m.platform);
+        }
     }
 }

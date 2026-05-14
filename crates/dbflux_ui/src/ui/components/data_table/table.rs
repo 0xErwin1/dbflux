@@ -105,29 +105,35 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-end", SelectToLineEnd, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-home", SelectToTop, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-end", SelectToBottom, Some(CONTEXT)),
-        KeyBinding::new("ctrl-a", SelectAll, Some(CONTEXT)),
+        // `secondary-*` is GPUI's platform-aware modifier: Cmd on macOS,
+        // Ctrl elsewhere. Use it for the system-standard commands so macOS
+        // gets the expected Cmd shortcut without binding the literal Ctrl
+        // chord too (which would shadow editor interrupt semantics on Mac).
+        KeyBinding::new("secondary-a", SelectAll, Some(CONTEXT)),
         KeyBinding::new("escape", ClearSelection, Some(CONTEXT)),
-        // Copy — `secondary-c` resolves to Cmd+C on macOS and Ctrl+C
-        // elsewhere, matching platform conventions. A literal `ctrl-c` here
-        // would fire on macOS Ctrl+C too, which is wrong.
+        // Copy
         KeyBinding::new("secondary-c", Copy, Some(CONTEXT)),
         KeyBinding::new("y y", Copy, Some(CONTEXT)),
         KeyBinding::new("shift-y shift-y", CopyRow, Some(CONTEXT)),
         // Edit mode
         KeyBinding::new("enter", StartEdit, Some(CONTEXT)),
         KeyBinding::new("f2", StartEdit, Some(CONTEXT)),
-        KeyBinding::new("ctrl-enter", SaveRow, Some(CONTEXT)),
+        KeyBinding::new("secondary-enter", SaveRow, Some(CONTEXT)),
         // Row operations (vim-style)
         KeyBinding::new("d d", DeleteRow, Some(CONTEXT)),
         KeyBinding::new("delete", DeleteRow, Some(CONTEXT)),
         KeyBinding::new("a a", AddRow, Some(CONTEXT)),
         KeyBinding::new("shift-a shift-a", DuplicateRow, Some(CONTEXT)),
+        // SetNull — local mnemonic ("N" for NULL). Kept as literal Ctrl on
+        // every platform; this isn't a system-standard shortcut and reusing
+        // Cmd+N on macOS would clash with NewQueryTab.
         KeyBinding::new("ctrl-n", SetNull, Some(CONTEXT)),
-        // Undo/Redo (vim-style + standard)
+        // Undo/Redo: standard Cmd/Ctrl variants via `secondary-`, plus
+        // vim-style `u` / `ctrl-r` kept literal as familiar editor aliases.
         KeyBinding::new("u", Undo, Some(CONTEXT)),
-        KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
+        KeyBinding::new("secondary-z", Undo, Some(CONTEXT)),
         KeyBinding::new("ctrl-r", Redo, Some(CONTEXT)),
-        KeyBinding::new("ctrl-shift-z", Redo, Some(CONTEXT)),
+        KeyBinding::new("secondary-shift-z", Redo, Some(CONTEXT)),
     ]);
 }
 
