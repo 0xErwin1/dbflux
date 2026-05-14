@@ -23,6 +23,7 @@ use crate::injection::{
 use crate::metadata::InfluxQueryMetadata;
 use crate::parser::flux::parse_flux_csv;
 use crate::parser::influxql::parse_influxql_json;
+use crate::query_generator::InfluxQueryGenerator;
 
 const INFLUXQL_MODE: &str = "influxql";
 const FLUX_MODE: &str = "flux";
@@ -40,6 +41,11 @@ pub struct InfluxConnection {
     pub default_bucket: Option<String>,
     pub org: Option<String>,
     last_metadata: RwLock<Option<InfluxQueryMetadata>>,
+    /// Query generator exposed through `Connection::query_generator()`.
+    ///
+    /// Kept as an owned value so it can be returned as `&dyn QueryGenerator`
+    /// with the connection's lifetime.
+    query_gen: InfluxQueryGenerator,
 }
 
 impl InfluxConnection {
@@ -51,6 +57,12 @@ impl InfluxConnection {
         default_bucket: Option<String>,
         org: Option<String>,
     ) -> Self {
+        let query_gen = InfluxQueryGenerator::new(
+            version,
+            default_language.clone(),
+            default_bucket.clone(),
+        );
+
         Self {
             http,
             version,
@@ -58,6 +70,7 @@ impl InfluxConnection {
             default_bucket,
             org,
             last_metadata: RwLock::new(None),
+            query_gen,
         }
     }
 
@@ -406,8 +419,9 @@ impl Connection for InfluxConnection {
         // into details_json without any driver-id branching.
         result.metadata_extra = Some(Self::build_metadata_extra_fields(&meta));
 
-        if let Ok(mut guard) = self.last_metadata.write() {
-            *guard = Some(meta);
+        match self.last_metadata.write() {
+            Ok(mut guard) => *guard = Some(meta),
+            Err(e) => log::warn!("Failed to store query metadata (lock poisoned): {e}"),
         }
 
         Ok(result)
@@ -425,9 +439,14 @@ impl Connection for InfluxConnection {
         // Enumerate all accessible buckets/databases so the UI can populate
         // the "Bucket"/"Database" source-context dropdown with every reachable
         // target, not just the profile default.
-        let databases = self.list_databases().unwrap_or_else(|_| {
-            // Fallback: if the API call fails and a default bucket is set,
-            // show at least that one so the dropdown is not empty.
+        let databases = self.list_databases().unwrap_or_else(|e| {
+            // Permission to list all buckets/databases is not always granted.
+            // Log the failure at warn level so operators can diagnose it, then
+            // fall back to showing only the profile default so the UI is not empty.
+            log::warn!(
+                "list_databases failed (falling back to profile default bucket): {e}"
+            );
+
             match &self.default_bucket {
                 Some(bucket) => vec![DatabaseInfo {
                     name: bucket.clone(),
@@ -699,7 +718,7 @@ impl Connection for InfluxConnection {
     }
 
     fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
-        None
+        Some(&self.query_gen)
     }
 }
 
