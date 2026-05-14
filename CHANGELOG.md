@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-dev.1] - 2026-05-14
+
 ### Changed
 
 * **Platform-aware keybindings** — application-level shortcuts now use
