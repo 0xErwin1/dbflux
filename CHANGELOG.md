@@ -4,6 +4,17 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-dev.2] - 2026-05-14
+
+### Fixed
+
+* **SQL editor diagnostics no longer flag PostgreSQL dollar-quoted
+  blocks** — valid `DO $$ ... $$;` anonymous code blocks and other
+  `$tag$`-quoted bodies were marked with spurious syntax errors because
+  the bundled tree-sitter SQL grammar does not understand dollar
+  quoting or PL/pgSQL. Parse diagnostics are now skipped when the query
+  contains a closed dollar-quoted block.
+
 ## [0.6.0-dev.1] - 2026-05-14
 
 ### Changed
