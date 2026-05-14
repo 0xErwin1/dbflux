@@ -4,6 +4,22 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+* **Platform-aware keybindings** — application-level shortcuts now use
+  Cmd on macOS and Ctrl on Linux/Windows: command palette
+  (`Cmd/Ctrl+Shift+P`), new/close/switch tab, run query, save, open
+  script/history, export results, toggle sidebar, audit viewer, and
+  Results cell copy. vim-style navigation (`Ctrl+h/j/k/l`, `Ctrl+u/d`)
+  and `Ctrl+Tab` / `Ctrl+Shift+Tab` stay literal Ctrl on every platform,
+  along with focus shortcuts (`Ctrl+Shift+1..4`) that would clash with
+  macOS screenshot bindings and `Ctrl+M` which would clash with
+  window-minimize on macOS. Inline data-table commands (Copy, Save row,
+  Select all, Undo/Redo) use GPUI's `secondary-` modifier so they pick
+  the right key per platform. Command-palette shortcut labels and the
+  SQL editor / save-row hints now reflect the platform modifier. Closes
+  #63.
+
 ## [0.6.0-dev.0] - 2026-05-12
 
 ### Features
