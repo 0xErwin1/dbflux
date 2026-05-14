@@ -1074,10 +1074,15 @@ impl Workspace {
     }
 
     fn default_commands() -> Vec<PaletteCommand> {
-        // Shortcut labels for the command palette. Keep these in sync with the
-        // primary-modifier bindings in `keymap::defaults`: app-level commands
-        // use Cmd on macOS / Ctrl elsewhere, while the literal-Ctrl bindings
-        // (Ctrl+Tab, Ctrl+Shift+1..4) stay the same on every platform.
+        // Shortcut labels for the command palette. The strings here are in
+        // the kebab-case form expected by `palette_shortcut_parts` so they
+        // render as a multi-badge `Chord` (e.g. `[Ctrl] + [N]`) rather than a
+        // single collapsed token.
+        //
+        // The primary-modifier bindings in `keymap::defaults` use Cmd on
+        // macOS and Ctrl elsewhere, so the labels below mirror that. Bindings
+        // kept literal on every platform (Ctrl+Tab, Ctrl+Shift+1..4) keep
+        // `ctrl-` here as well.
         struct ShortcutLabels {
             new_query_tab: &'static str,
             run_query: &'static str,
@@ -1094,31 +1099,31 @@ impl Workspace {
 
         #[cfg(target_os = "macos")]
         const SC: ShortcutLabels = ShortcutLabels {
-            new_query_tab: "Cmd+N",
-            run_query: "Cmd+Enter",
-            run_query_in_new_tab: "Cmd+Shift+Enter",
-            save_query: "Cmd+S",
-            save_file_as: "Cmd+Shift+S",
-            open_script_file: "Cmd+O",
-            open_history: "Cmd+P",
-            close_tab: "Cmd+W",
-            export_results: "Cmd+E",
-            toggle_sidebar: "Cmd+B",
-            open_audit_viewer: "Cmd+Shift+A",
+            new_query_tab: "cmd-n",
+            run_query: "cmd-enter",
+            run_query_in_new_tab: "cmd-shift-enter",
+            save_query: "cmd-s",
+            save_file_as: "cmd-shift-s",
+            open_script_file: "cmd-o",
+            open_history: "cmd-p",
+            close_tab: "cmd-w",
+            export_results: "cmd-e",
+            toggle_sidebar: "cmd-b",
+            open_audit_viewer: "cmd-shift-a",
         };
         #[cfg(not(target_os = "macos"))]
         const SC: ShortcutLabels = ShortcutLabels {
-            new_query_tab: "Ctrl+N",
-            run_query: "Ctrl+Enter",
-            run_query_in_new_tab: "Ctrl+Shift+Enter",
-            save_query: "Ctrl+S",
-            save_file_as: "Ctrl+Shift+S",
-            open_script_file: "Ctrl+O",
-            open_history: "Ctrl+P",
-            close_tab: "Ctrl+W",
-            export_results: "Ctrl+E",
-            toggle_sidebar: "Ctrl+B",
-            open_audit_viewer: "Ctrl+Shift+A",
+            new_query_tab: "ctrl-n",
+            run_query: "ctrl-enter",
+            run_query_in_new_tab: "ctrl-shift-enter",
+            save_query: "ctrl-s",
+            save_file_as: "ctrl-shift-s",
+            open_script_file: "ctrl-o",
+            open_history: "ctrl-p",
+            close_tab: "ctrl-w",
+            export_results: "ctrl-e",
+            toggle_sidebar: "ctrl-b",
+            open_audit_viewer: "ctrl-shift-a",
         };
 
         vec![
@@ -1136,13 +1141,13 @@ impl Workspace {
             PaletteCommand::new("open_history", "Open Query History", "Editor")
                 .with_shortcut(SC.open_history),
             PaletteCommand::new("cancel_query", "Cancel Running Query", "Editor")
-                .with_shortcut("Esc"),
+                .with_shortcut("esc"),
             // Tabs — Ctrl+Tab / Ctrl+Shift+Tab stay literal Ctrl on every
             // platform (Cmd+Tab is the macOS app switcher).
             PaletteCommand::new("close_tab", "Close Current Tab", "Tabs")
                 .with_shortcut(SC.close_tab),
-            PaletteCommand::new("next_tab", "Next Tab", "Tabs").with_shortcut("Ctrl+Tab"),
-            PaletteCommand::new("prev_tab", "Previous Tab", "Tabs").with_shortcut("Ctrl+Shift+Tab"),
+            PaletteCommand::new("next_tab", "Next Tab", "Tabs").with_shortcut("ctrl-tab"),
+            PaletteCommand::new("prev_tab", "Previous Tab", "Tabs").with_shortcut("ctrl-shift-tab"),
             // Results
             PaletteCommand::new("export_results", "Export Results", "Results")
                 .with_shortcut(SC.export_results),
@@ -1157,13 +1162,13 @@ impl Workspace {
             // Focus — Ctrl+Shift+1..4 stay literal Ctrl on every platform
             // (Cmd+Shift+3/4 are macOS screenshot shortcuts).
             PaletteCommand::new("focus_sidebar", "Focus Sidebar", "Focus")
-                .with_shortcut("Ctrl+Shift+1"),
+                .with_shortcut("ctrl-shift-1"),
             PaletteCommand::new("focus_editor", "Focus Editor", "Focus")
-                .with_shortcut("Ctrl+Shift+2"),
+                .with_shortcut("ctrl-shift-2"),
             PaletteCommand::new("focus_results", "Focus Results", "Focus")
-                .with_shortcut("Ctrl+Shift+3"),
+                .with_shortcut("ctrl-shift-3"),
             PaletteCommand::new("focus_tasks", "Focus Tasks Panel", "Focus")
-                .with_shortcut("Ctrl+Shift+4"),
+                .with_shortcut("ctrl-shift-4"),
             // View
             PaletteCommand::new("toggle_sidebar", "Toggle Sidebar", "View")
                 .with_shortcut(SC.toggle_sidebar),
