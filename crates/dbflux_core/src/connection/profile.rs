@@ -782,9 +782,7 @@ impl DbConfig {
             DbConfig::Redis { database, .. } => database.map(|d| d.to_string()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
-            DbConfig::InfluxDB {
-                default_bucket, ..
-            } => default_bucket.clone(),
+            DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
             DbConfig::External { .. } => None,
         }
     }

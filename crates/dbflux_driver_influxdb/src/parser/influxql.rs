@@ -362,7 +362,11 @@ mod tests {
         let result = parse_influxql_json(body).expect("parse must succeed");
 
         // All rows from both statements must be present.
-        assert_eq!(result.rows.len(), 3, "rows from all statements must be included");
+        assert_eq!(
+            result.rows.len(),
+            3,
+            "rows from all statements must be included"
+        );
 
         // First column must be the synthetic statement_index.
         assert_eq!(
@@ -371,11 +375,23 @@ mod tests {
         );
 
         // Rows from statement 0 carry index 0.
-        assert_eq!(result.rows[0][0], Value::Int(0), "first row from statement 0");
+        assert_eq!(
+            result.rows[0][0],
+            Value::Int(0),
+            "first row from statement 0"
+        );
 
         // Rows from statement 1 carry index 1.
-        assert_eq!(result.rows[1][0], Value::Int(1), "first row from statement 1");
-        assert_eq!(result.rows[2][0], Value::Int(1), "second row from statement 1");
+        assert_eq!(
+            result.rows[1][0],
+            Value::Int(1),
+            "first row from statement 1"
+        );
+        assert_eq!(
+            result.rows[2][0],
+            Value::Int(1),
+            "second row from statement 1"
+        );
     }
 
     // C.3.7 — multi-statement: empty first statement does not affect output of second
@@ -396,7 +412,11 @@ mod tests {
         let result = parse_influxql_json(body).expect("parse must succeed");
 
         // Only one non-empty statement, so no statement_index column.
-        assert_eq!(result.rows.len(), 1, "only the non-empty statement contributes rows");
+        assert_eq!(
+            result.rows.len(),
+            1,
+            "only the non-empty statement contributes rows"
+        );
         assert_ne!(
             result.columns.first().map(|c| c.name.as_str()),
             Some(STATEMENT_INDEX_COLUMN),
@@ -422,7 +442,10 @@ mod tests {
 
         match parse_influxql_json(body) {
             Err(ParseError::QueryError(msg)) => {
-                assert!(msg.contains("unknown measurement"), "error message must be forwarded: {msg}");
+                assert!(
+                    msg.contains("unknown measurement"),
+                    "error message must be forwarded: {msg}"
+                );
             }
             other => panic!("expected QueryError, got: {other:?}"),
         }

@@ -1194,21 +1194,25 @@ impl CodeDocument {
                     .when(
                         source_spec.is_some_and(|spec| !spec.query_modes.is_empty()),
                         |el| {
-                            el.child(div().flex_none().child(Text::caption(
-                                source_spec
-                                    .and_then(|spec| spec.query_mode_label.clone())
-                                    .unwrap_or_else(|| "Syntax".to_string()),
-                            )))
-                            .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
-                                context_slot_is_keyboard_focused(
-                                    self.focus_mode,
-                                    self.context_bar_slot,
-                                    ContextBarSlot::SourceQueryMode,
-                                ),
-                                Some(theme.ring),
-                                control_shell(self.source_query_mode_dropdown.clone(), cx),
-                                cx,
-                            )))
+                            el.child(
+                                div().flex_none().child(Text::caption(
+                                    source_spec
+                                        .and_then(|spec| spec.query_mode_label.clone())
+                                        .unwrap_or_else(|| "Syntax".to_string()),
+                                )),
+                            )
+                            .child(
+                                div().flex_none().min_w(px(180.0)).child(focus_frame(
+                                    context_slot_is_keyboard_focused(
+                                        self.focus_mode,
+                                        self.context_bar_slot,
+                                        ContextBarSlot::SourceQueryMode,
+                                    ),
+                                    Some(theme.ring),
+                                    control_shell(self.source_query_mode_dropdown.clone(), cx),
+                                    cx,
+                                )),
+                            )
                         },
                     )
                     // "Source:" is the generic label for the target-selector dropdown
@@ -1240,18 +1244,25 @@ impl CodeDocument {
                     }),
                     |el, (dropdown, label)| {
                         el.child(div().flex_none().child(Text::caption(label)))
-                            .child(div().flex_none().min_w(px(220.0)).child(control_shell(dropdown, cx)))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .min_w(px(220.0))
+                                    .child(control_shell(dropdown, cx)),
+                            )
                     },
                 );
 
                 // Text-input fallback when there is no time-range panel (specs
                 // without start/end labels — not InfluxDB but kept for generality).
                 el.when(self.source_time_range_panel.is_none(), |el| {
-                    el.child(div().flex_none().child(Text::caption(
-                        source_spec
-                            .map(|spec| spec.start_label.clone())
-                            .unwrap_or_else(|| "Start".to_string()),
-                    )))
+                    el.child(
+                        div().flex_none().child(Text::caption(
+                            source_spec
+                                .map(|spec| spec.start_label.clone())
+                                .unwrap_or_else(|| "Start".to_string()),
+                        )),
+                    )
                     .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
@@ -1262,11 +1273,13 @@ impl CodeDocument {
                         control_shell(Input::new(&self.source_start_input), cx),
                         cx,
                     )))
-                    .child(div().flex_none().child(Text::caption(
-                        source_spec
-                            .map(|spec| spec.end_label.clone())
-                            .unwrap_or_else(|| "End".to_string()),
-                    )))
+                    .child(
+                        div().flex_none().child(Text::caption(
+                            source_spec
+                                .map(|spec| spec.end_label.clone())
+                                .unwrap_or_else(|| "End".to_string()),
+                        )),
+                    )
                     .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
@@ -1339,43 +1352,57 @@ impl CodeDocument {
             // Custom date-range second row — only visible when Custom is active.
             // This avoids overflowing the single-line bar with the date picker,
             // four time dropdowns, and Apply button all pushed onto one row.
-            .when_some(custom_range_info, |el, (panel, date_picker, start_hour, start_minute, end_hour, end_minute, can_apply)| {
-                el.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .pt(Spacing::XS)
-                        .child(div().w(px(320.0)).child(control_shell(
-                            DatePicker::new(&date_picker)
-                                .small()
-                                .placeholder("Select date range")
-                                .number_of_months(2),
-                            cx,
-                        )))
-                        .child(Text::caption("from"))
-                        .child(div().w(px(72.0)).child(control_shell(start_hour, cx)))
-                        .child(div().w(px(72.0)).child(control_shell(start_minute, cx)))
-                        .child(Text::caption("to"))
-                        .child(div().w(px(72.0)).child(control_shell(end_hour, cx)))
-                        .child(div().w(px(72.0)).child(control_shell(end_minute, cx)))
-                        .child(
-                            Button::new("ctx-time-range-apply", "Apply")
-                                .small()
-                                .disabled(!can_apply)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    panel.update(cx, |p, cx| {
-                                        // Ignore the returned bounds — the panel emits
-                                        // TimeRangeChanged which is the authoritative signal.
-                                        let _ = p.apply_custom_range(cx);
-                                    });
-                                    this.sync_source_exec_context(cx);
-                                    cx.emit(DocumentEvent::MetaChanged);
-                                    cx.notify();
-                                })),
-                        ),
-                )
-            })
+            .when_some(
+                custom_range_info,
+                |el,
+                 (
+                    panel,
+                    date_picker,
+                    start_hour,
+                    start_minute,
+                    end_hour,
+                    end_minute,
+                    can_apply,
+                )| {
+                    el.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .pt(Spacing::XS)
+                            .child(
+                                div().w(px(320.0)).child(control_shell(
+                                    DatePicker::new(&date_picker)
+                                        .small()
+                                        .placeholder("Select date range")
+                                        .number_of_months(2),
+                                    cx,
+                                )),
+                            )
+                            .child(Text::caption("from"))
+                            .child(div().w(px(72.0)).child(control_shell(start_hour, cx)))
+                            .child(div().w(px(72.0)).child(control_shell(start_minute, cx)))
+                            .child(Text::caption("to"))
+                            .child(div().w(px(72.0)).child(control_shell(end_hour, cx)))
+                            .child(div().w(px(72.0)).child(control_shell(end_minute, cx)))
+                            .child(
+                                Button::new("ctx-time-range-apply", "Apply")
+                                    .small()
+                                    .disabled(!can_apply)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        panel.update(cx, |p, cx| {
+                                            // Ignore the returned bounds — the panel emits
+                                            // TimeRangeChanged which is the authoritative signal.
+                                            let _ = p.apply_custom_range(cx);
+                                        });
+                                        this.sync_source_exec_context(cx);
+                                        cx.emit(DocumentEvent::MetaChanged);
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                },
+            )
             .into_any_element()
     }
 }

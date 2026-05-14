@@ -171,8 +171,14 @@ mod tests {
     fn query_measurement_influxql_format() {
         let q = InfluxQueryGenerator::query_measurement_influxql("mydb", "cpu");
         assert!(q.contains("SELECT * FROM"), "must select all: {q}");
-        assert!(q.contains("\"mydb\".\"autogen\".\"cpu\""), "must include quoted db.rp.measurement: {q}");
-        assert!(q.contains("WHERE time > now() - 1h"), "must include time filter: {q}");
+        assert!(
+            q.contains("\"mydb\".\"autogen\".\"cpu\""),
+            "must include quoted db.rp.measurement: {q}"
+        );
+        assert!(
+            q.contains("WHERE time > now() - 1h"),
+            "must include time filter: {q}"
+        );
         assert!(q.contains("LIMIT 100"), "must include limit: {q}");
     }
 
@@ -180,8 +186,14 @@ mod tests {
     #[test]
     fn query_measurement_flux_format() {
         let q = InfluxQueryGenerator::query_measurement_flux("my-bucket", "temperature");
-        assert!(q.contains("from(bucket: \"my-bucket\")"), "must start from bucket: {q}");
-        assert!(q.contains("|> range(start: -1h)"), "must include range: {q}");
+        assert!(
+            q.contains("from(bucket: \"my-bucket\")"),
+            "must start from bucket: {q}"
+        );
+        assert!(
+            q.contains("|> range(start: -1h)"),
+            "must include range: {q}"
+        );
         assert!(
             q.contains("r._measurement == \"temperature\""),
             "must filter by measurement: {q}"
@@ -202,10 +214,20 @@ mod tests {
             database: "mydb",
         };
 
-        let result = qg.template_for_collection(&request).expect("must produce template");
+        let result = qg
+            .template_for_collection(&request)
+            .expect("must produce template");
         assert_eq!(result.language, QueryLanguage::InfluxQuery);
-        assert!(result.text.contains("SELECT * FROM"), "v1 must use InfluxQL: {}", result.text);
-        assert!(result.text.contains("mydb"), "must reference bucket: {}", result.text);
+        assert!(
+            result.text.contains("SELECT * FROM"),
+            "v1 must use InfluxQL: {}",
+            result.text
+        );
+        assert!(
+            result.text.contains("mydb"),
+            "must reference bucket: {}",
+            result.text
+        );
     }
 
     #[test]
@@ -221,9 +243,15 @@ mod tests {
             database: "my-bucket",
         };
 
-        let result = qg.template_for_collection(&request).expect("must produce template");
+        let result = qg
+            .template_for_collection(&request)
+            .expect("must produce template");
         assert_eq!(result.language, QueryLanguage::Flux);
-        assert!(result.text.contains("from(bucket:"), "v2/Flux must use Flux: {}", result.text);
+        assert!(
+            result.text.contains("from(bucket:"),
+            "v2/Flux must use Flux: {}",
+            result.text
+        );
         assert!(
             result.text.contains("temperature"),
             "must reference measurement: {}",
@@ -250,9 +278,6 @@ mod tests {
     fn query_measurement_flux_escapes_embedded_quotes() {
         let q = InfluxQueryGenerator::query_measurement_flux("my\"bucket", "my\"measurement");
         // Embedded double quotes are escaped with backslash in Flux string literals
-        assert!(
-            q.contains("\\\""),
-            "Flux must escape embedded quotes: {q}"
-        );
+        assert!(q.contains("\\\""), "Flux must escape embedded quotes: {q}");
     }
 }

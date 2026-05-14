@@ -397,7 +397,9 @@ mod tests {
         values.insert("use_v2".to_string(), "true".to_string());
         // No "bucket" key → bucket field is empty/absent.
 
-        let config = driver.build_config(&values).expect("v2 config must build without bucket");
+        let config = driver
+            .build_config(&values)
+            .expect("v2 config must build without bucket");
         let DbConfig::InfluxDB { default_bucket, .. } = config else {
             panic!("expected InfluxDB config");
         };
@@ -442,7 +444,9 @@ mod tests {
         values.insert("use_v2".to_string(), "false".to_string());
         // No "database" key → omitted.
 
-        let config = driver.build_config(&values).expect("v1 config must build without database");
+        let config = driver
+            .build_config(&values)
+            .expect("v1 config must build without database");
         let DbConfig::InfluxDB { default_bucket, .. } = config else {
             panic!("expected InfluxDB config");
         };

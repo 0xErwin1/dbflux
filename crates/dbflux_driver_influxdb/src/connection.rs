@@ -57,11 +57,8 @@ impl InfluxConnection {
         default_bucket: Option<String>,
         org: Option<String>,
     ) -> Self {
-        let query_gen = InfluxQueryGenerator::new(
-            version,
-            default_language.clone(),
-            default_bucket.clone(),
-        );
+        let query_gen =
+            InfluxQueryGenerator::new(version, default_language.clone(), default_bucket.clone());
 
         Self {
             http,
@@ -392,7 +389,8 @@ impl Connection for InfluxConnection {
             }
         }
 
-        let mut result = self.dispatch(language.clone(), bucket_for_dispatch, &final_query, started)?;
+        let mut result =
+            self.dispatch(language.clone(), bucket_for_dispatch, &final_query, started)?;
 
         if let Some(ref rw) = resolved_window {
             result.resolved_window = Some(rw.clone());
@@ -443,9 +441,7 @@ impl Connection for InfluxConnection {
             // Permission to list all buckets/databases is not always granted.
             // Log the failure at warn level so operators can diagnose it, then
             // fall back to showing only the profile default so the UI is not empty.
-            log::warn!(
-                "list_databases failed (falling back to profile default bucket): {e}"
-            );
+            log::warn!("list_databases failed (falling back to profile default bucket): {e}");
 
             match &self.default_bucket {
                 Some(bucket) => vec![DatabaseInfo {
@@ -618,8 +614,8 @@ impl Connection for InfluxConnection {
                     return Err(DbError::QueryFailed(fe));
                 }
 
-                let mut result = parse_flux_csv(&resp.body)
-                    .map_err(|e| DbError::query_failed(e.to_string()))?;
+                let mut result =
+                    parse_flux_csv(&resp.body).map_err(|e| DbError::query_failed(e.to_string()))?;
                 result.execution_time = started.elapsed();
                 Ok(result)
             }
@@ -672,8 +668,8 @@ impl Connection for InfluxConnection {
                     return Err(DbError::QueryFailed(fe));
                 }
 
-                let result = parse_flux_csv(&resp.body)
-                    .map_err(|e| DbError::query_failed(e.to_string()))?;
+                let result =
+                    parse_flux_csv(&resp.body).map_err(|e| DbError::query_failed(e.to_string()))?;
 
                 let count = result
                     .rows
@@ -694,11 +690,11 @@ impl Connection for InfluxConnection {
                 // InfluxQL: SELECT count(*) returns one row with one count per field.
                 // We take the maximum count as the best estimate of total points.
                 // The bucket comes from the collection reference (sidebar leaf).
-                let query =
-                    format!("SELECT count(*) FROM {measurement}",);
+                let query = format!("SELECT count(*) FROM {measurement}",);
 
                 let started = Instant::now();
-                let result = self.dispatch(self.default_language.clone(), bucket, &query, started)?;
+                let result =
+                    self.dispatch(self.default_language.clone(), bucket, &query, started)?;
 
                 let max_count = result
                     .rows
@@ -1231,7 +1227,10 @@ mod tests {
     #[test]
     fn escape_influxql_ident_wraps_plain_name() {
         assert_eq!(escape_influxql_ident("cpu"), "\"cpu\"");
-        assert_eq!(escape_influxql_ident("my_measurement"), "\"my_measurement\"");
+        assert_eq!(
+            escape_influxql_ident("my_measurement"),
+            "\"my_measurement\""
+        );
     }
 
     #[test]
@@ -1258,9 +1257,8 @@ mod tests {
             .with_pagination(Pagination::Offset { limit, offset });
 
         // Build the InfluxQL query the same way browse_collection does.
-        let query = format!(
-            "SELECT * FROM {escaped} ORDER BY time DESC LIMIT {limit} OFFSET {offset}",
-        );
+        let query =
+            format!("SELECT * FROM {escaped} ORDER BY time DESC LIMIT {limit} OFFSET {offset}",);
 
         assert!(
             query.contains("SELECT * FROM"),

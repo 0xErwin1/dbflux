@@ -414,9 +414,7 @@ impl ConnectionDriverConfigDto {
                     default_bucket: json
                         .get("default_bucket")
                         .and_then(|v| v.as_str())
-                        .or_else(|| {
-                            json.get("bucket_or_database").and_then(|v| v.as_str())
-                        })
+                        .or_else(|| json.get("bucket_or_database").and_then(|v| v.as_str()))
                         .filter(|s| !s.is_empty())
                         .map(String::from),
                     retention_policy: json

@@ -518,9 +518,7 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::Redis { database, .. } => database.map(|value| value.to_string()),
         DbConfig::DynamoDB { table, .. } => table.clone(),
         DbConfig::CloudWatchLogs { .. } => None,
-        DbConfig::InfluxDB {
-            default_bucket, ..
-        } => default_bucket.clone(),
+        DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }

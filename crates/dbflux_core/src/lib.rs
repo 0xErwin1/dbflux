@@ -96,12 +96,11 @@ pub use facade::{DangerousQuerySuppressions, SessionFacade};
 
 pub use query::{
     AggregateFunction, AggregateRequest, AggregateSpec, CollectionBrowseRequest,
-    CollectionCountRequest, CollectionRef, ColumnMeta, ColumnRef, DangerousQueryKind,
-    DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic, ExplainRequest,
-    CollectionTemplateRequest, GeneratedQuery, LanguageService, MutationCategory,
-    MutationTemplateOperation, MutationTemplateRequest, OrderByColumn, Pagination, PlannedQuery,
-    QueryGenerator, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
-    ReadTemplateOperation, ReadTemplateRequest,
+    CollectionCountRequest, CollectionRef, CollectionTemplateRequest, ColumnMeta, ColumnRef,
+    DangerousQueryKind, DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic,
+    ExplainRequest, GeneratedQuery, LanguageService, MutationCategory, MutationTemplateOperation,
+    MutationTemplateRequest, OrderByColumn, Pagination, PlannedQuery, QueryGenerator, QueryHandle,
+    QueryRequest, QueryResult, QueryResultShape, ReadTemplateOperation, ReadTemplateRequest,
     ResolvedWindow, Row, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
     SemanticPlanner, SemanticPredicate, SemanticRequest, SemanticRequestKind, SortDirection,
     SqlLanguageService, SqlMutationGenerator, TableBrowseRequest, TableCountRequest, TableRef,
