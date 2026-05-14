@@ -24,6 +24,10 @@ pub struct MultiSelect {
     open: bool,
     placeholder: SharedString,
     menu_scroll_handle: ScrollHandle,
+    /// When true, the trigger omits its own border/background so it can be
+    /// embedded inside an external shell (e.g. `control_shell`) without
+    /// double-layering visual chrome.
+    bare: bool,
 }
 
 impl MultiSelect {
@@ -35,7 +39,18 @@ impl MultiSelect {
             open: false,
             placeholder: "Select…".into(),
             menu_scroll_handle: ScrollHandle::new(),
+            bare: false,
         }
+    }
+
+    /// Suppress the trigger's own border and background.
+    ///
+    /// Use this when the MultiSelect is placed inside a container that already
+    /// provides the visual shell (e.g. `control_shell`), to avoid stacking
+    /// two sets of borders and backgrounds.
+    pub fn bare(mut self) -> Self {
+        self.bare = true;
+        self
     }
 
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
@@ -234,7 +249,10 @@ impl Render for MultiSelect {
         let is_empty = self.items.is_empty();
         let label = self.render_trigger_label();
         let has_selection = !self.selected_indices.is_empty();
+        let bare = self.bare;
 
+        // In bare mode the trigger omits its own border/background to avoid
+        // double chrome when embedded inside `control_shell`.
         let trigger = div()
             .id("ms-trigger")
             .h(Heights::BUTTON)
@@ -244,10 +262,12 @@ impl Render for MultiSelect {
             .gap_2()
             .w_full()
             .px_3()
-            .rounded_md()
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.input)
+            .when(!bare, |el| {
+                el.rounded_md()
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.input)
+            })
             .when(is_empty, |el| el.cursor_not_allowed().opacity(0.5))
             .when(!is_empty, |el| {
                 el.cursor_pointer()

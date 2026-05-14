@@ -546,8 +546,10 @@ impl CodeDocument {
                 .placeholder("Syntax")
                 .toolbar_style(true)
         });
+        // bare() suppresses the trigger's own border/background because the
+        // context bar wraps this in control_shell which provides the chrome.
         let source_targets =
-            cx.new(|_cx| MultiSelect::new("ctx-source-targets").placeholder("Sources"));
+            cx.new(|_cx| MultiSelect::new("ctx-source-targets").bare().placeholder("Sources"));
         let source_start_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
         let source_end_input =

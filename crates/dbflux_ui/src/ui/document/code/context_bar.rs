@@ -1155,13 +1155,18 @@ impl CodeDocument {
         });
 
         // Build the primary (always-visible) controls row.
+        // flex_wrap() allows controls to wrap to the next line on narrow viewports
+        // rather than overflowing the bar's right edge.
         let main_row = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(Spacing::SM)
             .child(
+                // flex_none keeps the label+control pair together on the same wrap line.
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap_1()
                     .child(Icon::new(AppIcon::Database).size(px(12.0)).muted())
@@ -1169,6 +1174,7 @@ impl CodeDocument {
             )
             .child(
                 div()
+                    .flex_none()
                     .min_w(context_dropdown_min_width(0))
                     .child(focus_frame(
                         context_slot_is_keyboard_focused(
@@ -1188,12 +1194,12 @@ impl CodeDocument {
                     .when(
                         source_spec.is_some_and(|spec| !spec.query_modes.is_empty()),
                         |el| {
-                            el.child(Text::caption(
+                            el.child(div().flex_none().child(Text::caption(
                                 source_spec
                                     .and_then(|spec| spec.query_mode_label.clone())
                                     .unwrap_or_else(|| "Syntax".to_string()),
-                            ))
-                            .child(div().min_w(px(180.0)).child(focus_frame(
+                            )))
+                            .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
                                 context_slot_is_keyboard_focused(
                                     self.focus_mode,
                                     self.context_bar_slot,
@@ -1205,12 +1211,12 @@ impl CodeDocument {
                             )))
                         },
                     )
-                    .child(Text::caption(
-                        source_spec
-                            .map(|spec| spec.targets_label.clone())
-                            .unwrap_or_else(|| "Sources".to_string()),
-                    ))
-                    .child(div().min_w(px(260.0)).child(focus_frame(
+                    // "Source:" is the generic label for the target-selector dropdown
+                    // across all drivers.  The driver-specific label (spec.targets_label)
+                    // is intentionally not used here — the placeholder already carries
+                    // driver-specific phrasing (e.g. "Select bucket...").
+                    .child(div().flex_none().child(Text::caption("Source:")))
+                    .child(div().flex_none().min_w(px(260.0)).child(focus_frame(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
@@ -1233,20 +1239,20 @@ impl CodeDocument {
                         (dropdown, label)
                     }),
                     |el, (dropdown, label)| {
-                        el.child(Text::caption(label))
-                            .child(div().min_w(px(220.0)).child(control_shell(dropdown, cx)))
+                        el.child(div().flex_none().child(Text::caption(label)))
+                            .child(div().flex_none().min_w(px(220.0)).child(control_shell(dropdown, cx)))
                     },
                 );
 
                 // Text-input fallback when there is no time-range panel (specs
                 // without start/end labels — not InfluxDB but kept for generality).
                 el.when(self.source_time_range_panel.is_none(), |el| {
-                    el.child(Text::caption(
+                    el.child(div().flex_none().child(Text::caption(
                         source_spec
                             .map(|spec| spec.start_label.clone())
                             .unwrap_or_else(|| "Start".to_string()),
-                    ))
-                    .child(div().min_w(px(180.0)).child(focus_frame(
+                    )))
+                    .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
@@ -1256,12 +1262,12 @@ impl CodeDocument {
                         control_shell(Input::new(&self.source_start_input), cx),
                         cx,
                     )))
-                    .child(Text::caption(
+                    .child(div().flex_none().child(Text::caption(
                         source_spec
                             .map(|spec| spec.end_label.clone())
                             .unwrap_or_else(|| "End".to_string()),
-                    ))
-                    .child(div().min_w(px(180.0)).child(focus_frame(
+                    )))
+                    .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
@@ -1274,36 +1280,40 @@ impl CodeDocument {
                 })
             })
             .when(!show_source_controls && show_db, |el| {
-                el.child(Text::caption("Database:")).child(
-                    div()
-                        .min_w(context_dropdown_min_width(1))
-                        .child(focus_frame(
-                            context_slot_is_keyboard_focused(
-                                self.focus_mode,
-                                self.context_bar_slot,
-                                ContextBarSlot::Database,
-                            ),
-                            Some(theme.ring),
-                            control_shell(self.database_dropdown.clone(), cx),
-                            cx,
-                        )),
-                )
+                el.child(div().flex_none().child(Text::caption("Database:")))
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(context_dropdown_min_width(1))
+                            .child(focus_frame(
+                                context_slot_is_keyboard_focused(
+                                    self.focus_mode,
+                                    self.context_bar_slot,
+                                    ContextBarSlot::Database,
+                                ),
+                                Some(theme.ring),
+                                control_shell(self.database_dropdown.clone(), cx),
+                                cx,
+                            )),
+                    )
             })
             .when(!show_source_controls && show_schema, |el| {
-                el.child(Text::caption("Schema:")).child(
-                    div()
-                        .min_w(context_dropdown_min_width(2))
-                        .child(focus_frame(
-                            context_slot_is_keyboard_focused(
-                                self.focus_mode,
-                                self.context_bar_slot,
-                                ContextBarSlot::Schema,
-                            ),
-                            Some(theme.ring),
-                            control_shell(self.schema_dropdown.clone(), cx),
-                            cx,
-                        )),
-                )
+                el.child(div().flex_none().child(Text::caption("Schema:")))
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(context_dropdown_min_width(2))
+                            .child(focus_frame(
+                                context_slot_is_keyboard_focused(
+                                    self.focus_mode,
+                                    self.context_bar_slot,
+                                    ContextBarSlot::Schema,
+                                ),
+                                Some(theme.ring),
+                                control_shell(self.schema_dropdown.clone(), cx),
+                                cx,
+                            )),
+                    )
             })
             .child(div().flex_1())
             .when_some(self.path.as_ref(), |el, path| {
