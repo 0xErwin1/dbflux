@@ -14,6 +14,9 @@ InfluxDB driver for DBFlux.
 - **Structured error messages** — server-side errors are parsed from the JSON `{"error": "..."}` field instead of being displayed as raw HTTP status codes.
 - **CSV and JSON export** — query results can be exported through the standard DBFlux export pipeline.
 - **Audit emission** — all queries are tracked through the standard DBFlux audit sink. The `bucket_or_database` metadata field records the actual bucket used for each query, not the profile default.
+- **Multi-statement InfluxQL** — when a query contains multiple statements separated by `;` (e.g. `SHOW MEASUREMENTS; SHOW SERIES`), all results are concatenated into a single result set. A synthetic `statement_index` integer column is prepended to distinguish rows from different statements.
+- **"Query Measurement" context menu** — right-clicking a measurement in the sidebar shows "Query Measurement". The action opens a new code document pre-populated with a template query (`SELECT * FROM ...` for InfluxQL, `from(bucket: ...) |> range(...)` for Flux).
+- **"New Query" context menu on buckets** — right-clicking a bucket/database node shows "New Query", opening a blank code document with the connection activated.
 
 ## Limitations
 
@@ -22,6 +25,6 @@ InfluxDB driver for DBFlux.
 - **No transactions** — InfluxDB does not support transactions.
 - **InfluxQL requires a bucket** — InfluxQL queries embed the bucket in the URL (`?db=<bucket>`). If neither the source-context dropdown nor the profile default provides a bucket, execution is rejected with a clear error asking the user to select one.
 - **Regex-based time predicate detection** — the driver uses regular expressions to determine whether a query already contains a time predicate. This may false-positive on quoted string literals that happen to contain text matching `time <`, `time >`, or `|> range(`.
-- **Multi-statement InfluxQL returns first result only** — when a query contains multiple statements separated by `;`, only the result of the first statement is returned. Remaining results are discarded.
+- **Multi-statement columns are fixed by the first non-empty statement** — when a multi-statement query returns results with different shapes (e.g. `SHOW MEASUREMENTS; SHOW SERIES`), the column layout is determined by the first non-empty statement. Rows from subsequent statements are mapped to that layout. Mismatched shapes produce misaligned columns rather than an error.
 - **Basic auth via Authorization header** — v1 username/password credentials are sent as an `Authorization: Basic <base64>` header rather than via URL query parameters. This is cleaner for log hygiene but differs from some InfluxDB client libraries.
 - **Backwards-compatible serialisation** — profiles saved with the old required `bucket_or_database` field continue to load correctly. The field is deserialized as `default_bucket` via a serde alias. Profiles saved after this change use the `default_bucket` key.

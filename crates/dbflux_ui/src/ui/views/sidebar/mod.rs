@@ -78,6 +78,15 @@ pub enum SidebarEvent {
         badge: String,
         query: String,
     },
+    /// Open a new code document pre-populated with the given query text.
+    ///
+    /// Used by "Query Measurement" and "New Query" context menu actions so the
+    /// user gets an editable tab rather than a read-only preview modal.
+    OpenNewQueryWithContent {
+        profile_id: Uuid,
+        language: QueryLanguage,
+        query: String,
+    },
     OpenScript {
         path: std::path::PathBuf,
     },
@@ -246,6 +255,15 @@ pub enum ContextMenuAction {
     GenerateForeignKeySql(ForeignKeySqlAction),
     GenerateTypeSql(TypeSqlAction),
     GenerateCollectionCode(CollectionCodeKind),
+    /// Open a new code document pre-seeded with a query template for this collection.
+    ///
+    /// Available for any `DatabaseCategory::TimeSeries` measurement. The template
+    /// text is produced by the driver's `QueryGenerator::template_for_collection`.
+    QueryCollection,
+    /// Open a new empty code document for writing queries against this database/bucket.
+    ///
+    /// Available for database nodes belonging to a time-series connection.
+    NewQueryForDatabase,
     // Schema DDL actions
     RefreshDatabase,
     RefreshObject,
@@ -316,6 +334,8 @@ impl ContextMenuAction {
             Self::GenerateForeignKeySql(_) => Some(AppIcon::Code),
             Self::GenerateTypeSql(_) => Some(AppIcon::Code),
             Self::GenerateCollectionCode(_) => Some(AppIcon::Code),
+            Self::QueryCollection => Some(AppIcon::Code),
+            Self::NewQueryForDatabase => Some(AppIcon::Code),
             Self::RefreshDatabase => Some(AppIcon::RefreshCcw),
             Self::RefreshObject => Some(AppIcon::RefreshCcw),
             Self::DropDatabase => Some(AppIcon::Delete),

@@ -6,8 +6,9 @@ pub(crate) mod table_browser;
 pub(crate) mod types;
 
 pub use generator::{
-    GeneratedQuery, MutationCategory, MutationTemplateOperation, MutationTemplateRequest,
-    QueryGenerator, ReadTemplateOperation, ReadTemplateRequest, SqlMutationGenerator,
+    CollectionTemplateRequest, GeneratedQuery, MutationCategory, MutationTemplateOperation,
+    MutationTemplateRequest, QueryGenerator, ReadTemplateOperation, ReadTemplateRequest,
+    SqlMutationGenerator,
 };
 pub use language_service::{
     DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,

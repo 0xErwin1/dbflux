@@ -209,6 +209,22 @@ impl Sidebar {
                     )],
                 );
 
+                // "Query Measurement" is available for any time-series collection that
+                // has a driver-provided template. The UI stays generic — no driver-id
+                // branching here. The driver's QueryGenerator::template_for_collection
+                // produces the correct language and query text.
+                if self.collection_is_time_series(item_id, cx)
+                    && self.collection_has_query_template(item_id, cx)
+                {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Query Measurement",
+                            ContextMenuAction::QueryCollection,
+                        )],
+                    );
+                }
+
                 // The Generate Query submenu contains MongoDB-specific operation names.
                 // Time-series measurements share the Collection node kind but do not use
                 // this submenu — their query model is Flux/InfluxQL, not MQL.
@@ -354,6 +370,19 @@ impl Sidebar {
                             ContextMenuAction::RefreshDatabase,
                         )],
                     );
+
+                    // "New Query" opens an empty code document with this bucket/database
+                    // pre-selected in the source-context dropdown. Available for any
+                    // time-series database node — no driver-id branching.
+                    if self.database_is_time_series(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "New Query",
+                                ContextMenuAction::NewQueryForDatabase,
+                            )],
+                        );
+                    }
 
                     // Drop Database gated on DDL capabilities
                     if self
@@ -818,6 +847,51 @@ impl Sidebar {
             .is_some_and(|schema| schema.is_time_series())
     }
 
+    /// Returns true when the driver's `QueryGenerator` can produce a query template
+    /// for this collection node. Used to gate the "Query Measurement" menu item.
+    fn collection_has_query_template(&self, item_id: &str, cx: &App) -> bool {
+        let Some(SchemaNodeId::Collection {
+            profile_id,
+            database,
+            name,
+        }) = parse_node_id(item_id)
+        else {
+            return false;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return false;
+        };
+
+        let Some(query_gen) = conn.connection.query_generator() else {
+            return false;
+        };
+
+        let request = dbflux_core::CollectionTemplateRequest {
+            collection: &name,
+            database: &database,
+        };
+
+        query_gen.template_for_collection(&request).is_some()
+    }
+
+    /// Returns true when the database node belongs to a time-series connection.
+    ///
+    /// Used to show the "New Query" action on bucket/database nodes for
+    /// time-series drivers without branching on a specific driver ID.
+    fn database_is_time_series(&self, item_id: &str, cx: &App) -> bool {
+        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+            return false;
+        };
+        let state = self.app_state.read(cx);
+        state
+            .connections()
+            .get(&profile_id)
+            .and_then(|conn| conn.schema.as_ref())
+            .is_some_and(|schema| schema.is_time_series())
+    }
+
     fn open_child_picker(&mut self, item_id: &str, cx: &mut Context<Self>) {
         let pending = PendingAction::OpenChildPicker {
             item_id: item_id.to_string(),
@@ -1031,6 +1105,12 @@ impl Sidebar {
             }
             ContextMenuAction::GenerateCollectionCode(kind) => {
                 self.generate_collection_code(&item_id, kind, cx);
+            }
+            ContextMenuAction::QueryCollection => {
+                self.query_collection(&item_id, cx);
+            }
+            ContextMenuAction::NewQueryForDatabase => {
+                self.new_query_for_database(&item_id, cx);
             }
             ContextMenuAction::OpenScript => {
                 self.execute_item(&item_id, cx);
