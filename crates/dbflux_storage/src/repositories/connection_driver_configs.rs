@@ -252,17 +252,19 @@ impl ConnectionDriverConfigDto {
                 version,
                 url,
                 org,
-                bucket_or_database,
+                default_bucket,
                 retention_policy,
                 user,
                 request_timeout_seconds,
             } => {
                 // No dedicated InfluxDB columns exist yet; serialize to the generic JSON field.
+                // The field is stored as `default_bucket`; the `bucket_or_database` key is
+                // kept as a read alias only (handled in `to_db_config` below).
                 let values = serde_json::json!({
                     "version": version,
                     "url": url,
                     "org": org,
-                    "bucket_or_database": bucket_or_database,
+                    "default_bucket": default_bucket,
                     "retention_policy": retention_policy,
                     "user": user,
                     "request_timeout_seconds": request_timeout_seconds,
@@ -407,11 +409,16 @@ impl ConnectionDriverConfigDto {
                         .unwrap_or("http://localhost:8086")
                         .to_string(),
                     org: json.get("org").and_then(|v| v.as_str()).map(String::from),
-                    bucket_or_database: json
-                        .get("bucket_or_database")
+                    // Read `default_bucket` first; fall back to the old `bucket_or_database`
+                    // key for profiles saved before this field was renamed.
+                    default_bucket: json
+                        .get("default_bucket")
                         .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
+                        .or_else(|| {
+                            json.get("bucket_or_database").and_then(|v| v.as_str())
+                        })
+                        .filter(|s| !s.is_empty())
+                        .map(String::from),
                     retention_policy: json
                         .get("retention_policy")
                         .and_then(|v| v.as_str())

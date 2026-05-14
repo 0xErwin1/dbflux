@@ -490,9 +490,9 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
         DbConfig::CloudWatchLogs { region, .. } => (Some(region.clone()), None, None),
         DbConfig::InfluxDB {
             url,
-            bucket_or_database,
+            default_bucket,
             ..
-        } => (Some(url.clone()), None, Some(bucket_or_database.clone())),
+        } => (Some(url.clone()), None, default_bucket.clone()),
         DbConfig::External { values, .. } => {
             let host = values.get("host").cloned();
             let port = values

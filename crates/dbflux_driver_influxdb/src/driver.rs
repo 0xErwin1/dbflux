@@ -101,12 +101,12 @@ impl DbDriver for InfluxDriver {
             .unwrap_or(true);
 
         if use_v2 {
+            // Bucket is now optional: empty means "no default, choose per-query".
             let bucket = values
                 .get("bucket")
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| DbError::InvalidProfile("Bucket is required for v2".to_string()))?
-                .to_string();
+                .map(|s| s.to_string());
 
             let org = values
                 .get("org")
@@ -118,18 +118,18 @@ impl DbDriver for InfluxDriver {
                 version: InfluxVersion::V2,
                 url,
                 org,
-                bucket_or_database: bucket,
+                default_bucket: bucket,
                 retention_policy: None,
                 user: None,
                 request_timeout_seconds: None,
             })
         } else {
+            // Database is now optional: empty means "no default, choose per-query".
             let database = values
                 .get("database")
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| DbError::InvalidProfile("Database is required for v1".to_string()))?
-                .to_string();
+                .map(|s| s.to_string());
 
             let retention_policy = values
                 .get("retention_policy")
@@ -147,7 +147,7 @@ impl DbDriver for InfluxDriver {
                 version: InfluxVersion::V1,
                 url,
                 org: None,
-                bucket_or_database: database,
+                default_bucket: database,
                 retention_policy,
                 user,
                 request_timeout_seconds: None,
@@ -160,7 +160,7 @@ impl DbDriver for InfluxDriver {
             version,
             url,
             org,
-            bucket_or_database,
+            default_bucket,
             retention_policy,
             user,
             ..
@@ -175,14 +175,18 @@ impl DbDriver for InfluxDriver {
         match version {
             InfluxVersion::V2 => {
                 values.insert("use_v2".to_string(), "true".to_string());
-                values.insert("bucket".to_string(), bucket_or_database.clone());
+                if let Some(bucket) = default_bucket {
+                    values.insert("bucket".to_string(), bucket.clone());
+                }
                 if let Some(org) = org {
                     values.insert("org".to_string(), org.clone());
                 }
             }
             InfluxVersion::V1 => {
                 values.insert("use_v2".to_string(), "false".to_string());
-                values.insert("database".to_string(), bucket_or_database.clone());
+                if let Some(db) = default_bucket {
+                    values.insert("database".to_string(), db.clone());
+                }
                 if let Some(rp) = retention_policy {
                     values.insert("retention_policy".to_string(), rp.clone());
                 }
@@ -205,7 +209,7 @@ impl DbDriver for InfluxDriver {
             version,
             url,
             org,
-            bucket_or_database,
+            default_bucket,
             user,
             ..
         } = &profile.config
@@ -225,7 +229,7 @@ impl DbDriver for InfluxDriver {
             http,
             *version,
             default_language,
-            bucket_or_database.clone(),
+            default_bucket.clone(),
             org.clone(),
         )))
     }
@@ -356,7 +360,7 @@ mod tests {
         assert_eq!(INFLUXDB_METADATA.icon, Icon::Influxdb);
     }
 
-    // C.9.2 — build_config v2
+    // C.9.2 — build_config v2 with explicit bucket
     #[test]
     fn build_config_v2_produces_correct_config() {
         let driver = InfluxDriver::new();
@@ -371,7 +375,7 @@ mod tests {
             version,
             url,
             org,
-            bucket_or_database,
+            default_bucket,
             ..
         } = config
         else {
@@ -380,11 +384,31 @@ mod tests {
 
         assert_eq!(version, InfluxVersion::V2);
         assert_eq!(url, "http://localhost:8086");
-        assert_eq!(bucket_or_database, "my-bucket");
+        assert_eq!(default_bucket.as_deref(), Some("my-bucket"));
         assert_eq!(org.as_deref(), Some("my-org"));
     }
 
-    // C.9.2 — build_config v1
+    // C.9.2 — build_config v2 without bucket → default_bucket is None
+    #[test]
+    fn build_config_v2_no_bucket_sets_default_bucket_none() {
+        let driver = InfluxDriver::new();
+        let mut values = HashMap::new();
+        values.insert("url".to_string(), "http://localhost:8086".to_string());
+        values.insert("use_v2".to_string(), "true".to_string());
+        // No "bucket" key → bucket field is empty/absent.
+
+        let config = driver.build_config(&values).expect("v2 config must build without bucket");
+        let DbConfig::InfluxDB { default_bucket, .. } = config else {
+            panic!("expected InfluxDB config");
+        };
+
+        assert!(
+            default_bucket.is_none(),
+            "build_config with no bucket must produce default_bucket=None"
+        );
+    }
+
+    // C.9.2 — build_config v1 with explicit database
     #[test]
     fn build_config_v1_produces_correct_config() {
         let driver = InfluxDriver::new();
@@ -396,7 +420,7 @@ mod tests {
         let config = driver.build_config(&values).expect("v1 config must build");
         let DbConfig::InfluxDB {
             version,
-            bucket_or_database,
+            default_bucket,
             org,
             ..
         } = config
@@ -405,8 +429,28 @@ mod tests {
         };
 
         assert_eq!(version, InfluxVersion::V1);
-        assert_eq!(bucket_or_database, "mydb");
+        assert_eq!(default_bucket.as_deref(), Some("mydb"));
         assert!(org.is_none(), "v1 has no org");
+    }
+
+    // C.9.2 — build_config v1 without database → default_bucket is None
+    #[test]
+    fn build_config_v1_no_database_sets_default_bucket_none() {
+        let driver = InfluxDriver::new();
+        let mut values = HashMap::new();
+        values.insert("url".to_string(), "http://localhost:8086".to_string());
+        values.insert("use_v2".to_string(), "false".to_string());
+        // No "database" key → omitted.
+
+        let config = driver.build_config(&values).expect("v1 config must build without database");
+        let DbConfig::InfluxDB { default_bucket, .. } = config else {
+            panic!("expected InfluxDB config");
+        };
+
+        assert!(
+            default_bucket.is_none(),
+            "build_config with no database must produce default_bucket=None"
+        );
     }
 
     /// v1: when the form provides a username, it must be persisted into DbConfig
@@ -430,13 +474,13 @@ mod tests {
 
     // C.9.3 — extract_values round-trips
     #[test]
-    fn extract_values_round_trips_v2_config() {
+    fn extract_values_round_trips_v2_config_with_bucket() {
         let driver = InfluxDriver::new();
         let config = DbConfig::InfluxDB {
             version: InfluxVersion::V2,
             url: "http://influx.example.com:8086".to_string(),
             org: Some("my-org".to_string()),
-            bucket_or_database: "my-bucket".to_string(),
+            default_bucket: Some("my-bucket".to_string()),
             retention_policy: None,
             user: None,
             request_timeout_seconds: None,
@@ -452,6 +496,28 @@ mod tests {
         assert_eq!(values.get("org").map(|s| s.as_str()), Some("my-org"));
     }
 
+    // C.9.3 — v2 config with no default bucket should not emit a "bucket" key
+    #[test]
+    fn extract_values_v2_no_bucket_omits_bucket_key() {
+        let driver = InfluxDriver::new();
+        let config = DbConfig::InfluxDB {
+            version: InfluxVersion::V2,
+            url: "http://influx.example.com:8086".to_string(),
+            org: Some("my-org".to_string()),
+            default_bucket: None,
+            retention_policy: None,
+            user: None,
+            request_timeout_seconds: None,
+        };
+
+        let values = driver.extract_values(&config);
+        assert_eq!(values.get("use_v2").map(|s| s.as_str()), Some("true"));
+        assert!(
+            values.get("bucket").is_none(),
+            "bucket key must be absent when default_bucket is None"
+        );
+    }
+
     #[test]
     fn extract_values_round_trips_v1_config() {
         let driver = InfluxDriver::new();
@@ -459,7 +525,7 @@ mod tests {
             version: InfluxVersion::V1,
             url: "http://influx.example.com:8086".to_string(),
             org: None,
-            bucket_or_database: "testdb".to_string(),
+            default_bucket: Some("testdb".to_string()),
             retention_policy: Some("autogen".to_string()),
             user: Some("admin".to_string()),
             request_timeout_seconds: None,

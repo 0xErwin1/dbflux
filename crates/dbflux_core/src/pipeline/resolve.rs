@@ -184,13 +184,19 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
         DbConfig::InfluxDB {
             url,
             org,
-            bucket_or_database,
+            default_bucket,
             retention_policy,
             ..
         } => match field {
             "url" => *url = val.to_string(),
             "org" => *org = Some(val.to_string()),
-            "bucket_or_database" => *bucket_or_database = val.to_string(),
+            "default_bucket" | "bucket_or_database" => {
+                *default_bucket = if val.is_empty() {
+                    None
+                } else {
+                    Some(val.to_string())
+                }
+            }
             "retention_policy" => *retention_policy = Some(val.to_string()),
             _ => {}
         },

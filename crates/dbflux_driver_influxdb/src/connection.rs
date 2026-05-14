@@ -32,7 +32,12 @@ pub struct InfluxConnection {
     http: HttpClient,
     pub version: InfluxVersion,
     pub default_language: QueryLanguage,
-    pub bucket_or_db: String,
+    /// Default bucket (v2) or database (v1) from the connection profile.
+    ///
+    /// `None` when the user did not specify one: they must pick a bucket from the
+    /// source-context dropdown before running a query. When set this value is
+    /// pre-selected in the editor but can be overridden at query time.
+    pub default_bucket: Option<String>,
     pub org: Option<String>,
     last_metadata: RwLock<Option<InfluxQueryMetadata>>,
 }
@@ -43,14 +48,14 @@ impl InfluxConnection {
         http: HttpClient,
         version: InfluxVersion,
         default_language: QueryLanguage,
-        bucket_or_db: String,
+        default_bucket: Option<String>,
         org: Option<String>,
     ) -> Self {
         Self {
             http,
             version,
             default_language,
-            bucket_or_db,
+            default_bucket,
             org,
             last_metadata: RwLock::new(None),
         }
@@ -121,6 +126,23 @@ impl InfluxConnection {
     // Internal query dispatch
     // -----------------------------------------------------------------------
 
+    /// Extract the first selected target (bucket/database) from the source-context.
+    ///
+    /// Returns `None` when the execution context carries no selected targets.
+    fn resolve_bucket_from_context(&self, req: &QueryRequest) -> Option<String> {
+        req.execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+            .and_then(|src| {
+                use dbflux_core::ExecutionSourceContext;
+                match src {
+                    ExecutionSourceContext::CollectionWindow { targets, .. } => {
+                        targets.first().cloned()
+                    }
+                }
+            })
+    }
+
     /// Resolve the effective query language for this request.
     ///
     /// Reads the query mode from the execution context when present, otherwise
@@ -183,20 +205,24 @@ impl InfluxConnection {
     }
 
     /// Execute the final query string using the appropriate HTTP endpoint.
+    ///
+    /// `bucket` is the resolved per-query bucket or database name. For InfluxQL
+    /// queries it is injected into the URL (`?db=<bucket>`). For Flux queries the
+    /// bucket lives inside the query text itself, so this parameter is unused.
     fn dispatch(
         &self,
         language: QueryLanguage,
+        bucket: &str,
         query: &str,
         started: Instant,
     ) -> Result<QueryResult, DbError> {
         let http_result = match (self.version, &language) {
             (InfluxVersion::V1, QueryLanguage::InfluxQuery) => {
-                self.http.execute_influxql_v1(&self.bucket_or_db, query)
+                self.http.execute_influxql_v1(bucket, query)
             }
             (InfluxVersion::V2, QueryLanguage::InfluxQuery) => {
                 let org = self.org.as_deref().unwrap_or("");
-                self.http
-                    .execute_influxql_v2(&self.bucket_or_db, org, query)
+                self.http.execute_influxql_v2(bucket, org, query)
             }
             (InfluxVersion::V2, QueryLanguage::Flux) => {
                 let org = self.org.as_deref().unwrap_or("");
@@ -251,13 +277,16 @@ impl Connection for InfluxConnection {
     }
 
     fn ping(&self) -> Result<(), DbError> {
-        // Use a lightweight query to probe liveness.
-        let query = "SHOW MEASUREMENTS LIMIT 1";
+        // Probe liveness without requiring a specific bucket or database.
+        //
+        // v1: SHOW DATABASES against the always-present `_internal` database.
+        // v2: GET /api/v2/buckets?limit=1 — a lightweight authenticated read
+        //     that works regardless of whether a default bucket was configured.
         match self.version {
             InfluxVersion::V1 => {
                 let resp = self
                     .http
-                    .execute_influxql_v1(&self.bucket_or_db, query)
+                    .execute_influxql_v1("_internal", "SHOW DATABASES")
                     .map_err(map_http_error)?;
                 if resp.status >= 400 {
                     return Err(DbError::connection_failed(format!(
@@ -268,15 +297,21 @@ impl Connection for InfluxConnection {
             }
             InfluxVersion::V2 => {
                 let org = self.org.as_deref().unwrap_or("");
-                let resp = self
-                    .http
-                    .execute_influxql_v2(&self.bucket_or_db, org, query)
-                    .map_err(map_http_error)?;
+                let base = self.http.base_url.trim_end_matches('/');
+                let url = format!(
+                    "{base}/api/v2/buckets?limit=1&org={}",
+                    urlencoding::encode(org)
+                );
+                let resp = self.http_get_raw(&url).map_err(map_http_error)?;
                 if resp.status >= 400 {
-                    return Err(DbError::connection_failed(format!(
-                        "ping failed: HTTP {}",
-                        resp.status
-                    )));
+                    return Err(if resp.status == 401 || resp.status == 403 {
+                        DbError::AuthFailed(InfluxErrorFormatter::format_http_error(
+                            resp.status,
+                            &resp.body,
+                        ))
+                    } else {
+                        DbError::connection_failed(format!("ping failed: HTTP {}", resp.status))
+                    });
                 }
             }
         }
@@ -290,6 +325,27 @@ impl Connection for InfluxConnection {
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         let started = Instant::now();
         let language = self.resolve_language(req)?;
+
+        // Resolve the effective bucket/database for this query.
+        //
+        // Priority: (1) first target from source-context dropdown, (2) profile default.
+        // InfluxQL queries embed the bucket in the URL (`?db=<bucket>`), so they need
+        // an explicit value. Flux queries carry the bucket inside the query text, so
+        // the resolved bucket is only used for metadata recording in that case.
+        let resolved_bucket = self
+            .resolve_bucket_from_context(req)
+            .or_else(|| self.default_bucket.clone());
+
+        // For InfluxQL, a bucket is required to route the HTTP request.
+        // Flux queries reference the bucket inside the query text, so we allow
+        // proceeding without one — the user wrote `from(bucket: "...")` themselves.
+        if language != QueryLanguage::Flux && resolved_bucket.is_none() {
+            return Err(DbError::query_failed(
+                "Select a source bucket from the dropdown before running a query".to_string(),
+            ));
+        }
+
+        let bucket_for_dispatch = resolved_bucket.as_deref().unwrap_or("");
 
         let window = Self::extract_window(req);
 
@@ -323,11 +379,16 @@ impl Connection for InfluxConnection {
             }
         }
 
-        let mut result = self.dispatch(language.clone(), &final_query, started)?;
+        let mut result = self.dispatch(language.clone(), bucket_for_dispatch, &final_query, started)?;
 
         if let Some(ref rw) = resolved_window {
             result.resolved_window = Some(rw.clone());
         }
+
+        // Record the actual bucket used for this query, not the profile default.
+        let effective_bucket = resolved_bucket
+            .clone()
+            .unwrap_or_else(|| "<flux-inline>".to_string());
 
         // Build and store per-query metadata for both audit forwarding and UI inspection.
         let meta = InfluxQueryMetadata {
@@ -337,7 +398,7 @@ impl Connection for InfluxConnection {
                 start_rfc3339: Some(rfc3339_from_ms(rw.start_ms)),
                 end_rfc3339: Some(rfc3339_from_ms(rw.end_ms)),
             }),
-            bucket_or_database: self.bucket_or_db.clone(),
+            bucket_or_database: effective_bucket,
             injected_window,
         };
 
@@ -363,28 +424,36 @@ impl Connection for InfluxConnection {
 
         // Enumerate all accessible buckets/databases so the UI can populate
         // the "Bucket"/"Database" source-context dropdown with every reachable
-        // target, not just the one from the connection profile.  The currently
-        // connected bucket is marked `is_current` so the UI can pre-select it.
+        // target, not just the profile default.
         let databases = self.list_databases().unwrap_or_else(|_| {
-            vec![DatabaseInfo {
-                name: self.bucket_or_db.clone(),
-                is_current: true,
-            }]
+            // Fallback: if the API call fails and a default bucket is set,
+            // show at least that one so the dropdown is not empty.
+            match &self.default_bucket {
+                Some(bucket) => vec![DatabaseInfo {
+                    name: bucket.clone(),
+                    is_current: true,
+                }],
+                None => vec![],
+            }
         });
 
-        // Ensure the current bucket is marked even when list_databases does
-        // not set is_current (e.g. the API returns a flat list without state).
+        // Mark the profile default as current so the UI can pre-select it.
+        // When no default is set, no bucket is pre-selected.
         let databases = databases
             .into_iter()
             .map(|mut db| {
-                db.is_current = db.name == self.bucket_or_db;
+                db.is_current = self
+                    .default_bucket
+                    .as_deref()
+                    .map(|d| db.name == d)
+                    .unwrap_or(false);
                 db
             })
             .collect();
 
         let schema = TimeSeriesSchema {
             databases,
-            current_database: Some(self.bucket_or_db.clone()),
+            current_database: self.default_bucket.clone(),
             measurements,
             retention_policies: Vec::new(),
         };
@@ -461,7 +530,9 @@ impl Connection for InfluxConnection {
         Some(SourceContextSpec {
             targets_label,
             targets_placeholder,
-            default_target: Some(self.bucket_or_db.clone()),
+            // Pre-select the profile default bucket when one is set.
+            // When None, the user must choose from the dropdown before running.
+            default_target: self.default_bucket.clone(),
             start_label: "Start".to_string(),
             end_label: "End".to_string(),
             query_mode_label: Some("Syntax".to_string()),
@@ -536,11 +607,12 @@ impl Connection for InfluxConnection {
 
             _ => {
                 // v1 (InfluxQL) or v2 with InfluxQL default language.
+                // The bucket comes from the collection reference (sidebar leaf).
                 let query = format!(
                     "SELECT * FROM {measurement} ORDER BY time DESC LIMIT {limit} OFFSET {offset}",
                 );
 
-                self.dispatch(self.default_language.clone(), &query, started)
+                self.dispatch(self.default_language.clone(), bucket, &query, started)
             }
         }
     }
@@ -602,11 +674,12 @@ impl Connection for InfluxConnection {
             _ => {
                 // InfluxQL: SELECT count(*) returns one row with one count per field.
                 // We take the maximum count as the best estimate of total points.
+                // The bucket comes from the collection reference (sidebar leaf).
                 let query =
                     format!("SELECT count(*) FROM {measurement}",);
 
                 let started = Instant::now();
-                let result = self.dispatch(self.default_language.clone(), &query, started)?;
+                let result = self.dispatch(self.default_language.clone(), bucket, &query, started)?;
 
                 let max_count = result
                     .rows
@@ -636,14 +709,21 @@ impl Connection for InfluxConnection {
 
 impl InfluxConnection {
     fn fetch_measurements(&self) -> Result<Vec<MeasurementInfo>, DbError> {
+        // When no default bucket is configured, skip measurement listing.
+        // The sidebar shows databases (buckets) and the user expands them individually.
+        // Measurement listing is only meaningful for a specific bucket/database.
+        let Some(bucket) = self.default_bucket.as_deref() else {
+            return Ok(vec![]);
+        };
+
         // v1 uses native InfluxQL `SHOW MEASUREMENTS`. v2 cannot rely on the InfluxQL
         // compatibility endpoint here because it requires a DBRP mapping between the
         // bucket and a v1 database name — those mappings are not created automatically
         // for every bucket. The Flux `schema.measurements` query works against any v2
         // bucket regardless of DBRP configuration.
         let names = match self.version {
-            InfluxVersion::V1 => self.fetch_measurements_v1()?,
-            InfluxVersion::V2 => self.fetch_measurements_v2_flux()?,
+            InfluxVersion::V1 => self.fetch_measurements_v1(bucket)?,
+            InfluxVersion::V2 => self.fetch_measurements_v2_flux(bucket)?,
         };
 
         Ok(names
@@ -656,10 +736,10 @@ impl InfluxConnection {
             .collect())
     }
 
-    fn fetch_measurements_v1(&self) -> Result<Vec<String>, DbError> {
+    fn fetch_measurements_v1(&self, bucket: &str) -> Result<Vec<String>, DbError> {
         let resp = self
             .http
-            .execute_influxql_v1(&self.bucket_or_db, "SHOW MEASUREMENTS")
+            .execute_influxql_v1(bucket, "SHOW MEASUREMENTS")
             .map_err(map_http_error)?;
 
         let result =
@@ -677,11 +757,11 @@ impl InfluxConnection {
             .collect())
     }
 
-    fn fetch_measurements_v2_flux(&self) -> Result<Vec<String>, DbError> {
+    fn fetch_measurements_v2_flux(&self, bucket: &str) -> Result<Vec<String>, DbError> {
         let org = self.org.as_deref().unwrap_or("");
         let query = format!(
             "import \"influxdata/influxdb/schema\"\nschema.measurements(bucket: \"{}\")",
-            escape_flux_string(&self.bucket_or_db)
+            escape_flux_string(bucket)
         );
 
         let resp = self
@@ -917,7 +997,7 @@ mod tests {
             build_stub_http(),
             InfluxVersion::V1,
             QueryLanguage::InfluxQuery,
-            "mydb".to_string(),
+            Some("mydb".to_string()),
             None,
         );
 
@@ -932,6 +1012,27 @@ mod tests {
         );
     }
 
+    // C.8.1b — execute() with no bucket and no context target returns a clear error
+    #[test]
+    fn execute_without_bucket_and_no_context_returns_clear_error() {
+        let conn = InfluxConnection::new(
+            build_stub_http(),
+            InfluxVersion::V2,
+            QueryLanguage::InfluxQuery,
+            None, // no default bucket
+            None,
+        );
+
+        // A plain InfluxQL request with no execution context (no selected bucket).
+        let req = QueryRequest::new("SELECT * FROM cpu");
+        let err = conn.execute(&req).expect_err("must fail without a bucket");
+        let msg = err.to_string().to_ascii_lowercase();
+        assert!(
+            msg.contains("select a source bucket") || msg.contains("bucket"),
+            "error must guide the user to select a bucket: {msg}"
+        );
+    }
+
     // C.8.2 — resolve_language dispatches correctly
     #[test]
     fn resolve_language_influxql_mode_returns_influxql() {
@@ -939,7 +1040,7 @@ mod tests {
             build_stub_http(),
             InfluxVersion::V2,
             QueryLanguage::InfluxQuery,
-            "b".to_string(),
+            Some("b".to_string()),
             Some("org".to_string()),
         );
 
@@ -954,13 +1055,76 @@ mod tests {
             build_stub_http(),
             InfluxVersion::V2,
             QueryLanguage::InfluxQuery,
-            "b".to_string(),
+            Some("b".to_string()),
             Some("org".to_string()),
         );
 
         let req = make_request_with_mode("from(bucket: \"b\")", Some("flux"));
         let lang = conn.resolve_language(&req).expect("must resolve");
         assert_eq!(lang, QueryLanguage::Flux);
+    }
+
+    // C.8.2b — resolve_bucket_from_context prefers context target over default_bucket
+    #[test]
+    fn resolve_bucket_from_context_prefers_context_target() {
+        let conn = InfluxConnection::new(
+            build_stub_http(),
+            InfluxVersion::V2,
+            QueryLanguage::InfluxQuery,
+            Some("default-bucket".to_string()),
+            None,
+        );
+
+        // Provide a different bucket via the execution context targets.
+        let source = ExecutionSourceContext::CollectionWindow {
+            targets: vec!["context-bucket".to_string()],
+            start_ms: 0,
+            end_ms: 1,
+            query_mode: None,
+        };
+        let ctx = ExecutionContext {
+            source: Some(source),
+            ..Default::default()
+        };
+        let req = QueryRequest::new("SELECT 1").with_execution_context(Some(ctx));
+
+        let bucket = conn.resolve_bucket_from_context(&req);
+        assert_eq!(
+            bucket.as_deref(),
+            Some("context-bucket"),
+            "context target must take precedence over default_bucket"
+        );
+    }
+
+    // C.8.2c — resolve_bucket_from_context returns None when no target is set
+    #[test]
+    fn resolve_bucket_from_context_returns_none_without_target() {
+        let conn = InfluxConnection::new(
+            build_stub_http(),
+            InfluxVersion::V2,
+            QueryLanguage::InfluxQuery,
+            Some("default-bucket".to_string()),
+            None,
+        );
+
+        // Empty targets list (user has not selected a bucket in the dropdown).
+        let source = ExecutionSourceContext::CollectionWindow {
+            targets: vec![],
+            start_ms: 0,
+            end_ms: 1,
+            query_mode: None,
+        };
+        let ctx = ExecutionContext {
+            source: Some(source),
+            ..Default::default()
+        };
+        let req = QueryRequest::new("SELECT 1").with_execution_context(Some(ctx));
+
+        let bucket = conn.resolve_bucket_from_context(&req);
+        assert!(
+            bucket.is_none(),
+            "empty targets must yield None from context resolution"
+        );
     }
 
     // C.8.3 — extract_window reads start_ms / end_ms

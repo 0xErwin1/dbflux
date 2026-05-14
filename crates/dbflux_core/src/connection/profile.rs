@@ -445,6 +445,10 @@ pub enum DbConfig {
     ///
     /// Supports both v1 (InfluxQL, user/password) and v2 (Flux/InfluxQL, token-based).
     /// `org` and `token` are v2-only; `retention_policy` is v1-only.
+    ///
+    /// `default_bucket` is optional: when absent the user selects a bucket (v2) or
+    /// database (v1) per-query from the source-context dropdown. When set it is
+    /// pre-selected in the editor but can always be overridden at query time.
     InfluxDB {
         version: InfluxVersion,
         /// HTTP endpoint, e.g. "http://localhost:8086".
@@ -452,8 +456,19 @@ pub enum DbConfig {
         /// Organization name (v2 only; ignored for v1).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         org: Option<String>,
-        /// Bucket (v2) or database name (v1).
-        bucket_or_database: String,
+        /// Default bucket (v2) or database (v1) to pre-select in the query editor.
+        ///
+        /// This is optional: leaving it unset allows the token/credentials to access
+        /// all buckets/databases and lets the user choose per-query from the dropdown.
+        ///
+        /// The `bucket_or_database` alias preserves backwards-compatibility with
+        /// profiles serialized before this field was made optional.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            alias = "bucket_or_database"
+        )]
+        default_bucket: Option<String>,
         /// Retention policy name (v1 only; ignored for v2).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retention_policy: Option<String>,
@@ -582,7 +597,7 @@ impl DbConfig {
             version: InfluxVersion::V2,
             url: "http://localhost:8086".to_string(),
             org: None,
-            bucket_or_database: String::new(),
+            default_bucket: None,
             retention_policy: None,
             user: None,
             request_timeout_seconds: None,
@@ -768,8 +783,8 @@ impl DbConfig {
             DbConfig::SQLite { .. } => Some("main".to_string()),
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB {
-                bucket_or_database, ..
-            } => Some(bucket_or_database.clone()),
+                default_bucket, ..
+            } => default_bucket.clone(),
             DbConfig::External { .. } => None,
         }
     }

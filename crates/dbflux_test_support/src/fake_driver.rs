@@ -237,7 +237,8 @@ impl DbDriver for FakeDriver {
                 version: dbflux_core::InfluxVersion::V2,
                 url: get_string(values, "url", "http://localhost:8086"),
                 org: get_optional_string(values, "org"),
-                bucket_or_database: get_string(values, "bucket_or_database", ""),
+                default_bucket: get_optional_string(values, "default_bucket")
+                    .or_else(|| get_optional_string(values, "bucket_or_database")),
                 retention_policy: get_optional_string(values, "retention_policy"),
                 user: get_optional_string(values, "user"),
                 request_timeout_seconds: None,
@@ -333,13 +334,16 @@ impl DbDriver for FakeDriver {
             DbConfig::InfluxDB {
                 url,
                 org,
-                bucket_or_database,
+                default_bucket,
                 retention_policy,
                 ..
             } => {
                 values.insert("url".to_string(), url.clone());
                 values.insert("org".to_string(), org.clone().unwrap_or_default());
-                values.insert("bucket_or_database".to_string(), bucket_or_database.clone());
+                values.insert(
+                    "default_bucket".to_string(),
+                    default_bucket.clone().unwrap_or_default(),
+                );
                 values.insert(
                     "retention_policy".to_string(),
                     retention_policy.clone().unwrap_or_default(),
@@ -515,8 +519,8 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::DynamoDB { table, .. } => table.clone(),
         DbConfig::CloudWatchLogs { .. } => None,
         DbConfig::InfluxDB {
-            bucket_or_database, ..
-        } => Some(bucket_or_database.clone()),
+            default_bucket, ..
+        } => default_bucket.clone(),
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }

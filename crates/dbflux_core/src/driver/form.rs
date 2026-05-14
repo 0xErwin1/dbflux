@@ -602,14 +602,30 @@ pub static INFLUXDB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
                         field("org", "Organization", FormFieldKind::Text, "my-org"),
                         "use_v2",
                     ),
-                    // v2-only: bucket
+                    // v2-only: default bucket (optional)
                     when_checked(
-                        field_required("bucket", "Bucket", FormFieldKind::Text, "my-bucket"),
+                        with_help(
+                            field(
+                                "bucket",
+                                "Default bucket (optional)",
+                                FormFieldKind::Text,
+                                "my-bucket",
+                            ),
+                            "Pre-selects a bucket in the query editor. Leave blank to choose per-query from the dropdown.",
+                        ),
                         "use_v2",
                     ),
-                    // v1-only: database
+                    // v1-only: default database (optional)
                     when_unchecked(
-                        field_required("database", "Database", FormFieldKind::Text, "mydb"),
+                        with_help(
+                            field(
+                                "database",
+                                "Default database (optional)",
+                                FormFieldKind::Text,
+                                "mydb",
+                            ),
+                            "Pre-selects a database in the query editor. Leave blank to choose per-query from the dropdown.",
+                        ),
                         "use_v2",
                     ),
                     // v1-only: retention policy
@@ -813,28 +829,34 @@ mod tests {
         }
     }
 
-    /// v2 mode: bucket is required (gated but required within its gate);
-    /// org and token are optional (convenience).
+    /// v2 mode: bucket is optional — a token+org gives access to all buckets,
+    /// so per-connection bucket selection is not required. The user picks a bucket
+    /// per-query from the source-context dropdown.
     #[test]
-    fn influxdb_form_bucket_is_required_in_v2_mode() {
+    fn influxdb_form_bucket_is_optional_in_v2_mode() {
         let bucket_field = INFLUXDB_FORM
             .field("bucket")
             .expect("bucket field must exist");
         assert!(
-            bucket_field.required,
-            "bucket must be required for v2 connections"
+            !bucket_field.required,
+            "bucket must be optional for v2 connections (users choose per-query)"
+        );
+        assert!(
+            bucket_field.help.is_some(),
+            "bucket field must have help text explaining it pre-selects in the editor"
         );
     }
 
-    /// v1 mode: database is required; retention_policy and user are optional.
+    /// v1 mode: database is optional — credentials can access all databases.
+    /// The user picks a database per-query from the source-context dropdown.
     #[test]
-    fn influxdb_form_database_is_required_in_v1_mode() {
+    fn influxdb_form_database_is_optional_in_v1_mode() {
         let db_field = INFLUXDB_FORM
             .field("database")
             .expect("database field must exist");
         assert!(
-            db_field.required,
-            "database must be required for v1 connections"
+            !db_field.required,
+            "database must be optional for v1 connections (users choose per-query)"
         );
 
         let rp_field = INFLUXDB_FORM

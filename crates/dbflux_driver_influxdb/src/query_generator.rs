@@ -16,20 +16,23 @@ use dbflux_core::{
 pub struct InfluxQueryGenerator {
     pub version: InfluxVersion,
     pub default_language: QueryLanguage,
-    /// Bucket or database name, used in Flux `from(bucket: ...)` templates.
-    pub bucket_or_db: String,
+    /// Default bucket or database name, used in Flux `from(bucket: ...)` templates.
+    ///
+    /// When `None`, Flux templates use a `"<bucket>"` placeholder so the user
+    /// can fill in the correct bucket name.
+    pub default_bucket: Option<String>,
 }
 
 impl InfluxQueryGenerator {
     pub fn new(
         version: InfluxVersion,
         default_language: QueryLanguage,
-        bucket_or_db: String,
+        default_bucket: Option<String>,
     ) -> Self {
         Self {
             version,
             default_language,
-            bucket_or_db,
+            default_bucket,
         }
     }
 
@@ -67,7 +70,12 @@ impl QueryGenerator for InfluxQueryGenerator {
         match self.default_language {
             QueryLanguage::Flux if self.version == InfluxVersion::V2 => Some(GeneratedQuery {
                 language: QueryLanguage::Flux,
-                text: Self::select_all_flux(&self.bucket_or_db, measurement, 100),
+                // Use the configured default bucket or a placeholder when none is set.
+                text: Self::select_all_flux(
+                    self.default_bucket.as_deref().unwrap_or("<bucket>"),
+                    measurement,
+                    100,
+                ),
             }),
             _ => Some(GeneratedQuery {
                 language: QueryLanguage::InfluxQuery,
