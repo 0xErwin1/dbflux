@@ -18,9 +18,11 @@
 //! }
 //! ```
 //!
-//! Multi-statement results: only the first statement is returned; the rest are
-//! silently discarded. This matches common use-case expectations and avoids
-//! returning partial tab content.
+//! Multi-statement results: when multiple `results[]` entries are present (e.g.
+//! `SHOW MEASUREMENTS; SHOW SERIES`), all rows are concatenated into a single
+//! `QueryResult`. A synthesized `statement_index` column (integer) is prepended
+//! so the caller can distinguish rows from different statements. When only one
+//! statement is present the column is omitted to avoid cluttering the output.
 
 use dbflux_core::{ColumnMeta, Value};
 use serde_json::Value as Json;
@@ -29,12 +31,17 @@ use super::{ParseError, build_query_result, infer_column_type};
 use dbflux_core::QueryResult;
 
 const SERIES_COLUMN: &str = "_series";
+const STATEMENT_INDEX_COLUMN: &str = "statement_index";
 
 /// Parse the JSON body of an InfluxQL response into a `QueryResult`.
 ///
-/// Returns the flattened result of all series in the first statement.
-/// When multiple series are present a synthesized `_series` column is prepended
-/// carrying the measurement name.
+/// When multiple semicolon-separated statements are present all rows are
+/// concatenated. A synthetic `statement_index` integer column is prepended only
+/// when there is more than one non-empty statement so single-statement output
+/// looks the same as before.
+///
+/// Within each statement, multiple series are flattened and a `_series` column
+/// is prepended when more than one series is present.
 pub fn parse_influxql_json(body: &str) -> Result<QueryResult, ParseError> {
     let root: Json =
         serde_json::from_str(body).map_err(|e| ParseError::Malformed(e.to_string()))?;
@@ -44,95 +51,129 @@ pub fn parse_influxql_json(body: &str) -> Result<QueryResult, ParseError> {
         .and_then(|v| v.as_array())
         .ok_or_else(|| ParseError::Malformed("missing 'results' array".into()))?;
 
-    // Only use the first statement.
-    let first = results
-        .first()
-        .ok_or_else(|| ParseError::Malformed("empty 'results' array".into()))?;
-
-    // Check for a statement-level error.
-    if let Some(err_msg) = first.get("error").and_then(|v| v.as_str()) {
-        return Err(ParseError::QueryError(err_msg.to_string()));
+    if results.is_empty() {
+        return Err(ParseError::Malformed("empty 'results' array".into()));
     }
 
-    let series_opt = first.get("series").and_then(|v| v.as_array());
-    let series: &[Json] = match series_opt {
-        None => return Ok(QueryResult::empty()),
-        Some(s) if s.is_empty() => return Ok(QueryResult::empty()),
-        Some(s) => s,
-    };
+    // Check for a statement-level error in any result before doing any work.
+    // We surface the first error encountered — InfluxQL stops execution on error.
+    for result in results.iter() {
+        if let Some(err_msg) = result.get("error").and_then(|v| v.as_str()) {
+            return Err(ParseError::QueryError(err_msg.to_string()));
+        }
+    }
 
-    let multi_series = series.len() > 1;
+    // Collect only statements that carry data (non-empty series arrays).
+    let non_empty: Vec<(usize, &[Json])> = results
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, result)| {
+            let series = result.get("series").and_then(|v| v.as_array())?;
+            if series.is_empty() {
+                None
+            } else {
+                Some((idx, series.as_slice()))
+            }
+        })
+        .collect();
+
+    if non_empty.is_empty() {
+        return Ok(QueryResult::empty());
+    }
+
+    let multi_statement = non_empty.len() > 1;
 
     let mut all_columns: Vec<ColumnMeta> = Vec::new();
     let mut all_rows: Vec<Vec<Value>> = Vec::new();
     let mut columns_initialized = false;
 
-    for serie in series {
-        let series_name = serie
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+    for (statement_idx, series) in non_empty {
+        let multi_series = series.len() > 1;
 
-        let col_names: Vec<String> = serie
-            .get("columns")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        for serie in series {
+            let series_name = serie
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
-        let values_array = serie
-            .get("values")
-            .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[]);
+            let col_names: Vec<String> = serie
+                .get("columns")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
 
-        // Infer types from the first non-null row.
-        let type_names = infer_type_names(&col_names, values_array);
+            let values_array = serie
+                .get("values")
+                .and_then(|v| v.as_array())
+                .map(|a| a.as_slice())
+                .unwrap_or(&[]);
 
-        if !columns_initialized {
-            if multi_series {
-                all_columns.push(ColumnMeta {
-                    name: SERIES_COLUMN.to_string(),
-                    type_name: "text".to_string(),
-                    nullable: false,
-                    is_primary_key: false,
-                });
+            // Infer types from the first non-null row.
+            let type_names = infer_type_names(&col_names, values_array);
+
+            // Column layout is fixed by the first statement we encounter.
+            // Subsequent statements must have a compatible shape (same field names);
+            // mismatched shapes will produce misaligned rows. This is a known
+            // limitation of concatenating heterogeneous InfluxQL results.
+            if !columns_initialized {
+                if multi_statement {
+                    all_columns.push(ColumnMeta {
+                        name: STATEMENT_INDEX_COLUMN.to_string(),
+                        type_name: "integer".to_string(),
+                        nullable: false,
+                        is_primary_key: false,
+                    });
+                }
+
+                if multi_series {
+                    all_columns.push(ColumnMeta {
+                        name: SERIES_COLUMN.to_string(),
+                        type_name: "text".to_string(),
+                        nullable: false,
+                        is_primary_key: false,
+                    });
+                }
+
+                for (name, type_name) in col_names.iter().zip(type_names.iter()) {
+                    all_columns.push(ColumnMeta {
+                        name: name.clone(),
+                        type_name: type_name.clone(),
+                        nullable: true,
+                        is_primary_key: name == "time",
+                    });
+                }
+
+                columns_initialized = true;
             }
 
-            for (name, type_name) in col_names.iter().zip(type_names.iter()) {
-                all_columns.push(ColumnMeta {
-                    name: name.clone(),
-                    type_name: type_name.clone(),
-                    nullable: true,
-                    is_primary_key: name == "time",
-                });
+            for row_json in values_array {
+                let row_arr = match row_json.as_array() {
+                    Some(r) => r,
+                    None => continue,
+                };
+
+                let mut row: Vec<Value> = Vec::with_capacity(all_columns.len());
+
+                if multi_statement {
+                    row.push(Value::Int(statement_idx as i64));
+                }
+
+                if multi_series {
+                    row.push(Value::Text(series_name.clone()));
+                }
+
+                for (idx, val) in row_arr.iter().enumerate() {
+                    let type_name = type_names.get(idx).map(|s| s.as_str()).unwrap_or("text");
+                    row.push(json_to_value(val, type_name));
+                }
+
+                all_rows.push(row);
             }
-
-            columns_initialized = true;
-        }
-
-        for row_json in values_array {
-            let row_arr = match row_json.as_array() {
-                Some(r) => r,
-                None => continue,
-            };
-
-            let mut row: Vec<Value> = Vec::with_capacity(all_columns.len());
-
-            if multi_series {
-                row.push(Value::Text(series_name.clone()));
-            }
-
-            for (idx, val) in row_arr.iter().enumerate() {
-                let type_name = type_names.get(idx).map(|s| s.as_str()).unwrap_or("text");
-                row.push(json_to_value(val, type_name));
-            }
-
-            all_rows.push(row);
         }
     }
 
@@ -302,9 +343,9 @@ mod tests {
         }
     }
 
-    // C.3.6 — multi-statement: only first statement used
+    // C.3.6 — multi-statement: all statements are concatenated with a statement_index column
     #[test]
-    fn multi_statement_returns_first_result_only() {
+    fn multi_statement_returns_all_rows_with_statement_index() {
         let body = r#"{
             "results": [
                 {
@@ -319,6 +360,71 @@ mod tests {
         }"#;
 
         let result = parse_influxql_json(body).expect("parse must succeed");
-        assert_eq!(result.rows.len(), 1, "only first statement rows returned");
+
+        // All rows from both statements must be present.
+        assert_eq!(result.rows.len(), 3, "rows from all statements must be included");
+
+        // First column must be the synthetic statement_index.
+        assert_eq!(
+            result.columns[0].name, STATEMENT_INDEX_COLUMN,
+            "first column must be statement_index"
+        );
+
+        // Rows from statement 0 carry index 0.
+        assert_eq!(result.rows[0][0], Value::Int(0), "first row from statement 0");
+
+        // Rows from statement 1 carry index 1.
+        assert_eq!(result.rows[1][0], Value::Int(1), "first row from statement 1");
+        assert_eq!(result.rows[2][0], Value::Int(1), "second row from statement 1");
+    }
+
+    // C.3.7 — multi-statement: empty first statement does not affect output of second
+    #[test]
+    fn multi_statement_empty_first_statement_skipped() {
+        let body = r#"{
+            "results": [
+                {
+                    "statement_id": 0
+                },
+                {
+                    "statement_id": 1,
+                    "series": [{"name": "cpu", "columns": ["time", "value"], "values": [[1000, 0.5]]}]
+                }
+            ]
+        }"#;
+
+        let result = parse_influxql_json(body).expect("parse must succeed");
+
+        // Only one non-empty statement, so no statement_index column.
+        assert_eq!(result.rows.len(), 1, "only the non-empty statement contributes rows");
+        assert_ne!(
+            result.columns.first().map(|c| c.name.as_str()),
+            Some(STATEMENT_INDEX_COLUMN),
+            "statement_index must not appear for a single non-empty statement"
+        );
+    }
+
+    // C.3.8 — multi-statement: statement-level error in any result is surfaced
+    #[test]
+    fn multi_statement_error_in_second_statement_is_surfaced() {
+        let body = r#"{
+            "results": [
+                {
+                    "statement_id": 0,
+                    "series": [{"name": "cpu", "columns": ["time"], "values": [[1000]]}]
+                },
+                {
+                    "statement_id": 1,
+                    "error": "unknown measurement"
+                }
+            ]
+        }"#;
+
+        match parse_influxql_json(body) {
+            Err(ParseError::QueryError(msg)) => {
+                assert!(msg.contains("unknown measurement"), "error message must be forwarded: {msg}");
+            }
+            other => panic!("expected QueryError, got: {other:?}"),
+        }
     }
 }
