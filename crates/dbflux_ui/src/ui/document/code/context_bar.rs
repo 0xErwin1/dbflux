@@ -310,12 +310,25 @@ impl CodeDocument {
             dropdown.set_selected_index(selected_query_mode_index, cx);
         });
 
+        // Derive the initial selection: prefer an explicit exec_ctx source, then fall
+        // back to the spec's default target so the driver's connected bucket/database
+        // is pre-selected instead of showing a blank "Sources" placeholder.
         let selected_values = match self.exec_ctx.source.as_ref() {
             Some(ExecutionSourceContext::CollectionWindow { targets, .. }) => targets.clone(),
-            None => Vec::new(),
+            None => source_spec
+                .as_ref()
+                .and_then(|spec| spec.default_target.clone())
+                .into_iter()
+                .collect(),
         };
 
+        let targets_placeholder = source_spec
+            .as_ref()
+            .map(|spec| spec.targets_placeholder.clone())
+            .unwrap_or_else(|| "Sources".to_string());
+
         self.source_targets.update(cx, |multi_select, cx| {
+            multi_select.set_placeholder(targets_placeholder, cx);
             multi_select.set_items(items, cx);
             multi_select.set_selected_values(&selected_values, cx);
         });
@@ -1323,12 +1336,13 @@ impl CodeDocument {
                         .items_center()
                         .gap(Spacing::SM)
                         .pt(Spacing::XS)
-                        .child(div().w(px(320.0)).child(
+                        .child(div().w(px(320.0)).child(control_shell(
                             DatePicker::new(&date_picker)
                                 .small()
                                 .placeholder("Select date range")
                                 .number_of_months(2),
-                        ))
+                            cx,
+                        )))
                         .child(Text::caption("from"))
                         .child(div().w(px(72.0)).child(control_shell(start_hour, cx)))
                         .child(div().w(px(72.0)).child(control_shell(start_minute, cx)))

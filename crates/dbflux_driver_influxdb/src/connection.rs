@@ -453,9 +453,15 @@ impl Connection for InfluxConnection {
             InfluxVersion::V2 => "Bucket".to_string(),
         };
 
+        let targets_placeholder = match self.version {
+            InfluxVersion::V1 => "Select database...".to_string(),
+            InfluxVersion::V2 => "Select bucket...".to_string(),
+        };
+
         Some(SourceContextSpec {
             targets_label,
-            targets_placeholder: self.bucket_or_db.clone(),
+            targets_placeholder,
+            default_target: Some(self.bucket_or_db.clone()),
             start_label: "Start".to_string(),
             end_label: "End".to_string(),
             query_mode_label: Some("Syntax".to_string()),

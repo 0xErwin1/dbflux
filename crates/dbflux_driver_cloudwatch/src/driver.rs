@@ -515,6 +515,7 @@ impl Connection for CloudWatchConnection {
         Some(SourceContextSpec {
             targets_label: "Log groups".to_string(),
             targets_placeholder: "Log groups".to_string(),
+            default_target: None,
             start_label: "Start".to_string(),
             end_label: "End".to_string(),
             query_mode_label: Some("Syntax".to_string()),

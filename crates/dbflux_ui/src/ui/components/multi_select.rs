@@ -43,6 +43,12 @@ impl MultiSelect {
         self
     }
 
+    /// Update the placeholder text shown when no item is selected.
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.placeholder = placeholder.into();
+        cx.notify();
+    }
+
     /// Replace the item list. Clears the selection if selected indices are now out of range.
     pub fn set_items(&mut self, items: Vec<DropdownItem>, cx: &mut Context<Self>) {
         self.items = items;

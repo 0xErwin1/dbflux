@@ -104,6 +104,9 @@ pub struct SourceQueryMode {
 pub struct SourceContextSpec {
     pub targets_label: String,
     pub targets_placeholder: String,
+    /// Pre-selected target shown on first load (e.g. the connected bucket/database).
+    /// When `Some`, the UI auto-selects this value if no target is currently selected.
+    pub default_target: Option<String>,
     pub start_label: String,
     pub end_label: String,
     pub query_mode_label: Option<String>,
