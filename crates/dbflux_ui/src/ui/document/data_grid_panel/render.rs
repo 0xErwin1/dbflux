@@ -1022,7 +1022,8 @@ impl DataGridPanel {
         let border = theme.border;
         let foreground = theme.foreground;
         let secondary = theme.secondary;
-        let accent = theme.accent;
+        let primary = theme.primary;
+        let primary_fg = theme.primary_foreground;
 
         // --- Resolved window label ---
         let row_count = self.result.row_count();
@@ -1042,17 +1043,17 @@ impl DataGridPanel {
         };
 
         let resolution_label = SharedString::from(format_resolution(x_span_ms, row_count));
-
         let window_label: SharedString = window_label.into();
 
-        // --- Rail state ---
+        // --- Rail state (captured before borrowing self further) ---
         let rail_open = self.chart_rail_open;
         let rail_tab = self.chart_rail_tab;
 
         // --- RANGE chips ---
-        let preset_labels: Vec<SharedString> = TimeRangePanel::preset_items()
+        // All presets including "Custom…" are shown; each chip drives the
+        // chart_source_time_range_panel dropdown directly.
+        let all_presets: Vec<SharedString> = TimeRangePanel::preset_items()
             .into_iter()
-            .filter(|item| item.label != "Custom")
             .map(|item| item.label)
             .collect();
 
@@ -1062,45 +1063,36 @@ impl DataGridPanel {
             .and_then(|p| p.read(cx).dropdown_time_range.read(cx).selected_label());
 
         let time_range_panel = self.chart_source_time_range_panel.clone();
+        let num_presets = all_presets.len();
 
-        // --- Vertical divider helper ---
-        let vdivider = || div().w(px(1.0)).h(px(16.0)).mx(Spacing::XS).bg(border);
-
-        div()
+        // Segmented chip row — no gap between chips, shared border.
+        // Active chip: primary bg + primary-fg text. Inactive: muted + hover secondary.
+        let chips = div()
             .flex()
-            .flex_row()
             .items_center()
-            .h(px(34.0))
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            // RANGE label
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(muted)
-                    .mr(Spacing::XS)
-                    .child("RANGE"),
-            )
-            // Preset chips
-            .children(preset_labels.iter().enumerate().map(|(i, label)| {
-                let label = label.clone();
-                let is_active = active_preset_label.as_ref() == Some(&label);
+            .border_1()
+            .border_color(border)
+            .rounded(Radii::SM)
+            .overflow_hidden()
+            .children(all_presets.into_iter().enumerate().map(|(i, label)| {
+                let is_active = active_preset_label.as_ref().is_some_and(|a| a == &label);
+                let is_last = i == num_presets - 1;
                 let trp = time_range_panel.clone();
 
-                div()
-                    .id(ElementId::Name(format!("range-chip-{}", i).into()))
-                    .px(Spacing::XS)
-                    .py(px(2.0))
-                    .mr(px(2.0))
-                    .rounded(Radii::SM)
-                    .text_size(FontSizes::XS)
+                let mut chip = div()
+                    .id(ElementId::Name(format!("range-chip-{i}").into()))
+                    .px(px(8.0))
+                    .py(px(3.0))
+                    .text_size(px(11.0))
+                    .font(font("JetBrains Mono"))
                     .cursor_pointer()
-                    .when(is_active, |d| d.bg(accent.opacity(0.18)).text_color(accent))
-                    .when(!is_active, |d| {
-                        d.text_color(muted).hover(|d| d.bg(secondary))
+                    .when(is_active, |d| {
+                        d.bg(primary).text_color(primary_fg).font_weight(FontWeight::SEMIBOLD)
                     })
+                    .when(!is_active, |d| {
+                        d.text_color(muted).hover(move |d| d.bg(secondary))
+                    })
+                    .when(!is_last, |d| d.border_r_1().border_color(border))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |_this, _, _, cx| {
@@ -1114,140 +1106,184 @@ impl DataGridPanel {
                             }
                         }),
                     )
-                    .child(label)
-            }))
-            // Refresh dropdown
+                    .child(label);
+
+                // Left-side rounding only on first chip; right-side only on last.
+                if i == 0 {
+                    chip = chip.rounded_tl(Radii::SM).rounded_bl(Radii::SM);
+                } else if is_last {
+                    chip = chip.rounded_tr(Radii::SM).rounded_br(Radii::SM);
+                }
+
+                chip
+            }));
+
+        // --- Vertical divider helper ---
+        let vdivider = || div().w(px(1.0)).h(px(12.0)).mx(px(4.0)).bg(border);
+
+        // --- Toolbar action button helper ---
+        // Returns a compact ghost/primary pill button with an optional icon.
+        let toolbar_btn = |id: &'static str,
+                           icon: AppIcon,
+                           label: &'static str,
+                           is_active: bool| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .px(px(6.0))
+                .py(px(2.0))
+                .rounded(Radii::SM)
+                .text_size(FontSizes::XS)
+                .cursor_pointer()
+                .when(is_active, |d| d.bg(primary).text_color(primary_fg))
+                .when(!is_active, |d| {
+                    d.text_color(foreground).hover(move |d| d.bg(secondary))
+                })
+                .child(Icon::new(icon).size(px(11.0)).color(if is_active {
+                    primary_fg
+                } else {
+                    foreground
+                }))
+                .child(label)
+        };
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(px(34.0))
+            .px(Spacing::SM)
+            .gap(px(4.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            // RANGE label
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(muted)
+                    .font_weight(FontWeight::BOLD)
+                    .child("RANGE"),
+            )
+            // Segmented range chips
+            .child(chips)
+            // Divider
             .child(vdivider())
+            // REFRESH label + dropdown
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(Spacing::XS)
-                    .child(div().text_size(px(10.0)).text_color(muted).child("REFRESH"))
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(muted)
+                            .font_weight(FontWeight::BOLD)
+                            .child("REFRESH"),
+                    )
                     .child(
                         div()
                             .w(px(80.0))
-                            .h(px(24.0))
+                            .h(px(22.0))
                             .child(self.refresh_dropdown.clone()),
                     ),
             )
-            // Resolved window
+            // Divider
             .child(vdivider())
+            // Clock icon + resolved window string
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(Spacing::XS)
+                    .gap(px(4.0))
                     .child(Icon::new(AppIcon::Clock).size(px(11.0)).color(muted))
                     .child(
                         div()
-                            .text_size(FontSizes::XS)
+                            .text_size(px(11.0))
                             .text_color(muted)
                             .font(font("JetBrains Mono"))
                             .child(window_label),
                     ),
             )
-            // Spacer
+            // Spacer pushes right-side items to the end
             .child(div().flex_1())
-            // Points + resolution
+            // Points · resolution
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(muted)
-                            .font(font("JetBrains Mono"))
-                            .child(SharedString::from(format!("{} pts", row_count))),
-                    )
-                    .child(div().text_size(FontSizes::XS).text_color(muted).child("·"))
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(muted)
-                            .font(font("JetBrains Mono"))
-                            .child(resolution_label),
-                    ),
+                    .gap(px(4.0))
+                    .text_size(px(11.0))
+                    .text_color(muted)
+                    .font(font("JetBrains Mono"))
+                    .child(SharedString::from(format!("{row_count} pts")))
+                    .child("·")
+                    .child(resolution_label),
             )
             .child(vdivider())
-            // Stats button
+            // Stats button (Issue 1: toggling same tab closes rail)
             .child({
                 let is_stats_active = rail_open && rail_tab == ChartRailTab::Stats;
-                div()
-                    .id("chart-toolbar-stats")
-                    .px(Spacing::XS)
-                    .py(px(2.0))
-                    .rounded(Radii::SM)
-                    .text_size(FontSizes::XS)
-                    .cursor_pointer()
-                    .when(is_stats_active, |d| {
-                        d.bg(accent.opacity(0.18)).text_color(accent)
-                    })
-                    .when(!is_stats_active, |d| {
-                        d.text_color(foreground).hover(|d| d.bg(secondary))
-                    })
+                toolbar_btn("chart-toolbar-stats", AppIcon::Zap, "Stats", is_stats_active)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
-                            this.chart_rail_tab = ChartRailTab::Stats;
-                            this.chart_rail_open = true;
-                            cx.notify();
-                        }),
-                    )
-                    .child("Stats")
-            })
-            // Configure button
-            .child({
-                let is_configure_active = rail_open && rail_tab == ChartRailTab::Configure;
-                div()
-                    .id("chart-toolbar-configure")
-                    .px(Spacing::XS)
-                    .py(px(2.0))
-                    .ml(px(2.0))
-                    .rounded(Radii::SM)
-                    .text_size(FontSizes::XS)
-                    .cursor_pointer()
-                    .when(is_configure_active, |d| {
-                        d.bg(accent.opacity(0.18)).text_color(accent)
-                    })
-                    .when(!is_configure_active, |d| {
-                        d.text_color(foreground).hover(|d| d.bg(secondary))
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.chart_rail_tab = ChartRailTab::Configure;
-                            this.chart_rail_open = true;
-                            if this.chart_rail_open {
-                                this.prime_chart_rail_picker_from_spec();
+                            if this.chart_rail_open && this.chart_rail_tab == ChartRailTab::Stats {
+                                this.chart_rail_open = false;
+                            } else {
+                                this.chart_rail_open = true;
+                                this.chart_rail_tab = ChartRailTab::Stats;
                             }
                             cx.notify();
                         }),
                     )
-                    .child("Configure")
             })
-            // PNG stub
+            // Configure button (Issue 1: toggling same tab closes rail)
             .child({
-                div()
-                    .id("chart-toolbar-png")
-                    .px(Spacing::XS)
-                    .py(px(2.0))
-                    .ml(px(2.0))
-                    .rounded(Radii::SM)
-                    .text_size(FontSizes::XS)
-                    .cursor_pointer()
-                    .text_color(muted)
-                    .hover(|d| d.bg(secondary))
+                let is_configure_active = rail_open && rail_tab == ChartRailTab::Configure;
+                toolbar_btn(
+                    "chart-toolbar-configure",
+                    AppIcon::Settings,
+                    "Configure",
+                    is_configure_active,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        if this.chart_rail_open
+                            && this.chart_rail_tab == ChartRailTab::Configure
+                        {
+                            this.chart_rail_open = false;
+                        } else {
+                            this.chart_rail_open = true;
+                            this.chart_rail_tab = ChartRailTab::Configure;
+                            this.prime_chart_rail_picker_from_spec();
+                        }
+                        cx.notify();
+                    }),
+                )
+            })
+            // PNG export (stub — shows an info toast)
+            .child(
+                toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG", false)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|_this, _, _, _cx| {
-                            log::debug!("PNG export: not yet implemented");
+                        cx.listener(|this, _, _, _cx| {
+                            this.pending_toast = Some(
+                                crate::ui::components::toast::PendingToast {
+                                    message: format!(
+                                        "PNG export coming in v0.7 — {}",
+                                        now_hms()
+                                    ),
+                                    is_error: false,
+                                },
+                            );
                         }),
-                    )
-                    .child("PNG")
-            })
+                    ),
+            )
     }
 
     // -- Result View Renderers --
