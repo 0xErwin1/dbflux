@@ -28,7 +28,6 @@ use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
 use dbflux_components::chart::{
     ChartDetection, ChartSpec, ChartView, ManualChartSelection, detect_chart_columns,
 };
-use std::collections::HashSet;
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
@@ -36,6 +35,7 @@ use dbflux_core::{
 };
 use gpui::*;
 use gpui_component::Sizable;
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -423,7 +423,8 @@ pub struct DataGridPanel {
     /// the panel is built. Used by the chart toolbar RANGE chips to read/write
     /// the active preset. `None` for non-TimeSeries sources or before the panel
     /// has been created.
-    chart_source_time_range_panel: Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>>,
+    chart_source_time_range_panel:
+        Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>>,
 
     // Chart Configure rail (feedback round)
     /// Whether the Configure rail is currently visible. Toggled by the gear button.

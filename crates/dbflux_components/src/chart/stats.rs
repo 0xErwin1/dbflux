@@ -344,24 +344,72 @@ mod tests {
         use dbflux_core::{ColumnKind, ColumnMeta};
 
         let cols = vec![
-            ColumnMeta { name: "t".into(), type_name: "timestamp".into(), kind: ColumnKind::Timestamp, nullable: true, is_primary_key: false },
-            ColumnMeta { name: "v1".into(), type_name: "float".into(), kind: ColumnKind::Float, nullable: true, is_primary_key: false },
-            ColumnMeta { name: "v2".into(), type_name: "int".into(), kind: ColumnKind::Integer, nullable: true, is_primary_key: false },
-            ColumnMeta { name: "v3".into(), type_name: "float".into(), kind: ColumnKind::Float, nullable: true, is_primary_key: false },
-            ColumnMeta { name: "s".into(), type_name: "text".into(), kind: ColumnKind::Text, nullable: true, is_primary_key: false },
-            ColumnMeta { name: "u".into(), type_name: "unknown".into(), kind: ColumnKind::Unknown, nullable: true, is_primary_key: false },
+            ColumnMeta {
+                name: "t".into(),
+                type_name: "timestamp".into(),
+                kind: ColumnKind::Timestamp,
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "v1".into(),
+                type_name: "float".into(),
+                kind: ColumnKind::Float,
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "v2".into(),
+                type_name: "int".into(),
+                kind: ColumnKind::Integer,
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "v3".into(),
+                type_name: "float".into(),
+                kind: ColumnKind::Float,
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "s".into(),
+                type_name: "text".into(),
+                kind: ColumnKind::Text,
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "u".into(),
+                type_name: "unknown".into(),
+                kind: ColumnKind::Unknown,
+                nullable: true,
+                is_primary_key: false,
+            },
         ];
         let (num, ts) = count_columns_for_why(&cols);
         assert_eq!(num, 3); // v1, v2, v3
-        assert_eq!(ts, 1);  // t
+        assert_eq!(ts, 1); // t
     }
 
     #[test]
     fn count_columns_for_why_all_unknown() {
         use dbflux_core::{ColumnKind, ColumnMeta};
         let cols = vec![
-            ColumnMeta { name: "a".into(), type_name: "t".into(), kind: ColumnKind::Unknown, nullable: true, is_primary_key: false },
-            ColumnMeta { name: "b".into(), type_name: "t".into(), kind: ColumnKind::Text, nullable: true, is_primary_key: false },
+            ColumnMeta {
+                name: "a".into(),
+                type_name: "t".into(),
+                kind: ColumnKind::Unknown,
+                nullable: true,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "b".into(),
+                type_name: "t".into(),
+                kind: ColumnKind::Text,
+                nullable: true,
+                is_primary_key: false,
+            },
         ];
         let (num, ts) = count_columns_for_why(&cols);
         assert_eq!(num, 0);

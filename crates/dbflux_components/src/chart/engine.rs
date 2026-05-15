@@ -10,8 +10,8 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, TextRun,
-    Window, canvas, div, fill, font, point,
+    AnyElement, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, TextRun, Window,
+    canvas, div, fill, font, point,
 };
 
 use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
@@ -56,18 +56,53 @@ pub enum ChartBuildError {
 ///   #F07178 → h=0.985, s=0.819, l=0.694  (chart-4 rose)
 ///   #D2A6FF → h=0.758, s=1.0,  l=0.826   (chart-5 lavender)
 pub const CHART_PALETTE: &[Hsla] = &[
-    Hsla { h: 0.578, s: 1.0,   l: 0.673, a: 1.0 }, // #59C2FF chart-1 cyan
-    Hsla { h: 0.228, s: 0.673, l: 0.572, a: 1.0 }, // #AAD94C chart-2 lime
-    Hsla { h: 0.097, s: 1.0,   l: 0.666, a: 1.0 }, // #FFB454 chart-3 amber
-    Hsla { h: 0.985, s: 0.819, l: 0.694, a: 1.0 }, // #F07178 chart-4 rose
-    Hsla { h: 0.758, s: 1.0,   l: 0.826, a: 1.0 }, // #D2A6FF chart-5 lavender
+    Hsla {
+        h: 0.578,
+        s: 1.0,
+        l: 0.673,
+        a: 1.0,
+    }, // #59C2FF chart-1 cyan
+    Hsla {
+        h: 0.228,
+        s: 0.673,
+        l: 0.572,
+        a: 1.0,
+    }, // #AAD94C chart-2 lime
+    Hsla {
+        h: 0.097,
+        s: 1.0,
+        l: 0.666,
+        a: 1.0,
+    }, // #FFB454 chart-3 amber
+    Hsla {
+        h: 0.985,
+        s: 0.819,
+        l: 0.694,
+        a: 1.0,
+    }, // #F07178 chart-4 rose
+    Hsla {
+        h: 0.758,
+        s: 1.0,
+        l: 0.826,
+        a: 1.0,
+    }, // #D2A6FF chart-5 lavender
 ];
 
 /// Accent cyan — #95E6CB (min/max/avg stat values in the Stats dock).
-pub const CHART_ACCENT_CYAN: Hsla = Hsla { h: 0.444, s: 0.618, l: 0.741, a: 1.0 };
+pub const CHART_ACCENT_CYAN: Hsla = Hsla {
+    h: 0.444,
+    s: 0.618,
+    l: 0.741,
+    a: 1.0,
+};
 
 /// Accent primary — #FFB454 (p99 stat value, matches theme primary).
-pub const CHART_ACCENT_PRIMARY: Hsla = Hsla { h: 0.097, s: 1.0, l: 0.666, a: 1.0 };
+pub const CHART_ACCENT_PRIMARY: Hsla = Hsla {
+    h: 0.097,
+    s: 1.0,
+    l: 0.666,
+    a: 1.0,
+};
 
 // ---------------------------------------------------------------------------
 // RenderModel
@@ -599,284 +634,281 @@ impl Render for ChartView {
                                 bounds
                             },
                             move |_bounds, bounds_data, window, cx| {
-                                        let b = bounds_data;
-                                        let w = f32::from(b.size.width);
-                                        let h = f32::from(b.size.height);
-                                        let ox = f32::from(b.origin.x);
-                                        let oy = f32::from(b.origin.y);
+                                let b = bounds_data;
+                                let w = f32::from(b.size.width);
+                                let h = f32::from(b.size.height);
+                                let ox = f32::from(b.origin.x);
+                                let oy = f32::from(b.origin.y);
 
-                                        // Plot area occupies the right portion of the canvas;
-                                        // the left MARGIN_LEFT is reserved for Y-axis tick labels.
-                                        let plot_x0 = ox + MARGIN_LEFT;
-                                        let plot_y0 = oy + MARGIN_TOP;
-                                        let plot_w = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
-                                        let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
+                                // Plot area occupies the right portion of the canvas;
+                                // the left MARGIN_LEFT is reserved for Y-axis tick labels.
+                                let plot_x0 = ox + MARGIN_LEFT;
+                                let plot_y0 = oy + MARGIN_TOP;
+                                let plot_w = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
+                                let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
 
-                                        let data_to_screen_x = |dx: f64| -> f32 {
-                                            plot_x0
-                                                + ((dx - x_min) / x_range * plot_w as f64) as f32
-                                        };
-                                        let data_to_screen_y = |dy: f64| -> f32 {
-                                            // Y is inverted: top = y_max, bottom = y_min.
-                                            plot_y0 + plot_h
-                                                - ((dy - y_min) / y_range * plot_h as f64) as f32
-                                        };
+                                let data_to_screen_x = |dx: f64| -> f32 {
+                                    plot_x0 + ((dx - x_min) / x_range * plot_w as f64) as f32
+                                };
+                                let data_to_screen_y = |dy: f64| -> f32 {
+                                    // Y is inverted: top = y_max, bottom = y_min.
+                                    plot_y0 + plot_h
+                                        - ((dy - y_min) / y_range * plot_h as f64) as f32
+                                };
 
-                                        // --- Horizontal gridlines at each Y tick ---
-                                        for tick in &y_ticks_canvas {
-                                            let sy = data_to_screen_y(tick.value);
+                                // --- Horizontal gridlines at each Y tick ---
+                                for tick in &y_ticks_canvas {
+                                    let sy = data_to_screen_y(tick.value);
+                                    window.paint_quad(fill(
+                                        gpui::Bounds {
+                                            origin: point(gpui::px(plot_x0), gpui::px(sy - 0.5)),
+                                            size: gpui::Size {
+                                                width: gpui::px(plot_w),
+                                                height: gpui::px(1.0),
+                                            },
+                                        },
+                                        gpui::hsla(0.0, 0.0, 0.5, 0.18),
+                                    ));
+                                }
+
+                                // --- Vertical gridlines at each X tick ---
+                                for tick in &x_ticks_canvas {
+                                    let sx = data_to_screen_x(tick.value);
+                                    window.paint_quad(fill(
+                                        gpui::Bounds {
+                                            origin: point(gpui::px(sx - 0.5), gpui::px(plot_y0)),
+                                            size: gpui::Size {
+                                                width: gpui::px(1.0),
+                                                height: gpui::px(plot_h),
+                                            },
+                                        },
+                                        gpui::hsla(0.0, 0.0, 0.5, 0.18),
+                                    ));
+                                }
+
+                                // --- Series polylines (two-pass) ---
+                                //
+                                // Pass 1: all non-focused series at 2.0 px so they
+                                // render below the focused line.
+                                // Pass 2: focused series at 2.8 px, composited on top.
+                                let paint_series =
+                                    |pts: &[(f64, f64)],
+                                     color: Hsla,
+                                     stroke_w: f32,
+                                     window: &mut Window| {
+                                        if pts.is_empty() {
+                                            return;
+                                        }
+                                        if pts.len() == 1 {
+                                            // Single-point fallback: paint a square whose
+                                            // side scales with stroke width.
+                                            let half = stroke_w * 1.5;
+                                            let sx = data_to_screen_x(pts[0].0);
+                                            let sy = data_to_screen_y(pts[0].1);
                                             window.paint_quad(fill(
                                                 gpui::Bounds {
                                                     origin: point(
-                                                        gpui::px(plot_x0),
-                                                        gpui::px(sy - 0.5),
+                                                        gpui::px(sx - half),
+                                                        gpui::px(sy - half),
                                                     ),
                                                     size: gpui::Size {
-                                                        width: gpui::px(plot_w),
-                                                        height: gpui::px(1.0),
+                                                        width: gpui::px(half * 2.0),
+                                                        height: gpui::px(half * 2.0),
                                                     },
                                                 },
-                                                gpui::hsla(0.0, 0.0, 0.5, 0.18),
+                                                color,
                                             ));
-                                        }
-
-                                        // --- Vertical gridlines at each X tick ---
-                                        for tick in &x_ticks_canvas {
-                                            let sx = data_to_screen_x(tick.value);
-                                            window.paint_quad(fill(
-                                                gpui::Bounds {
-                                                    origin: point(
-                                                        gpui::px(sx - 0.5),
-                                                        gpui::px(plot_y0),
-                                                    ),
-                                                    size: gpui::Size {
-                                                        width: gpui::px(1.0),
-                                                        height: gpui::px(plot_h),
-                                                    },
-                                                },
-                                                gpui::hsla(0.0, 0.0, 0.5, 0.18),
+                                        } else {
+                                            let mut builder =
+                                                PathBuilder::stroke(gpui::px(stroke_w));
+                                            let (x0, y0) = pts[0];
+                                            builder.move_to(point(
+                                                gpui::px(data_to_screen_x(x0)),
+                                                gpui::px(data_to_screen_y(y0)),
                                             ));
+                                            for &(x, y) in pts.iter().skip(1) {
+                                                builder.line_to(point(
+                                                    gpui::px(data_to_screen_x(x)),
+                                                    gpui::px(data_to_screen_y(y)),
+                                                ));
+                                            }
+                                            if let Ok(path) = builder.build() {
+                                                window.paint_path(path, color);
+                                            }
                                         }
+                                    };
 
-                                        // --- Series polylines (two-pass) ---
-                                        //
-                                        // Pass 1: all non-focused series at 2.0 px so they
-                                        // render below the focused line.
-                                        // Pass 2: focused series at 2.8 px, composited on top.
-                                        let paint_series = |pts: &[(f64, f64)],
-                                                            color: Hsla,
-                                                            stroke_w: f32,
-                                                            window: &mut Window| {
-                                            if pts.is_empty() {
-                                                return;
-                                            }
-                                            if pts.len() == 1 {
-                                                // Single-point fallback: paint a square whose
-                                                // side scales with stroke width.
-                                                let half = stroke_w * 1.5;
-                                                let sx = data_to_screen_x(pts[0].0);
-                                                let sy = data_to_screen_y(pts[0].1);
-                                                window.paint_quad(fill(
-                                                    gpui::Bounds {
-                                                        origin: point(
-                                                            gpui::px(sx - half),
-                                                            gpui::px(sy - half),
-                                                        ),
-                                                        size: gpui::Size {
-                                                            width: gpui::px(half * 2.0),
-                                                            height: gpui::px(half * 2.0),
-                                                        },
-                                                    },
-                                                    color,
-                                                ));
-                                            } else {
-                                                let mut builder =
-                                                    PathBuilder::stroke(gpui::px(stroke_w));
-                                                let (x0, y0) = pts[0];
-                                                builder.move_to(point(
-                                                    gpui::px(data_to_screen_x(x0)),
-                                                    gpui::px(data_to_screen_y(y0)),
-                                                ));
-                                                for &(x, y) in pts.iter().skip(1) {
-                                                    builder.line_to(point(
-                                                        gpui::px(data_to_screen_x(x)),
-                                                        gpui::px(data_to_screen_y(y)),
-                                                    ));
-                                                }
-                                                if let Ok(path) = builder.build() {
-                                                    window.paint_path(path, color);
-                                                }
-                                            }
-                                        };
+                                // Pass 1 — non-focused, non-hidden series at 1.4 px.
+                                for (s_idx, pts) in decimated_canvas.iter().enumerate() {
+                                    if s_idx == focused_idx || hidden_canvas.contains(&s_idx) {
+                                        continue;
+                                    }
+                                    let color = palette_canvas
+                                        .get(s_idx)
+                                        .copied()
+                                        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+                                    paint_series(pts, color, 1.4, window);
+                                }
 
-                                        // Pass 1 — non-focused, non-hidden series at 1.4 px.
+                                // Pass 2 — focused series at 2.2 px (composited on top).
+                                // Skip if the focused series is hidden.
+                                if !hidden_canvas.contains(&focused_idx)
+                                    && let Some(pts) = decimated_canvas.get(focused_idx)
+                                {
+                                    let color = palette_canvas
+                                        .get(focused_idx)
+                                        .copied()
+                                        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+                                    paint_series(pts, color, 2.2, window);
+                                }
+
+                                // --- Crosshair (dashed, amber #FFB454 at 0.7 opacity) ---
+                                if let Some(hx) = hover_x_canvas {
+                                    let sx = f32::from(hx);
+                                    if sx >= plot_x0 && sx <= plot_x0 + plot_w {
+                                        paint_dashed_vline(
+                                            window,
+                                            sx,
+                                            plot_y0,
+                                            plot_y0 + plot_h,
+                                            gpui::hsla(0.097, 1.0, 0.666, 0.7),
+                                            2.0,
+                                            3.0,
+                                        );
+
+                                        // --- Hover dots per series ---
+                                        // Two-pass: fill background first, then stroke series color.
+                                        let cursor_data_x = x_min
+                                            + ((sx - plot_x0) as f64 / plot_w as f64) * x_range;
+
                                         for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                            if s_idx == focused_idx || hidden_canvas.contains(&s_idx) {
+                                            if hidden_canvas.contains(&s_idx) {
                                                 continue;
                                             }
-                                            let color = palette_canvas
+
+                                            let Some(y_data) =
+                                                crate::chart::stats::interpolate_y_at_x(
+                                                    pts,
+                                                    cursor_data_x,
+                                                )
+                                            else {
+                                                continue;
+                                            };
+
+                                            let dot_sx = sx;
+                                            let dot_sy = data_to_screen_y(y_data);
+                                            let series_color = palette_canvas
                                                 .get(s_idx)
                                                 .copied()
                                                 .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                            paint_series(pts, color, 1.4, window);
+
+                                            // Background fill circle (square proxy, r≈3.5 → side=7)
+                                            let r = 3.5_f32;
+                                            let d = r * 2.0;
+                                            window.paint_quad(fill(
+                                                gpui::Bounds {
+                                                    origin: point(
+                                                        gpui::px(dot_sx - r),
+                                                        gpui::px(dot_sy - r),
+                                                    ),
+                                                    size: gpui::Size {
+                                                        width: gpui::px(d),
+                                                        height: gpui::px(d),
+                                                    },
+                                                },
+                                                series_color,
+                                            ));
+
+                                            // Inner background circle
+                                            let inner_r = r - 1.5;
+                                            let inner_d = inner_r * 2.0;
+                                            window.paint_quad(fill(
+                                                gpui::Bounds {
+                                                    origin: point(
+                                                        gpui::px(dot_sx - inner_r),
+                                                        gpui::px(dot_sy - inner_r),
+                                                    ),
+                                                    size: gpui::Size {
+                                                        width: gpui::px(inner_d),
+                                                        height: gpui::px(inner_d),
+                                                    },
+                                                },
+                                                gpui::hsla(0.56, 0.17, 0.07, 1.0),
+                                            ));
                                         }
+                                    }
+                                }
 
-                                        // Pass 2 — focused series at 2.2 px (composited on top).
-                                        // Skip if the focused series is hidden.
-                                        if !hidden_canvas.contains(&focused_idx) {
-                                            if let Some(pts) = decimated_canvas.get(focused_idx) {
-                                                let color = palette_canvas
-                                                    .get(focused_idx)
-                                                    .copied()
-                                                    .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                                paint_series(pts, color, 2.2, window);
-                                            }
-                                        }
+                                // --- In-canvas Y-axis tick labels ---
+                                // Right-aligned in the MARGIN_LEFT column.
+                                let tick_color = gpui::hsla(0.0, 0.0, 0.55, 1.0);
+                                let tick_font = font("Zed Mono");
+                                let tick_size = gpui::px(10.0);
+                                let line_height = gpui::px(12.0);
 
-                                        // --- Crosshair (dashed, amber #FFB454 at 0.7 opacity) ---
-                                        if let Some(hx) = hover_x_canvas {
-                                            let sx = f32::from(hx);
-                                            if sx >= plot_x0 && sx <= plot_x0 + plot_w {
-                                                paint_dashed_vline(
-                                                    window,
-                                                    sx,
-                                                    plot_y0,
-                                                    plot_y0 + plot_h,
-                                                    gpui::hsla(0.097, 1.0, 0.666, 0.7),
-                                                    2.0,
-                                                    3.0,
-                                                );
+                                for (value, label) in &y_tick_labels_canvas {
+                                    let sy = data_to_screen_y(*value);
+                                    let run = TextRun {
+                                        len: label.len(),
+                                        font: tick_font.clone(),
+                                        color: tick_color,
+                                        background_color: None,
+                                        underline: None,
+                                        strikethrough: None,
+                                    };
+                                    let shaped = window.text_system().shape_line(
+                                        label.clone(),
+                                        tick_size,
+                                        &[run],
+                                        None,
+                                    );
+                                    let label_w = f32::from(shaped.width);
+                                    // Right-align within MARGIN_LEFT minus 4px padding.
+                                    let label_x = ox + (MARGIN_LEFT - 4.0) - label_w;
+                                    let label_y = sy - f32::from(line_height) / 2.0;
+                                    let _ = shaped.paint(
+                                        point(gpui::px(label_x), gpui::px(label_y)),
+                                        line_height,
+                                        window,
+                                        cx,
+                                    );
+                                }
 
-                                                // --- Hover dots per series ---
-                                                // Two-pass: fill background first, then stroke series color.
-                                                let cursor_data_x = x_min
-                                                    + ((sx - plot_x0) as f64 / plot_w as f64)
-                                                        * x_range;
+                                // --- In-canvas X-axis tick labels ---
+                                // Centered below each tick, in the MARGIN_BOTTOM band.
+                                let x_baseline_y = plot_y0 + plot_h + 10.0;
 
-                                                for (s_idx, pts) in
-                                                    decimated_canvas.iter().enumerate()
-                                                {
-                                                    if hidden_canvas.contains(&s_idx) {
-                                                        continue;
-                                                    }
-
-                                                    let Some(y_data) =
-                                                        crate::chart::stats::interpolate_y_at_x(
-                                                            pts,
-                                                            cursor_data_x,
-                                                        )
-                                                    else {
-                                                        continue;
-                                                    };
-
-                                                    let dot_sx = sx;
-                                                    let dot_sy = data_to_screen_y(y_data);
-                                                    let series_color = palette_canvas
-                                                        .get(s_idx)
-                                                        .copied()
-                                                        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-
-                                                    // Background fill circle (square proxy, r≈3.5 → side=7)
-                                                    let r = 3.5_f32;
-                                                    let d = r * 2.0;
-                                                    window.paint_quad(fill(
-                                                        gpui::Bounds {
-                                                            origin: point(
-                                                                gpui::px(dot_sx - r),
-                                                                gpui::px(dot_sy - r),
-                                                            ),
-                                                            size: gpui::Size {
-                                                                width: gpui::px(d),
-                                                                height: gpui::px(d),
-                                                            },
-                                                        },
-                                                        series_color,
-                                                    ));
-
-                                                    // Inner background circle
-                                                    let inner_r = r - 1.5;
-                                                    let inner_d = inner_r * 2.0;
-                                                    window.paint_quad(fill(
-                                                        gpui::Bounds {
-                                                            origin: point(
-                                                                gpui::px(dot_sx - inner_r),
-                                                                gpui::px(dot_sy - inner_r),
-                                                            ),
-                                                            size: gpui::Size {
-                                                                width: gpui::px(inner_d),
-                                                                height: gpui::px(inner_d),
-                                                            },
-                                                        },
-                                                        gpui::hsla(0.56, 0.17, 0.07, 1.0),
-                                                    ));
-                                                }
-                                            }
-                                        }
-
-                                        // --- In-canvas Y-axis tick labels ---
-                                        // Right-aligned in the MARGIN_LEFT column.
-                                        let tick_color = gpui::hsla(0.0, 0.0, 0.55, 1.0);
-                                        let tick_font = font("Zed Mono");
-                                        let tick_size = gpui::px(10.0);
-                                        let line_height = gpui::px(12.0);
-
-                                        for (value, label) in &y_tick_labels_canvas {
-                                            let sy = data_to_screen_y(*value);
-                                            let run = TextRun {
-                                                len: label.len(),
-                                                font: tick_font.clone(),
-                                                color: tick_color,
-                                                background_color: None,
-                                                underline: None,
-                                                strikethrough: None,
-                                            };
-                                            let shaped = window
-                                                .text_system()
-                                                .shape_line(label.clone(), tick_size, &[run], None);
-                                            let label_w = f32::from(shaped.width);
-                                            // Right-align within MARGIN_LEFT minus 4px padding.
-                                            let label_x = ox + (MARGIN_LEFT - 4.0) - label_w;
-                                            let label_y = sy - f32::from(line_height) / 2.0;
-                                            let _ = shaped.paint(
-                                                point(gpui::px(label_x), gpui::px(label_y)),
-                                                line_height,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-
-                                        // --- In-canvas X-axis tick labels ---
-                                        // Centered below each tick, in the MARGIN_BOTTOM band.
-                                        let x_baseline_y = plot_y0 + plot_h + 10.0;
-
-                                        for (value, label) in &x_tick_labels_canvas {
-                                            let sx = data_to_screen_x(*value);
-                                            let run = TextRun {
-                                                len: label.len(),
-                                                font: tick_font.clone(),
-                                                color: tick_color,
-                                                background_color: None,
-                                                underline: None,
-                                                strikethrough: None,
-                                            };
-                                            let shaped = window
-                                                .text_system()
-                                                .shape_line(label.clone(), tick_size, &[run], None);
-                                            let label_w = f32::from(shaped.width);
-                                            let label_x = sx - label_w / 2.0;
-                                            let _ = shaped.paint(
-                                                point(gpui::px(label_x), gpui::px(x_baseline_y)),
-                                                line_height,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    },
-                                )
-                                .absolute()
-                                .size_full()
-                            })
-                            .when_some(readout, |container, r| container.child(readout_overlay(r))),
+                                for (value, label) in &x_tick_labels_canvas {
+                                    let sx = data_to_screen_x(*value);
+                                    let run = TextRun {
+                                        len: label.len(),
+                                        font: tick_font.clone(),
+                                        color: tick_color,
+                                        background_color: None,
+                                        underline: None,
+                                        strikethrough: None,
+                                    };
+                                    let shaped = window.text_system().shape_line(
+                                        label.clone(),
+                                        tick_size,
+                                        &[run],
+                                        None,
+                                    );
+                                    let label_w = f32::from(shaped.width);
+                                    let label_x = sx - label_w / 2.0;
+                                    let _ = shaped.paint(
+                                        point(gpui::px(label_x), gpui::px(x_baseline_y)),
+                                        line_height,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            },
+                        )
+                        .absolute()
+                        .size_full()
+                    })
+                    .when_some(readout, |container, r| container.child(readout_overlay(r))),
             )
             // Legend row (below canvas)
             .when_some(legend, |d, leg| d.child(leg))
@@ -1162,7 +1194,11 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(r.header_time)
                 .when_some(r.header_offset, |d, offset| {
-                    d.child(div().text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0)).child(offset))
+                    d.child(
+                        div()
+                            .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                            .child(offset),
+                    )
                 }),
         )
         // One row per series; focused row gets semibold + slightly brighter bg.

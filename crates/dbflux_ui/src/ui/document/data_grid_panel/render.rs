@@ -8,12 +8,12 @@ use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::chart::legend::legend_element;
 use dbflux_components::chart::{
     CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, ChartDetection, ManualChartSelection, SeriesSpec,
     SeriesStats, count_columns_for_why, format_resolution, format_span, format_x_value,
     format_y_value,
 };
-use dbflux_components::chart::legend::legend_element;
 use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
 use dbflux_core::{
@@ -337,9 +337,7 @@ impl Render for DataGridPanel {
                     )
                     // Result-tabs strip (Table | Chart) at the top of the content area.
                     .when(show_chart_tabs_strip, |d| {
-                        d.child(
-                            self.render_result_tabs_strip(row_count_for_strip, &theme, cx),
-                        )
+                        d.child(self.render_result_tabs_strip(row_count_for_strip, &theme, cx))
                     })
                     // Content body — fills remaining space below the strip.
                     .child({
@@ -374,19 +372,16 @@ impl Render for DataGridPanel {
                             |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
                         );
 
-                        let content = content.when(
-                            matches!(content_mode, DataGridContentMode::Document),
-                            |d| d.child(self.render_document_view(&theme, cx)),
-                        );
+                        let content = content
+                            .when(matches!(content_mode, DataGridContentMode::Document), |d| {
+                                d.child(self.render_document_view(&theme, cx))
+                            });
 
-                        content.when(
-                            matches!(content_mode, DataGridContentMode::Table),
-                            |d| {
-                                d.when_some(self.data_table.clone(), |d, data_table| {
-                                    d.child(data_table)
-                                })
-                            },
-                        )
+                        content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
+                            d.when_some(self.data_table.clone(), |d, data_table| {
+                                d.child(data_table)
+                            })
+                        })
                     })
             })
             // Status bar
@@ -1046,8 +1041,7 @@ impl DataGridPanel {
             ("—".to_string(), 0.0)
         };
 
-        let resolution_label =
-            SharedString::from(format_resolution(x_span_ms, row_count));
+        let resolution_label = SharedString::from(format_resolution(x_span_ms, row_count));
 
         let window_label: SharedString = window_label.into();
 
@@ -1062,21 +1056,15 @@ impl DataGridPanel {
             .map(|item| item.label)
             .collect();
 
-        let active_preset_label: Option<SharedString> =
-            self.chart_source_time_range_panel
-                .as_ref()
-                .and_then(|p| p.read(cx).dropdown_time_range.read(cx).selected_label());
+        let active_preset_label: Option<SharedString> = self
+            .chart_source_time_range_panel
+            .as_ref()
+            .and_then(|p| p.read(cx).dropdown_time_range.read(cx).selected_label());
 
         let time_range_panel = self.chart_source_time_range_panel.clone();
 
         // --- Vertical divider helper ---
-        let vdivider = || {
-            div()
-                .w(px(1.0))
-                .h(px(16.0))
-                .mx(Spacing::XS)
-                .bg(border)
-        };
+        let vdivider = || div().w(px(1.0)).h(px(16.0)).mx(Spacing::XS).bg(border);
 
         div()
             .flex()
@@ -1110,7 +1098,9 @@ impl DataGridPanel {
                     .text_size(FontSizes::XS)
                     .cursor_pointer()
                     .when(is_active, |d| d.bg(accent.opacity(0.18)).text_color(accent))
-                    .when(!is_active, |d| d.text_color(muted).hover(|d| d.bg(secondary)))
+                    .when(!is_active, |d| {
+                        d.text_color(muted).hover(|d| d.bg(secondary))
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |_this, _, _, cx| {
@@ -1133,12 +1123,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(muted)
-                            .child("REFRESH"),
-                    )
+                    .child(div().text_size(px(10.0)).text_color(muted).child("REFRESH"))
                     .child(
                         div()
                             .w(px(80.0))
@@ -1153,11 +1138,7 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        Icon::new(AppIcon::Clock)
-                            .size(px(11.0))
-                            .color(muted),
-                    )
+                    .child(Icon::new(AppIcon::Clock).size(px(11.0)).color(muted))
                     .child(
                         div()
                             .text_size(FontSizes::XS)
@@ -1181,12 +1162,7 @@ impl DataGridPanel {
                             .font(font("JetBrains Mono"))
                             .child(SharedString::from(format!("{} pts", row_count))),
                     )
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(muted)
-                            .child("·"),
-                    )
+                    .child(div().text_size(FontSizes::XS).text_color(muted).child("·"))
                     .child(
                         div()
                             .text_size(FontSizes::XS)
@@ -1206,8 +1182,12 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .text_size(FontSizes::XS)
                     .cursor_pointer()
-                    .when(is_stats_active, |d| d.bg(accent.opacity(0.18)).text_color(accent))
-                    .when(!is_stats_active, |d| d.text_color(foreground).hover(|d| d.bg(secondary)))
+                    .when(is_stats_active, |d| {
+                        d.bg(accent.opacity(0.18)).text_color(accent)
+                    })
+                    .when(!is_stats_active, |d| {
+                        d.text_color(foreground).hover(|d| d.bg(secondary))
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -1229,8 +1209,12 @@ impl DataGridPanel {
                     .rounded(Radii::SM)
                     .text_size(FontSizes::XS)
                     .cursor_pointer()
-                    .when(is_configure_active, |d| d.bg(accent.opacity(0.18)).text_color(accent))
-                    .when(!is_configure_active, |d| d.text_color(foreground).hover(|d| d.bg(secondary)))
+                    .when(is_configure_active, |d| {
+                        d.bg(accent.opacity(0.18)).text_color(accent)
+                    })
+                    .when(!is_configure_active, |d| {
+                        d.text_color(foreground).hover(|d| d.bg(secondary))
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -1332,9 +1316,7 @@ impl DataGridPanel {
                     .child(
                         div()
                             .text_size(FontSizes::SM)
-                            .when(is_active, |d| {
-                                d.font_weight(gpui::FontWeight::SEMIBOLD)
-                            })
+                            .when(is_active, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
                             .child(label_text),
                     )
                     // Row-count badge on the Data tab only.
@@ -1457,8 +1439,15 @@ impl DataGridPanel {
             });
         };
 
-        legend_element(&series, &palette, &stats, &hidden, focused_idx, Some(on_toggle))
-            .into_any_element()
+        legend_element(
+            &series,
+            &palette,
+            &stats,
+            &hidden,
+            focused_idx,
+            Some(on_toggle),
+        )
+        .into_any_element()
     }
 
     /// Render the degraded-state chart panel when `ensure_chart_view` returned `None`.
@@ -1712,43 +1701,44 @@ impl DataGridPanel {
             .gap(Spacing::MD);
 
         if !x_candidates.is_empty() {
-            let x_row = div()
-                .flex()
-                .flex_col()
-                .gap(Spacing::XS)
-                .child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .child(Text::body("X axis (time / label column)")),
-                )
-                .child(div().flex().flex_wrap().gap(Spacing::XS).children(
-                    x_candidates.iter().enumerate().map(
-                        |(candidate_idx, (col_idx, col_name))| {
-                            let col_idx = *col_idx;
-                            let is_selected = candidate_idx == x_selected_candidate_idx;
-                            let label = col_name.clone();
-                            div()
-                                .id(ElementId::Name(format!("chart-x-col-{}", col_idx).into()))
-                                .px(Spacing::SM)
-                                .py(Spacing::XS)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .text_size(FontSizes::SM)
-                                .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2)))
-                                .when(!is_selected, |d| {
-                                    d.hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)))
-                                })
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.chart_picker_x_col = col_idx;
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(label)
-                        },
-                    ),
-                ));
+            let x_row =
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XS)
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .child(Text::body("X axis (time / label column)")),
+                    )
+                    .child(div().flex().flex_wrap().gap(Spacing::XS).children(
+                        x_candidates.iter().enumerate().map(
+                            |(candidate_idx, (col_idx, col_name))| {
+                                let col_idx = *col_idx;
+                                let is_selected = candidate_idx == x_selected_candidate_idx;
+                                let label = col_name.clone();
+                                div()
+                                    .id(ElementId::Name(format!("chart-x-col-{}", col_idx).into()))
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .text_size(FontSizes::SM)
+                                    .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2)))
+                                    .when(!is_selected, |d| {
+                                        d.hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)))
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.chart_picker_x_col = col_idx;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(label)
+                            },
+                        ),
+                    ));
 
             picker = picker.child(x_row);
         }
@@ -1763,25 +1753,33 @@ impl DataGridPanel {
                         .text_size(FontSizes::SM)
                         .child(Text::body("Y axis (numeric columns)")),
                 )
-                .child(div().flex().flex_col().gap(Spacing::XS).children(
-                    y_candidates.iter().enumerate().map(|(candidate_idx, (_, col_name))| {
-                        let checked = y_checked.get(candidate_idx).copied().unwrap_or(false);
-                        let label = col_name.clone();
-                        Checkbox::new(ElementId::Name(
-                            format!("chart-y-col-{}", candidate_idx).into(),
-                        ))
-                        .checked(checked)
-                        .label(label)
-                        .on_click(cx.listener(move |this, &new_checked, _, cx| {
-                            if let Some(slot) =
-                                this.chart_picker_y_checked.get_mut(candidate_idx)
-                            {
-                                *slot = new_checked;
-                            }
-                            cx.notify();
-                        }))
-                    }),
-                ));
+                .child(
+                    div().flex().flex_col().gap(Spacing::XS).children(
+                        y_candidates
+                            .iter()
+                            .enumerate()
+                            .map(|(candidate_idx, (_, col_name))| {
+                                let checked =
+                                    y_checked.get(candidate_idx).copied().unwrap_or(false);
+                                let label = col_name.clone();
+                                Checkbox::new(ElementId::Name(
+                                    format!("chart-y-col-{}", candidate_idx).into(),
+                                ))
+                                .checked(checked)
+                                .label(label)
+                                .on_click(cx.listener(
+                                    move |this, &new_checked, _, cx| {
+                                        if let Some(slot) =
+                                            this.chart_picker_y_checked.get_mut(candidate_idx)
+                                        {
+                                            *slot = new_checked;
+                                        }
+                                        cx.notify();
+                                    },
+                                ))
+                            }),
+                    ),
+                );
 
             picker = picker.child(y_row);
         }
@@ -1863,7 +1861,10 @@ impl DataGridPanel {
     }
 
     /// Section container helper for the right dock panels.
-    fn dock_section(content: impl IntoElement, theme: &gpui_component::theme::Theme) -> impl IntoElement {
+    fn dock_section(
+        content: impl IntoElement,
+        theme: &gpui_component::theme::Theme,
+    ) -> impl IntoElement {
         div()
             .px(px(14.0))
             .py(px(12.0))
@@ -1899,12 +1900,7 @@ impl DataGridPanel {
                     .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
                     .child(SharedString::from(k.to_string())),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(11.0))
-                    .child(v),
-            )
+            .child(div().flex_1().text_size(px(11.0)).child(v))
     }
 
     /// Configure tab body: WHY paragraph, X-column selector, Y-column
@@ -2050,8 +2046,7 @@ impl DataGridPanel {
                             let label = col_name.clone();
 
                             // Find this column's series index in active_y_cols.
-                            let series_idx_opt =
-                                active_y_cols.iter().position(|&ci| ci == col_idx);
+                            let series_idx_opt = active_y_cols.iter().position(|&ci| ci == col_idx);
                             let stat_label = series_idx_opt
                                 .and_then(|si| stats.get(si).copied().flatten())
                                 .map(|s| {
@@ -2204,25 +2199,25 @@ impl DataGridPanel {
             .map(|cv| cv.read(cx).focused_series_idx())
             .unwrap_or(self.chart_focused_series_idx);
 
-        let (stats_opt, label, color, x_min, x_max, x_is_time) =
-            if let Some(cv) = &self.chart_view {
-                let view = cv.read(cx);
-                let s = view.series_stats().get(focused_idx).copied().flatten();
-                let label = view.series_label(focused_idx).to_string();
-                let color = view.series_color(focused_idx);
-                let (x_min, x_max) = view.data_x_bounds();
-                let x_is_time = view.x_is_time();
-                (s, label, color, x_min, x_max, x_is_time)
-            } else {
-                // Rail may briefly be open while chart_view is None (e.g. during
-                // rebuild after Apply). Render an empty state.
-                return div()
-                    .p_2()
-                    .text_size(FontSizes::XS)
-                    .text_color(theme.muted_foreground)
-                    .child("Rebuilding chart…")
-                    .into_any_element();
-            };
+        let (stats_opt, label, color, x_min, x_max, x_is_time) = if let Some(cv) = &self.chart_view
+        {
+            let view = cv.read(cx);
+            let s = view.series_stats().get(focused_idx).copied().flatten();
+            let label = view.series_label(focused_idx).to_string();
+            let color = view.series_color(focused_idx);
+            let (x_min, x_max) = view.data_x_bounds();
+            let x_is_time = view.x_is_time();
+            (s, label, color, x_min, x_max, x_is_time)
+        } else {
+            // Rail may briefly be open while chart_view is None (e.g. during
+            // rebuild after Apply). Render an empty state.
+            return div()
+                .p_2()
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child("Rebuilding chart…")
+                .into_any_element();
+        };
 
         let Some(stats) = stats_opt else {
             return div()
