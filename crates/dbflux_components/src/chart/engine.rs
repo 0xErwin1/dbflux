@@ -6,8 +6,7 @@
 
 use gpui::prelude::*;
 use gpui::{
-    App, Context, Hsla, PathBuilder, Pixels, Render, SharedString, Window, canvas, div, fill,
-    point,
+    App, Context, Hsla, PathBuilder, Pixels, Render, SharedString, Window, canvas, div, fill, point,
 };
 
 use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};

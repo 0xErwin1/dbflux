@@ -8,7 +8,9 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::chart::{ChartDetection, ManualChartSelection};
 use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
-use dbflux_core::{ColumnKind, DatabaseCategory, Pagination, QueryResultShape, SortDirection, Value};
+use dbflux_core::{
+    ColumnKind, DatabaseCategory, Pagination, QueryResultShape, SortDirection, Value,
+};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -1088,99 +1090,83 @@ impl DataGridPanel {
 
         if show_picker && !x_candidates.is_empty() {
             // X-axis column selector: clickable row of candidate column names.
-            let x_row = div()
-                .flex()
-                .flex_col()
-                .gap(Spacing::XS)
-                .child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .child(Text::body("X axis (time / label column)")),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap(Spacing::XS)
-                        .children(
-                            x_candidates
-                                .iter()
-                                .enumerate()
-                                .map(|(candidate_idx, (col_idx, col_name))| {
-                                    let col_idx = *col_idx;
-                                    let is_selected = candidate_idx == x_selected_candidate_idx;
-                                    let label = col_name.clone();
-                                    div()
-                                        .id(ElementId::Name(
-                                            format!("chart-x-col-{}", col_idx).into(),
-                                        ))
-                                        .px(Spacing::SM)
-                                        .py(Spacing::XS)
-                                        .rounded(Radii::SM)
-                                        .cursor_pointer()
-                                        .text_size(FontSizes::SM)
-                                        .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2)))
-                                        .when(!is_selected, |d| {
-                                            d.hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)))
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |this, _, _, cx| {
-                                                this.chart_picker_x_col = col_idx;
-                                                cx.notify();
-                                            }),
-                                        )
-                                        .child(label)
-                                }),
-                        ),
-                );
-
-            outer = outer.child(x_row);
-
-            // Y-axis column checkboxes.
-            if !y_candidates.is_empty() {
-                let y_row = div()
+            let x_row =
+                div()
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
                     .child(
                         div()
                             .text_size(FontSizes::SM)
-                            .child(Text::body("Y axis (numeric columns)")),
+                            .child(Text::body("X axis (time / label column)")),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(Spacing::XS)
-                            .children(
-                                y_candidates
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(candidate_idx, (_, col_name))| {
-                                        let checked = y_checked
-                                            .get(candidate_idx)
-                                            .copied()
-                                            .unwrap_or(false);
-                                        let label = col_name.clone();
-                                        Checkbox::new(ElementId::Name(
-                                            format!("chart-y-col-{}", candidate_idx).into(),
-                                        ))
-                                        .checked(checked)
-                                        .label(label)
-                                        .on_click(cx.listener(
-                                            move |this, &new_checked, _, cx| {
-                                                if let Some(slot) =
-                                                    this.chart_picker_y_checked.get_mut(candidate_idx)
-                                                {
-                                                    *slot = new_checked;
-                                                }
-                                                cx.notify();
-                                            },
-                                        ))
-                                    }),
+                    .child(div().flex().flex_wrap().gap(Spacing::XS).children(
+                        x_candidates.iter().enumerate().map(
+                            |(candidate_idx, (col_idx, col_name))| {
+                                let col_idx = *col_idx;
+                                let is_selected = candidate_idx == x_selected_candidate_idx;
+                                let label = col_name.clone();
+                                div()
+                                    .id(ElementId::Name(format!("chart-x-col-{}", col_idx).into()))
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .text_size(FontSizes::SM)
+                                    .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2)))
+                                    .when(!is_selected, |d| {
+                                        d.hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)))
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.chart_picker_x_col = col_idx;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(label)
+                            },
+                        ),
+                    ));
+
+            outer = outer.child(x_row);
+
+            // Y-axis column checkboxes.
+            if !y_candidates.is_empty() {
+                let y_row =
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(Spacing::XS)
+                        .child(
+                            div()
+                                .text_size(FontSizes::SM)
+                                .child(Text::body("Y axis (numeric columns)")),
+                        )
+                        .child(div().flex().flex_col().gap(Spacing::XS).children(
+                            y_candidates.iter().enumerate().map(
+                                |(candidate_idx, (_, col_name))| {
+                                    let checked =
+                                        y_checked.get(candidate_idx).copied().unwrap_or(false);
+                                    let label = col_name.clone();
+                                    Checkbox::new(ElementId::Name(
+                                        format!("chart-y-col-{}", candidate_idx).into(),
+                                    ))
+                                    .checked(checked)
+                                    .label(label)
+                                    .on_click(cx.listener(
+                                        move |this, &new_checked, _, cx| {
+                                            if let Some(slot) =
+                                                this.chart_picker_y_checked.get_mut(candidate_idx)
+                                            {
+                                                *slot = new_checked;
+                                            }
+                                            cx.notify();
+                                        },
+                                    ))
+                                },
                             ),
-                    );
+                        ));
 
                 outer = outer.child(y_row);
             }
