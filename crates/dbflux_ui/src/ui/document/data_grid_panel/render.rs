@@ -982,15 +982,11 @@ impl DataGridPanel {
                 if let Some(chart_entity) = self.ensure_chart_view(cx) {
                     container = container.child(chart_entity);
                 } else {
-                    container = container
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            dbflux_components::primitives::Text::muted(
-                                "Chart unavailable: no Timestamp column with numeric series detected.",
-                            ),
-                        );
+                    container = container.flex().items_center().justify_center().child(
+                        dbflux_components::primitives::Text::muted(
+                            "Chart unavailable: no Timestamp column with numeric series detected.",
+                        ),
+                    );
                 }
             }
             ResultViewMode::Text => {

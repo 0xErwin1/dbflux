@@ -121,10 +121,7 @@ mod tests {
             None,
             Duration::ZERO,
         );
-        assert_eq!(
-            detect_chart_columns(&result),
-            ChartDetection::NoTimeColumn
-        );
+        assert_eq!(detect_chart_columns(&result), ChartDetection::NoTimeColumn);
     }
 
     #[test]

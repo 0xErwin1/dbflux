@@ -39,12 +39,42 @@ pub enum ChartBuildError {
 
 /// Default palette for chart series (HSLA, 1.0 alpha).
 pub const CHART_PALETTE: &[Hsla] = &[
-    Hsla { h: 0.60, s: 0.70, l: 0.55, a: 1.0 }, // blue
-    Hsla { h: 0.10, s: 0.80, l: 0.55, a: 1.0 }, // orange
-    Hsla { h: 0.37, s: 0.55, l: 0.45, a: 1.0 }, // green
-    Hsla { h: 0.00, s: 0.70, l: 0.55, a: 1.0 }, // red
-    Hsla { h: 0.80, s: 0.55, l: 0.55, a: 1.0 }, // purple
-    Hsla { h: 0.13, s: 0.75, l: 0.45, a: 1.0 }, // amber
+    Hsla {
+        h: 0.60,
+        s: 0.70,
+        l: 0.55,
+        a: 1.0,
+    }, // blue
+    Hsla {
+        h: 0.10,
+        s: 0.80,
+        l: 0.55,
+        a: 1.0,
+    }, // orange
+    Hsla {
+        h: 0.37,
+        s: 0.55,
+        l: 0.45,
+        a: 1.0,
+    }, // green
+    Hsla {
+        h: 0.00,
+        s: 0.70,
+        l: 0.55,
+        a: 1.0,
+    }, // red
+    Hsla {
+        h: 0.80,
+        s: 0.55,
+        l: 0.55,
+        a: 1.0,
+    }, // purple
+    Hsla {
+        h: 0.13,
+        s: 0.75,
+        l: 0.45,
+        a: 1.0,
+    }, // amber
 ];
 
 // ---------------------------------------------------------------------------
@@ -163,7 +193,11 @@ impl ChartView {
 
         let mut indices: Vec<usize> = (0..raw_x.len()).collect();
         let mut swapped = false;
-        indices.sort_by(|&a, &b| raw_x[a].partial_cmp(&raw_x[b]).unwrap_or(std::cmp::Ordering::Equal));
+        indices.sort_by(|&a, &b| {
+            raw_x[a]
+                .partial_cmp(&raw_x[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         for (new, &old) in indices.iter().enumerate() {
             if new != old {
                 swapped = true;
@@ -210,7 +244,10 @@ impl ChartView {
         // --- Compute data-space bounds ---
 
         let x_min = raw_x_sorted.iter().cloned().fold(f64::INFINITY, f64::min);
-        let x_max = raw_x_sorted.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let x_max = raw_x_sorted
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
 
         let y_min = decimated
             .iter()
@@ -361,7 +398,8 @@ impl Render for ChartView {
                                 };
                                 let data_to_screen_y = |dy: f64| -> f32 {
                                     // Y is inverted: top = y_max, bottom = y_min.
-                                    plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32
+                                    plot_y0 + plot_h
+                                        - ((dy - y_min) / y_range * plot_h as f64) as f32
                                 };
 
                                 // --- Horizontal gridlines at each Y tick ---
@@ -369,10 +407,7 @@ impl Render for ChartView {
                                     let sy = data_to_screen_y(tick.value);
                                     window.paint_quad(fill(
                                         gpui::Bounds {
-                                            origin: point(
-                                                gpui::px(plot_x0),
-                                                gpui::px(sy - 0.5),
-                                            ),
+                                            origin: point(gpui::px(plot_x0), gpui::px(sy - 0.5)),
                                             size: gpui::Size {
                                                 width: gpui::px(plot_w),
                                                 height: gpui::px(1.0),
@@ -398,7 +433,10 @@ impl Render for ChartView {
                                         let sy = data_to_screen_y(pts[0].1);
                                         window.paint_quad(fill(
                                             gpui::Bounds {
-                                                origin: point(gpui::px(sx - 1.5), gpui::px(sy - 1.5)),
+                                                origin: point(
+                                                    gpui::px(sx - 1.5),
+                                                    gpui::px(sy - 1.5),
+                                                ),
                                                 size: gpui::Size {
                                                     width: gpui::px(3.0),
                                                     height: gpui::px(3.0),
@@ -431,7 +469,10 @@ impl Render for ChartView {
                                     if sx >= plot_x0 && sx <= plot_x0 + plot_w {
                                         window.paint_quad(fill(
                                             gpui::Bounds {
-                                                origin: point(gpui::px(sx - 0.5), gpui::px(plot_y0)),
+                                                origin: point(
+                                                    gpui::px(sx - 0.5),
+                                                    gpui::px(plot_y0),
+                                                ),
                                                 size: gpui::Size {
                                                     width: gpui::px(1.0),
                                                     height: gpui::px(plot_h),
@@ -445,7 +486,7 @@ impl Render for ChartView {
                         )
                         .absolute()
                         .size_full()
-                    })
+                    }),
             )
             // Legend row (below chart)
             .when_some(legend, |d, leg| d.child(leg))
@@ -461,7 +502,11 @@ fn extract_f64(value: &Value, is_time: bool) -> Option<f64> {
     match value {
         Value::Int(i) => Some(*i as f64),
         Value::Float(f) => {
-            if f.is_finite() { Some(*f) } else { None }
+            if f.is_finite() {
+                Some(*f)
+            } else {
+                None
+            }
         }
         Value::Text(s) if is_time => {
             // Try parsing as RFC 3339 timestamp.
@@ -528,13 +573,19 @@ mod tests {
     #[test]
     fn build_errors_on_empty_result() {
         let result = QueryResult::table(
-            vec![make_col("t", ColumnKind::Timestamp), make_col("v", ColumnKind::Float)],
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
             vec![],
             None,
             Duration::ZERO,
         );
         let spec = simple_spec(0, &[1]);
-        assert!(matches!(ChartView::build(&result, spec), Err(ChartBuildError::Empty)));
+        assert!(matches!(
+            ChartView::build(&result, spec),
+            Err(ChartBuildError::Empty)
+        ));
     }
 
     #[test]
@@ -561,7 +612,10 @@ mod tests {
             .collect();
 
         let result = QueryResult::table(
-            vec![make_col("t", ColumnKind::Timestamp), make_col("v", ColumnKind::Float)],
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
             rows,
             None,
             Duration::ZERO,
@@ -587,22 +641,29 @@ mod tests {
             vec![Value::Int(2000), Value::Float(3.0)],
         ];
         let result = QueryResult::table(
-            vec![make_col("t", ColumnKind::Timestamp), make_col("v", ColumnKind::Float)],
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
             rows,
             None,
             Duration::ZERO,
         );
         let spec = simple_spec(0, &[1]);
         let view = ChartView::build(&result, spec).expect("build should succeed");
-        assert!(!view.render_model.x_ticks.is_empty(), "x ticks should be generated");
-        assert!(!view.render_model.y_ticks.is_empty(), "y ticks should be generated");
+        assert!(
+            !view.render_model.x_ticks.is_empty(),
+            "x ticks should be generated"
+        );
+        assert!(
+            !view.render_model.y_ticks.is_empty(),
+            "y ticks should be generated"
+        );
     }
 
     #[test]
     fn build_assigns_palette_colors() {
-        let rows = vec![
-            vec![Value::Int(0), Value::Float(1.0), Value::Float(2.0)],
-        ];
+        let rows = vec![vec![Value::Int(0), Value::Float(1.0), Value::Float(2.0)]];
         let result = QueryResult::table(
             vec![
                 make_col("t", ColumnKind::Timestamp),

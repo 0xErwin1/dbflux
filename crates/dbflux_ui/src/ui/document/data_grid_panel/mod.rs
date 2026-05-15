@@ -834,17 +834,17 @@ impl DataGridPanel {
     /// Returns `true` when the current result has a `Timestamp` column and at
     /// least one numeric column — i.e., chart mode is available.
     pub(super) fn chart_available(&self) -> bool {
-        matches!(
-            &self.chart_detection,
-            Some(ChartDetection::Ok { .. })
-        )
+        matches!(&self.chart_detection, Some(ChartDetection::Ok { .. }))
     }
 
     /// Build or return the existing `ChartView` entity for the current result.
     ///
     /// Returns `None` when detection failed or the result is incompatible.
     /// Uses the manual selection if set, otherwise auto-detection.
-    pub(super) fn ensure_chart_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<ChartView>> {
+    pub(super) fn ensure_chart_view(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<ChartView>> {
         if self.chart_view.is_some() {
             return self.chart_view.clone();
         }
@@ -853,14 +853,15 @@ impl DataGridPanel {
             ChartSpec::from_manual_selection(manual, &self.result.columns, 10_000)
         } else {
             match &self.chart_detection {
-                Some(ChartDetection::Ok { time_col, numeric_cols }) => {
-                    ChartSpec::from_detection(
-                        *time_col,
-                        numeric_cols.clone(),
-                        &self.result.columns,
-                        10_000,
-                    )
-                }
+                Some(ChartDetection::Ok {
+                    time_col,
+                    numeric_cols,
+                }) => ChartSpec::from_detection(
+                    *time_col,
+                    numeric_cols.clone(),
+                    &self.result.columns,
+                    10_000,
+                ),
                 _ => None,
             }
         }?;

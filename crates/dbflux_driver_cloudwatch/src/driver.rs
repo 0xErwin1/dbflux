@@ -9,13 +9,13 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CLOUDWATCH_FORM, CollectionBrowseRequest, CollectionChildInfo, CollectionChildrenPage,
     CollectionChildrenRequest, CollectionCountRequest, CollectionInfo, CollectionPresentation,
-    ColumnKind, ColumnMeta, Connection, ConnectionProfile, DatabaseCategory, DatabaseInfo, DbConfig,
-    DbDriver,
-    DbError, DbKind, DeploymentClass, DocumentSchema, DriverCapabilities, DriverFormDef,
-    DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery, EventRecord,
-    EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext, FormValues, Icon,
-    QueryLanguage, QueryRequest, QueryResult, SchemaFeatures, SchemaLoadingStrategy,
-    SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo, ValidationResult, Value,
+    ColumnKind, ColumnMeta, Connection, ConnectionProfile, DatabaseCategory, DatabaseInfo,
+    DbConfig, DbDriver, DbError, DbKind, DeploymentClass, DocumentSchema, DriverCapabilities,
+    DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery,
+    EventRecord, EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext,
+    FormValues, Icon, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
+    SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
+    ValidationResult, Value,
 };
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {

@@ -6,9 +6,7 @@
 //! - `ChartSpec::from_detection` builds a spec that `ChartView::build` accepts.
 //! - No driver-specific logic appears at the chart boundary.
 
-use dbflux_components::chart::{
-    ChartDetection, ChartSpec, ChartView, detect_chart_columns,
-};
+use dbflux_components::chart::{ChartDetection, ChartSpec, ChartView, detect_chart_columns};
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
 use std::time::Duration;
 
@@ -62,7 +60,10 @@ fn detection_ignores_text_columns_regardless_of_type_name() {
             make_col("timestamp", ColumnKind::Text, "timestamptz"),
             make_col("val", ColumnKind::Float, "float8"),
         ],
-        one_row(vec![Value::Text("2024-01-01".to_string()), Value::Float(1.0)]),
+        one_row(vec![
+            Value::Text("2024-01-01".to_string()),
+            Value::Float(1.0),
+        ]),
         None,
         Duration::ZERO,
     );
@@ -94,7 +95,10 @@ fn detection_to_spec_to_chart_build_succeeds() {
 
     let detection = detect_chart_columns(&result);
     let (time_col, numeric_cols) = match detection {
-        ChartDetection::Ok { time_col, numeric_cols } => (time_col, numeric_cols),
+        ChartDetection::Ok {
+            time_col,
+            numeric_cols,
+        } => (time_col, numeric_cols),
         other => panic!("expected ChartDetection::Ok, got {:?}", other),
     };
 

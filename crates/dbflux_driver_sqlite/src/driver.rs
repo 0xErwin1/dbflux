@@ -8,8 +8,7 @@ use std::time::Instant;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind,
-    ColumnMeta,
-    Connection, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
+    ColumnMeta, Connection, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
     CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection,
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest,
@@ -478,7 +477,6 @@ impl QueryCancelHandle for SqliteCancelHandle {
         self.cancelled.load(Ordering::SeqCst)
     }
 }
-
 
 fn sqlite_code_generators() -> Vec<CodeGeneratorInfo> {
     vec![
