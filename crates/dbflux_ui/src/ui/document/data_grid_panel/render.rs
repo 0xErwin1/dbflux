@@ -8,7 +8,7 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::Input;
 use dbflux_components::controls::InputState;
 use dbflux_components::primitives::{Icon, Text, surface_raised};
-use dbflux_core::{Pagination, QueryResultShape, SortDirection, Value};
+use dbflux_core::{DatabaseCategory, Pagination, QueryResultShape, SortDirection, Value};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -1111,7 +1111,17 @@ impl DataGridPanel {
         };
 
         let available_modes = if uses_result_view {
-            if self.chart_available() && self.result.shape == QueryResultShape::Table {
+            // The Chart toggle is visible when the result shape is a table AND:
+            // - auto-detection succeeded (chart_available()), OR
+            // - the driver's category is TimeSeries (REQ-CHART-015: always show for TimeSeries
+            //   so the user can reach the manual picker even when detection fails).
+            let is_time_series =
+                DataGridPanel::connection_category(&self.source, &self.app_state, cx)
+                    == Some(DatabaseCategory::TimeSeries);
+            let show_chart = self.result.shape == QueryResultShape::Table
+                && (self.chart_available() || is_time_series);
+
+            if show_chart {
                 ResultViewMode::available_for_chartable_result()
             } else {
                 ResultViewMode::available_for_shape(&self.result.shape)
