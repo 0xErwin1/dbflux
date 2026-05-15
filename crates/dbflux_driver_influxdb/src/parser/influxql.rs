@@ -24,11 +24,22 @@
 //! so the caller can distinguish rows from different statements. When only one
 //! statement is present the column is omitted to avoid cluttering the output.
 
-use dbflux_core::{ColumnMeta, Value};
+use dbflux_core::{ColumnKind, ColumnMeta, Value};
 use serde_json::Value as Json;
 
 use super::{ParseError, build_query_result, infer_column_type};
 use dbflux_core::QueryResult;
+
+/// Map an InfluxDB type name string to a semantic `ColumnKind`.
+fn kind_from_influx_type_name(s: &str) -> ColumnKind {
+    match s {
+        "timestamp" | "time" | "datetime" => ColumnKind::Timestamp,
+        "integer" => ColumnKind::Integer,
+        "double" | "float" | "float64" => ColumnKind::Float,
+        "text" | "string" => ColumnKind::Text,
+        _ => ColumnKind::Unknown,
+    }
+}
 
 const SERIES_COLUMN: &str = "_series";
 const STATEMENT_INDEX_COLUMN: &str = "statement_index";
@@ -125,6 +136,7 @@ pub fn parse_influxql_json(body: &str) -> Result<QueryResult, ParseError> {
                     all_columns.push(ColumnMeta {
                         name: STATEMENT_INDEX_COLUMN.to_string(),
                         type_name: "integer".to_string(),
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     });
@@ -134,6 +146,7 @@ pub fn parse_influxql_json(body: &str) -> Result<QueryResult, ParseError> {
                     all_columns.push(ColumnMeta {
                         name: SERIES_COLUMN.to_string(),
                         type_name: "text".to_string(),
+                        kind: ColumnKind::Text,
                         nullable: false,
                         is_primary_key: false,
                     });
@@ -143,6 +156,7 @@ pub fn parse_influxql_json(body: &str) -> Result<QueryResult, ParseError> {
                     all_columns.push(ColumnMeta {
                         name: name.clone(),
                         type_name: type_name.clone(),
+                        kind: kind_from_influx_type_name(type_name),
                         nullable: true,
                         is_primary_key: name == "time",
                     });

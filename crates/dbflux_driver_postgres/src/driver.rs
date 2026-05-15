@@ -9,7 +9,8 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
-    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
+    CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter,
+    ConnectionExt,
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
     CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
     DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest,
@@ -751,6 +752,19 @@ struct ExtractedPostgresConfig {
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
+/// Map a PostgreSQL type OID to a semantic `ColumnKind`.
+///
+/// Only the most common OIDs are listed; everything else is `Unknown`.
+fn pg_oid_to_kind(oid: u32) -> ColumnKind {
+    match oid {
+        1114 | 1184 | 1082 => ColumnKind::Timestamp, // TIMESTAMP, TIMESTAMPTZ, DATE
+        21 | 23 | 20 => ColumnKind::Integer,          // INT2, INT4, INT8
+        700 | 701 | 1700 => ColumnKind::Float,        // FLOAT4, FLOAT8, NUMERIC
+        25 | 1043 | 1042 | 19 => ColumnKind::Text,    // TEXT, VARCHAR, BPCHAR, NAME
+        _ => ColumnKind::Unknown,
+    }
+}
+
 fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig, DbError> {
     match config {
         DbConfig::Postgres {
@@ -1389,6 +1403,7 @@ impl Connection for PostgresConnection {
                 .map(|col| ColumnMeta {
                     name: col.name().to_string(),
                     type_name: col.type_().name().to_string(),
+                    kind: pg_oid_to_kind(col.type_().oid()),
                     nullable: true,
                     is_primary_key: false,
                 })

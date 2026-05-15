@@ -1493,7 +1493,7 @@ mod tests {
     use crate::app_state_entity::AppStateEntity;
     use crate::ui::components::toast::{ToastGlobal, ToastHost};
     use crate::ui::theme;
-    use dbflux_core::{CollectionRef, ColumnMeta, Pagination, QueryResult, TableRef};
+    use dbflux_core::{CollectionRef, ColumnKind, ColumnMeta, Pagination, QueryResult, TableRef};
     use dbflux_storage::bootstrap::StorageRuntime;
     use gpui::{AppContext, TestAppContext};
     use gpui_component::Root;
@@ -1518,12 +1518,14 @@ mod tests {
             ColumnMeta {
                 name: "id".to_string(),
                 type_name: "int4".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: true,
             },
             ColumnMeta {
                 name: "name".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: true,
                 is_primary_key: false,
             },

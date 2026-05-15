@@ -7,7 +7,8 @@ use std::time::Instant;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
-    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
+    ConnectionProfile,
     ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
@@ -767,6 +768,36 @@ struct ExtractedMysqlConfig {
     /// MySQL native ssl-mode identifier (e.g. `"PREFERRED"`, `"VERIFY_CA"`). Defaults to `"PREFERRED"` when absent.
     ssl_mode: String,
     ssh_tunnel: Option<SshTunnelConfig>,
+}
+
+/// Map a MySQL column type to a semantic `ColumnKind`.
+fn mysql_type_to_kind(col_type: mysql::consts::ColumnType) -> ColumnKind {
+    use mysql::consts::ColumnType as CT;
+    match col_type {
+        CT::MYSQL_TYPE_TIMESTAMP
+        | CT::MYSQL_TYPE_DATETIME
+        | CT::MYSQL_TYPE_DATE
+        | CT::MYSQL_TYPE_TIMESTAMP2
+        | CT::MYSQL_TYPE_DATETIME2 => ColumnKind::Timestamp,
+
+        CT::MYSQL_TYPE_TINY
+        | CT::MYSQL_TYPE_SHORT
+        | CT::MYSQL_TYPE_LONG
+        | CT::MYSQL_TYPE_LONGLONG
+        | CT::MYSQL_TYPE_INT24 => ColumnKind::Integer,
+
+        CT::MYSQL_TYPE_FLOAT
+        | CT::MYSQL_TYPE_DOUBLE
+        | CT::MYSQL_TYPE_DECIMAL
+        | CT::MYSQL_TYPE_NEWDECIMAL => ColumnKind::Float,
+
+        CT::MYSQL_TYPE_VARCHAR
+        | CT::MYSQL_TYPE_VAR_STRING
+        | CT::MYSQL_TYPE_STRING
+        | CT::MYSQL_TYPE_BLOB => ColumnKind::Text,
+
+        _ => ColumnKind::Unknown,
+    }
 }
 
 fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbError> {
@@ -1567,6 +1598,7 @@ impl Connection for MysqlConnection {
             .map(|col| ColumnMeta {
                 name: col.name_str().to_string(),
                 type_name: format!("{:?}", col.column_type()),
+                kind: mysql_type_to_kind(col.column_type()),
                 nullable: true,
                 is_primary_key: false,
             })

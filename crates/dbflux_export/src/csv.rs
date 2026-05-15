@@ -84,6 +84,7 @@ mod tests {
                 .map(|name| ColumnMeta {
                     name: name.to_string(),
                     type_name: "text".to_string(),
+                    kind: dbflux_core::ColumnKind::Unknown,
                     nullable: true,
                     is_primary_key: false,
                 })

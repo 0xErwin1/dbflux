@@ -1045,7 +1045,7 @@ fn value_to_json(value: &Value) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::{DocumentTreeState, set_value_at_path, should_expand_scalar_value, value_to_json};
-    use dbflux_core::{ColumnMeta, Value};
+    use dbflux_core::{ColumnKind, ColumnMeta, Value};
     use std::collections::BTreeMap;
 
     #[test]
@@ -1054,12 +1054,14 @@ mod tests {
             ColumnMeta {
                 name: "_id".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "_document".to_string(),
                 type_name: "json".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: false,
             },

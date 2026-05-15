@@ -9,7 +9,8 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CLOUDWATCH_FORM, CollectionBrowseRequest, CollectionChildInfo, CollectionChildrenPage,
     CollectionChildrenRequest, CollectionCountRequest, CollectionInfo, CollectionPresentation,
-    ColumnMeta, Connection, ConnectionProfile, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
+    ColumnKind, ColumnMeta, Connection, ConnectionProfile, DatabaseCategory, DatabaseInfo, DbConfig,
+    DbDriver,
     DbError, DbKind, DeploymentClass, DocumentSchema, DriverCapabilities, DriverFormDef,
     DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery, EventRecord,
     EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext, FormValues, Icon,
@@ -293,6 +294,7 @@ impl Connection for CloudWatchConnection {
                         .map(|name| ColumnMeta {
                             name: name.clone(),
                             type_name: "text".to_string(),
+                            kind: cloudwatch_column_kind(name),
                             nullable: true,
                             is_primary_key: false,
                         })
@@ -455,30 +457,35 @@ impl Connection for CloudWatchConnection {
             ColumnMeta {
                 name: "timestamp_ms".to_string(),
                 type_name: "bigint".to_string(),
+                kind: ColumnKind::Timestamp,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "ingestion_time_ms".to_string(),
                 type_name: "bigint".to_string(),
+                kind: ColumnKind::Timestamp,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "log_stream_name".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Text,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "message".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Text,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "event_id".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Text,
                 nullable: true,
                 is_primary_key: false,
             },
@@ -829,30 +836,35 @@ impl CloudWatchConnection {
             ColumnMeta {
                 name: "timestamp_ms".to_string(),
                 type_name: "bigint".to_string(),
+                kind: ColumnKind::Timestamp,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "ingestion_time_ms".to_string(),
                 type_name: "bigint".to_string(),
+                kind: ColumnKind::Timestamp,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "log_stream_name".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Text,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "message".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Text,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "event_id".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Text,
                 nullable: true,
                 is_primary_key: false,
             },
@@ -869,6 +881,22 @@ impl dbflux_core::LanguageService for CloudWatchLanguageService {
 
     fn detect_dangerous(&self, _query: &str) -> Option<dbflux_core::DangerousQueryKind> {
         None
+    }
+}
+
+/// Classify a CloudWatch Insights column name to a semantic `ColumnKind`.
+///
+/// CloudWatch Insights uses known annotation fields (@timestamp, @ingestionTime)
+/// and dynamic stats fields. This function maps the driver's own canonical field
+/// names — not a generic heuristic.
+fn cloudwatch_column_kind(name: &str) -> ColumnKind {
+    match name {
+        "@timestamp" | "@ingestionTime" => ColumnKind::Timestamp,
+        "@message" | "@logStream" | "@log" => ColumnKind::Text,
+        _ => {
+            // stats query numeric fields: treat as Float (safest choice for chart)
+            ColumnKind::Float
+        }
     }
 }
 

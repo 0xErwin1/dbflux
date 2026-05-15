@@ -1,5 +1,5 @@
 use dbflux_core::{
-    ColumnInfo, ColumnMeta, DataStructure, DatabaseInfo, DbSchemaInfo, QueryResult,
+    ColumnInfo, ColumnKind, ColumnMeta, DataStructure, DatabaseInfo, DbSchemaInfo, QueryResult,
     RelationalSchema, Row, SchemaSnapshot, TableInfo, Value,
 };
 use std::time::Duration;
@@ -24,6 +24,23 @@ pub fn column(name: impl Into<String>, type_name: impl Into<String>, nullable: b
     ColumnMeta {
         name: name.into(),
         type_name: type_name.into(),
+        kind: ColumnKind::Unknown,
+        nullable,
+        is_primary_key: false,
+    }
+}
+
+/// Build a `ColumnMeta` with an explicit semantic kind.
+pub fn column_with_kind(
+    name: impl Into<String>,
+    type_name: impl Into<String>,
+    kind: ColumnKind,
+    nullable: bool,
+) -> ColumnMeta {
+    ColumnMeta {
+        name: name.into(),
+        type_name: type_name.into(),
+        kind,
         nullable,
         is_primary_key: false,
     }

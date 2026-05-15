@@ -21,10 +21,21 @@
 //! - `dateTime:RFC3339`, `dateTime:RFC3339Nano` → `Value::Text` (ISO timestamp)
 
 use csv::ReaderBuilder;
-use dbflux_core::{ColumnMeta, Value};
+use dbflux_core::{ColumnKind, ColumnMeta, Value};
 
 use super::{ParseError, build_query_result, parse_typed_value};
 use dbflux_core::QueryResult;
+
+/// Map a Flux/annotated-CSV type name string to a semantic `ColumnKind`.
+fn kind_from_influx_type_name(s: &str) -> ColumnKind {
+    match s {
+        "timestamp" | "time" | "datetime" => ColumnKind::Timestamp,
+        "integer" | "int" => ColumnKind::Integer,
+        "double" | "float" | "float64" | "unsignedLong" | "long" => ColumnKind::Float,
+        "text" | "string" => ColumnKind::Text,
+        _ => ColumnKind::Unknown,
+    }
+}
 
 const ANNOTATION_DATATYPE: &str = "#datatype";
 const ANNOTATION_GROUP: &str = "#group";
@@ -206,7 +217,8 @@ fn build_column_meta(state: &TableState) -> Vec<ColumnMeta> {
 
         columns.push(ColumnMeta {
             name,
-            type_name,
+            type_name: type_name.clone(),
+            kind: kind_from_influx_type_name(&type_name),
             nullable: true,
             is_primary_key: false,
         });

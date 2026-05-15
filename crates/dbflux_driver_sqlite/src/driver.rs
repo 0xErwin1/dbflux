@@ -7,7 +7,8 @@ use std::time::Instant;
 
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
+    CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind,
+    ColumnMeta,
     Connection, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
     CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection,
@@ -478,6 +479,7 @@ impl QueryCancelHandle for SqliteCancelHandle {
     }
 }
 
+
 fn sqlite_code_generators() -> Vec<CodeGeneratorInfo> {
     vec![
         CodeGeneratorInfo {
@@ -676,7 +678,11 @@ impl Connection for SqliteConnection {
             || sql_trimmed.starts_with("EXPLAIN");
 
         if is_query {
-            // For SELECT statements, use query() to get rows
+            // For SELECT statements, use query() to get rows.
+            // rusqlite's `column_types` feature (which exposes declared types via
+            // Statement::columns()) is not enabled in this crate. Without declared
+            // types, all SQLite result columns report as Unknown — users can use
+            // the manual chart picker when they need to chart a SQLite result.
             let column_count = stmt.column_count();
             let column_names: Vec<String> =
                 stmt.column_names().iter().map(|s| s.to_string()).collect();
@@ -685,6 +691,7 @@ impl Connection for SqliteConnection {
                 .map(|name| ColumnMeta {
                     name,
                     type_name: "TEXT".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: true,
                     is_primary_key: false,
                 })
