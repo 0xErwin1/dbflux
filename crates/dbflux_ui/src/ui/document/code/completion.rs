@@ -85,6 +85,32 @@ impl QueryCompletionProvider {
             dbflux_core::QueryLanguage::Cypher => &[
                 "MATCH", "WHERE", "RETURN", "CREATE", "MERGE", "SET", "DELETE", "DETACH", "LIMIT",
             ],
+            dbflux_core::QueryLanguage::Flux => &[
+                "from",
+                "range",
+                "filter",
+                "map",
+                "group",
+                "aggregateWindow",
+                "mean",
+                "sum",
+                "count",
+                "last",
+                "first",
+                "yield",
+                "join",
+                "pivot",
+                "sort",
+                "limit",
+                "drop",
+                "keep",
+                "rename",
+                "fill",
+                "toFloat",
+                "toInt",
+                "toString",
+                "|>",
+            ],
             dbflux_core::QueryLanguage::Lua
             | dbflux_core::QueryLanguage::Python
             | dbflux_core::QueryLanguage::Bash

@@ -29,6 +29,7 @@ members = [
     "crates/dbflux_approval",
     "crates/dbflux_audit",
     "crates/dbflux_storage",
+    "crates/dbflux_driver_influxdb",
 ]
 default-members = ["crates/dbflux"]
 resolver = "2"
@@ -67,6 +68,7 @@ dbflux_policy = { path = "crates/dbflux_policy" }
 dbflux_approval = { path = "crates/dbflux_approval" }
 dbflux_audit = { path = "crates/dbflux_audit" }
 dbflux_storage = { path = "crates/dbflux_storage" }
+dbflux_driver_influxdb = { path = "crates/dbflux_driver_influxdb" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
 dbflux_ui = { path = "crates/dbflux_ui" }
@@ -90,6 +92,11 @@ log = "0.4"
 env_logger = "0.11"
 fuzzy-matcher = "0.3"
 regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip", "json"] }
+csv = "1"
+chrono = { version = "0.4", features = ["serde"] }
+urlencoding = "2"
+base64 = "0.22"
 hex = "0.4"
 sha2 = "0.10"
 interprocess = "2.4"

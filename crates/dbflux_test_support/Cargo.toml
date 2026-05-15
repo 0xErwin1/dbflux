@@ -19,3 +19,4 @@ dbflux_driver_redis.workspace = true
 serde_json.workspace = true
 testcontainers = "0.15"
 interprocess.workspace = true
+reqwest = { workspace = true, default-features = false, features = ["blocking", "rustls-tls"] }

@@ -116,11 +116,8 @@ impl Render for DataGridPanel {
             DataSource::Collection { collection, .. } => collection.qualified_name(),
             DataSource::QueryResult { .. } => String::new(),
         };
-        let source_query_prefix = if self.source.is_collection() {
-            "find"
-        } else {
-            "SELECT * FROM"
-        };
+        let (source_query_prefix, filter_keyword) =
+            DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
         let filter_input = self.filter_input.clone();
         let filter_has_value = !self.filter_input.read(cx).value().is_empty();
         let limit_input = self.limit_input.clone();
@@ -203,6 +200,7 @@ impl Render for DataGridPanel {
             .when(show_data_toolbar, |d| {
                 d.child(self.render_toolbar(
                     source_query_prefix,
+                    filter_keyword,
                     &source_name,
                     &filter_input,
                     filter_has_value,
@@ -389,6 +387,7 @@ impl DataGridPanel {
     pub(super) fn render_toolbar(
         &self,
         source_query_prefix: &str,
+        filter_keyword: &str,
         source_name: &str,
         filter_input: &Entity<InputState>,
         filter_has_value: bool,
@@ -422,61 +421,65 @@ impl DataGridPanel {
                     .child(Text::caption(source_query_prefix.to_string()).primary())
                     .child(Text::label(source_name.to_string())),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .child(Text::caption("WHERE").primary())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .w(px(420.0))
-                            .rounded(Radii::SM)
-                            .when(
-                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
-                                |d| d.border_1().border_color(theme.ring),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.switching_input = true;
-                                    this.focus_mode = GridFocusMode::Toolbar;
-                                    this.toolbar_focus = ToolbarFocus::Filter;
-                                    this.edit_state = EditState::Editing;
-                                    cx.notify();
-                                }),
-                            )
-                            .child(div().flex_1().child(Input::new(filter_input).small()))
-                            .when(filter_has_value, |d| {
-                                d.child(
-                                    div()
-                                        .id("clear-filter")
-                                        .w(px(20.0))
-                                        .h(px(20.0))
-                                        .mr(Spacing::XS)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(Radii::SM)
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme.muted_foreground)
-                                        .cursor_pointer()
-                                        .hover(|d| {
-                                            d.bg(theme.secondary).text_color(theme.foreground)
-                                        })
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.filter_input.update(cx, |input, cx| {
-                                                input.set_value("", window, cx);
-                                            });
-                                            this.refresh(window, cx);
-                                        }))
-                                        .child("\u{00d7}"),
+            // Filter input: hidden for drivers that don't support collection filtering
+            // (e.g. TimeSeries/InfluxDB where browse_collection ignores the filter).
+            .when(!filter_keyword.is_empty(), |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .child(Text::caption(filter_keyword.to_string()).primary())
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .w(px(420.0))
+                                .rounded(Radii::SM)
+                                .when(
+                                    show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
+                                    |d| d.border_1().border_color(theme.ring),
                                 )
-                            }),
-                    ),
-            )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.switching_input = true;
+                                        this.focus_mode = GridFocusMode::Toolbar;
+                                        this.toolbar_focus = ToolbarFocus::Filter;
+                                        this.edit_state = EditState::Editing;
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(div().flex_1().child(Input::new(filter_input).small()))
+                                .when(filter_has_value, |d| {
+                                    d.child(
+                                        div()
+                                            .id("clear-filter")
+                                            .w(px(20.0))
+                                            .h(px(20.0))
+                                            .mr(Spacing::XS)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(Radii::SM)
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.muted_foreground)
+                                            .cursor_pointer()
+                                            .hover(|d| {
+                                                d.bg(theme.secondary).text_color(theme.foreground)
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.filter_input.update(cx, |input, cx| {
+                                                    input.set_value("", window, cx);
+                                                });
+                                                this.refresh(window, cx);
+                                            }))
+                                            .child("\u{00d7}"),
+                                    )
+                                }),
+                        ),
+                )
+            })
             .child(
                 div()
                     .flex()

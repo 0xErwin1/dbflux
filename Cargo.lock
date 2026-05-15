@@ -318,6 +318,7 @@ dependencies = [
  "compression-core",
  "futures-io",
  "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
@@ -2309,6 +2310,7 @@ dependencies = [
  "dbflux_core",
  "dbflux_driver_cloudwatch",
  "dbflux_driver_dynamodb",
+ "dbflux_driver_influxdb",
  "dbflux_driver_ipc",
  "dbflux_driver_mongodb",
  "dbflux_driver_mysql",
@@ -2353,6 +2355,7 @@ dependencies = [
  "dbflux_core",
  "dbflux_driver_cloudwatch",
  "dbflux_driver_dynamodb",
+ "dbflux_driver_influxdb",
  "dbflux_driver_ipc",
  "dbflux_driver_mongodb",
  "dbflux_driver_mysql",
@@ -2503,6 +2506,24 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "dbflux_driver_influxdb"
+version = "0.6.0-dev.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "csv",
+ "dbflux_core",
+ "dbflux_test_support",
+ "log",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "urlencoding",
 ]
 
 [[package]]
@@ -2758,6 +2779,7 @@ dependencies = [
  "dbflux_driver_redis",
  "dbflux_ipc",
  "interprocess",
+ "reqwest",
  "serde_json",
  "testcontainers",
 ]
@@ -4745,6 +4767,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -7488,6 +7511,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "reqwest"
+version = "0.12.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.9.0",
+ "hyper-rustls 0.27.9",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "percent-encoding",
+ "pin-project-lite",
+ "quinn",
+ "rustls 0.23.40",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sync_wrapper",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "webpki-roots",
+]
+
+[[package]]
 name = "resolv-conf"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9386,6 +9449,29 @@ dependencies = [
  "tokio",
  "tower-layer",
  "tower-service",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.6.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68d6fdd9f81c2819c9a8b0e0cd91660e7746a8e6ea2ba7c6b2b057985f6bcb51"
+dependencies = [
+ "async-compression",
+ "bitflags 2.11.1",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "url",
 ]
 
 [[package]]

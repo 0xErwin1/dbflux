@@ -51,6 +51,9 @@ use dbflux_driver_dynamodb::DynamoDriver;
 #[cfg(feature = "cloudwatch")]
 use dbflux_driver_cloudwatch::CloudWatchDriver;
 
+#[cfg(feature = "influxdb")]
+use dbflux_driver_influxdb::InfluxDriver;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -820,6 +823,11 @@ impl AppState {
         #[cfg(feature = "cloudwatch")]
         {
             drivers.insert("cloudwatch".to_string(), Arc::new(CloudWatchDriver::new()));
+        }
+
+        #[cfg(feature = "influxdb")]
+        {
+            drivers.insert("influxdb".to_string(), Arc::new(InfluxDriver::new()));
         }
 
         drivers
@@ -3452,5 +3460,26 @@ mod tests {
             .external_driver_diagnostic("missing.sock")
             .expect("app diagnostic");
         assert_eq!(diagnostic.summary, "Probe failed");
+    }
+
+    /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain
+    /// a driver whose `driver_key()` is `"builtin:influxdb"`.
+    #[test]
+    #[cfg(feature = "influxdb")]
+    fn influxdb_registration_present_when_feature_enabled() {
+        let drivers = AppState::build_builtin_drivers();
+        assert!(
+            drivers.contains_key("influxdb"),
+            "driver map must contain the 'influxdb' key when the influxdb feature is enabled"
+        );
+
+        let driver = drivers
+            .get("influxdb")
+            .expect("influxdb driver must be registered");
+        let key: String = driver.driver_key().into();
+        assert_eq!(
+            key, "builtin:influxdb",
+            "driver_key() must be 'builtin:influxdb'"
+        );
     }
 }

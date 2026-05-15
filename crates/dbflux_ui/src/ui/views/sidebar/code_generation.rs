@@ -751,4 +751,68 @@ impl Sidebar {
             query,
         });
     }
+
+    /// Open a new code document pre-seeded with a query template for this measurement.
+    ///
+    /// Calls `QueryGenerator::template_for_collection` on the driver — no driver-id
+    /// branching. If the driver does not implement the method the action is a no-op.
+    pub(super) fn query_collection(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(SchemaNodeId::Collection {
+            profile_id,
+            database,
+            name,
+        }) = parse_node_id(item_id)
+        else {
+            return;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return;
+        };
+
+        let Some(query_gen) = conn.connection.query_generator() else {
+            return;
+        };
+
+        let request = dbflux_core::CollectionTemplateRequest {
+            collection: &name,
+            database: &database,
+        };
+
+        let Some(generated) = query_gen.template_for_collection(&request) else {
+            return;
+        };
+
+        cx.emit(SidebarEvent::OpenNewQueryWithContent {
+            profile_id,
+            language: generated.language,
+            query: generated.text,
+        });
+    }
+
+    /// Open a new empty code document for the given database/bucket node.
+    ///
+    /// The workspace will activate this profile's connection and pre-select the
+    /// bucket in the source-context dropdown via `OpenNewQueryWithContent`.
+    pub(super) fn new_query_for_database(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(SchemaNodeId::Database { profile_id, .. }) = parse_node_id(item_id) else {
+            return;
+        };
+
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return;
+        };
+
+        let language = conn.connection.metadata().query_language.clone();
+
+        // Emit an empty query — the workspace opens a blank code document with
+        // the profile already active so the user can select the bucket and type.
+        cx.emit(SidebarEvent::OpenNewQueryWithContent {
+            profile_id,
+            language,
+            query: String::new(),
+        });
+    }
 }

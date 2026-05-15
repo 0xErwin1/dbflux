@@ -425,6 +425,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::Redis => "Redis",
         DbKind::DynamoDB => "DynamoDB",
         DbKind::CloudWatchLogs => "CloudWatchLogs",
+        DbKind::InfluxDB => "InfluxDB",
     }
     .to_string()
 }
@@ -439,6 +440,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "Redis" => Some(DbKind::Redis),
         "DynamoDB" => Some(DbKind::DynamoDB),
         "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
+        "InfluxDB" => Some(DbKind::InfluxDB),
         _ => None,
     }
 }

@@ -348,7 +348,7 @@ impl AppIcon {
             QueryLanguage::Bash => Self::BrandBash,
             QueryLanguage::MongoQuery => Self::BrandMongodb,
             QueryLanguage::RedisCommands => Self::BrandRedis,
-            QueryLanguage::InfluxQuery => Self::BrandInfluxDb,
+            QueryLanguage::InfluxQuery | QueryLanguage::Flux => Self::BrandInfluxDb,
             QueryLanguage::Sql
             | QueryLanguage::CloudWatchLogsInsightsQl
             | QueryLanguage::OpenSearchPpl
@@ -369,6 +369,8 @@ impl AppIcon {
             Icon::Mongodb => Self::BrandMongodb,
             Icon::Redis => Self::BrandRedis,
             Icon::Dynamodb => Self::Database,
+            // TODO(influxdb-icon): real brand SVG already exists at icons/brand/influxdb.svg
+            Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
             Icon::Database => Self::Database,
         }

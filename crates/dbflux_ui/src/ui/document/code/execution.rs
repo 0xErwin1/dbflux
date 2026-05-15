@@ -771,6 +771,7 @@ impl CodeDocument {
             query.as_deref(),
             duration_ms,
             None,
+            None,
         );
     }
 
@@ -865,6 +866,10 @@ impl CodeDocument {
                 let affected_rows = qr.affected_rows;
                 let row_count = affected_rows.unwrap_or(qr.rows.len() as u64);
                 let execution_time = qr.execution_time;
+
+                // Extract driver-provided audit fields before the result is moved into Arc.
+                let metadata_extra = qr.metadata_extra.clone();
+
                 record.rows_affected = Some(row_count);
                 let arc_result = Arc::new(qr);
                 record.result = Some(arc_result.clone());
@@ -936,6 +941,7 @@ impl CodeDocument {
                         Some(&pending.query),
                         duration_ms,
                         None,
+                        None,
                     );
                 } else {
                     self.emit_audit_event(
@@ -947,6 +953,7 @@ impl CodeDocument {
                         Some(&pending.query),
                         duration_ms,
                         None,
+                        metadata_extra.as_ref(),
                     );
                 }
             }
@@ -1020,6 +1027,7 @@ impl CodeDocument {
                         Some(&pending.query),
                         duration_ms,
                         Some(&error_msg),
+                        None,
                     );
                 } else {
                     self.emit_audit_event(
@@ -1031,6 +1039,7 @@ impl CodeDocument {
                         Some(&pending.query),
                         duration_ms,
                         Some(&error_msg),
+                        None,
                     );
                 }
             }
@@ -1407,6 +1416,8 @@ impl CodeDocument {
                         text_body: Some(output),
                         raw_bytes: None,
                         next_page_token: None,
+                        resolved_window: None,
+                        metadata_extra: None,
                     })
                 }
                 Err(error) => Err(DbError::query_failed(error)),

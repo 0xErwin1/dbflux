@@ -4,6 +4,8 @@ use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::keymap::{Command, ContextId};
+use crate::ui::common::time_range::state::TimeRange;
+use crate::ui::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
@@ -14,7 +16,7 @@ use crate::ui::overlays::modals::schema_drift::{
 };
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{
-    CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
+    Button, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
 };
 use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
@@ -31,6 +33,8 @@ use dbflux_core::{
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
+use gpui_component::date_picker::DatePicker;
 use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
 };
@@ -207,6 +211,14 @@ pub struct CodeDocument {
     source_start_input: Entity<InputState>,
     source_end_input: Entity<InputState>,
     pending_source_input_values: Option<(String, String)>,
+    /// Present when the active connection's `SourceContextSpec` declares both
+    /// a non-empty `start_label` and `end_label`. The panel replaces the raw
+    /// RFC3339 text inputs and forwards epoch-ms bounds into `exec_ctx.source`.
+    /// `None` for connections that use text-based time inputs or have no spec.
+    source_time_range_panel: Option<Entity<TimeRangePanel>>,
+    /// Subscription to `TimeRangeChanged` from `source_time_range_panel`.
+    /// Stored separately so it can be replaced when the panel is recreated.
+    _source_time_range_sub: Option<Subscription>,
     _context_subscriptions: Vec<Subscription>,
 
     // Execution
@@ -534,8 +546,13 @@ impl CodeDocument {
                 .placeholder("Syntax")
                 .toolbar_style(true)
         });
-        let source_targets =
-            cx.new(|_cx| MultiSelect::new("ctx-source-targets").placeholder("Sources"));
+        // bare() suppresses the trigger's own border/background because the
+        // context bar wraps this in control_shell which provides the chrome.
+        let source_targets = cx.new(|_cx| {
+            MultiSelect::new("ctx-source-targets")
+                .bare()
+                .placeholder("Sources")
+        });
         let source_start_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
         let source_end_input =
@@ -607,6 +624,8 @@ impl CodeDocument {
             source_start_input,
             source_end_input,
             pending_source_input_values: None,
+            source_time_range_panel: None,
+            _source_time_range_sub: None,
             _context_subscriptions: vec![
                 conn_sub,
                 db_sub,
@@ -1114,6 +1133,7 @@ impl CodeDocument {
         query: Option<&str>,
         duration_ms: Option<i64>,
         error: Option<&str>,
+        metadata_extra: Option<&std::collections::HashMap<String, serde_json::Value>>,
     ) {
         // Scripts don't require a connection context
         let (conn_id, database_name, driver_id) = if category == EventCategory::Script {
@@ -1164,9 +1184,29 @@ impl CodeDocument {
             event = event.with_origin(EventOrigin::local());
         }
 
-        if let Some(query) = query {
-            event.details_json = Some(serde_json::json!({ "query": query }).to_string());
-        }
+        // Build details_json from the query text and any driver-provided extra fields.
+        // The extra fields let drivers surface structured context (e.g., language, version,
+        // injected window) without requiring driver-id branching here.
+        let details = {
+            let mut obj = serde_json::Map::new();
+            if let Some(q) = query {
+                obj.insert(
+                    "query".to_string(),
+                    serde_json::Value::String(q.to_string()),
+                );
+            }
+            if let Some(extra) = metadata_extra {
+                for (key, value) in extra {
+                    obj.insert(key.clone(), value.clone());
+                }
+            }
+            if !obj.is_empty() {
+                Some(serde_json::Value::Object(obj).to_string())
+            } else {
+                None
+            }
+        };
+        event.details_json = details;
 
         if let Some(duration) = duration_ms {
             event.duration_ms = Some(duration);
