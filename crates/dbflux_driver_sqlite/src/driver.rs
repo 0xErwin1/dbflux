@@ -677,19 +677,32 @@ impl Connection for SqliteConnection {
 
         if is_query {
             // For SELECT statements, use query() to get rows.
-            // rusqlite's `column_types` feature (which exposes declared types via
-            // Statement::columns()) is not enabled in this crate. Without declared
-            // types, all SQLite result columns report as Unknown — users can use
-            // the manual chart picker when they need to chart a SQLite result.
+            // Use Statement::columns() (requires the `column_decltype` rusqlite feature)
+            // to get declared type strings, then apply SQLite affinity heuristics to
+            // populate ColumnKind. Columns whose declared type is NULL (dynamic columns
+            // or expressions) fall back to ColumnKind::Unknown.
             let column_count = stmt.column_count();
-            let column_names: Vec<String> =
-                stmt.column_names().iter().map(|s| s.to_string()).collect();
-            let columns: Vec<ColumnMeta> = column_names
+            let col_meta: Vec<(String, String, ColumnKind)> = stmt
+                .columns()
                 .into_iter()
-                .map(|name| ColumnMeta {
+                .map(|col| {
+                    let name = col.name().to_string();
+                    let decl = col.decl_type().unwrap_or("");
+                    let type_name = if decl.is_empty() {
+                        "TEXT".to_string()
+                    } else {
+                        decl.to_uppercase()
+                    };
+                    let kind = kind_from_decltype(col.decl_type());
+                    (name, type_name, kind)
+                })
+                .collect();
+            let columns: Vec<ColumnMeta> = col_meta
+                .into_iter()
+                .map(|(name, type_name, kind)| ColumnMeta {
                     name,
-                    type_name: "TEXT".to_string(),
-                    kind: ColumnKind::Unknown,
+                    type_name,
+                    kind,
                     nullable: true,
                     is_primary_key: false,
                 })
@@ -1980,16 +1993,105 @@ fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
     }
 }
 
+/// Map a SQLite declared-type string to a `ColumnKind` using SQLite's type-affinity rules.
+///
+/// The mapping is case-insensitive substring matching following the SQLite type affinity
+/// algorithm (https://www.sqlite.org/datatype3.html), adapted to chart-column needs:
+/// - Contains "INT"                       → `Integer`
+/// - Contains "REAL", "FLOA", "DOUB",
+///   "NUMERIC", or "DECIMAL"             → `Float`
+/// - Contains "DATE", "TIME", or "STAMP" → `Timestamp`
+/// - Contains "CHAR", "TEXT", or "CLOB"  → `Text`
+/// - `None` (expression / dynamic type)
+///   or any other string                 → `Unknown`
+pub(crate) fn kind_from_decltype(decl: Option<&str>) -> ColumnKind {
+    let decl = match decl {
+        Some(d) if !d.is_empty() => d.to_uppercase(),
+        _ => return ColumnKind::Unknown,
+    };
+
+    if decl.contains("INT") {
+        return ColumnKind::Integer;
+    }
+
+    if decl.contains("REAL")
+        || decl.contains("FLOA")
+        || decl.contains("DOUB")
+        || decl.contains("NUMERIC")
+        || decl.contains("DECIMAL")
+    {
+        return ColumnKind::Float;
+    }
+
+    if decl.contains("DATE") || decl.contains("TIME") || decl.contains("STAMP") {
+        return ColumnKind::Timestamp;
+    }
+
+    if decl.contains("CHAR") || decl.contains("TEXT") || decl.contains("CLOB") {
+        return ColumnKind::Text;
+    }
+
+    ColumnKind::Unknown
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        SqliteDialect, SqliteDriver, plan_sqlite_semantic_request, sqlite_generate_create_table,
+        SqliteDialect, SqliteDriver, kind_from_decltype, plan_sqlite_semantic_request,
+        sqlite_generate_create_table,
     };
     use dbflux_core::{
-        ColumnInfo, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
+        ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
         QueryLanguage, RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest, TableInfo,
         TableRef, Value, WhereOperator,
     };
+
+    // --- kind_from_decltype unit tests (TDD: RED → GREEN) ---
+
+    #[test]
+    fn kind_from_decltype_integer_variants() {
+        assert_eq!(kind_from_decltype(Some("INTEGER")), ColumnKind::Integer);
+        assert_eq!(kind_from_decltype(Some("INT")), ColumnKind::Integer);
+        assert_eq!(kind_from_decltype(Some("BIGINT")), ColumnKind::Integer);
+        assert_eq!(kind_from_decltype(Some("TINYINT")), ColumnKind::Integer);
+        assert_eq!(kind_from_decltype(Some("integer")), ColumnKind::Integer);
+    }
+
+    #[test]
+    fn kind_from_decltype_float_variants() {
+        assert_eq!(kind_from_decltype(Some("REAL")), ColumnKind::Float);
+        assert_eq!(kind_from_decltype(Some("FLOAT")), ColumnKind::Float);
+        assert_eq!(kind_from_decltype(Some("DOUBLE")), ColumnKind::Float);
+        assert_eq!(kind_from_decltype(Some("NUMERIC")), ColumnKind::Float);
+        assert_eq!(kind_from_decltype(Some("DECIMAL")), ColumnKind::Float);
+        assert_eq!(kind_from_decltype(Some("double precision")), ColumnKind::Float);
+    }
+
+    #[test]
+    fn kind_from_decltype_timestamp_variants() {
+        assert_eq!(kind_from_decltype(Some("DATETIME")), ColumnKind::Timestamp);
+        assert_eq!(kind_from_decltype(Some("TIMESTAMP")), ColumnKind::Timestamp);
+        assert_eq!(kind_from_decltype(Some("DATE")), ColumnKind::Timestamp);
+        assert_eq!(kind_from_decltype(Some("TIME")), ColumnKind::Timestamp);
+        assert_eq!(kind_from_decltype(Some("datetime")), ColumnKind::Timestamp);
+    }
+
+    #[test]
+    fn kind_from_decltype_text_variants() {
+        assert_eq!(kind_from_decltype(Some("TEXT")), ColumnKind::Text);
+        assert_eq!(kind_from_decltype(Some("VARCHAR")), ColumnKind::Text);
+        assert_eq!(kind_from_decltype(Some("CHAR")), ColumnKind::Text);
+        assert_eq!(kind_from_decltype(Some("CLOB")), ColumnKind::Text);
+        assert_eq!(kind_from_decltype(Some("varchar(255)")), ColumnKind::Text);
+    }
+
+    #[test]
+    fn kind_from_decltype_unknown_cases() {
+        assert_eq!(kind_from_decltype(None), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("BLOB")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("NONE")), ColumnKind::Unknown);
+    }
 
     #[test]
     fn build_config_requires_non_empty_path() {
