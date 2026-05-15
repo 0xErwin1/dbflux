@@ -1835,10 +1835,10 @@ impl DataGridPanel {
         picker.child(apply_btn)
     }
 
-    /// Render the 280px Configure rail shown when `chart_rail_open` is true.
+    /// Render the 320px Configure/Stats rail shown when `chart_rail_open` is true.
     ///
-    /// Contains two tabs — Configure (column picker + Apply/Reset) and Stats
-    /// (focused-series descriptive statistics + window summary).
+    /// The active tab is controlled by the chart toolbar buttons (Stats / Configure).
+    /// There is no in-dock tab header — the toolbar is the single source of truth.
     fn render_chart_rail(
         &mut self,
         theme: &gpui_component::theme::Theme,
@@ -1846,84 +1846,70 @@ impl DataGridPanel {
     ) -> impl IntoElement {
         let active_tab = self.chart_rail_tab;
 
-        // Tab header
-        let tab_header = div()
-            .flex()
-            .flex_row()
-            .gap_1()
-            .px_2()
-            .pt_2()
-            .pb_1()
-            .border_b_1()
-            .border_color(theme.border)
-            .child({
-                let is_active = active_tab == ChartRailTab::Configure;
-                div()
-                    .id("rail-tab-configure")
-                    .px(Spacing::SM)
-                    .py(gpui::px(2.0))
-                    .rounded(Radii::SM)
-                    .text_size(FontSizes::XS)
-                    .cursor_pointer()
-                    .when(is_active, |d| d.bg(gpui::hsla(0.0, 0.0, 0.15, 1.0)))
-                    .when(!is_active, |d| {
-                        d.border_1()
-                            .border_color(theme.border)
-                            .hover(|d| d.bg(theme.secondary))
-                    })
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.chart_rail_tab = ChartRailTab::Configure;
-                            cx.notify();
-                        }),
-                    )
-                    .child("Configure")
-            })
-            .child({
-                let is_active = active_tab == ChartRailTab::Stats;
-                div()
-                    .id("rail-tab-stats")
-                    .px(Spacing::SM)
-                    .py(gpui::px(2.0))
-                    .rounded(Radii::SM)
-                    .text_size(FontSizes::XS)
-                    .cursor_pointer()
-                    .when(is_active, |d| d.bg(gpui::hsla(0.0, 0.0, 0.15, 1.0)))
-                    .when(!is_active, |d| {
-                        d.border_1()
-                            .border_color(theme.border)
-                            .hover(|d| d.bg(theme.secondary))
-                    })
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.chart_rail_tab = ChartRailTab::Stats;
-                            cx.notify();
-                        }),
-                    )
-                    .child("Stats")
-            });
-
         let body = match active_tab {
             ChartRailTab::Configure => self.render_rail_configure_tab(theme, cx).into_any_element(),
             ChartRailTab::Stats => self.render_rail_stats_tab(theme, cx).into_any_element(),
         };
 
         div()
-            .w(gpui::px(280.0))
+            .w(gpui::px(320.0))
             .flex_shrink_0()
             .flex()
             .flex_col()
             .border_l_1()
             .border_color(theme.border)
             .bg(theme.background)
-            .child(tab_header)
             .child(div().flex_grow().child(body))
     }
 
-    /// Configure tab body: X-column selector, Y-column checkboxes with
-    /// inline avg/last, and Reset-to-auto + Apply footer buttons.
+    /// Section container helper for the right dock panels.
+    fn dock_section(content: impl IntoElement, theme: &gpui_component::theme::Theme) -> impl IntoElement {
+        div()
+            .px(px(14.0))
+            .py(px(12.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(content)
+    }
+
+    /// Section header label for the right dock panels.
+    /// Renders uppercase tracked muted 10px text, optionally prefixed by an icon.
+    fn dock_header(label: &str) -> impl IntoElement {
+        div()
+            .text_size(px(10.0))
+            .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+            .font_weight(gpui::FontWeight::BOLD)
+            .mb(px(6.0))
+            .child(SharedString::from(label.to_uppercase()))
+    }
+
+    /// Key/value row for the right dock panels.
+    /// `k` is shown muted at 10px, `v` is the value element at 11px.
+    fn dock_kv_row(k: &str, v: impl IntoElement) -> impl IntoElement {
+        div()
+            .flex()
+            .items_start()
+            .gap(px(8.0))
+            .py(px(2.0))
+            .child(
+                div()
+                    .w(px(96.0))
+                    .flex_shrink_0()
+                    .text_size(px(10.0))
+                    .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+                    .child(SharedString::from(k.to_string())),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(11.0))
+                    .child(v),
+            )
+    }
+
+    /// Configure tab body: WHY paragraph, X-column selector, Y-column
+    /// checkboxes with inline avg/last, AXIS & STACKING read-only markers,
+    /// and Reset-to-auto + Apply footer buttons.
     fn render_rail_configure_tab(
         &mut self,
         theme: &gpui_component::theme::Theme,
@@ -1932,6 +1918,7 @@ impl DataGridPanel {
         use dbflux_core::ColumnKind;
 
         let columns = &self.result.columns;
+        let (num_numeric, num_ts) = count_columns_for_why(columns);
 
         let x_candidates: Vec<(usize, String)> = columns
             .iter()
@@ -1961,7 +1948,7 @@ impl DataGridPanel {
         let y_checked = self.chart_rail_picker_y_checked.clone();
         let any_y_checked = y_checked.iter().any(|&c| c);
 
-        // Build inline avg/last labels for Y candidates currently in the spec.
+        // Inline avg/last labels for Y candidates currently in the spec.
         let stats: Vec<Option<SeriesStats>> = if let Some(cv) = &self.chart_view {
             cv.read(cx).series_stats().to_vec()
         } else {
@@ -1981,18 +1968,42 @@ impl DataGridPanel {
         let has_manual = self.chart_manual_selection.is_some();
         let reset_enabled = detection_ok || has_manual;
 
+        let why_text = format!(
+            "The result has {} numeric column{} and {} timestamp-like column{}. \
+             Pick which one is the time axis and which series to plot.",
+            num_numeric,
+            if num_numeric == 1 { "" } else { "s" },
+            num_ts,
+            if num_ts == 1 { "" } else { "s" },
+        );
+
         div()
+            .id("rail-configure-scroll")
             .flex()
             .flex_col()
-            .gap(Spacing::SM)
-            .p_2()
-            // X-column section
-            .child(
+            .overflow_y_scroll()
+            // WHY THIS PANEL section
+            .child(Self::dock_section(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .child(Text::caption("Time column".to_string()).color(theme.muted_foreground))
+                    .gap(px(4.0))
+                    .child(Self::dock_header("Why this panel"))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground)
+                            .child(SharedString::from(why_text)),
+                    ),
+                theme,
+            ))
+            // TIME COLUMN section
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(Self::dock_header("Time column"))
                     .children(x_candidates.iter().enumerate().map(
                         |(cand_idx, (col_idx, col_name))| {
                             let col_idx = *col_idx;
@@ -2000,13 +2011,19 @@ impl DataGridPanel {
                             let label = col_name.clone();
                             div()
                                 .id(ElementId::Name(format!("rail-x-col-{}", col_idx).into()))
-                                .px(Spacing::SM)
-                                .py(gpui::px(2.0))
+                                .px(px(8.0))
+                                .py(px(3.0))
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
-                                .text_size(FontSizes::XS)
-                                .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2)))
-                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
+                                .text_size(px(11.0))
+                                .when(is_selected, |d| {
+                                    d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.18))
+                                        .text_color(theme.foreground)
+                                })
+                                .when(!is_selected, |d| {
+                                    d.text_color(theme.muted_foreground)
+                                        .hover(|d| d.bg(theme.secondary))
+                                })
                                 .on_mouse_down(
                                     gpui::MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -2017,14 +2034,15 @@ impl DataGridPanel {
                                 .child(label)
                         },
                     )),
-            )
-            // Y-column section
-            .child(
+                theme,
+            ))
+            // SERIES section
+            .child(Self::dock_section(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .child(Text::caption("Y columns".to_string()).color(theme.muted_foreground))
+                    .gap(px(6.0))
+                    .child(Self::dock_header("Series"))
                     .children(y_candidates.iter().enumerate().map(
                         |(cand_idx, (col_idx, col_name))| {
                             let col_idx = *col_idx;
@@ -2032,7 +2050,8 @@ impl DataGridPanel {
                             let label = col_name.clone();
 
                             // Find this column's series index in active_y_cols.
-                            let series_idx_opt = active_y_cols.iter().position(|&ci| ci == col_idx);
+                            let series_idx_opt =
+                                active_y_cols.iter().position(|&ci| ci == col_idx);
                             let stat_label = series_idx_opt
                                 .and_then(|si| stats.get(si).copied().flatten())
                                 .map(|s| {
@@ -2047,7 +2066,7 @@ impl DataGridPanel {
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap(gpui::px(1.0))
+                                .gap(px(2.0))
                                 .child(
                                     Checkbox::new(ElementId::Name(
                                         format!("rail-y-col-{}", cand_idx).into(),
@@ -2067,23 +2086,53 @@ impl DataGridPanel {
                                 )
                                 .child(
                                     div()
-                                        .pl(gpui::px(20.0))
+                                        .pl(px(20.0))
                                         .text_size(FontSizes::XS)
                                         .text_color(theme.muted_foreground)
                                         .child(stat_label),
                                 )
                         },
                     )),
-            )
+                theme,
+            ))
+            // AXIS & STACKING section (read-only, v0.6 placeholders)
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(Self::dock_header("Axis & Stacking"))
+                    .child(Self::dock_kv_row(
+                        "y-axis",
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.foreground)
+                            .child("linear · 0 → auto"),
+                    ))
+                    .child(Self::dock_kv_row(
+                        "stack",
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground)
+                            .child("off (v0.6.0)"),
+                    ))
+                    .child(Self::dock_kv_row(
+                        "interpolation",
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.foreground)
+                            .child("linear"),
+                    )),
+                theme,
+            ))
             // Footer: Reset + Apply
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .justify_between()
-                    .pt_1()
-                    .border_t_1()
-                    .border_color(theme.border)
+                    .px(px(14.0))
+                    .py(px(10.0))
                     // Reset-to-auto button
                     .child(
                         div()
@@ -2137,7 +2186,8 @@ impl DataGridPanel {
             )
     }
 
-    /// Stats tab body: focused-series descriptive statistics and window summary.
+    /// Stats tab body: focused-series descriptive statistics, window summary,
+    /// and a SOURCE placeholder section for future driver-provided metadata.
     fn render_rail_stats_tab(
         &mut self,
         theme: &gpui_component::theme::Theme,
@@ -2154,25 +2204,25 @@ impl DataGridPanel {
             .map(|cv| cv.read(cx).focused_series_idx())
             .unwrap_or(self.chart_focused_series_idx);
 
-        let (stats_opt, label, color, x_min, x_max, x_is_time) = if let Some(cv) = &self.chart_view
-        {
-            let view = cv.read(cx);
-            let s = view.series_stats().get(focused_idx).copied().flatten();
-            let label = view.series_label(focused_idx).to_string();
-            let color = view.series_color(focused_idx);
-            let (x_min, x_max) = view.data_x_bounds();
-            let x_is_time = view.x_is_time();
-            (s, label, color, x_min, x_max, x_is_time)
-        } else {
-            // Rail may briefly be open while chart_view is None (e.g. during
-            // rebuild after Apply). Render an empty state.
-            return div()
-                .p_2()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
-                .child("Rebuilding chart…")
-                .into_any_element();
-        };
+        let (stats_opt, label, color, x_min, x_max, x_is_time) =
+            if let Some(cv) = &self.chart_view {
+                let view = cv.read(cx);
+                let s = view.series_stats().get(focused_idx).copied().flatten();
+                let label = view.series_label(focused_idx).to_string();
+                let color = view.series_color(focused_idx);
+                let (x_min, x_max) = view.data_x_bounds();
+                let x_is_time = view.x_is_time();
+                (s, label, color, x_min, x_max, x_is_time)
+            } else {
+                // Rail may briefly be open while chart_view is None (e.g. during
+                // rebuild after Apply). Render an empty state.
+                return div()
+                    .p_2()
+                    .text_size(FontSizes::XS)
+                    .text_color(theme.muted_foreground)
+                    .child("Rebuilding chart…")
+                    .into_any_element();
+            };
 
         let Some(stats) = stats_opt else {
             return div()
@@ -2183,86 +2233,121 @@ impl DataGridPanel {
                 .into_any_element();
         };
 
-        // Compute window span.
         let span_ms = x_max - x_min;
         let start_label = format_x_value(x_min, x_is_time);
         let end_label = format_x_value(x_max, x_is_time);
         let span_label = format_span(span_ms);
         let points_count = self.result.rows.len();
 
-        let stat_row = |name: &str, value: String| -> gpui::AnyElement {
+        // Value color per stat:
+        //   min, max, avg  → CHART_ACCENT_CYAN  (#95E6CB)
+        //   p99            → CHART_ACCENT_PRIMARY (#FFB454 / theme primary)
+        //   others         → theme.foreground
+        let cyan_val = |v: f64| -> gpui::AnyElement {
             div()
-                .flex()
-                .flex_row()
-                .justify_between()
-                .py(gpui::px(1.0))
-                .text_size(FontSizes::XS)
-                .child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(SharedString::from(name.to_string())),
-                )
-                .child(
-                    div()
-                        .text_color(theme.foreground)
-                        .child(SharedString::from(value)),
-                )
+                .text_size(px(11.0))
+                .text_color(CHART_ACCENT_CYAN)
+                .child(SharedString::from(format_y_value(v)))
+                .into_any_element()
+        };
+        let primary_val = |v: f64| -> gpui::AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(CHART_ACCENT_PRIMARY)
+                .child(SharedString::from(format_y_value(v)))
+                .into_any_element()
+        };
+        let fg_val = |v: f64| -> gpui::AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.foreground)
+                .child(SharedString::from(format_y_value(v)))
+                .into_any_element()
+        };
+        let str_val = |s: String| -> gpui::AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.foreground)
+                .child(SharedString::from(s))
+                .into_any_element()
+        };
+        let unavail_val = || -> gpui::AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.muted_foreground)
+                .italic()
+                .child("unavailable")
                 .into_any_element()
         };
 
         div()
+            .id("rail-stats-scroll")
             .flex()
             .flex_col()
-            .gap_1()
-            .p_2()
-            // Series header: swatch + label
-            .child(
+            .overflow_y_scroll()
+            // SERIES header
+            .child(Self::dock_section(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_2()
-                    .pb_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(div().w(gpui::px(8.0)).h(gpui::px(8.0)).bg(color))
+                    .gap(px(8.0))
+                    .child(div().w(px(10.0)).h(px(10.0)).rounded_sm().bg(color))
                     .child(
                         div()
-                            .text_size(FontSizes::XS)
+                            .text_size(px(12.0))
                             .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(theme.foreground)
                             .child(SharedString::from(label)),
                     ),
-            )
-            // Stats rows
-            .child(stat_row("min", format_y_value(stats.min)))
-            .child(stat_row("max", format_y_value(stats.max)))
-            .child(stat_row("avg", format_y_value(stats.avg)))
-            .child(stat_row("p50", format_y_value(stats.p50)))
-            .child(stat_row("p95", format_y_value(stats.p95)))
-            .child(stat_row("p99", format_y_value(stats.p99)))
-            .child(stat_row("last", format_y_value(stats.last)))
-            // Window section
-            .child(
+                theme,
+            ))
+            // STATS section
+            .child(Self::dock_section(
                 div()
-                    .pt_1()
-                    .mt_1()
-                    .border_t_1()
-                    .border_color(theme.border)
                     .flex()
                     .flex_col()
-                    .gap(gpui::px(1.0))
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(theme.muted_foreground)
-                            .pb(gpui::px(1.0))
-                            .child("Window"),
-                    )
-                    .child(stat_row("start", start_label))
-                    .child(stat_row("end", end_label))
-                    .child(stat_row("span", span_label))
-                    .child(stat_row("points", format!("{}", points_count))),
-            )
+                    .gap(px(2.0))
+                    .child(Self::dock_header("Stats"))
+                    .child(Self::dock_kv_row("min", cyan_val(stats.min)))
+                    .child(Self::dock_kv_row("max", cyan_val(stats.max)))
+                    .child(Self::dock_kv_row("avg", cyan_val(stats.avg)))
+                    .child(Self::dock_kv_row("p50", fg_val(stats.p50)))
+                    .child(Self::dock_kv_row("p95", fg_val(stats.p95)))
+                    .child(Self::dock_kv_row("p99", primary_val(stats.p99)))
+                    .child(Self::dock_kv_row("last", fg_val(stats.last))),
+                theme,
+            ))
+            // WINDOW section
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(Self::dock_header("Window"))
+                    .child(Self::dock_kv_row("start", str_val(start_label)))
+                    .child(Self::dock_kv_row("end", str_val(end_label)))
+                    .child(Self::dock_kv_row("span", str_val(span_label)))
+                    .child(Self::dock_kv_row(
+                        "points",
+                        str_val(format!("{}", points_count)),
+                    )),
+                theme,
+            ))
+            // SOURCE section — placeholder until drivers populate QueryResult.metadata
+            // TODO(v0.7): wire driver-provided metadata via QueryResult.metadata
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(Self::dock_header("Source"))
+                    .child(Self::dock_kv_row("measurement", unavail_val()))
+                    .child(Self::dock_kv_row("field", unavail_val()))
+                    .child(Self::dock_kv_row("host", unavail_val()))
+                    .child(Self::dock_kv_row("region", unavail_val())),
+                theme,
+            ))
             .into_any_element()
     }
 
