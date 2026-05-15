@@ -1,30 +1,23 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect x="80" y="80" width="864" height="864" rx="110" fill="#07111F"/>
-
-  <circle
-    cx="512"
-    cy="512"
-    r="295"
-    stroke="#F3B35A"
-    stroke-width="18"
-    fill="none"
-  />
-
-  <g stroke="#F3B35A" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" fill="none">
-    <ellipse cx="512" cy="390" rx="145" ry="48"/>
-    <path d="M367 390V650"/>
-    <path d="M657 390V650"/>
-    <path d="M367 476C367 502.51 431.92 524 512 524C592.08 524 657 502.51 657 476"/>
-    <path d="M367 563C367 589.51 431.92 611 512 611C592.08 611 657 589.51 657 563"/>
-    <path d="M367 650C367 676.51 431.92 698 512 698C592.08 698 657 676.51 657 650"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="DBFlux">
+  <defs>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFC97A"></stop>
+      <stop offset="100%" stop-color="#E69642"></stop>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="128" height="128" rx="26" ry="26" fill="#0A0E14"></rect>
+  <circle cx="64" cy="64" r="42" fill="none" stroke="#FFB454" stroke-width="2.5"></circle>
+  <g stroke="#FFB454" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="64" cy="40" rx="20" ry="5.5"></ellipse>
+    <path d="M44 40 V58"></path>
+    <path d="M84 40 V58"></path>
+    <path d="M44 58 a20 5.5 0 0 0 40 0"></path>
+    <path d="M44 58 V76"></path>
+    <path d="M84 58 V76"></path>
+    <path d="M44 76 a20 5.5 0 0 0 40 0"></path>
+    <path d="M44 76 V92"></path>
+    <path d="M84 76 V92"></path>
+    <path d="M44 92 a20 5.5 0 0 0 40 0"></path>
   </g>
-
-  <path
-    d="M554 270L444 500H522L454 724L590 462H502L554 270Z"
-    fill="#07111F"
-    stroke="#F3B35A"
-    stroke-width="18"
-    stroke-linejoin="round"
-    stroke-linecap="round"
-  />
+  <path d="M74 28 L48 66 L60 66 L54 100 L80 62 L68 62 Z" fill="url(#bolt)" stroke="#0A0E14" stroke-width="2.5" stroke-linejoin="round"></path>
 </svg>
