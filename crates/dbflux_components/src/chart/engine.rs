@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, Window, canvas, div,
-    fill, point,
+    App, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, TextRun, Window,
+    canvas, div, fill, font, point,
 };
 
 use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
@@ -476,12 +476,27 @@ impl Render for ChartView {
         let decimated = model.decimated.clone();
         let x_is_time = spec.x_axis.kind == AxisKind::Time;
 
+        // Tick label strings for in-canvas painting (Y data order; painting handles positioning).
+        let y_tick_labels: Vec<(f64, SharedString)> = model
+            .y_ticks
+            .iter()
+            .map(|t| (t.value, SharedString::from(t.label.clone())))
+            .collect();
+
+        let x_tick_labels: Vec<(f64, SharedString)> = model
+            .x_ticks
+            .iter()
+            .map(|t| (t.value, SharedString::from(t.label.clone())))
+            .collect();
+
         // Clone for canvas closure.
         let decimated_canvas = decimated.clone();
         let palette_canvas = palette.clone();
         let y_ticks_canvas = model.y_ticks.clone();
         let x_ticks_canvas = model.x_ticks.clone();
         let hover_x_canvas = hover_x;
+        let y_tick_labels_canvas = y_tick_labels.clone();
+        let x_tick_labels_canvas = x_tick_labels.clone();
 
         // Shared plot-area bounds: written by the canvas prepaint closure,
         // read here to compute the readout and inside the on_mouse_move
@@ -504,23 +519,6 @@ impl Render for ChartView {
             x_is_time,
         );
 
-        // Y-axis labels (rendered reversed: highest value at top, lowest at bottom).
-        // `justify_between` distributes them evenly in the label column, matching
-        // the evenly-spaced gridlines produced by the nice-tick algorithm.
-        let y_label_texts: Vec<SharedString> = model
-            .y_ticks
-            .iter()
-            .rev()
-            .map(|t| SharedString::from(t.label.clone()))
-            .collect();
-
-        // X-axis labels (left-to-right, matching data order).
-        let x_label_texts: Vec<SharedString> = model
-            .x_ticks
-            .iter()
-            .map(|t| SharedString::from(t.label.clone()))
-            .collect();
-
         // Legend element (built outside the canvas closure so it can be a div child).
         let legend = if spec.legend_visible && spec.series.len() > 1 {
             let entity = cx.entity().clone();
@@ -542,65 +540,49 @@ impl Render for ChartView {
             .flex()
             .flex_col()
             .size_full()
-            // Chart body: Y-label column + plot area side by side.
+            // Chart body: canvas covers the full area including Y-label margin.
+            // Tick labels are painted directly onto the canvas.
             .child(
                 div()
-                    .flex()
                     .flex_grow()
-                    // Y-axis label column — sits in the left margin.
-                    .child(
-                        div()
-                            .w(gpui::px(MARGIN_LEFT))
-                            .flex_shrink_0()
-                            // Inset by MARGIN_TOP at the top so labels align with
-                            // the plot area, not the full container height.
-                            .pt(gpui::px(MARGIN_TOP))
-                            .flex()
-                            .flex_col()
-                            .justify_between()
-                            .overflow_hidden()
-                            .children(y_label_texts.into_iter().map(|label| {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_end()
-                                    .pr(gpui::px(4.0))
-                                    .text_size(FontSizes::XS)
-                                    .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                                    .child(label)
-                            })),
-                    )
-                    // Plot area: canvas (absolute, size_full) inside a relative container.
-                    .child(
-                        div()
-                            .flex_grow()
-                            .relative()
-                            .on_mouse_move(cx.listener(
-                                move |this, ev: &gpui::MouseMoveEvent, _window, cx| {
-                                    this.hover_x_screen = Some(ev.position.x);
-                                    this.hover_y_screen = Some(ev.position.y);
-                                    this.update_focused_from_hover();
-                                    cx.notify();
-                                },
-                            ))
-                            .child({
-                                canvas(
-                                    move |bounds, _window, _cx| {
-                                        *plot_bounds_for_canvas.borrow_mut() = Some(bounds);
-                                        bounds
+                    .relative()
+                    .on_mouse_move(cx.listener(
+                        move |this, ev: &gpui::MouseMoveEvent, _window, cx| {
+                            this.hover_x_screen = Some(ev.position.x);
+                            this.hover_y_screen = Some(ev.position.y);
+                            this.update_focused_from_hover();
+                            cx.notify();
+                        },
+                    ))
+                    .child({
+                        canvas(
+                            move |bounds, _window, _cx| {
+                                // Store the full canvas bounds; plot bounds are derived
+                                // inside the paint closure using the same margin constants.
+                                *plot_bounds_for_canvas.borrow_mut() = Some(gpui::Bounds {
+                                    origin: point(
+                                        bounds.origin.x + gpui::px(MARGIN_LEFT),
+                                        bounds.origin.y,
+                                    ),
+                                    size: gpui::Size {
+                                        width: bounds.size.width - gpui::px(MARGIN_LEFT),
+                                        height: bounds.size.height,
                                     },
-                                    move |_bounds, bounds_data, window, _cx| {
+                                });
+                                bounds
+                            },
+                            move |_bounds, bounds_data, window, cx| {
                                         let b = bounds_data;
                                         let w = f32::from(b.size.width);
                                         let h = f32::from(b.size.height);
                                         let ox = f32::from(b.origin.x);
                                         let oy = f32::from(b.origin.y);
 
-                                        // Plot area in screen space (no left margin here;
-                                        // the Y-label column already occupies MARGIN_LEFT).
-                                        let plot_x0 = ox;
+                                        // Plot area occupies the right portion of the canvas;
+                                        // the left MARGIN_LEFT is reserved for Y-axis tick labels.
+                                        let plot_x0 = ox + MARGIN_LEFT;
                                         let plot_y0 = oy + MARGIN_TOP;
-                                        let plot_w = (w - MARGIN_RIGHT).max(1.0);
+                                        let plot_w = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
                                         let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
 
                                         let data_to_screen_x = |dx: f64| -> f32 {
@@ -796,33 +778,73 @@ impl Render for ChartView {
                                                 }
                                             }
                                         }
+
+                                        // --- In-canvas Y-axis tick labels ---
+                                        // Right-aligned in the MARGIN_LEFT column.
+                                        let tick_color = gpui::hsla(0.0, 0.0, 0.55, 1.0);
+                                        let tick_font = font("Zed Mono");
+                                        let tick_size = gpui::px(10.0);
+                                        let line_height = gpui::px(12.0);
+
+                                        for (value, label) in &y_tick_labels_canvas {
+                                            let sy = data_to_screen_y(*value);
+                                            let run = TextRun {
+                                                len: label.len(),
+                                                font: tick_font.clone(),
+                                                color: tick_color,
+                                                background_color: None,
+                                                underline: None,
+                                                strikethrough: None,
+                                            };
+                                            let shaped = window
+                                                .text_system()
+                                                .shape_line(label.clone(), tick_size, &[run], None);
+                                            let label_w = f32::from(shaped.width);
+                                            // Right-align within MARGIN_LEFT minus 4px padding.
+                                            let label_x = ox + (MARGIN_LEFT - 4.0) - label_w;
+                                            let label_y = sy - f32::from(line_height) / 2.0;
+                                            let _ = shaped.paint(
+                                                point(gpui::px(label_x), gpui::px(label_y)),
+                                                line_height,
+                                                window,
+                                                cx,
+                                            );
+                                        }
+
+                                        // --- In-canvas X-axis tick labels ---
+                                        // Centered below each tick, in the MARGIN_BOTTOM band.
+                                        let x_baseline_y = plot_y0 + plot_h + 10.0;
+
+                                        for (value, label) in &x_tick_labels_canvas {
+                                            let sx = data_to_screen_x(*value);
+                                            let run = TextRun {
+                                                len: label.len(),
+                                                font: tick_font.clone(),
+                                                color: tick_color,
+                                                background_color: None,
+                                                underline: None,
+                                                strikethrough: None,
+                                            };
+                                            let shaped = window
+                                                .text_system()
+                                                .shape_line(label.clone(), tick_size, &[run], None);
+                                            let label_w = f32::from(shaped.width);
+                                            let label_x = sx - label_w / 2.0;
+                                            let _ = shaped.paint(
+                                                point(gpui::px(label_x), gpui::px(x_baseline_y)),
+                                                line_height,
+                                                window,
+                                                cx,
+                                            );
+                                        }
                                     },
                                 )
                                 .absolute()
                                 .size_full()
                             })
                             .when_some(readout, |container, r| container.child(readout_overlay(r))),
-                    ),
             )
-            // X-axis label row — sits below the chart body, inset by the Y-label column width.
-            .child(
-                div()
-                    .h(gpui::px(MARGIN_BOTTOM))
-                    .flex_shrink_0()
-                    // Left padding equal to the Y-label column so labels start at plot_x0.
-                    .pl(gpui::px(MARGIN_LEFT))
-                    .flex()
-                    .items_start()
-                    .justify_between()
-                    .overflow_hidden()
-                    .children(x_label_texts.into_iter().map(|label| {
-                        div()
-                            .text_size(FontSizes::XS)
-                            .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                            .child(label)
-                    })),
-            )
-            // Legend row (below X labels)
+            // Legend row (below canvas)
             .when_some(legend, |d, leg| d.child(leg))
     }
 }
@@ -1048,15 +1070,18 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
     const PANEL_GAP: f32 = 8.0;
     const PANEL_ESTIMATED_WIDTH: f32 = 220.0;
 
+    // screen_x_relative is relative to the plot origin (which starts at MARGIN_LEFT).
+    // We add MARGIN_LEFT so the tooltip is positioned within the full canvas container.
     let hover_x = f32::from(r.screen_x_relative);
     let plot_w = f32::from(r.plot_width);
     let flip_to_left = hover_x + PANEL_GAP + PANEL_ESTIMATED_WIDTH > plot_w;
 
-    let left_px = if flip_to_left {
+    let left_in_plot = if flip_to_left {
         (hover_x - PANEL_GAP - PANEL_ESTIMATED_WIDTH).max(0.0)
     } else {
         hover_x + PANEL_GAP
     };
+    let left_px = MARGIN_LEFT + left_in_plot;
 
     let focused_idx = r.focused_idx;
 
