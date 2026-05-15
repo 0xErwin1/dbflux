@@ -13,6 +13,13 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
+// Save-row shortcut hint: matches the SaveRow binding in the data-table
+// component (`secondary-enter` — Cmd+Enter on macOS, Ctrl+Enter elsewhere).
+#[cfg(target_os = "macos")]
+const SAVE_ROW_SHORTCUT_HINT: &str = "Cmd+↵";
+#[cfg(not(target_os = "macos"))]
+const SAVE_ROW_SHORTCUT_HINT: &str = "Ctrl+↵";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DataGridContentMode {
     EmptyFallback,
@@ -749,7 +756,7 @@ impl DataGridPanel {
                             } else {
                                 theme.muted_foreground
                             }))
-                            .child(Text::caption("Ctrl+↵").color(if has_changes {
+                            .child(Text::caption(SAVE_ROW_SHORTCUT_HINT).color(if has_changes {
                                 theme.primary_foreground.opacity(0.7)
                             } else {
                                 theme.muted_foreground.opacity(0.5)

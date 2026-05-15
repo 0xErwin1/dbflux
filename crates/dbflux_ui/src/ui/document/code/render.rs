@@ -62,6 +62,15 @@ impl CodeDocument {
                     .map(|finished| finished.duration_since(r.started_at))
             });
 
+        // Keep this label in sync with the RunQuery binding (Cmd+Enter on
+        // macOS, Ctrl+Enter elsewhere) registered in `keymap::defaults`.
+        #[cfg(target_os = "macos")]
+        let shortcut_hint = if is_db_language {
+            "Cmd+Enter (selection/full)"
+        } else {
+            "Cmd+Enter"
+        };
+        #[cfg(not(target_os = "macos"))]
         let shortcut_hint = if is_db_language {
             "Ctrl+Enter (selection/full)"
         } else {

@@ -9,10 +9,10 @@ use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
-    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement,
-    Styled, Window, actions, canvas, div, px, uniform_list,
+    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, ScrollWheelEvent,
+    StatefulInteractiveElement, Styled, Window, actions, canvas, div, px, uniform_list,
 };
-use gpui_component::scroll::Scrollbar;
+use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use gpui_component::{ActiveTheme, Sizable};
 
 use super::events::{DataTableEvent, Direction, Edge};
@@ -105,27 +105,35 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-end", SelectToLineEnd, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-home", SelectToTop, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-end", SelectToBottom, Some(CONTEXT)),
-        KeyBinding::new("ctrl-a", SelectAll, Some(CONTEXT)),
+        // `secondary-*` is GPUI's platform-aware modifier: Cmd on macOS,
+        // Ctrl elsewhere. Use it for the system-standard commands so macOS
+        // gets the expected Cmd shortcut without binding the literal Ctrl
+        // chord too (which would shadow editor interrupt semantics on Mac).
+        KeyBinding::new("secondary-a", SelectAll, Some(CONTEXT)),
         KeyBinding::new("escape", ClearSelection, Some(CONTEXT)),
         // Copy
-        KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
+        KeyBinding::new("secondary-c", Copy, Some(CONTEXT)),
         KeyBinding::new("y y", Copy, Some(CONTEXT)),
         KeyBinding::new("shift-y shift-y", CopyRow, Some(CONTEXT)),
         // Edit mode
         KeyBinding::new("enter", StartEdit, Some(CONTEXT)),
         KeyBinding::new("f2", StartEdit, Some(CONTEXT)),
-        KeyBinding::new("ctrl-enter", SaveRow, Some(CONTEXT)),
+        KeyBinding::new("secondary-enter", SaveRow, Some(CONTEXT)),
         // Row operations (vim-style)
         KeyBinding::new("d d", DeleteRow, Some(CONTEXT)),
         KeyBinding::new("delete", DeleteRow, Some(CONTEXT)),
         KeyBinding::new("a a", AddRow, Some(CONTEXT)),
         KeyBinding::new("shift-a shift-a", DuplicateRow, Some(CONTEXT)),
+        // SetNull — local mnemonic ("N" for NULL). Kept as literal Ctrl on
+        // every platform; this isn't a system-standard shortcut and reusing
+        // Cmd+N on macOS would clash with NewQueryTab.
         KeyBinding::new("ctrl-n", SetNull, Some(CONTEXT)),
-        // Undo/Redo (vim-style + standard)
+        // Undo/Redo: standard Cmd/Ctrl variants via `secondary-`, plus
+        // vim-style `u` / `ctrl-r` kept literal as familiar editor aliases.
         KeyBinding::new("u", Undo, Some(CONTEXT)),
-        KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
+        KeyBinding::new("secondary-z", Undo, Some(CONTEXT)),
         KeyBinding::new("ctrl-r", Redo, Some(CONTEXT)),
-        KeyBinding::new("ctrl-shift-z", Redo, Some(CONTEXT)),
+        KeyBinding::new("secondary-shift-z", Redo, Some(CONTEXT)),
     ]);
 }
 
@@ -439,11 +447,45 @@ impl gpui::Render for DataTable {
         let state_for_resize_move = self.state.clone();
         let resize_drag_for_up = self.resize_drag.clone();
 
+        // Forward horizontal wheel/trackpad deltas to the horizontal scroll
+        // handle. The handle is owned by a 1px phantom scroller at the bottom
+        // (so the gpui-component scrollbar can drive it), which means
+        // horizontal wheel events landing on the header or body would
+        // otherwise be lost. The body's uniform_list still consumes delta.y
+        // natively. We deliberately do not synthesise a horizontal delta
+        // from shift+wheel because the list consumes delta.y first and we
+        // would end up scrolling both axes at once.
+        //
+        // After updating the scroll handle we synchronously bump
+        // `state.horizontal_offset` so the body shift (`ml(-h_offset)`) and
+        // the scrollbar move on the same frame; otherwise the canvas-based
+        // sync runs one frame later and the table reads as jittery during
+        // trackpad momentum.
+        let state_for_wheel = self.state.clone();
+        let on_scroll_wheel = move |event: &ScrollWheelEvent, window: &mut Window, cx: &mut App| {
+            let delta_x = event.delta.pixel_delta(window.line_height()).x;
+            if delta_x == px(0.0) {
+                return;
+            }
+            let consumed = state_for_wheel.update(cx, |state, cx| {
+                if state.apply_horizontal_wheel_delta(delta_x) {
+                    state.sync_horizontal_offset(cx);
+                    true
+                } else {
+                    false
+                }
+            });
+            if consumed {
+                cx.stop_propagation();
+            }
+        };
+
         let inner_table = div()
             .id("table-inner")
             .flex()
             .flex_col()
             .size_full()
+            .on_scroll_wheel(on_scroll_wheel)
             .child(header)
             .when(row_count > 0, |this| this.child(body))
             .when(row_count == 0 && col_count > 0, |this| {
@@ -598,7 +640,7 @@ impl gpui::Render for DataTable {
                     .track_scroll(&horizontal_scroll_handle)
                     .child(div().min_w(px(total_width)).h(px(1.0))),
             )
-            // Scrollbars as absolute overlays
+            // Scrollbars as absolute overlays.
             .child(
                 div()
                     .absolute()
@@ -610,6 +652,10 @@ impl gpui::Render for DataTable {
                         this.child(Scrollbar::vertical(&vertical_scroll_handle))
                     }),
             )
+            // Horizontal scrollbar uses `ScrollbarShow::Always` because the phantom
+            // scroller that owns the handle is 1px tall and never captures the wheel,
+            // so the bar would otherwise stay transparent until the user navigates
+            // off-screen with the keyboard.
             .child(
                 div()
                     .absolute()
@@ -617,7 +663,10 @@ impl gpui::Render for DataTable {
                     .right_0()
                     .bottom_0()
                     .h(SCROLLBAR_WIDTH)
-                    .child(Scrollbar::horizontal(&horizontal_scroll_handle)),
+                    .child(
+                        Scrollbar::horizontal(&horizontal_scroll_handle)
+                            .scrollbar_show(ScrollbarShow::Always),
+                    ),
             )
     }
 }
@@ -800,46 +849,55 @@ impl DataTable {
         // Body uses overflow_hidden to prevent wheel capture.
         // Horizontal position is set via margin based on state.horizontal_offset().
         // uniform_list handles vertical scrolling.
+        let mut list = uniform_list(
+            "table-rows",
+            row_count,
+            move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
+                let theme = cx.theme();
+                // Read state INSIDE closure - only when actually rendering
+                let state = state_entity.read(cx);
+
+                let editing_cell = state.editing_cell();
+                let cell_input = state.cell_input().cloned();
+                let enum_dropdown = state.enum_dropdown().cloned();
+                let edit_buffer = state.edit_buffer();
+
+                render_rows(
+                    &state_entity,
+                    visible_range,
+                    &model,
+                    state.column_widths(),
+                    state.selection(),
+                    editing_cell,
+                    cell_input.as_ref(),
+                    enum_dropdown.as_ref(),
+                    edit_buffer,
+                    total_width,
+                    theme,
+                )
+            },
+        )
+        .size_full()
+        .min_w(px(total_width))
+        .ml(-h_offset)
+        .with_sizing_behavior(ListSizingBehavior::Auto)
+        .track_scroll(vertical_scroll_handle);
+
+        // Stop GPUI's paint_scroll_listener from translating a non-zero delta.x
+        // into delta.y on this vertical-only list. The platform layer maps
+        // shift+wheel to delta.x with delta.y == 0, and without this flag the
+        // list would scroll vertically using that delta.x while the outer
+        // on_scroll_wheel handler also scrolls horizontally — both axes move
+        // at once. With restrict_scroll_to_axis set, shift+wheel becomes a
+        // pure horizontal scroll driven by the outer handler.
+        list.style().restrict_scroll_to_axis = Some(true);
+
         div()
             .id("table-body")
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .child(
-                uniform_list(
-                    "table-rows",
-                    row_count,
-                    move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
-                        let theme = cx.theme();
-                        // Read state INSIDE closure - only when actually rendering
-                        let state = state_entity.read(cx);
-
-                        let editing_cell = state.editing_cell();
-                        let cell_input = state.cell_input().cloned();
-                        let enum_dropdown = state.enum_dropdown().cloned();
-                        let edit_buffer = state.edit_buffer();
-
-                        render_rows(
-                            &state_entity,
-                            visible_range,
-                            &model,
-                            state.column_widths(),
-                            state.selection(),
-                            editing_cell,
-                            cell_input.as_ref(),
-                            enum_dropdown.as_ref(),
-                            edit_buffer,
-                            total_width,
-                            theme,
-                        )
-                    },
-                )
-                .size_full()
-                .min_w(px(total_width))
-                .ml(-h_offset)
-                .with_sizing_behavior(ListSizingBehavior::Auto)
-                .track_scroll(vertical_scroll_handle),
-            )
+            .child(list)
     }
 }
 
