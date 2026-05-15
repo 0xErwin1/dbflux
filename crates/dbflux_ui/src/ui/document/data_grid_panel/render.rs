@@ -5,10 +5,10 @@ use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::controls::Input;
-use dbflux_components::controls::InputState;
-use dbflux_components::primitives::{Icon, Text, surface_raised};
-use dbflux_core::{DatabaseCategory, Pagination, QueryResultShape, SortDirection, Value};
+use dbflux_components::chart::{ChartDetection, ManualChartSelection};
+use dbflux_components::controls::{Checkbox, Input, InputState};
+use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
+use dbflux_core::{ColumnKind, DatabaseCategory, Pagination, QueryResultShape, SortDirection, Value};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -978,15 +978,10 @@ impl DataGridPanel {
                 container = container.when_some(self.data_table.clone(), |d, dt| d.child(dt));
             }
             ResultViewMode::Chart => {
-                // Build the chart view on first access; display a banner if unavailable.
                 if let Some(chart_entity) = self.ensure_chart_view(cx) {
                     container = container.child(chart_entity);
                 } else {
-                    container = container.flex().items_center().justify_center().child(
-                        dbflux_components::primitives::Text::muted(
-                            "Chart unavailable: no Timestamp column with numeric series detected.",
-                        ),
-                    );
+                    container = container.child(self.render_chart_degraded(cx));
                 }
             }
             ResultViewMode::Text => {
@@ -1010,6 +1005,234 @@ impl DataGridPanel {
         }
 
         container
+    }
+
+    /// Render the degraded-state chart panel when `ensure_chart_view` returned `None`.
+    ///
+    /// Shows a detection-specific banner. For `NoTimeColumn` and `NoNumericSeries`
+    /// a manual column picker is also shown so the user can override detection.
+    fn render_chart_degraded(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let detection = self.chart_detection.clone();
+
+        // Y-candidate columns: Float, Integer, or Unknown.
+        // X-candidate columns: Timestamp, Text, or Unknown.
+        let y_candidates: Vec<(usize, String)> = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, c)| (i, c.name.clone()))
+            .collect();
+
+        let x_candidates: Vec<(usize, String)> = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Timestamp | ColumnKind::Text | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, c)| (i, c.name.clone()))
+            .collect();
+
+        let (banner_text, show_picker) = match &detection {
+            Some(ChartDetection::NoTimeColumn) | None => (
+                "No time column detected — pick one below to chart this result.",
+                true,
+            ),
+            Some(ChartDetection::NoNumericSeries) => (
+                "No numeric series detected — this result has no chartable values.",
+                false,
+            ),
+            Some(ChartDetection::EmptyResult) => (
+                "No data to chart yet — run the query to populate this view.",
+                false,
+            ),
+            Some(ChartDetection::Ok { .. }) => {
+                // ensure_chart_view handles Ok; this path means build() failed.
+                ("Chart could not be built from this result.", false)
+            }
+        };
+
+        // Current picker selection state (indices into x_candidates / y_candidates).
+        let selected_x_col = self.chart_picker_x_col;
+        let y_checked = self.chart_picker_y_checked.clone();
+
+        // Find the index into x_candidates that matches selected_x_col, for display.
+        let x_selected_candidate_idx = x_candidates
+            .iter()
+            .position(|(col_idx, _)| *col_idx == selected_x_col)
+            .unwrap_or(0);
+
+        let any_y_checked = y_checked.iter().any(|&c| c);
+
+        let mut outer = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_start()
+            .p(Spacing::LG)
+            .gap(Spacing::MD);
+
+        outer = outer.child(BannerBlock::new(BannerVariant::Info, banner_text));
+
+        if show_picker && !x_candidates.is_empty() {
+            // X-axis column selector: clickable row of candidate column names.
+            let x_row = div()
+                .flex()
+                .flex_col()
+                .gap(Spacing::XS)
+                .child(
+                    div()
+                        .text_size(FontSizes::SM)
+                        .child(Text::body("X axis (time / label column)")),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(Spacing::XS)
+                        .children(
+                            x_candidates
+                                .iter()
+                                .enumerate()
+                                .map(|(candidate_idx, (col_idx, col_name))| {
+                                    let col_idx = *col_idx;
+                                    let is_selected = candidate_idx == x_selected_candidate_idx;
+                                    let label = col_name.clone();
+                                    div()
+                                        .id(ElementId::Name(
+                                            format!("chart-x-col-{}", col_idx).into(),
+                                        ))
+                                        .px(Spacing::SM)
+                                        .py(Spacing::XS)
+                                        .rounded(Radii::SM)
+                                        .cursor_pointer()
+                                        .text_size(FontSizes::SM)
+                                        .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2)))
+                                        .when(!is_selected, |d| {
+                                            d.hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)))
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.chart_picker_x_col = col_idx;
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(label)
+                                }),
+                        ),
+                );
+
+            outer = outer.child(x_row);
+
+            // Y-axis column checkboxes.
+            if !y_candidates.is_empty() {
+                let y_row = div()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XS)
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .child(Text::body("Y axis (numeric columns)")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(Spacing::XS)
+                            .children(
+                                y_candidates
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(candidate_idx, (_, col_name))| {
+                                        let checked = y_checked
+                                            .get(candidate_idx)
+                                            .copied()
+                                            .unwrap_or(false);
+                                        let label = col_name.clone();
+                                        Checkbox::new(ElementId::Name(
+                                            format!("chart-y-col-{}", candidate_idx).into(),
+                                        ))
+                                        .checked(checked)
+                                        .label(label)
+                                        .on_click(cx.listener(
+                                            move |this, &new_checked, _, cx| {
+                                                if let Some(slot) =
+                                                    this.chart_picker_y_checked.get_mut(candidate_idx)
+                                                {
+                                                    *slot = new_checked;
+                                                }
+                                                cx.notify();
+                                            },
+                                        ))
+                                    }),
+                            ),
+                    );
+
+                outer = outer.child(y_row);
+            }
+
+            // Apply button — enabled only when at least one Y column is checked.
+            let x_col_snapshot = selected_x_col;
+            let y_col_indices: Vec<usize> = y_candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(candidate_idx, (col_idx, _))| {
+                    if y_checked.get(candidate_idx).copied().unwrap_or(false) {
+                        Some(*col_idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let apply_btn = div()
+                .id("chart-picker-apply")
+                .px(Spacing::MD)
+                .py(Spacing::SM)
+                .rounded(Radii::SM)
+                .text_size(FontSizes::SM)
+                .when(any_y_checked, |d| {
+                    d.cursor_pointer()
+                        .bg(gpui::hsla(0.6, 0.7, 0.55, 1.0))
+                        .text_color(gpui::white())
+                        .hover(|d| d.bg(gpui::hsla(0.6, 0.7, 0.50, 1.0)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                let selection = ManualChartSelection {
+                                    x_col: x_col_snapshot,
+                                    y_cols: y_col_indices.clone(),
+                                };
+                                this.chart_manual_selection = Some(selection);
+                                this.chart_view = None;
+                                cx.notify();
+                            }),
+                        )
+                })
+                .when(!any_y_checked, |d| {
+                    d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.3))
+                        .text_color(gpui::hsla(0.0, 0.0, 0.5, 0.7))
+                })
+                .child("Apply");
+
+            outer = outer.child(apply_btn);
+        }
+
+        outer
     }
 
     fn render_text_view(

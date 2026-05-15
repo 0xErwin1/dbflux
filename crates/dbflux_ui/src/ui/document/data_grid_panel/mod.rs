@@ -383,6 +383,14 @@ pub struct DataGridPanel {
     chart_manual_selection: Option<ManualChartSelection>,
     /// Index of the currently focused legend series.
     chart_focused_series_idx: usize,
+
+    // Manual column picker state — used when chart_detection is not Ok and the
+    // user is choosing columns manually. Reset whenever chart_detection changes.
+    /// Index into the result's columns for the picker's selected X column.
+    chart_picker_x_col: usize,
+    /// Checked state for each Y-candidate column (parallel to the Y-candidate list
+    /// built from result columns with kind Float, Integer, or Unknown).
+    chart_picker_y_checked: Vec<bool>,
 }
 
 impl DataGridPanel {
@@ -778,6 +786,8 @@ impl DataGridPanel {
             chart_view: None,
             chart_manual_selection: None,
             chart_focused_series_idx: 0,
+            chart_picker_x_col: 0,
+            chart_picker_y_checked: Vec::new(),
         }
     }
 
@@ -877,6 +887,30 @@ impl DataGridPanel {
                 None
             }
         }
+    }
+
+    /// Reset the manual picker state for a new result's column list.
+    ///
+    /// X defaults to the first Timestamp column, or column 0 if none.
+    /// Y checkboxes default to `true` for Float and Integer columns.
+    pub(super) fn reset_chart_picker(&mut self, columns: &[dbflux_core::ColumnMeta]) {
+        use dbflux_core::ColumnKind;
+
+        self.chart_picker_x_col = columns
+            .iter()
+            .position(|c| c.kind == ColumnKind::Timestamp)
+            .unwrap_or(0);
+
+        self.chart_picker_y_checked = columns
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
+                )
+            })
+            .map(|c| matches!(c.kind, ColumnKind::Float | ColumnKind::Integer))
+            .collect();
     }
 
     pub(super) fn derived_text(&mut self) -> &str {
@@ -1038,6 +1072,7 @@ impl DataGridPanel {
         self.chart_view = None;
         self.chart_manual_selection = None;
         self.chart_focused_series_idx = 0;
+        self.reset_chart_picker(&result.columns);
 
         self.result = result;
         self.rebuild_table(None, cx);
