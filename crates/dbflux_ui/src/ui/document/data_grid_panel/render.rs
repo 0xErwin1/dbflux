@@ -1397,10 +1397,6 @@ impl DataGridPanel {
 
                 let chart_row = div().flex_grow().size_full().child(chart_area);
 
-                // The rail is mounted at the body level so it overlays both the
-                // chart canvas AND the legend row below it. The toolbar stays
-                // outside the relative container so it remains uncovered above
-                // the rail, matching the design.
                 let body = div()
                     .relative()
                     .flex()
@@ -1884,12 +1880,6 @@ impl DataGridPanel {
             ChartRailTab::Stats => self.render_rail_stats_tab(theme, cx).into_any_element(),
         };
 
-        // Rendered as an absolute overlay on the right edge of the chart area so
-        // the chart canvas is never resized when the rail opens or closes.
-        // `theme.popover` is the raised-surface token (Ayu #151E2B) which gives
-        // the rail a clear visual separation from the chart background; the
-        // mouse handlers absorb pointer events so the chart underneath does not
-        // receive hover/click while the rail is open.
         div()
             .absolute()
             .top_0()
@@ -1901,14 +1891,7 @@ impl DataGridPanel {
             .border_l_1()
             .border_color(theme.border)
             .bg(theme.popover)
-            // `.occlude()` blocks all mouse events from reaching the chart
-            // beneath the rail. Empty `on_mouse_move`/`on_mouse_down` handlers
-            // are not enough — GPUI's hit-test still walks through to siblings
-            // unless this element is explicitly marked opaque to the cursor.
             .occlude()
-            // The inner Configure/Stats tab bodies own the `overflow_y_scroll`;
-            // this wrapper just clips them to the rail's bounded height so the
-            // scroll can take effect.
             .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
     }
 
