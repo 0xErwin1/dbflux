@@ -170,6 +170,50 @@ pub fn format_span(ms: f64) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Toolbar helpers
+// ---------------------------------------------------------------------------
+
+/// Format a resolution label for the chart toolbar.
+///
+/// `span_ms` is the total time range in milliseconds. `points` is the number
+/// of data points. Returns "—" when `points <= 1` (no meaningful step).
+pub fn format_resolution(span_ms: f64, points: usize) -> String {
+    if points <= 1 {
+        return "\u{2014}".to_string(); // em-dash
+    }
+    let step = span_ms / (points as f64 - 1.0);
+    if step < 1_000.0 {
+        format!("{:.0}ms resolution", step)
+    } else if step < 60_000.0 {
+        format!("{:.0}s resolution", step / 1_000.0)
+    } else if step < 3_600_000.0 {
+        format!("{:.0}m resolution", step / 60_000.0)
+    } else {
+        format!("{:.1}h resolution", step / 3_600_000.0)
+    }
+}
+
+/// Count numeric and timestamp-like columns in a result column list.
+///
+/// Returns `(numeric_count, timestamp_count)`.
+pub fn count_columns_for_why(columns: &[dbflux_core::ColumnMeta]) -> (usize, usize) {
+    let numeric = columns
+        .iter()
+        .filter(|c| {
+            matches!(
+                c.kind,
+                dbflux_core::ColumnKind::Float | dbflux_core::ColumnKind::Integer
+            )
+        })
+        .count();
+    let timestamp = columns
+        .iter()
+        .filter(|c| matches!(c.kind, dbflux_core::ColumnKind::Timestamp))
+        .count();
+    (numeric, timestamp)
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
@@ -266,6 +310,62 @@ mod tests {
         let result =
             hit_test_focused_series(&decimated, 5.0, 60.0_f32, |y_data| y_data as f32, 14.0);
         assert!(result.is_none());
+    }
+
+    // --- format_resolution ---
+
+    #[test]
+    fn format_resolution_single_point() {
+        assert_eq!(format_resolution(60_000.0, 1), "\u{2014}");
+    }
+
+    #[test]
+    fn format_resolution_seconds() {
+        // 60s span, 61 points → step = 1000ms = 1s
+        assert_eq!(format_resolution(60_000.0, 61), "1s resolution");
+    }
+
+    #[test]
+    fn format_resolution_minutes() {
+        // 1h span, 61 points → step = 60_000ms = 1m
+        assert_eq!(format_resolution(3_600_000.0, 61), "1m resolution");
+    }
+
+    #[test]
+    fn format_resolution_hours() {
+        // 24h span, 13 points → step = 7_200_000ms = 2h
+        assert_eq!(format_resolution(86_400_000.0, 13), "2.0h resolution");
+    }
+
+    // --- count_columns_for_why ---
+
+    #[test]
+    fn count_columns_for_why_basic() {
+        use dbflux_core::{ColumnKind, ColumnMeta};
+
+        let cols = vec![
+            ColumnMeta { name: "t".into(), type_name: "timestamp".into(), kind: ColumnKind::Timestamp, nullable: true, is_primary_key: false },
+            ColumnMeta { name: "v1".into(), type_name: "float".into(), kind: ColumnKind::Float, nullable: true, is_primary_key: false },
+            ColumnMeta { name: "v2".into(), type_name: "int".into(), kind: ColumnKind::Integer, nullable: true, is_primary_key: false },
+            ColumnMeta { name: "v3".into(), type_name: "float".into(), kind: ColumnKind::Float, nullable: true, is_primary_key: false },
+            ColumnMeta { name: "s".into(), type_name: "text".into(), kind: ColumnKind::Text, nullable: true, is_primary_key: false },
+            ColumnMeta { name: "u".into(), type_name: "unknown".into(), kind: ColumnKind::Unknown, nullable: true, is_primary_key: false },
+        ];
+        let (num, ts) = count_columns_for_why(&cols);
+        assert_eq!(num, 3); // v1, v2, v3
+        assert_eq!(ts, 1);  // t
+    }
+
+    #[test]
+    fn count_columns_for_why_all_unknown() {
+        use dbflux_core::{ColumnKind, ColumnMeta};
+        let cols = vec![
+            ColumnMeta { name: "a".into(), type_name: "t".into(), kind: ColumnKind::Unknown, nullable: true, is_primary_key: false },
+            ColumnMeta { name: "b".into(), type_name: "t".into(), kind: ColumnKind::Text, nullable: true, is_primary_key: false },
+        ];
+        let (num, ts) = count_columns_for_why(&cols);
+        assert_eq!(num, 0);
+        assert_eq!(ts, 0);
     }
 
     // --- format_span ---

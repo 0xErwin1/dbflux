@@ -917,6 +917,7 @@ fn tracing_debug_non_monotonic() {
 // ---------------------------------------------------------------------------
 
 /// One row of the multi-series readout panel.
+/// One row in the crosshair readout (one per visible series).
 struct SeriesReadoutEntry {
     label: SharedString,
     color: Hsla,
@@ -924,14 +925,14 @@ struct SeriesReadoutEntry {
 }
 
 /// Pre-computed content for the crosshair readout panel.
-///
-/// `screen_x_relative` is the cursor X in plot-area-local coordinates and is
-/// used to anchor the overlay; the panel clamps to stay inside the plot area
-/// when the cursor is close to the right edge.
 struct HoverReadout {
-    x_label: SharedString,
+    /// Header: e.g. "11:34 UTC"
+    header_time: SharedString,
+    /// Optional time-offset suffix: e.g. " · t+13m" (None when x_min is unavailable)
+    header_offset: Option<SharedString>,
     series: Vec<SeriesReadoutEntry>,
     focused_idx: usize,
+    /// Cursor X relative to the plot origin (used to position the overlay).
     screen_x_relative: Pixels,
     plot_width: Pixels,
 }
@@ -970,8 +971,32 @@ fn build_readout(
 
     let cursor_data_x = x_min + (rel_x_f as f64 / plot_w_px as f64) * x_range;
 
-    // Collect one entry per series, using the nearest sample's X for the header.
-    let mut x_label_str: Option<String> = None;
+    // Build the time header: "HH:MM UTC" or raw value for non-time axes.
+    let header_time = if x_is_time {
+        let secs = (cursor_data_x / 1000.0).trunc() as i64;
+        let nsecs = ((cursor_data_x.rem_euclid(1000.0)) * 1_000_000.0) as u32;
+        match dbflux_core::chrono::DateTime::from_timestamp(secs, nsecs) {
+            Some(dt) => SharedString::from(dt.format("%H:%M UTC").to_string()),
+            None => SharedString::from(format!("{:.3}", cursor_data_x)),
+        }
+    } else {
+        SharedString::from(format!("{:.3}", cursor_data_x))
+    };
+
+    // Optional t+N suffix (whole minutes since x_min).
+    let header_offset = if x_is_time {
+        let offset_ms = cursor_data_x - x_min;
+        let minutes = (offset_ms / 60_000.0).floor() as i64;
+        if minutes >= 0 {
+            Some(SharedString::from(format!(" · t+{}m", minutes)))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Collect one entry per series.
     let mut entries: Vec<SeriesReadoutEntry> = Vec::with_capacity(decimated.len());
     let mut any_valid = false;
 
@@ -979,11 +1004,7 @@ fn build_readout(
         if pts.is_empty() {
             continue;
         }
-        let (sample_x, sample_y) = nearest_sample(pts, cursor_data_x);
-
-        if x_label_str.is_none() {
-            x_label_str = Some(format_x_value(sample_x, x_is_time));
-        }
+        let (_sample_x, sample_y) = nearest_sample(pts, cursor_data_x);
 
         let label = spec
             .series
@@ -1008,7 +1029,8 @@ fn build_readout(
     }
 
     Some(HoverReadout {
-        x_label: SharedString::from(x_label_str.unwrap_or_default()),
+        header_time,
+        header_offset,
         series: entries,
         focused_idx,
         screen_x_relative: relative_x,
@@ -1063,64 +1085,75 @@ pub fn format_y_value(y: f64) -> String {
     }
 }
 
-/// Build the absolute-positioned overlay div that shows the multi-series
-/// readout. Clamps to the left side of the crosshair when the cursor is past
-/// the midpoint of the plot so the panel never falls outside the chart.
+/// Build the absolute-positioned overlay div that shows the multi-series readout.
+///
+/// Layout: top 18px fixed; left clamped so the panel stays inside the plot area.
+/// Min-width 200px; one header row (time + optional offset) then one row per series.
 fn readout_overlay(r: HoverReadout) -> impl IntoElement {
-    const PANEL_GAP: f32 = 8.0;
-    const PANEL_ESTIMATED_WIDTH: f32 = 220.0;
+    const PANEL_MIN_WIDTH: f32 = 200.0;
+    const PANEL_GAP: f32 = 12.0;
 
-    // screen_x_relative is relative to the plot origin (which starts at MARGIN_LEFT).
-    // We add MARGIN_LEFT so the tooltip is positioned within the full canvas container.
+    // screen_x_relative is in plot coordinates; add MARGIN_LEFT for the full canvas.
     let hover_x = f32::from(r.screen_x_relative);
     let plot_w = f32::from(r.plot_width);
-    let flip_to_left = hover_x + PANEL_GAP + PANEL_ESTIMATED_WIDTH > plot_w;
 
-    let left_in_plot = if flip_to_left {
-        (hover_x - PANEL_GAP - PANEL_ESTIMATED_WIDTH).max(0.0)
-    } else {
-        hover_x + PANEL_GAP
-    };
-    let left_px = MARGIN_LEFT + left_in_plot;
+    // Clamp so the panel never overflows the right edge.
+    let left_in_plot = (hover_x + PANEL_GAP).min(plot_w - PANEL_MIN_WIDTH);
+    let left_px = (MARGIN_LEFT + left_in_plot).max(MARGIN_LEFT + 4.0);
 
     let focused_idx = r.focused_idx;
 
     div()
         .absolute()
         .left(gpui::px(left_px))
-        .top(gpui::px(MARGIN_TOP + 4.0))
+        .top(gpui::px(18.0))
+        .min_w(gpui::px(PANEL_MIN_WIDTH))
         .flex()
         .flex_col()
-        .gap(gpui::px(1.0))
-        .px_2()
-        .py_1()
+        .gap(gpui::px(2.0))
+        .px(gpui::px(10.0))
+        .py(gpui::px(8.0))
+        .bg(gpui::hsla(0.0, 0.0, 0.1, 0.95))
+        .border_1()
+        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.08))
+        .rounded(gpui::px(6.0))
         .text_size(FontSizes::XS)
-        .text_color(gpui::hsla(0.0, 0.0, 0.95, 1.0))
-        // X-axis header row — plain background.
+        // Header: time + optional offset
         .child(
             div()
-                .bg(gpui::hsla(0.0, 0.0, 0.1, 0.92))
-                .px_2()
-                .py(gpui::px(1.0))
-                .child(r.x_label),
+                .flex()
+                .items_center()
+                .text_color(gpui::hsla(0.0, 0.0, 0.85, 1.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(r.header_time)
+                .when_some(r.header_offset, |d, offset| {
+                    d.child(div().text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0)).child(offset))
+                }),
         )
-        // One row per series; focused row gets a brighter background + bold text.
+        // One row per series; focused row gets semibold + slightly brighter bg.
         .children(r.series.into_iter().enumerate().map(move |(idx, entry)| {
             let is_focused = idx == focused_idx;
             div()
                 .flex()
                 .items_center()
-                .gap_2()
-                .px_2()
+                .gap(gpui::px(6.0))
                 .py(gpui::px(1.0))
-                .when(is_focused, |d| {
-                    d.bg(gpui::hsla(0.0, 0.0, 0.2, 0.95))
-                        .font_weight(gpui::FontWeight::BOLD)
-                })
-                .when(!is_focused, |d| d.bg(gpui::hsla(0.0, 0.0, 0.1, 0.92)))
-                .child(div().w(gpui::px(8.0)).h(gpui::px(8.0)).bg(entry.color))
-                .child(div().flex_grow().child(entry.label))
-                .child(entry.y_label)
+                .when(is_focused, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
+                // 10px colour swatch
+                .child(div().w(gpui::px(10.0)).h(gpui::px(10.0)).bg(entry.color))
+                // Series name (muted, takes remaining space)
+                .child(
+                    div()
+                        .flex_1()
+                        .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                        .child(entry.label),
+                )
+                // Value (foreground)
+                .child(
+                    div()
+                        .text_color(gpui::hsla(0.0, 0.0, 0.95, 1.0))
+                        .child(entry.y_label),
+                )
         }))
 }
 
