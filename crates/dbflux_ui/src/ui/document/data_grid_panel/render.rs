@@ -1395,25 +1395,30 @@ impl DataGridPanel {
                         .into_any_element()
                 };
 
-                // Relative container so the absolute rail is positioned against it.
-                let chart_row = div()
+                let chart_row = div().flex_grow().size_full().child(chart_area);
+
+                // The rail is mounted at the body level so it overlays both the
+                // chart canvas AND the legend row below it. The toolbar stays
+                // outside the relative container so it remains uncovered above
+                // the rail, matching the design.
+                let body = div()
                     .relative()
+                    .flex()
+                    .flex_col()
                     .flex_grow()
-                    .size_full()
-                    .child(chart_area)
+                    .min_h_0()
+                    .child(chart_row)
+                    .when(has_chart_view, |d| {
+                        d.child(self.render_chart_legend_row(theme, cx))
+                    })
                     .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
 
                 let col = div()
                     .flex()
                     .flex_col()
                     .size_full()
-                    // Chart toolbar: RANGE chips, Refresh, window, points, Stats/Configure/PNG.
                     .child(self.render_chart_toolbar(theme, cx))
-                    .child(chart_row)
-                    // Legend row — always shown when a chart view exists.
-                    .when(has_chart_view, |d| {
-                        d.child(self.render_chart_legend_row(theme, cx))
-                    });
+                    .child(body);
 
                 container = container.child(col);
             }
@@ -1881,6 +1886,10 @@ impl DataGridPanel {
 
         // Rendered as an absolute overlay on the right edge of the chart area so
         // the chart canvas is never resized when the rail opens or closes.
+        // `theme.popover` is the raised-surface token (Ayu #151E2B) which gives
+        // the rail a clear visual separation from the chart background; the
+        // mouse handlers absorb pointer events so the chart underneath does not
+        // receive hover/click while the rail is open.
         div()
             .absolute()
             .top_0()
@@ -1891,9 +1900,12 @@ impl DataGridPanel {
             .flex_col()
             .border_l_1()
             .border_color(theme.border)
-            .bg(theme.background)
-            // min_h_0 allows the flex child to shrink below its content height so
-            // the inner overflow_y_scroll can take effect correctly.
+            .bg(theme.popover)
+            .on_mouse_move(|_, _, _| {})
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, _| {})
+            // The inner Configure/Stats tab bodies own the `overflow_y_scroll`;
+            // this wrapper just clips them to the rail's bounded height so the
+            // scroll can take effect.
             .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
     }
 
@@ -2012,6 +2024,7 @@ impl DataGridPanel {
 
         div()
             .id("rail-configure-scroll")
+            .size_full()
             .flex()
             .flex_col()
             .overflow_y_scroll()
@@ -2314,6 +2327,7 @@ impl DataGridPanel {
 
         div()
             .id("rail-stats-scroll")
+            .size_full()
             .flex()
             .flex_col()
             .overflow_y_scroll()
