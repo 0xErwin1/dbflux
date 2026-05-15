@@ -28,6 +28,7 @@ use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
 use dbflux_components::chart::{
     ChartDetection, ChartSpec, ChartView, ManualChartSelection, detect_chart_columns,
 };
+use std::collections::HashSet;
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
@@ -411,6 +412,9 @@ pub struct DataGridPanel {
     /// Checked state for each Y-candidate column (parallel to the Y-candidate list
     /// built from result columns with kind Float, Integer, or Unknown).
     chart_picker_y_checked: Vec<bool>,
+
+    /// Series indices hidden by the user via the legend. Cleared on set_result and Apply.
+    pub(super) chart_hidden_series: HashSet<usize>,
 
     // Chart Configure rail (feedback round)
     /// Whether the Configure rail is currently visible. Toggled by the gear button.
@@ -822,6 +826,7 @@ impl DataGridPanel {
             chart_legend_visible: true,
             chart_picker_x_col: 0,
             chart_picker_y_checked: Vec::new(),
+            chart_hidden_series: HashSet::new(),
             chart_rail_open: false,
             chart_rail_tab: ChartRailTab::Configure,
             chart_rail_picker_x_col: 0,
@@ -934,6 +939,26 @@ impl DataGridPanel {
                 None
             }
         }
+    }
+
+    /// Toggle the hidden state of a series by index.
+    ///
+    /// Propagates the updated hidden set to the live `ChartView` entity.
+    pub(super) fn toggle_chart_series_hidden(&mut self, idx: usize, cx: &mut Context<Self>) {
+        if self.chart_hidden_series.contains(&idx) {
+            self.chart_hidden_series.remove(&idx);
+        } else {
+            self.chart_hidden_series.insert(idx);
+        }
+
+        if let Some(chart_entity) = self.chart_view.clone() {
+            let hidden = self.chart_hidden_series.clone();
+            chart_entity.update(cx, |view, cx| {
+                view.set_hidden_series(hidden, cx);
+            });
+        }
+
+        cx.notify();
     }
 
     /// Flip the user-controlled legend visibility for the current chart panel
@@ -1093,6 +1118,7 @@ impl DataGridPanel {
         self.chart_manual_selection = Some(ManualChartSelection { x_col, y_cols });
         self.chart_view = None;
         self.chart_view_observer = None;
+        self.chart_hidden_series = HashSet::new();
         cx.notify();
     }
 
@@ -1273,7 +1299,8 @@ impl DataGridPanel {
         self.chart_focused_series_idx = 0;
         self.reset_chart_picker(&result.columns);
 
-        // Reset the Configure rail for the new result.
+        // Reset the Configure rail and hidden-series state for the new result.
+        self.chart_hidden_series = HashSet::new();
         self.chart_rail_open = false;
         self.chart_rail_tab = ChartRailTab::Configure;
         self.chart_rail_picker_x_col = 0;

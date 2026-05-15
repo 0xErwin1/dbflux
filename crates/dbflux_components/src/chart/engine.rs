@@ -5,6 +5,7 @@
 //! stored `RenderModel`.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::prelude::*;
@@ -119,6 +120,9 @@ pub struct ChartView {
     /// `render` to convert the window-space hover X to data space and to
     /// position the readout overlay.
     plot_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
+    /// Series indices that are hidden. Hidden series are skipped when painting
+    /// polylines, hover dots, and the readout overlay.
+    hidden: HashSet<usize>,
 }
 
 impl ChartView {
@@ -304,6 +308,7 @@ impl ChartView {
             hover_y_screen: None,
             focused_series_idx: 0,
             plot_bounds: Rc::new(RefCell::new(None)),
+            hidden: HashSet::new(),
         })
     }
 
@@ -370,6 +375,24 @@ impl ChartView {
             .unwrap_or("")
     }
 
+    /// Replace the set of hidden series indices.
+    ///
+    /// If `focused_series_idx` is in the new hidden set, it is reset to the
+    /// first non-hidden series (or 0 when all are hidden).
+    pub fn set_hidden_series(&mut self, hidden: HashSet<usize>, cx: &mut Context<Self>) {
+        self.hidden = hidden;
+
+        // Ensure the focused series remains visible.
+        if self.hidden.contains(&self.focused_series_idx) {
+            let fallback = (0..self.spec.series.len())
+                .find(|i| !self.hidden.contains(i))
+                .unwrap_or(0);
+            self.focused_series_idx = fallback;
+        }
+
+        cx.notify();
+    }
+
     /// Re-evaluate which series the cursor hovers over and update
     /// `focused_series_idx` with a 2 px dead-band to dampen jitter.
     ///
@@ -411,13 +434,15 @@ impl ChartView {
 
         let cursor_screen_y = f32::from(hover_y);
 
+        // hit_test operates over all series; filter the result to ignore hidden ones.
         let candidate = hit_test_focused_series(
             &self.render_model.decimated,
             cursor_data_x,
             cursor_screen_y,
             data_to_screen_y,
             14.0,
-        );
+        )
+        .filter(|idx| !self.hidden.contains(idx));
 
         let Some(new_idx) = candidate else { return };
 
@@ -497,6 +522,7 @@ impl Render for ChartView {
         let hover_x_canvas = hover_x;
         let y_tick_labels_canvas = y_tick_labels.clone();
         let x_tick_labels_canvas = x_tick_labels.clone();
+        let hidden_canvas = self.hidden.clone();
 
         // Shared plot-area bounds: written by the canvas prepaint closure,
         // read here to compute the readout and inside the on_mouse_move
@@ -513,6 +539,7 @@ impl Render for ChartView {
             &decimated,
             &palette,
             focused_idx,
+            &self.hidden,
             spec,
             x_min,
             x_range,
@@ -682,9 +709,9 @@ impl Render for ChartView {
                                             }
                                         };
 
-                                        // Pass 1 — non-focused series at 1.4 px.
+                                        // Pass 1 — non-focused, non-hidden series at 1.4 px.
                                         for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                            if s_idx == focused_idx {
+                                            if s_idx == focused_idx || hidden_canvas.contains(&s_idx) {
                                                 continue;
                                             }
                                             let color = palette_canvas
@@ -695,12 +722,15 @@ impl Render for ChartView {
                                         }
 
                                         // Pass 2 — focused series at 2.2 px (composited on top).
-                                        if let Some(pts) = decimated_canvas.get(focused_idx) {
-                                            let color = palette_canvas
-                                                .get(focused_idx)
-                                                .copied()
-                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                            paint_series(pts, color, 2.2, window);
+                                        // Skip if the focused series is hidden.
+                                        if !hidden_canvas.contains(&focused_idx) {
+                                            if let Some(pts) = decimated_canvas.get(focused_idx) {
+                                                let color = palette_canvas
+                                                    .get(focused_idx)
+                                                    .copied()
+                                                    .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+                                                paint_series(pts, color, 2.2, window);
+                                            }
                                         }
 
                                         // --- Crosshair (dashed, amber #FFB454 at 0.7 opacity) ---
@@ -726,6 +756,10 @@ impl Render for ChartView {
                                                 for (s_idx, pts) in
                                                     decimated_canvas.iter().enumerate()
                                                 {
+                                                    if hidden_canvas.contains(&s_idx) {
+                                                        continue;
+                                                    }
+
                                                     let Some(y_data) =
                                                         crate::chart::stats::interpolate_y_at_x(
                                                             pts,
@@ -948,6 +982,7 @@ fn build_readout(
     decimated: &[Vec<(f64, f64)>],
     palette: &[Hsla],
     focused_idx: usize,
+    hidden: &HashSet<usize>,
     spec: &ChartSpec,
     x_min: f64,
     x_range: f64,
@@ -1001,7 +1036,7 @@ fn build_readout(
     let mut any_valid = false;
 
     for (s_idx, pts) in decimated.iter().enumerate() {
-        if pts.is_empty() {
+        if pts.is_empty() || hidden.contains(&s_idx) {
             continue;
         }
         let (_sample_x, sample_y) = nearest_sample(pts, cursor_data_x);
