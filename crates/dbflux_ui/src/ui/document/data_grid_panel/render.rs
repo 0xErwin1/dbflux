@@ -1,4 +1,7 @@
-use super::{DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus};
+use super::{
+    ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
+};
+use crate::ui::common::time_range::view::TimeRangePanel;
 use crate::ui::components::data_table::SortState as TableSortState;
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::document::data_view::DataViewMode;
@@ -1002,6 +1005,267 @@ impl DataGridPanel {
         }
     }
 
+    // -- Chart Toolbar --
+
+    /// Render the chart toolbar that sits between the result-tabs strip and the
+    /// canvas + rail row.
+    ///
+    /// Contains (left to right):
+    /// - RANGE label + preset chips (driven by `chart_source_time_range_panel`)
+    /// - Refresh dropdown (only in Chart mode)
+    /// - Resolved window string
+    /// - Spacer
+    /// - Points + resolution
+    /// - Stats / Configure buttons
+    /// - PNG stub button
+    pub(super) fn render_chart_toolbar(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let muted = theme.muted_foreground;
+        let border = theme.border;
+        let foreground = theme.foreground;
+        let secondary = theme.secondary;
+        let accent = theme.accent;
+
+        // --- Resolved window label ---
+        let row_count = self.result.row_count();
+        let (window_label, x_span_ms) = if let Some(rw) = &self.result.resolved_window {
+            let start_str = format_x_value(rw.start_ms as f64, true);
+            let end_str = format_x_value(rw.end_ms as f64, true);
+            let span = (rw.end_ms - rw.start_ms) as f64;
+            (format!("{} → {} UTC", start_str, end_str), span)
+        } else if let Some(cv) = &self.chart_view {
+            let (x_min, x_max) = cv.read(cx).data_x_bounds();
+            let start_str = format_x_value(x_min, true);
+            let end_str = format_x_value(x_max, true);
+            let span = x_max - x_min;
+            (format!("{} → {} UTC", start_str, end_str), span)
+        } else {
+            ("—".to_string(), 0.0)
+        };
+
+        let resolution_label =
+            SharedString::from(format_resolution(x_span_ms, row_count));
+
+        let window_label: SharedString = window_label.into();
+
+        // --- Rail state ---
+        let rail_open = self.chart_rail_open;
+        let rail_tab = self.chart_rail_tab;
+
+        // --- RANGE chips ---
+        let preset_labels: Vec<SharedString> = TimeRangePanel::preset_items()
+            .into_iter()
+            .filter(|item| item.label != "Custom")
+            .map(|item| item.label)
+            .collect();
+
+        let active_preset_label: Option<SharedString> =
+            self.chart_source_time_range_panel
+                .as_ref()
+                .and_then(|p| p.read(cx).dropdown_time_range.read(cx).selected_label());
+
+        let time_range_panel = self.chart_source_time_range_panel.clone();
+
+        // --- Vertical divider helper ---
+        let vdivider = || {
+            div()
+                .w(px(1.0))
+                .h(px(16.0))
+                .mx(Spacing::XS)
+                .bg(border)
+        };
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(px(34.0))
+            .px(Spacing::SM)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            // RANGE label
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(muted)
+                    .mr(Spacing::XS)
+                    .child("RANGE"),
+            )
+            // Preset chips
+            .children(preset_labels.iter().enumerate().map(|(i, label)| {
+                let label = label.clone();
+                let is_active = active_preset_label.as_ref() == Some(&label);
+                let trp = time_range_panel.clone();
+
+                div()
+                    .id(ElementId::Name(format!("range-chip-{}", i).into()))
+                    .px(Spacing::XS)
+                    .py(px(2.0))
+                    .mr(px(2.0))
+                    .rounded(Radii::SM)
+                    .text_size(FontSizes::XS)
+                    .cursor_pointer()
+                    .when(is_active, |d| d.bg(accent.opacity(0.18)).text_color(accent))
+                    .when(!is_active, |d| d.text_color(muted).hover(|d| d.bg(secondary)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_this, _, _, cx| {
+                            if let Some(ref panel_entity) = trp {
+                                panel_entity.update(cx, |panel, cx| {
+                                    panel.dropdown_time_range.update(cx, |dd, cx| {
+                                        dd.set_selected_index(Some(i), cx);
+                                    });
+                                    panel.emit_initial(cx);
+                                });
+                            }
+                        }),
+                    )
+                    .child(label)
+            }))
+            // Refresh dropdown
+            .child(vdivider())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(muted)
+                            .child("REFRESH"),
+                    )
+                    .child(
+                        div()
+                            .w(px(80.0))
+                            .h(px(24.0))
+                            .child(self.refresh_dropdown.clone()),
+                    ),
+            )
+            // Resolved window
+            .child(vdivider())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(
+                        Icon::new(AppIcon::Clock)
+                            .size(px(11.0))
+                            .color(muted),
+                    )
+                    .child(
+                        div()
+                            .text_size(FontSizes::XS)
+                            .text_color(muted)
+                            .font(font("JetBrains Mono"))
+                            .child(window_label),
+                    ),
+            )
+            // Spacer
+            .child(div().flex_1())
+            // Points + resolution
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(
+                        div()
+                            .text_size(FontSizes::XS)
+                            .text_color(muted)
+                            .font(font("JetBrains Mono"))
+                            .child(SharedString::from(format!("{} pts", row_count))),
+                    )
+                    .child(
+                        div()
+                            .text_size(FontSizes::XS)
+                            .text_color(muted)
+                            .child("·"),
+                    )
+                    .child(
+                        div()
+                            .text_size(FontSizes::XS)
+                            .text_color(muted)
+                            .font(font("JetBrains Mono"))
+                            .child(resolution_label),
+                    ),
+            )
+            .child(vdivider())
+            // Stats button
+            .child({
+                let is_stats_active = rail_open && rail_tab == ChartRailTab::Stats;
+                div()
+                    .id("chart-toolbar-stats")
+                    .px(Spacing::XS)
+                    .py(px(2.0))
+                    .rounded(Radii::SM)
+                    .text_size(FontSizes::XS)
+                    .cursor_pointer()
+                    .when(is_stats_active, |d| d.bg(accent.opacity(0.18)).text_color(accent))
+                    .when(!is_stats_active, |d| d.text_color(foreground).hover(|d| d.bg(secondary)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.chart_rail_tab = ChartRailTab::Stats;
+                            this.chart_rail_open = true;
+                            cx.notify();
+                        }),
+                    )
+                    .child("Stats")
+            })
+            // Configure button
+            .child({
+                let is_configure_active = rail_open && rail_tab == ChartRailTab::Configure;
+                div()
+                    .id("chart-toolbar-configure")
+                    .px(Spacing::XS)
+                    .py(px(2.0))
+                    .ml(px(2.0))
+                    .rounded(Radii::SM)
+                    .text_size(FontSizes::XS)
+                    .cursor_pointer()
+                    .when(is_configure_active, |d| d.bg(accent.opacity(0.18)).text_color(accent))
+                    .when(!is_configure_active, |d| d.text_color(foreground).hover(|d| d.bg(secondary)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.chart_rail_tab = ChartRailTab::Configure;
+                            this.chart_rail_open = true;
+                            if this.chart_rail_open {
+                                this.prime_chart_rail_picker_from_spec();
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child("Configure")
+            })
+            // PNG stub
+            .child({
+                div()
+                    .id("chart-toolbar-png")
+                    .px(Spacing::XS)
+                    .py(px(2.0))
+                    .ml(px(2.0))
+                    .rounded(Radii::SM)
+                    .text_size(FontSizes::XS)
+                    .cursor_pointer()
+                    .text_color(muted)
+                    .hover(|d| d.bg(secondary))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _, _, _cx| {
+                            log::debug!("PNG export: not yet implemented");
+                        }),
+                    )
+                    .child("PNG")
+            })
+    }
+
     // -- Result View Renderers --
 
     /// Render the Table / Chart tab strip that appears above the result content
@@ -1131,6 +1395,8 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .size_full()
+                    // Chart toolbar: RANGE chips, Refresh, window, points, Stats/Configure/PNG.
+                    .child(self.render_chart_toolbar(theme, cx))
                     .child(row)
                     // Legend row — always shown when a chart view exists.
                     .when(has_chart_view, |d| {
@@ -1417,8 +1683,6 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        use super::ChartRailTab;
-
         let active_tab = self.chart_rail_tab;
 
         // Tab header
