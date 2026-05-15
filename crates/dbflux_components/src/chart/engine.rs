@@ -4,9 +4,13 @@
 //! happens in `ChartView::build`. `Render::render` is a pure read of the
 //! stored `RenderModel`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gpui::prelude::*;
 use gpui::{
-    App, Context, Hsla, PathBuilder, Pixels, Render, SharedString, Window, canvas, div, fill, point,
+    App, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, Window, canvas, div,
+    fill, point,
 };
 
 use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
@@ -113,11 +117,16 @@ pub(crate) struct RenderModel {
 pub struct ChartView {
     spec: ChartSpec,
     render_model: RenderModel,
-    /// Screen-space X coordinate of the current crosshair, relative to the
-    /// canvas origin. `None` when the cursor is outside the chart.
+    /// Window-space X coordinate of the current crosshair, captured from the
+    /// last `MouseMoveEvent`. `None` when the cursor has not yet entered the
+    /// chart or after a rebuild.
     hover_x_screen: Option<Pixels>,
     /// Index of the focused series used for the crosshair readout.
     focused_series_idx: usize,
+    /// Plot-area bounds, written by the canvas prepaint closure and read by
+    /// `render` to convert the window-space hover X to data space and to
+    /// position the readout overlay.
+    plot_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
 }
 
 impl ChartView {
@@ -294,6 +303,7 @@ impl ChartView {
             render_model,
             hover_x_screen: None,
             focused_series_idx: 0,
+            plot_bounds: Rc::new(RefCell::new(None)),
         })
     }
 
@@ -336,12 +346,34 @@ impl Render for ChartView {
 
         let palette = model.palette_colors.clone();
         let decimated = model.decimated.clone();
+        let x_is_time = spec.x_axis.kind == AxisKind::Time;
 
         // Clone for canvas closure.
         let decimated_canvas = decimated.clone();
         let palette_canvas = palette.clone();
         let y_ticks_canvas = model.y_ticks.clone();
         let hover_x_canvas = hover_x;
+
+        // Shared plot-area bounds: written by the canvas prepaint closure,
+        // read here to compute the readout and inside the on_mouse_move
+        // listener (next render after the cursor moves).
+        let plot_bounds_rc = self.plot_bounds.clone();
+        let plot_bounds_for_canvas = plot_bounds_rc.clone();
+
+        // Derive the readout (series label + formatted X/Y) from the bounds
+        // captured during the previous paint. `None` until the first paint
+        // has run or while the cursor is outside the plot area.
+        let readout = build_readout(
+            hover_x,
+            plot_bounds_rc.borrow().as_ref(),
+            &decimated,
+            &palette,
+            focused_idx,
+            spec,
+            x_min,
+            x_range,
+            x_is_time,
+        );
 
         // Y-axis labels (rendered reversed: highest value at top, lowest at bottom).
         // `justify_between` distributes them evenly in the label column, matching
@@ -422,7 +454,10 @@ impl Render for ChartView {
                             ))
                             .child({
                                 canvas(
-                                    move |bounds, _window, _cx| bounds,
+                                    move |bounds, _window, _cx| {
+                                        *plot_bounds_for_canvas.borrow_mut() = Some(bounds);
+                                        bounds
+                                    },
                                     move |_bounds, bounds_data, window, _cx| {
                                         let b = bounds_data;
                                         let w = f32::from(b.size.width);
@@ -535,7 +570,8 @@ impl Render for ChartView {
                                 )
                                 .absolute()
                                 .size_full()
-                            }),
+                            })
+                            .when_some(readout, |container, r| container.child(readout_overlay(r))),
                     ),
             )
             // X-axis label row — sits below the chart body, inset by the Y-label column width.
@@ -596,6 +632,170 @@ fn tracing_debug_non_monotonic() {
 }
 
 // ---------------------------------------------------------------------------
+// Hover readout
+// ---------------------------------------------------------------------------
+
+/// Pre-computed content for the crosshair readout panel.
+///
+/// `screen_x_relative` is the cursor X in plot-area-local coordinates and is
+/// used to anchor the overlay; the panel itself is clamped to stay inside the
+/// plot area when the cursor is close to the right edge.
+struct HoverReadout {
+    series_label: SharedString,
+    series_color: Hsla,
+    x_label: SharedString,
+    y_label: SharedString,
+    screen_x_relative: Pixels,
+    plot_width: Pixels,
+}
+
+/// Derive readout content from the captured plot-area bounds and the
+/// last-seen hover X. Returns `None` when bounds are not yet known (no paint
+/// has run), when the cursor falls outside the plot area, or when the
+/// focused series has no usable samples.
+#[allow(clippy::too_many_arguments)]
+fn build_readout(
+    hover_x_window: Option<Pixels>,
+    plot_bounds: Option<&Bounds<Pixels>>,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    focused_idx: usize,
+    spec: &ChartSpec,
+    x_min: f64,
+    x_range: f64,
+    x_is_time: bool,
+) -> Option<HoverReadout> {
+    let hover_x = hover_x_window?;
+    let bounds = plot_bounds?;
+
+    let plot_x0 = bounds.origin.x;
+    let plot_w_px = f32::from(bounds.size.width) - MARGIN_RIGHT;
+    if plot_w_px <= 0.0 {
+        return None;
+    }
+    let plot_w = gpui::px(plot_w_px);
+
+    let relative_x = hover_x - plot_x0;
+    let rel_x_f = f32::from(relative_x);
+    if rel_x_f < 0.0 || rel_x_f > plot_w_px {
+        return None;
+    }
+
+    let cursor_data_x = x_min + (rel_x_f as f64 / plot_w_px as f64) * x_range;
+
+    let series_pts = decimated.get(focused_idx)?;
+    if series_pts.is_empty() {
+        return None;
+    }
+
+    let (sample_x, sample_y) = nearest_sample(series_pts, cursor_data_x);
+
+    let series_spec = spec.series.get(focused_idx)?;
+
+    let series_color = palette
+        .get(focused_idx)
+        .copied()
+        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+
+    Some(HoverReadout {
+        series_label: SharedString::from(series_spec.label.clone()),
+        series_color,
+        x_label: SharedString::from(format_x_value(sample_x, x_is_time)),
+        y_label: SharedString::from(format_y_value(sample_y)),
+        screen_x_relative: relative_x,
+        plot_width: plot_w,
+    })
+}
+
+/// Locate the sample in `points` whose X coordinate is closest to `target_x`.
+/// Assumes `points` is sorted by X (the engine sorts during `build`).
+fn nearest_sample(points: &[(f64, f64)], target_x: f64) -> (f64, f64) {
+    match points.binary_search_by(|p| {
+        p.0.partial_cmp(&target_x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
+        Ok(idx) => points[idx],
+        Err(insert_idx) => {
+            if insert_idx == 0 {
+                points[0]
+            } else if insert_idx >= points.len() {
+                points[points.len() - 1]
+            } else {
+                let lo = points[insert_idx - 1];
+                let hi = points[insert_idx];
+                if (target_x - lo.0).abs() <= (hi.0 - target_x).abs() {
+                    lo
+                } else {
+                    hi
+                }
+            }
+        }
+    }
+}
+
+fn format_x_value(x: f64, is_time: bool) -> String {
+    if is_time {
+        let secs = (x / 1000.0).trunc() as i64;
+        let nsecs = ((x.rem_euclid(1000.0)) * 1_000_000.0) as u32;
+        match dbflux_core::chrono::DateTime::from_timestamp(secs, nsecs) {
+            Some(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            None => format!("{:.3}", x),
+        }
+    } else {
+        format!("{:.3}", x)
+    }
+}
+
+fn format_y_value(y: f64) -> String {
+    if y.abs() >= 1000.0 || (y != 0.0 && y.abs() < 0.001) {
+        format!("{:.3e}", y)
+    } else {
+        format!("{:.3}", y)
+    }
+}
+
+/// Build the absolute-positioned overlay div that shows the readout. Clamps
+/// to the left side of the crosshair when the cursor is past the midpoint of
+/// the plot so the panel never falls outside the chart.
+fn readout_overlay(r: HoverReadout) -> impl IntoElement {
+    const PANEL_GAP: f32 = 8.0;
+    const PANEL_ESTIMATED_WIDTH: f32 = 170.0;
+
+    let hover_x = f32::from(r.screen_x_relative);
+    let plot_w = f32::from(r.plot_width);
+    let flip_to_left = hover_x + PANEL_GAP + PANEL_ESTIMATED_WIDTH > plot_w;
+
+    let left_px = if flip_to_left {
+        (hover_x - PANEL_GAP - PANEL_ESTIMATED_WIDTH).max(0.0)
+    } else {
+        hover_x + PANEL_GAP
+    };
+
+    div()
+        .absolute()
+        .left(gpui::px(left_px))
+        .top(gpui::px(MARGIN_TOP + 4.0))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .px_2()
+        .py_1()
+        .bg(gpui::hsla(0.0, 0.0, 0.1, 0.92))
+        .text_size(FontSizes::XS)
+        .text_color(gpui::hsla(0.0, 0.0, 0.95, 1.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().w(gpui::px(8.0)).h(gpui::px(8.0)).bg(r.series_color))
+                .child(r.series_label),
+        )
+        .child(div().child(r.x_label))
+        .child(div().child(r.y_label))
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
@@ -605,6 +805,52 @@ mod tests {
     use crate::chart::spec::{AxisKind, AxisSpec, ChartSpec, SeriesSpec};
     use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
     use std::time::Duration;
+
+    #[test]
+    fn nearest_sample_picks_exact_match() {
+        let pts = vec![(0.0, 10.0), (1.0, 20.0), (2.0, 30.0)];
+        assert_eq!(nearest_sample(&pts, 1.0), (1.0, 20.0));
+    }
+
+    #[test]
+    fn nearest_sample_clamps_below_min() {
+        let pts = vec![(5.0, 1.0), (6.0, 2.0)];
+        assert_eq!(nearest_sample(&pts, -100.0), (5.0, 1.0));
+    }
+
+    #[test]
+    fn nearest_sample_clamps_above_max() {
+        let pts = vec![(5.0, 1.0), (6.0, 2.0)];
+        assert_eq!(nearest_sample(&pts, 100.0), (6.0, 2.0));
+    }
+
+    #[test]
+    fn nearest_sample_picks_closer_of_two_neighbours() {
+        let pts = vec![(0.0, 1.0), (10.0, 2.0)];
+        assert_eq!(nearest_sample(&pts, 3.0), (0.0, 1.0));
+        assert_eq!(nearest_sample(&pts, 7.0), (10.0, 2.0));
+    }
+
+    #[test]
+    fn nearest_sample_ties_to_lower() {
+        let pts = vec![(0.0, 1.0), (10.0, 2.0)];
+        // Midpoint: implementation prefers the lower-x neighbour on ties.
+        assert_eq!(nearest_sample(&pts, 5.0), (0.0, 1.0));
+    }
+
+    #[test]
+    fn format_x_value_time_formats_unix_ms() {
+        let s = format_x_value(0.0, true);
+        assert!(s.starts_with("1970-01-01"), "got: {s}");
+    }
+
+    #[test]
+    fn format_y_value_uses_scientific_for_large_magnitudes() {
+        assert!(format_y_value(1234.0).contains('e'));
+        assert!(format_y_value(0.0001).contains('e'));
+        assert_eq!(format_y_value(0.0), "0.000");
+        assert_eq!(format_y_value(1.5), "1.500");
+    }
 
     fn make_col(name: &str, kind: ColumnKind) -> ColumnMeta {
         ColumnMeta {
