@@ -28,5 +28,6 @@ pub use table_browser::{
     TableCountRequest, TableRef,
 };
 pub use types::{
-    ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape, ResolvedWindow, Row,
+    ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
+    ResolvedWindow, Row,
 };

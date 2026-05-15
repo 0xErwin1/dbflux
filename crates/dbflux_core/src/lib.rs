@@ -96,7 +96,8 @@ pub use facade::{DangerousQuerySuppressions, SessionFacade};
 
 pub use query::{
     AggregateFunction, AggregateRequest, AggregateSpec, CollectionBrowseRequest,
-    CollectionCountRequest, CollectionRef, CollectionTemplateRequest, ColumnMeta, ColumnRef,
+    CollectionCountRequest, CollectionRef, CollectionTemplateRequest, ColumnKind, ColumnMeta,
+    ColumnRef,
     DangerousQueryKind, DescribeRequest, Diagnostic, DiagnosticSeverity, EditorDiagnostic,
     ExplainRequest, GeneratedQuery, LanguageService, MutationCategory, MutationTemplateOperation,
     MutationTemplateRequest, OrderByColumn, Pagination, PlannedQuery, QueryGenerator, QueryHandle,
