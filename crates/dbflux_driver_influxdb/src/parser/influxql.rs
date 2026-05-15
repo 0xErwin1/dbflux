@@ -33,7 +33,7 @@ use dbflux_core::QueryResult;
 /// Map an InfluxDB type name string to a semantic `ColumnKind`.
 fn kind_from_influx_type_name(s: &str) -> ColumnKind {
     match s {
-        "timestamp" | "time" | "datetime" => ColumnKind::Timestamp,
+        "timestamp" | "timestamp_ms" | "time" | "datetime" => ColumnKind::Timestamp,
         "integer" => ColumnKind::Integer,
         "double" | "float" | "float64" => ColumnKind::Float,
         "text" | "string" => ColumnKind::Text,
@@ -273,6 +273,32 @@ fn json_to_value(json: &Json, type_name: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn time_column_populates_column_kind_timestamp() {
+        // The inferred type for InfluxDB's `time` column is `timestamp_ms`;
+        // this must map to `ColumnKind::Timestamp` so the chart engine picks
+        // it as the time axis and renders formatted time labels.
+        let body = r#"{
+            "results": [{
+                "statement_id": 0,
+                "series": [{
+                    "name": "cpu",
+                    "columns": ["time", "value"],
+                    "values": [[1704067200000, 0.5]]
+                }]
+            }]
+        }"#;
+
+        let result = parse_influxql_json(body).expect("parse must succeed");
+        let time_col = result
+            .columns
+            .iter()
+            .find(|c| c.name == "time")
+            .expect("time column must be present");
+        assert_eq!(time_col.kind, ColumnKind::Timestamp);
+        assert_eq!(time_col.type_name, "timestamp_ms");
+    }
 
     // C.3.1 — single series
     #[test]
