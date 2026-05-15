@@ -10,13 +10,12 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, TextRun, Window,
-    canvas, div, fill, font, point,
+    AnyElement, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, TextRun,
+    Window, canvas, div, fill, font, point,
 };
 
 use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
 use crate::chart::decimate::lttb;
-use crate::chart::legend::legend_element;
 use crate::chart::spec::{AxisKind, ChartSpec};
 use crate::chart::stats::{
     SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x,
@@ -375,6 +374,16 @@ impl ChartView {
             .unwrap_or("")
     }
 
+    /// All series specs — used by the external legend renderer in `DataGridPanel`.
+    pub fn spec_series(&self) -> &[crate::chart::spec::SeriesSpec] {
+        &self.spec.series
+    }
+
+    /// Resolved palette colours, indexed parallel to `spec_series()`.
+    pub fn palette_colors(&self) -> &[Hsla] {
+        &self.render_model.palette_colors
+    }
+
     /// Replace the set of hidden series indices.
     ///
     /// If `focused_series_idx` is in the new hidden set, it is reset to the
@@ -546,22 +555,13 @@ impl Render for ChartView {
             x_is_time,
         );
 
-        // Legend element (built outside the canvas closure so it can be a div child).
-        let legend = if spec.legend_visible && spec.series.len() > 1 {
-            let entity = cx.entity().clone();
-            Some(legend_element(
-                &spec.series,
-                &palette,
-                focused_idx,
-                Some(move |idx: usize, _window: &mut Window, cx: &mut App| {
-                    entity.update(cx, |this, cx| {
-                        this.set_focused_series_idx(idx, cx);
-                    });
-                }),
-            ))
-        } else {
-            None
-        };
+        // The legend is now rendered by DataGridPanel as a sibling row below the canvas
+        // (via render_chart_legend_row). ChartView no longer owns the legend element —
+        // this simplifies the toggle wiring and keeps DataGridPanel as the source of
+        // truth for chart_hidden_series.
+        //
+        // The `spec.legend_visible` field is preserved for future use / API compat.
+        let legend: Option<AnyElement> = None;
 
         div()
             .flex()

@@ -6,8 +6,11 @@ use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::chart::{
-    ChartDetection, ManualChartSelection, SeriesStats, format_span, format_x_value, format_y_value,
+    CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, ChartDetection, ManualChartSelection, SeriesSpec,
+    SeriesStats, count_columns_for_why, format_resolution, format_span, format_x_value,
+    format_y_value,
 };
+use dbflux_components::chart::legend::legend_element;
 use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
 use dbflux_core::{
@@ -982,11 +985,14 @@ impl DataGridPanel {
                 container = container.when_some(self.data_table.clone(), |d, dt| d.child(dt));
             }
             ResultViewMode::Chart => {
-                // Chart mode: a horizontal flex row containing the chart area
-                // and (when open) a 280px Configure rail on the right.
+                // Chart mode: vertical stack — chart+rail row, then legend row below.
                 let rail_open = self.chart_rail_open;
 
-                let chart_area = if let Some(chart_entity) = self.ensure_chart_view(cx) {
+                // Build chart_view on first render before checking whether it exists.
+                let _ = self.ensure_chart_view(cx);
+                let has_chart_view = self.chart_view.is_some();
+
+                let chart_area = if let Some(chart_entity) = self.chart_view.clone() {
                     div()
                         .flex_grow()
                         .size_full()
@@ -1003,11 +1009,21 @@ impl DataGridPanel {
                 let row = div()
                     .flex()
                     .flex_row()
-                    .size_full()
+                    .flex_grow()
                     .child(chart_area)
                     .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
 
-                container = container.child(row);
+                let col = div()
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .child(row)
+                    // Legend row — always shown when a chart view exists.
+                    .when(has_chart_view, |d| {
+                        d.child(self.render_chart_legend_row(theme, cx))
+                    });
+
+                container = container.child(col);
             }
             ResultViewMode::Text => {
                 let text = self.derived_text().to_string();
@@ -1030,6 +1046,39 @@ impl DataGridPanel {
         }
 
         container
+    }
+
+    /// Render the legend row below the chart canvas.
+    ///
+    /// Reads series specs, palette colours, and stats from the `ChartView` entity,
+    /// then delegates to `legend_element` with a toggle callback that calls
+    /// `toggle_chart_series_hidden` on this panel.
+    pub(super) fn render_chart_legend_row(
+        &mut self,
+        _theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let Some(chart_entity) = self.chart_view.clone() else {
+            return div().into_any_element();
+        };
+
+        let cv = chart_entity.read(cx);
+        let series = cv.spec_series().to_vec();
+        let palette = cv.palette_colors().to_vec();
+        let stats = cv.series_stats().to_vec();
+        let focused_idx = cv.focused_series_idx();
+
+        let hidden = self.chart_hidden_series.clone();
+        let panel_entity = cx.entity().clone();
+
+        let on_toggle = move |idx: usize, _window: &mut Window, cx: &mut App| {
+            panel_entity.update(cx, |this, cx| {
+                this.toggle_chart_series_hidden(idx, cx);
+            });
+        };
+
+        legend_element(&series, &palette, &stats, &hidden, focused_idx, Some(on_toggle))
+            .into_any_element()
     }
 
     /// Render the degraded-state chart panel when `ensure_chart_view` returned `None`.

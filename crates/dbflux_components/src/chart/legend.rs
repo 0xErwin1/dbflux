@@ -1,30 +1,41 @@
 //! Legend element factory for line charts.
 //!
-//! `legend_element` returns a flex row of colour-swatch pills. It is a pure
-//! element factory — not a GPUI `Entity`. The caller decides whether to include
-//! it in the render tree.
+//! `legend_element` renders a row of clickable chips below the canvas, one per
+//! series. Clicking a chip toggles its visibility via `on_toggle_hidden`.
+
+use std::collections::HashSet;
 
 use gpui::prelude::*;
 use gpui::{AnyElement, Hsla, IntoElement, SharedString, div};
 
 use crate::chart::spec::SeriesSpec;
+use crate::chart::stats::SeriesStats;
 
 /// Build the legend element for a chart.
 ///
 /// # Parameters
-/// - `series`: the series specifications, one pill per entry.
+/// - `series`: series specifications, one chip per entry.
 /// - `palette`: resolved `Hsla` colours indexed by `SeriesSpec::color_slot`.
-/// - `focused_series_idx`: the index of the currently focused series; that
-///   pill is rendered with a distinct border.
-/// - `on_pill_click`: called with the series index, window, and app context
-///   when a pill is clicked. Pass `None` to render pills without click handling.
-pub fn legend_element(
+/// - `stats`: per-series statistics (parallel to `series`); may be `None` for empty series.
+/// - `hidden`: set of hidden series indices; chips for hidden indices are rendered at 40% opacity.
+/// - `focused_series_idx`: currently focused series (chip highlighted with a border).
+/// - `on_toggle_hidden`: called with the series index when the chip is clicked.
+pub fn legend_element<F>(
     series: &[SeriesSpec],
     palette: &[Hsla],
+    stats: &[Option<SeriesStats>],
+    hidden: &HashSet<usize>,
     focused_series_idx: usize,
-    on_pill_click: Option<impl Fn(usize, &mut gpui::Window, &mut gpui::App) + Clone + 'static>,
-) -> impl IntoElement {
-    let pills: Vec<AnyElement> = series
+    on_toggle_hidden: Option<F>,
+) -> impl IntoElement
+where
+    F: Fn(usize, &mut gpui::Window, &mut gpui::App) + Clone + Send + Sync + 'static,
+{
+    let total = series.len();
+    let visible = total - hidden.len();
+    let counter: SharedString = format!("{} of {} visible · click to hide", visible, total).into();
+
+    let chips: Vec<AnyElement> = series
         .iter()
         .enumerate()
         .map(|(i, s)| {
@@ -35,35 +46,53 @@ pub fn legend_element(
 
             let label: SharedString = s.label.clone().into();
             let is_focused = i == focused_series_idx;
+            let is_hidden = hidden.contains(&i);
 
-            let mut pill = div()
+            // Optional avg and last values from stats.
+            let stat_str: Option<SharedString> = stats.get(i).and_then(|opt| {
+                opt.map(|st| format!("avg {:.2} · last {:.2}", st.avg, st.last).into())
+            });
+
+            let mut chip = div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(gpui::px(4.0))
                 .px(gpui::px(8.0))
-                .py(gpui::px(2.0))
+                .py(gpui::px(4.0))
                 .rounded(gpui::px(4.0))
                 .border_1()
                 .border_color(if is_focused {
                     color
                 } else {
-                    gpui::hsla(0.0, 0.0, 0.5, 0.3)
+                    gpui::hsla(0.0, 0.0, 1.0, 0.12)
                 })
+                // Opacity signals hidden state (no strikethrough — GPUI 0.2.2 lacks it).
+                .when(is_hidden, |d| d.opacity(0.4))
                 // Colour swatch.
                 .child(
                     div()
-                        .w(gpui::px(10.0))
-                        .h(gpui::px(10.0))
+                        .w(gpui::px(8.0))
+                        .h(gpui::px(8.0))
                         .rounded_full()
                         .bg(color),
                 )
-                // Series label text.
+                // Series label.
                 .child(div().text_sm().child(label));
 
-            if let Some(ref handler) = on_pill_click {
+            // Append avg / last inline when available.
+            if let Some(stat) = stat_str {
+                chip = chip.child(
+                    div()
+                        .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                        .text_sm()
+                        .child(stat),
+                );
+            }
+
+            if let Some(ref handler) = on_toggle_hidden {
                 let handler = handler.clone();
-                pill = pill.cursor_pointer().on_mouse_down(
+                chip = chip.cursor_pointer().on_mouse_down(
                     gpui::MouseButton::Left,
                     move |_ev, window, cx| {
                         handler(i, window, cx);
@@ -71,7 +100,7 @@ pub fn legend_element(
                 );
             }
 
-            pill.into_any_element()
+            chip.into_any_element()
         })
         .collect();
 
@@ -79,7 +108,21 @@ pub fn legend_element(
         .flex()
         .flex_row()
         .flex_wrap()
-        .gap(gpui::px(6.0))
-        .py(gpui::px(4.0))
-        .children(pills)
+        .items_center()
+        .gap(gpui::px(8.0))
+        .px(gpui::px(14.0))
+        .py(gpui::px(6.0))
+        .border_t_1()
+        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.08))
+        .children(chips)
+        // Counter at the right end.
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .justify_end()
+                .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                .text_sm()
+                .child(counter),
+        )
 }
