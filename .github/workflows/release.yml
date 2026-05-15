@@ -172,8 +172,8 @@ jobs:
           convert resources/icon.svg -resize 128x128 packaging/icons/128x128/apps/dbflux.png
           convert resources/icon.svg -resize 64x64 packaging/icons/64x64/apps/dbflux.png
           convert resources/icon.svg -resize 48x48 packaging/icons/48x48/apps/dbflux.png
-          convert resources/icons/dbflux-32.svg -resize 32x32 packaging/icons/32x32/apps/dbflux.png
-          convert resources/icons/dbflux-16.svg -resize 16x16 packaging/icons/16x16/apps/dbflux.png
+          convert resources/icon-small.svg -resize 32x32 packaging/icons/32x32/apps/dbflux.png
+          convert resources/icon-small.svg -resize 16x16 packaging/icons/16x16/apps/dbflux.png
 
       - name: Install Go
         uses: actions/setup-go@v5
