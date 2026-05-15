@@ -13,6 +13,7 @@ pub mod semantic;
 pub mod tokens;
 pub mod typography;
 
+pub mod chart;
 pub mod composites;
 pub mod controls;
 pub mod primitives;
