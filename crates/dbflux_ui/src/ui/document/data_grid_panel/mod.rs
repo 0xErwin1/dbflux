@@ -148,6 +148,14 @@ pub enum DataGridEvent {
     },
 }
 
+/// Active tab in the Chart Configure rail.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum ChartRailTab {
+    #[default]
+    Configure,
+    Stats,
+}
+
 /// Internal state for grid loading/ready/error.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum GridState {
@@ -399,6 +407,16 @@ pub struct DataGridPanel {
     /// Checked state for each Y-candidate column (parallel to the Y-candidate list
     /// built from result columns with kind Float, Integer, or Unknown).
     chart_picker_y_checked: Vec<bool>,
+
+    // Chart Configure rail (feedback round)
+    /// Whether the Configure rail is currently visible. Toggled by the gear button.
+    pub(super) chart_rail_open: bool,
+    /// Active tab inside the rail (Configure or Stats).
+    pub(super) chart_rail_tab: ChartRailTab,
+    /// Selected X-column index in the rail picker (mirrors the degraded picker).
+    pub(super) chart_rail_picker_x_col: usize,
+    /// Checked state per Y-candidate column in the rail picker.
+    pub(super) chart_rail_picker_y_checked: Vec<bool>,
 }
 
 impl DataGridPanel {
@@ -799,6 +817,10 @@ impl DataGridPanel {
             chart_legend_visible: true,
             chart_picker_x_col: 0,
             chart_picker_y_checked: Vec::new(),
+            chart_rail_open: false,
+            chart_rail_tab: ChartRailTab::Configure,
+            chart_rail_picker_x_col: 0,
+            chart_rail_picker_y_checked: Vec::new(),
         }
     }
 
@@ -944,6 +966,141 @@ impl DataGridPanel {
             })
             .map(|c| matches!(c.kind, ColumnKind::Float | ColumnKind::Integer))
             .collect();
+    }
+
+    /// Initialise the Configure rail picker from the current chart spec.
+    ///
+    /// Called when the rail is toggled open so the controls reflect what is
+    /// currently rendered (either auto-detected or manual).
+    pub(super) fn prime_chart_rail_picker_from_spec(&mut self) {
+        use dbflux_core::ColumnKind;
+
+        let columns = &self.result.columns;
+
+        // Determine effective X and Y columns from current selection or detection.
+        let (x_col, y_col_indices) = if let Some(manual) = &self.chart_manual_selection {
+            let ys: Vec<usize> = manual.y_cols.clone();
+            (manual.x_col, ys)
+        } else if let Some(ChartDetection::Ok {
+            time_col,
+            numeric_cols,
+        }) = &self.chart_detection
+        {
+            (*time_col, numeric_cols.clone())
+        } else {
+            // No usable spec — fall back to defaults.
+            let x = columns
+                .iter()
+                .position(|c| c.kind == ColumnKind::Timestamp)
+                .unwrap_or(0);
+            (x, vec![])
+        };
+
+        // Map x_col to the rail picker's X index (index into X-candidate list).
+        // The rail picker uses the same X-candidates as the degraded picker:
+        // Timestamp, Text, or Unknown columns.
+        let x_candidates: Vec<usize> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Timestamp | ColumnKind::Text | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        self.chart_rail_picker_x_col = x_candidates
+            .iter()
+            .position(|&ci| ci == x_col)
+            .unwrap_or(0);
+
+        // Y-candidate list: Float, Integer, or Unknown columns.
+        let y_candidates: Vec<usize> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        self.chart_rail_picker_y_checked = y_candidates
+            .iter()
+            .map(|ci| y_col_indices.contains(ci))
+            .collect();
+    }
+
+    /// Apply the current rail Configure picker state as a `ManualChartSelection`.
+    ///
+    /// Clears the existing `chart_view` so the next render triggers a rebuild.
+    /// The rail stays open so the user can see the updated chart.
+    pub(super) fn apply_chart_rail_selection(&mut self, cx: &mut Context<Self>) {
+        use dbflux_core::ColumnKind;
+
+        let columns = &self.result.columns;
+
+        let x_candidates: Vec<usize> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Timestamp | ColumnKind::Text | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        let x_col = x_candidates
+            .get(self.chart_rail_picker_x_col)
+            .copied()
+            .unwrap_or(0);
+
+        let y_candidates: Vec<usize> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        let y_cols: Vec<usize> = y_candidates
+            .iter()
+            .zip(self.chart_rail_picker_y_checked.iter())
+            .filter_map(|(&ci, &checked)| if checked { Some(ci) } else { None })
+            .collect();
+
+        if y_cols.is_empty() {
+            // Nothing to chart; do not trigger a rebuild.
+            return;
+        }
+
+        self.chart_manual_selection = Some(ManualChartSelection { x_col, y_cols });
+        self.chart_view = None;
+        cx.notify();
+    }
+
+    /// Reset chart selection to auto-detection, clearing any manual override.
+    ///
+    /// Disabled (no-op) when detection did not produce an `Ok` result.
+    pub(super) fn reset_chart_rail_to_auto(&mut self, cx: &mut Context<Self>) {
+        if !matches!(&self.chart_detection, Some(ChartDetection::Ok { .. })) {
+            return;
+        }
+        self.chart_manual_selection = None;
+        self.chart_view = None;
+        // Re-prime the picker to reflect the detection columns.
+        self.prime_chart_rail_picker_from_spec();
+        cx.notify();
     }
 
     pub(super) fn derived_text(&mut self) -> &str {
@@ -1106,6 +1263,12 @@ impl DataGridPanel {
         self.chart_manual_selection = None;
         self.chart_focused_series_idx = 0;
         self.reset_chart_picker(&result.columns);
+
+        // Reset the Configure rail for the new result.
+        self.chart_rail_open = false;
+        self.chart_rail_tab = ChartRailTab::Configure;
+        self.chart_rail_picker_x_col = 0;
+        self.chart_rail_picker_y_checked = Vec::new();
 
         self.result = result;
         self.rebuild_table(None, cx);
