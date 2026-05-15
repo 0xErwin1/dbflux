@@ -646,6 +646,19 @@ impl Workspace {
                         );
                     });
                 }
+                SidebarEvent::OpenNewQueryWithContent {
+                    profile_id,
+                    language: _,
+                    query,
+                } => {
+                    // Activate the correct connection first so the new tab is
+                    // associated with the right profile.
+                    this.app_state.update(cx, |state, _cx| {
+                        state.set_active_connection(*profile_id);
+                    });
+
+                    this.new_query_tab_with_content(query.clone(), window, cx);
+                }
                 SidebarEvent::OpenScript { path } => {
                     if dbflux_core::is_openable_script(path) {
                         this.open_script_from_path(path.clone(), cx);

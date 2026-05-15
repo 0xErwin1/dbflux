@@ -395,6 +395,7 @@ impl ConnectionManagerWindow {
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => {}
         }
 

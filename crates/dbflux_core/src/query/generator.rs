@@ -73,6 +73,19 @@ impl From<GeneratedQuery> for PlannedQuery {
 /// Produces native query/command text from a `MutationRequest`.
 ///
 /// Accessed via `Connection::query_generator()`.
+/// Request used by `QueryGenerator::template_for_collection`.
+///
+/// Carries the information available from a sidebar collection node so the
+/// driver can build a query template pre-seeded with the correct bucket and
+/// measurement name.
+#[derive(Debug, Clone)]
+pub struct CollectionTemplateRequest<'a> {
+    /// Name of the collection (measurement, table, etc.).
+    pub collection: &'a str,
+    /// Database or bucket the collection belongs to.
+    pub database: &'a str,
+}
+
 pub trait QueryGenerator: Send + Sync {
     fn supported_categories(&self) -> &'static [MutationCategory];
 
@@ -83,6 +96,22 @@ pub trait QueryGenerator: Send + Sync {
     }
 
     fn generate_read_template(&self, _request: &ReadTemplateRequest<'_>) -> Option<GeneratedQuery> {
+        None
+    }
+
+    /// Generate a query template pre-seeded with the given collection and database.
+    ///
+    /// Called by the UI when the user selects "Query Measurement" / "Query Collection"
+    /// from the sidebar context menu. The returned query is opened in a new code
+    /// document so the user can run or modify it immediately.
+    ///
+    /// Drivers that do not support collection-level templates return `None` (default).
+    /// The UI falls back gracefully and does not show the menu item when `None` is
+    /// returned for this specific collection.
+    fn template_for_collection(
+        &self,
+        _request: &CollectionTemplateRequest<'_>,
+    ) -> Option<GeneratedQuery> {
         None
     }
 

@@ -111,7 +111,10 @@ impl CodeDocument {
         });
     }
 
-    fn current_source_context_spec(&self, cx: &App) -> Option<dbflux_core::SourceContextSpec> {
+    pub(super) fn current_source_context_spec(
+        &self,
+        cx: &App,
+    ) -> Option<dbflux_core::SourceContextSpec> {
         let connection_id = self.exec_ctx.connection_id.or(self.connection_id)?;
 
         self.app_state
@@ -170,11 +173,27 @@ impl CodeDocument {
             return Vec::new();
         };
 
-        let mut items = schema
-            .collections()
-            .iter()
-            .map(|collection| DropdownItem::with_value(&collection.name, &collection.name))
-            .collect::<Vec<_>>();
+        // For time-series databases (e.g. InfluxDB) the source-context
+        // dropdown represents the top-level container (bucket for v2,
+        // database for v1) rather than individual measurements.  Measurements
+        // live inside a bucket and are filter predicates in the query, not
+        // things a user switches between in the context bar.
+        //
+        // `SchemaSnapshot::databases()` returns the accessible buckets/
+        // databases enumerated by the driver — no driver-id branching needed.
+        let mut items: Vec<DropdownItem> = if schema.is_time_series() {
+            schema
+                .databases()
+                .iter()
+                .map(|db| DropdownItem::with_value(&db.name, &db.name))
+                .collect()
+        } else {
+            schema
+                .collections()
+                .iter()
+                .map(|c| DropdownItem::with_value(&c.name, &c.name))
+                .collect()
+        };
 
         items.sort_by(|left, right| left.label.as_ref().cmp(right.label.as_ref()));
         items
@@ -243,6 +262,20 @@ impl CodeDocument {
         };
 
         let source_spec = self.current_source_context_spec(cx);
+
+        // Tear down the time-range panel when the spec no longer declares
+        // labelled start/end inputs.  Creation is deferred to render because
+        // the DatePickerState constructor requires a Window reference.
+        // B.3.1: the canonical site for SourceContextSpec start_label / end_label consumption.
+        let wants_panel = source_spec
+            .as_ref()
+            .is_some_and(|spec| !spec.start_label.is_empty() && !spec.end_label.is_empty());
+
+        if !wants_panel {
+            self.source_time_range_panel = None;
+            self._source_time_range_sub = None;
+        }
+
         let query_mode_items = source_spec
             .as_ref()
             .map(|spec| {
@@ -277,12 +310,25 @@ impl CodeDocument {
             dropdown.set_selected_index(selected_query_mode_index, cx);
         });
 
+        // Derive the initial selection: prefer an explicit exec_ctx source, then fall
+        // back to the spec's default target so the driver's connected bucket/database
+        // is pre-selected instead of showing a blank "Sources" placeholder.
         let selected_values = match self.exec_ctx.source.as_ref() {
             Some(ExecutionSourceContext::CollectionWindow { targets, .. }) => targets.clone(),
-            None => Vec::new(),
+            None => source_spec
+                .as_ref()
+                .and_then(|spec| spec.default_target.clone())
+                .into_iter()
+                .collect(),
         };
 
+        let targets_placeholder = source_spec
+            .as_ref()
+            .map(|spec| spec.targets_placeholder.clone())
+            .unwrap_or_else(|| "Sources".to_string());
+
         self.source_targets.update(cx, |multi_select, cx| {
+            multi_select.set_placeholder(targets_placeholder, cx);
             multi_select.set_items(items, cx);
             multi_select.set_selected_values(&selected_values, cx);
         });
@@ -314,6 +360,34 @@ impl CodeDocument {
 
     pub(super) fn on_source_time_range_changed(&mut self, cx: &mut Context<Self>) {
         self.sync_source_exec_context(cx);
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
+    }
+
+    /// Called when the embedded `TimeRangePanel` emits `TimeRangeChanged`.
+    ///
+    /// Updates `exec_ctx.source` with the epoch-ms bounds produced by the
+    /// panel, preserving the existing targets and query-mode selections.
+    /// Only a preset selection produces a valid (start, end) pair; Custom
+    /// mode defers to the user pressing Apply inside the panel.
+    pub(super) fn on_source_time_range_panel_changed(
+        &mut self,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        let query_mode = self.current_source_query_mode_value(cx);
+        let targets = self.current_source_targets(cx);
+
+        if let (Some(start_ms), Some(end_ms)) = (start_ms, end_ms) {
+            self.exec_ctx.source = Some(ExecutionSourceContext::CollectionWindow {
+                targets,
+                start_ms,
+                end_ms,
+                query_mode,
+            });
+        }
+
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
     }
@@ -1060,19 +1134,39 @@ impl CodeDocument {
         let show_schema = self.should_show_schema_dropdown(cx);
         let source_spec = self.current_source_context_spec(cx);
 
-        div()
-            .id("exec-context-bar")
+        // Determine whether the custom date-range picker is active.  When it
+        // is, the picker + hour/minute dropdowns + Apply button are rendered
+        // on a dedicated second row so they don't overflow the bar width.
+        let custom_range_info = self.source_time_range_panel.as_ref().and_then(|p| {
+            let panel = p.read(cx);
+            let is_custom = panel.selected_time_range == Some(TimeRange::Custom);
+
+            is_custom.then(|| {
+                (
+                    p.clone(),
+                    panel.custom_date_range_picker.clone(),
+                    panel.custom_start_hour_dropdown.clone(),
+                    panel.custom_start_minute_dropdown.clone(),
+                    panel.custom_end_hour_dropdown.clone(),
+                    panel.custom_end_minute_dropdown.clone(),
+                    panel.can_apply_custom_range(cx),
+                )
+            })
+        });
+
+        // Build the primary (always-visible) controls row.
+        // flex_wrap() allows controls to wrap to the next line on narrow viewports
+        // rather than overflowing the bar's right edge.
+        let main_row = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(Spacing::SM)
-            .px(Spacing::SM)
-            .py(Spacing::XS)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
             .child(
+                // flex_none keeps the label+control pair together on the same wrap line.
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap_1()
                     .child(Icon::new(AppIcon::Database).size(px(12.0)).muted())
@@ -1080,6 +1174,7 @@ impl CodeDocument {
             )
             .child(
                 div()
+                    .flex_none()
                     .min_w(context_dropdown_min_width(0))
                     .child(focus_frame(
                         context_slot_is_keyboard_focused(
@@ -1095,103 +1190,143 @@ impl CodeDocument {
             .when(show_source_controls, |el| {
                 let source_spec = source_spec.as_ref();
 
-                el.when(
-                    source_spec.is_some_and(|spec| !spec.query_modes.is_empty()),
-                    |el| {
-                        el.child(Text::caption(
-                            source_spec
-                                .and_then(|spec| spec.query_mode_label.clone())
-                                .unwrap_or_else(|| "Syntax".to_string()),
-                        ))
-                        .child(div().min_w(px(180.0)).child(focus_frame(
-                            context_slot_is_keyboard_focused(
-                                self.focus_mode,
-                                self.context_bar_slot,
-                                ContextBarSlot::SourceQueryMode,
-                            ),
-                            Some(theme.ring),
-                            control_shell(self.source_query_mode_dropdown.clone(), cx),
-                            cx,
-                        )))
+                let el = el
+                    .when(
+                        source_spec.is_some_and(|spec| !spec.query_modes.is_empty()),
+                        |el| {
+                            el.child(
+                                div().flex_none().child(Text::caption(
+                                    source_spec
+                                        .and_then(|spec| spec.query_mode_label.clone())
+                                        .unwrap_or_else(|| "Syntax".to_string()),
+                                )),
+                            )
+                            .child(
+                                div().flex_none().min_w(px(180.0)).child(focus_frame(
+                                    context_slot_is_keyboard_focused(
+                                        self.focus_mode,
+                                        self.context_bar_slot,
+                                        ContextBarSlot::SourceQueryMode,
+                                    ),
+                                    Some(theme.ring),
+                                    control_shell(self.source_query_mode_dropdown.clone(), cx),
+                                    cx,
+                                )),
+                            )
+                        },
+                    )
+                    // "Source:" is the generic label for the target-selector dropdown
+                    // across all drivers.  The driver-specific label (spec.targets_label)
+                    // is intentionally not used here — the placeholder already carries
+                    // driver-specific phrasing (e.g. "Select bucket...").
+                    .child(div().flex_none().child(Text::caption("Source:")))
+                    .child(div().flex_none().min_w(px(260.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::SourceTargets,
+                        ),
+                        Some(theme.ring),
+                        control_shell(self.source_targets.clone(), cx),
+                        cx,
+                    )));
+
+                // Time-range preset dropdown — always on the main row.
+                // The custom date-range controls are on the second row (below).
+                let el = el.when_some(
+                    self.source_time_range_panel.as_ref().map(|p| {
+                        let panel = p.read(cx);
+                        let dropdown = panel.dropdown_time_range.clone();
+                        let label = source_spec
+                            .map(|s| s.start_label.clone())
+                            .unwrap_or_else(|| "Time".to_string());
+                        (dropdown, label)
+                    }),
+                    |el, (dropdown, label)| {
+                        el.child(div().flex_none().child(Text::caption(label)))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .min_w(px(220.0))
+                                    .child(control_shell(dropdown, cx)),
+                            )
                     },
-                )
-                .child(Text::caption(
-                    source_spec
-                        .map(|spec| spec.targets_label.clone())
-                        .unwrap_or_else(|| "Sources".to_string()),
-                ))
-                .child(div().min_w(px(260.0)).child(focus_frame(
-                    context_slot_is_keyboard_focused(
-                        self.focus_mode,
-                        self.context_bar_slot,
-                        ContextBarSlot::SourceTargets,
-                    ),
-                    Some(theme.ring),
-                    control_shell(self.source_targets.clone(), cx),
-                    cx,
-                )))
-                .child(Text::caption(
-                    source_spec
-                        .map(|spec| spec.start_label.clone())
-                        .unwrap_or_else(|| "Start".to_string()),
-                ))
-                .child(div().min_w(px(180.0)).child(focus_frame(
-                    context_slot_is_keyboard_focused(
-                        self.focus_mode,
-                        self.context_bar_slot,
-                        ContextBarSlot::SourceStart,
-                    ),
-                    Some(theme.ring),
-                    control_shell(Input::new(&self.source_start_input), cx),
-                    cx,
-                )))
-                .child(Text::caption(
-                    source_spec
-                        .map(|spec| spec.end_label.clone())
-                        .unwrap_or_else(|| "End".to_string()),
-                ))
-                .child(div().min_w(px(180.0)).child(focus_frame(
-                    context_slot_is_keyboard_focused(
-                        self.focus_mode,
-                        self.context_bar_slot,
-                        ContextBarSlot::SourceEnd,
-                    ),
-                    Some(theme.ring),
-                    control_shell(Input::new(&self.source_end_input), cx),
-                    cx,
-                )))
+                );
+
+                // Text-input fallback when there is no time-range panel (specs
+                // without start/end labels — not InfluxDB but kept for generality).
+                el.when(self.source_time_range_panel.is_none(), |el| {
+                    el.child(
+                        div().flex_none().child(Text::caption(
+                            source_spec
+                                .map(|spec| spec.start_label.clone())
+                                .unwrap_or_else(|| "Start".to_string()),
+                        )),
+                    )
+                    .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::SourceStart,
+                        ),
+                        Some(theme.ring),
+                        control_shell(Input::new(&self.source_start_input), cx),
+                        cx,
+                    )))
+                    .child(
+                        div().flex_none().child(Text::caption(
+                            source_spec
+                                .map(|spec| spec.end_label.clone())
+                                .unwrap_or_else(|| "End".to_string()),
+                        )),
+                    )
+                    .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
+                        context_slot_is_keyboard_focused(
+                            self.focus_mode,
+                            self.context_bar_slot,
+                            ContextBarSlot::SourceEnd,
+                        ),
+                        Some(theme.ring),
+                        control_shell(Input::new(&self.source_end_input), cx),
+                        cx,
+                    )))
+                })
             })
             .when(!show_source_controls && show_db, |el| {
-                el.child(Text::caption("Database:")).child(
-                    div()
-                        .min_w(context_dropdown_min_width(1))
-                        .child(focus_frame(
-                            context_slot_is_keyboard_focused(
-                                self.focus_mode,
-                                self.context_bar_slot,
-                                ContextBarSlot::Database,
-                            ),
-                            Some(theme.ring),
-                            control_shell(self.database_dropdown.clone(), cx),
-                            cx,
-                        )),
-                )
+                el.child(div().flex_none().child(Text::caption("Database:")))
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(context_dropdown_min_width(1))
+                            .child(focus_frame(
+                                context_slot_is_keyboard_focused(
+                                    self.focus_mode,
+                                    self.context_bar_slot,
+                                    ContextBarSlot::Database,
+                                ),
+                                Some(theme.ring),
+                                control_shell(self.database_dropdown.clone(), cx),
+                                cx,
+                            )),
+                    )
             })
             .when(!show_source_controls && show_schema, |el| {
-                el.child(Text::caption("Schema:")).child(
-                    div()
-                        .min_w(context_dropdown_min_width(2))
-                        .child(focus_frame(
-                            context_slot_is_keyboard_focused(
-                                self.focus_mode,
-                                self.context_bar_slot,
-                                ContextBarSlot::Schema,
-                            ),
-                            Some(theme.ring),
-                            control_shell(self.schema_dropdown.clone(), cx),
-                            cx,
-                        )),
-                )
+                el.child(div().flex_none().child(Text::caption("Schema:")))
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(context_dropdown_min_width(2))
+                            .child(focus_frame(
+                                context_slot_is_keyboard_focused(
+                                    self.focus_mode,
+                                    self.context_bar_slot,
+                                    ContextBarSlot::Schema,
+                                ),
+                                Some(theme.ring),
+                                control_shell(self.schema_dropdown.clone(), cx),
+                                cx,
+                            )),
+                    )
             })
             .child(div().flex_1())
             .when_some(self.path.as_ref(), |el, path| {
@@ -1200,7 +1335,74 @@ impl CodeDocument {
                         .overflow_x_hidden()
                         .child(Text::caption(path.display().to_string())),
                 )
-            })
+            });
+
+        // Outer bar: column layout so the custom date-range row can sit below
+        // the main controls without stretching the bar's width.
+        div()
+            .id("exec-context-bar")
+            .flex()
+            .flex_col()
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .child(main_row)
+            // Custom date-range second row — only visible when Custom is active.
+            // This avoids overflowing the single-line bar with the date picker,
+            // four time dropdowns, and Apply button all pushed onto one row.
+            .when_some(
+                custom_range_info,
+                |el,
+                 (
+                    panel,
+                    date_picker,
+                    start_hour,
+                    start_minute,
+                    end_hour,
+                    end_minute,
+                    can_apply,
+                )| {
+                    el.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .pt(Spacing::XS)
+                            .child(
+                                div().w(px(320.0)).child(control_shell(
+                                    DatePicker::new(&date_picker)
+                                        .small()
+                                        .placeholder("Select date range")
+                                        .number_of_months(2),
+                                    cx,
+                                )),
+                            )
+                            .child(Text::caption("from"))
+                            .child(div().w(px(72.0)).child(control_shell(start_hour, cx)))
+                            .child(div().w(px(72.0)).child(control_shell(start_minute, cx)))
+                            .child(Text::caption("to"))
+                            .child(div().w(px(72.0)).child(control_shell(end_hour, cx)))
+                            .child(div().w(px(72.0)).child(control_shell(end_minute, cx)))
+                            .child(
+                                Button::new("ctx-time-range-apply", "Apply")
+                                    .small()
+                                    .disabled(!can_apply)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        panel.update(cx, |p, cx| {
+                                            // Ignore the returned bounds — the panel emits
+                                            // TimeRangeChanged which is the authoritative signal.
+                                            let _ = p.apply_custom_range(cx);
+                                        });
+                                        this.sync_source_exec_context(cx);
+                                        cx.emit(DocumentEvent::MetaChanged);
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                },
+            )
             .into_any_element()
     }
 }

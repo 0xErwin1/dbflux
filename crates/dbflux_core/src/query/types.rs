@@ -1,4 +1,4 @@
-use crate::{ExecutionContext, Value};
+use crate::{ExecutionContext, QueryLanguage, Value};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
@@ -121,6 +121,20 @@ pub struct ColumnMeta {
     pub is_primary_key: bool,
 }
 
+/// The effective time window resolved by the driver after executing a time-series query.
+///
+/// Drivers that interpret relative time ranges (e.g., Flux `range(start: -1h)`) can populate
+/// this so the UI can display the concrete UTC boundaries that were actually queried.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedWindow {
+    /// Start of the resolved window in milliseconds since Unix epoch (UTC).
+    pub start_ms: i64,
+    /// End of the resolved window in milliseconds since Unix epoch (UTC).
+    pub end_ms: i64,
+    /// Query language used to produce this result (used for UI context display).
+    pub language: QueryLanguage,
+}
+
 // -- Query Result --
 
 #[derive(Debug, Clone)]
@@ -134,6 +148,13 @@ pub struct QueryResult {
     pub raw_bytes: Option<Vec<u8>>,
     /// Pagination token for fetching the next page of results (used by PageToken-style pagination).
     pub next_page_token: Option<String>,
+    /// Resolved time window for time-series queries. `None` for non-time-series results.
+    pub resolved_window: Option<ResolvedWindow>,
+    /// Driver-provided structured fields forwarded verbatim into the audit event's
+    /// `details_json`. Drivers that need extra audit context (e.g., language, version,
+    /// injected_window) populate this map; the runner merges it into the event without
+    /// any driver-id branching.
+    pub metadata_extra: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 impl QueryResult {
@@ -147,7 +168,15 @@ impl QueryResult {
             text_body: None,
             raw_bytes: None,
             next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
         }
+    }
+
+    /// Attaches a resolved time window to this result (builder-style).
+    pub fn with_resolved_window(mut self, window: ResolvedWindow) -> Self {
+        self.resolved_window = Some(window);
+        self
     }
 
     pub fn table(
@@ -165,6 +194,8 @@ impl QueryResult {
             text_body: None,
             raw_bytes: None,
             next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
         }
     }
 
@@ -178,6 +209,8 @@ impl QueryResult {
             text_body: None,
             raw_bytes: None,
             next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
         }
     }
 
@@ -191,6 +224,8 @@ impl QueryResult {
             text_body: Some(body),
             raw_bytes: None,
             next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
         }
     }
 
@@ -204,6 +239,8 @@ impl QueryResult {
             text_body: None,
             raw_bytes: Some(data),
             next_page_token: None,
+            resolved_window: None,
+            metadata_extra: None,
         }
     }
 
@@ -234,5 +271,49 @@ impl QueryHandle {
 impl Default for QueryHandle {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::QueryLanguage;
+
+    #[test]
+    fn resolved_window_serde_roundtrip() {
+        let window = ResolvedWindow {
+            start_ms: 1_000_000,
+            end_ms: 2_000_000,
+            language: QueryLanguage::Flux,
+        };
+
+        let serialized = serde_json::to_string(&window).expect("serialize ResolvedWindow");
+        let deserialized: ResolvedWindow =
+            serde_json::from_str(&serialized).expect("deserialize ResolvedWindow");
+
+        assert_eq!(deserialized.start_ms, 1_000_000);
+        assert_eq!(deserialized.end_ms, 2_000_000);
+        assert_eq!(deserialized.language, QueryLanguage::Flux);
+    }
+
+    #[test]
+    fn query_result_resolved_window_defaults_to_none() {
+        let result = QueryResult::empty();
+        assert!(
+            result.resolved_window.is_none(),
+            "resolved_window must default to None"
+        );
+    }
+
+    #[test]
+    fn query_result_with_resolved_window_builder() {
+        let window = ResolvedWindow {
+            start_ms: 0,
+            end_ms: 3_600_000,
+            language: QueryLanguage::InfluxQuery,
+        };
+
+        let result = QueryResult::empty().with_resolved_window(window.clone());
+        assert_eq!(result.resolved_window.as_ref(), Some(&window));
     }
 }

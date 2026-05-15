@@ -21,6 +21,7 @@ pub enum DbKind {
     Redis,
     DynamoDB,
     CloudWatchLogs,
+    InfluxDB,
 }
 
 impl DbKind {
@@ -34,8 +35,22 @@ impl DbKind {
             DbKind::Redis => "Redis",
             DbKind::DynamoDB => "DynamoDB",
             DbKind::CloudWatchLogs => "CloudWatch Logs",
+            DbKind::InfluxDB => "InfluxDB",
         }
     }
+}
+
+/// InfluxDB API version.
+///
+/// Determines the authentication scheme and query API endpoint used by the driver.
+/// V2 uses token-based auth and the Flux/InfluxQL v2 API; V1 uses username/password
+/// and the InfluxQL v1 API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum InfluxVersion {
+    V1,
+    #[default]
+    V2,
 }
 
 /// Returns `true` when the given SSL mode id string requires a root CA certificate.
@@ -426,6 +441,44 @@ pub enum DbConfig {
         #[serde(default)]
         endpoint: Option<String>,
     },
+    /// InfluxDB connection parameters.
+    ///
+    /// Supports both v1 (InfluxQL, user/password) and v2 (Flux/InfluxQL, token-based).
+    /// `org` and `token` are v2-only; `retention_policy` is v1-only.
+    ///
+    /// `default_bucket` is optional: when absent the user selects a bucket (v2) or
+    /// database (v1) per-query from the source-context dropdown. When set it is
+    /// pre-selected in the editor but can always be overridden at query time.
+    InfluxDB {
+        version: InfluxVersion,
+        /// HTTP endpoint, e.g. "http://localhost:8086".
+        url: String,
+        /// Organization name (v2 only; ignored for v1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        org: Option<String>,
+        /// Default bucket (v2) or database (v1) to pre-select in the query editor.
+        ///
+        /// This is optional: leaving it unset allows the token/credentials to access
+        /// all buckets/databases and lets the user choose per-query from the dropdown.
+        ///
+        /// The `bucket_or_database` alias preserves backwards-compatibility with
+        /// profiles serialized before this field was made optional.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            alias = "bucket_or_database"
+        )]
+        default_bucket: Option<String>,
+        /// Retention policy name (v1 only; ignored for v2).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retention_policy: Option<String>,
+        /// Username for HTTP Basic auth (v1 only; ignored for v2 which uses token).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        /// Request timeout override in seconds (both versions).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_timeout_seconds: Option<u64>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -448,6 +501,7 @@ impl DbConfig {
             DbConfig::Redis { .. } => DbKind::Redis,
             DbConfig::DynamoDB { .. } => DbKind::DynamoDB,
             DbConfig::CloudWatchLogs { .. } => DbKind::CloudWatchLogs,
+            DbConfig::InfluxDB { .. } => DbKind::InfluxDB,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -538,6 +592,18 @@ impl DbConfig {
         }
     }
 
+    pub fn default_influxdb() -> Self {
+        DbConfig::InfluxDB {
+            version: InfluxVersion::V2,
+            url: "http://localhost:8086".to_string(),
+            org: None,
+            default_bucket: None,
+            retention_policy: None,
+            user: None,
+            request_timeout_seconds: None,
+        }
+    }
+
     pub fn default_cloudwatch_logs() -> Self {
         DbConfig::CloudWatchLogs {
             region: "us-east-1".to_string(),
@@ -555,6 +621,7 @@ impl DbConfig {
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -581,6 +648,7 @@ impl DbConfig {
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -611,6 +679,7 @@ impl DbConfig {
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => false,
         }
     }
@@ -625,6 +694,7 @@ impl DbConfig {
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -663,6 +733,7 @@ impl DbConfig {
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -680,6 +751,7 @@ impl DbConfig {
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => {
                 return None;
             }
@@ -710,6 +782,7 @@ impl DbConfig {
             DbConfig::Redis { database, .. } => database.map(|d| d.to_string()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
+            DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
             DbConfig::External { .. } => None,
         }
     }
@@ -1120,6 +1193,7 @@ impl ConnectionProfile {
             DbKind::Redis => "redis",
             DbKind::DynamoDB => "dynamodb",
             DbKind::CloudWatchLogs => "cloudwatch",
+            DbKind::InfluxDB => "influxdb",
         }
     }
 
@@ -1684,6 +1758,31 @@ mod tests {
         assert!(governance.enabled);
         assert_eq!(governance.policy_bindings.len(), 1);
         assert_eq!(governance.policy_bindings[0].actor_id, "agent-a");
+    }
+
+    // --- InfluxVersion tests ---
+
+    #[test]
+    fn influx_version_default_is_v2() {
+        assert_eq!(InfluxVersion::default(), InfluxVersion::V2);
+    }
+
+    #[test]
+    fn influx_version_serde_roundtrip() {
+        let v1 = InfluxVersion::V1;
+        let v2 = InfluxVersion::V2;
+
+        let v1_json = serde_json::to_string(&v1).expect("serialize V1");
+        let v2_json = serde_json::to_string(&v2).expect("serialize V2");
+
+        assert_eq!(v1_json, "\"v1\"");
+        assert_eq!(v2_json, "\"v2\"");
+
+        let v1_back: InfluxVersion = serde_json::from_str(&v1_json).expect("deserialize V1");
+        let v2_back: InfluxVersion = serde_json::from_str(&v2_json).expect("deserialize V2");
+
+        assert_eq!(v1_back, InfluxVersion::V1);
+        assert_eq!(v2_back, InfluxVersion::V2);
     }
 
     // --- TestConnectionResult::format_body tests ---

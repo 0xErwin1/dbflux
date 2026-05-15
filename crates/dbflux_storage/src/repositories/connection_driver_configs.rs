@@ -248,6 +248,29 @@ impl ConnectionDriverConfigDto {
                 dto.dynamo_profile = profile.clone();
                 dto.dynamo_endpoint = endpoint.clone();
             }
+            DbConfig::InfluxDB {
+                version,
+                url,
+                org,
+                default_bucket,
+                retention_policy,
+                user,
+                request_timeout_seconds,
+            } => {
+                // No dedicated InfluxDB columns exist yet; serialize to the generic JSON field.
+                // The field is stored as `default_bucket`; the `bucket_or_database` key is
+                // kept as a read alias only (handled in `to_db_config` below).
+                let values = serde_json::json!({
+                    "version": version,
+                    "url": url,
+                    "org": org,
+                    "default_bucket": default_bucket,
+                    "retention_policy": retention_policy,
+                    "user": user,
+                    "request_timeout_seconds": request_timeout_seconds,
+                });
+                dto.external_values_json = Some(values.to_string());
+            }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
                 dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
@@ -366,6 +389,44 @@ impl ConnectionDriverConfigDto {
                 profile: self.dynamo_profile.clone(),
                 endpoint: self.dynamo_endpoint.clone(),
             }),
+            DbKind::InfluxDB => {
+                let json: serde_json::Value = self
+                    .external_values_json
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_default();
+
+                let version = json
+                    .get("version")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+
+                Some(DbConfig::InfluxDB {
+                    version,
+                    url: json
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("http://localhost:8086")
+                        .to_string(),
+                    org: json.get("org").and_then(|v| v.as_str()).map(String::from),
+                    // Read `default_bucket` first; fall back to the old `bucket_or_database`
+                    // key for profiles saved before this field was renamed.
+                    default_bucket: json
+                        .get("default_bucket")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| json.get("bucket_or_database").and_then(|v| v.as_str()))
+                        .filter(|s| !s.is_empty())
+                        .map(String::from),
+                    retention_policy: json
+                        .get("retention_policy")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    user: json.get("user").and_then(|v| v.as_str()).map(String::from),
+                    request_timeout_seconds: json
+                        .get("request_timeout_seconds")
+                        .and_then(|v| v.as_u64()),
+                })
+            }
         }
     }
 }
@@ -384,6 +445,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::Redis => "Redis",
         DbKind::DynamoDB => "DynamoDB",
         DbKind::CloudWatchLogs => "CloudWatchLogs",
+        DbKind::InfluxDB => "InfluxDB",
     }
     .to_string()
 }
@@ -398,6 +460,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "Redis" => Some(DbKind::Redis),
         "DynamoDB" => Some(DbKind::DynamoDB),
         "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
+        "InfluxDB" => Some(DbKind::InfluxDB),
         _ => None,
     }
 }

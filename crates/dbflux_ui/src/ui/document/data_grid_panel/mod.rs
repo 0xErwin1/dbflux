@@ -27,8 +27,8 @@ use crate::ui::overlays::document_preview_modal::{
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
-    CollectionRef, OrderByColumn, Pagination, QueryResult, RefreshPolicy, SortDirection, TableRef,
-    Value,
+    CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
+    SortDirection, TableRef, Value,
 };
 use gpui::*;
 use gpui_component::Sizable;
@@ -551,11 +551,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter_placeholder = if source.is_collection() {
-            r#"e.g. {"name": {"$regex": "test"}}"#
-        } else {
-            "e.g. id > 10 AND name LIKE '%test%'"
-        };
+        let filter_placeholder = Self::filter_placeholder_for_source(&source, &app_state, cx);
 
         let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(filter_placeholder));
 
@@ -1419,6 +1415,72 @@ impl DataGridPanel {
                 "{} inserts · {} updates · {} deletes",
                 inserts, updates, deletes
             ))
+        }
+    }
+
+    // === Filter bar presentation helpers ===
+
+    /// Resolve the database category for the connection backing this data source.
+    ///
+    /// Returns `None` for `QueryResult` sources (no associated connection) or when
+    /// the connection is not found in `app_state`.
+    fn connection_category(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> Option<DatabaseCategory> {
+        let profile_id = match source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            DataSource::Collection { profile_id, .. } => *profile_id,
+            DataSource::QueryResult { .. } => return None,
+        };
+
+        app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| connected.connection.metadata().category)
+    }
+
+    /// Filter verb and filter keyword ("SELECT * FROM" / "find" / "FROM") shown
+    /// in the toolbar to the left of the source name and to the left of the filter
+    /// input, respectively.
+    ///
+    /// Derived purely from `DatabaseCategory` — no driver-id branching.
+    pub(super) fn filter_labels_for_source(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> (&'static str, &'static str) {
+        if source.is_table() {
+            return ("SELECT * FROM", "WHERE");
+        }
+
+        match Self::connection_category(source, app_state, cx) {
+            Some(DatabaseCategory::Document) => ("find", "WHERE"),
+            Some(DatabaseCategory::TimeSeries) => ("SELECT * FROM", "WHERE"),
+            _ => ("SELECT * FROM", "WHERE"),
+        }
+    }
+
+    /// Filter input placeholder text, derived from `DatabaseCategory`.
+    ///
+    /// Returns an empty string for `TimeSeries` sources because `browse_collection`
+    /// on InfluxDB ignores the filter field — showing a misleading placeholder
+    /// would lie to the user.
+    fn filter_placeholder_for_source(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> &'static str {
+        if source.is_table() {
+            return "e.g. id > 10 AND name LIKE '%test%'";
+        }
+
+        match Self::connection_category(source, app_state, cx) {
+            Some(DatabaseCategory::Document) => r#"e.g. {"name": {"$regex": "test"}}"#,
+            Some(DatabaseCategory::TimeSeries) => "",
+            _ => "e.g. id > 10 AND name LIKE '%test%'",
         }
     }
 }
