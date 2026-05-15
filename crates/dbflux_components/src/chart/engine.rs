@@ -773,24 +773,30 @@ fn tracing_debug_non_monotonic() {
 // Hover readout
 // ---------------------------------------------------------------------------
 
+/// One row of the multi-series readout panel.
+struct SeriesReadoutEntry {
+    label: SharedString,
+    color: Hsla,
+    y_label: SharedString,
+}
+
 /// Pre-computed content for the crosshair readout panel.
 ///
 /// `screen_x_relative` is the cursor X in plot-area-local coordinates and is
-/// used to anchor the overlay; the panel itself is clamped to stay inside the
-/// plot area when the cursor is close to the right edge.
+/// used to anchor the overlay; the panel clamps to stay inside the plot area
+/// when the cursor is close to the right edge.
 struct HoverReadout {
-    series_label: SharedString,
-    series_color: Hsla,
     x_label: SharedString,
-    y_label: SharedString,
+    series: Vec<SeriesReadoutEntry>,
+    focused_idx: usize,
     screen_x_relative: Pixels,
     plot_width: Pixels,
 }
 
 /// Derive readout content from the captured plot-area bounds and the
 /// last-seen hover X. Returns `None` when bounds are not yet known (no paint
-/// has run), when the cursor falls outside the plot area, or when the
-/// focused series has no usable samples.
+/// has run), when the cursor falls outside the plot area, or when no series
+/// has usable samples near the cursor.
 #[allow(clippy::too_many_arguments)]
 fn build_readout(
     hover_x_window: Option<Pixels>,
@@ -821,25 +827,47 @@ fn build_readout(
 
     let cursor_data_x = x_min + (rel_x_f as f64 / plot_w_px as f64) * x_range;
 
-    let series_pts = decimated.get(focused_idx)?;
-    if series_pts.is_empty() {
+    // Collect one entry per series, using the nearest sample's X for the header.
+    let mut x_label_str: Option<String> = None;
+    let mut entries: Vec<SeriesReadoutEntry> = Vec::with_capacity(decimated.len());
+    let mut any_valid = false;
+
+    for (s_idx, pts) in decimated.iter().enumerate() {
+        if pts.is_empty() {
+            continue;
+        }
+        let (sample_x, sample_y) = nearest_sample(pts, cursor_data_x);
+
+        if x_label_str.is_none() {
+            x_label_str = Some(format_x_value(sample_x, x_is_time));
+        }
+
+        let label = spec
+            .series
+            .get(s_idx)
+            .map(|s| s.label.as_str())
+            .unwrap_or("");
+        let color = palette
+            .get(s_idx)
+            .copied()
+            .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+
+        entries.push(SeriesReadoutEntry {
+            label: SharedString::from(label.to_string()),
+            color,
+            y_label: SharedString::from(format_y_value(sample_y)),
+        });
+        any_valid = true;
+    }
+
+    if !any_valid {
         return None;
     }
 
-    let (sample_x, sample_y) = nearest_sample(series_pts, cursor_data_x);
-
-    let series_spec = spec.series.get(focused_idx)?;
-
-    let series_color = palette
-        .get(focused_idx)
-        .copied()
-        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-
     Some(HoverReadout {
-        series_label: SharedString::from(series_spec.label.clone()),
-        series_color,
-        x_label: SharedString::from(format_x_value(sample_x, x_is_time)),
-        y_label: SharedString::from(format_y_value(sample_y)),
+        x_label: SharedString::from(x_label_str.unwrap_or_default()),
+        series: entries,
+        focused_idx,
         screen_x_relative: relative_x,
         plot_width: plot_w,
     })
@@ -871,7 +899,7 @@ fn nearest_sample(points: &[(f64, f64)], target_x: f64) -> (f64, f64) {
     }
 }
 
-fn format_x_value(x: f64, is_time: bool) -> String {
+pub(crate) fn format_x_value(x: f64, is_time: bool) -> String {
     if is_time {
         let secs = (x / 1000.0).trunc() as i64;
         let nsecs = ((x.rem_euclid(1000.0)) * 1_000_000.0) as u32;
@@ -884,7 +912,7 @@ fn format_x_value(x: f64, is_time: bool) -> String {
     }
 }
 
-fn format_y_value(y: f64) -> String {
+pub(crate) fn format_y_value(y: f64) -> String {
     if y.abs() >= 1000.0 || (y != 0.0 && y.abs() < 0.001) {
         format!("{:.3e}", y)
     } else {
@@ -892,12 +920,12 @@ fn format_y_value(y: f64) -> String {
     }
 }
 
-/// Build the absolute-positioned overlay div that shows the readout. Clamps
-/// to the left side of the crosshair when the cursor is past the midpoint of
-/// the plot so the panel never falls outside the chart.
+/// Build the absolute-positioned overlay div that shows the multi-series
+/// readout. Clamps to the left side of the crosshair when the cursor is past
+/// the midpoint of the plot so the panel never falls outside the chart.
 fn readout_overlay(r: HoverReadout) -> impl IntoElement {
     const PANEL_GAP: f32 = 8.0;
-    const PANEL_ESTIMATED_WIDTH: f32 = 170.0;
+    const PANEL_ESTIMATED_WIDTH: f32 = 220.0;
 
     let hover_x = f32::from(r.screen_x_relative);
     let plot_w = f32::from(r.plot_width);
@@ -909,28 +937,52 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
         hover_x + PANEL_GAP
     };
 
+    let focused_idx = r.focused_idx;
+
     div()
         .absolute()
         .left(gpui::px(left_px))
         .top(gpui::px(MARGIN_TOP + 4.0))
         .flex()
         .flex_col()
-        .gap_1()
+        .gap(gpui::px(1.0))
         .px_2()
         .py_1()
-        .bg(gpui::hsla(0.0, 0.0, 0.1, 0.92))
         .text_size(FontSizes::XS)
         .text_color(gpui::hsla(0.0, 0.0, 0.95, 1.0))
+        // X-axis header row — plain background.
         .child(
             div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(div().w(gpui::px(8.0)).h(gpui::px(8.0)).bg(r.series_color))
-                .child(r.series_label),
+                .bg(gpui::hsla(0.0, 0.0, 0.1, 0.92))
+                .px_2()
+                .py(gpui::px(1.0))
+                .child(r.x_label),
         )
-        .child(div().child(r.x_label))
-        .child(div().child(r.y_label))
+        // One row per series; focused row gets a brighter background + bold text.
+        .children(
+            r.series
+                .into_iter()
+                .enumerate()
+                .map(move |(idx, entry)| {
+                    let is_focused = idx == focused_idx;
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py(gpui::px(1.0))
+                        .when(is_focused, |d| {
+                            d.bg(gpui::hsla(0.0, 0.0, 0.2, 0.95))
+                                .font_weight(gpui::FontWeight::BOLD)
+                        })
+                        .when(!is_focused, |d| {
+                            d.bg(gpui::hsla(0.0, 0.0, 0.1, 0.92))
+                        })
+                        .child(div().w(gpui::px(8.0)).h(gpui::px(8.0)).bg(entry.color))
+                        .child(div().flex_grow().child(entry.label))
+                        .child(entry.y_label)
+                }),
+        )
 }
 
 // ---------------------------------------------------------------------------
