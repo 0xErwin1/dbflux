@@ -157,6 +157,15 @@ impl Render for DataGridPanel {
         let shows_table_content = matches!(content_mode, DataGridContentMode::Table);
         let shows_content_controls = has_data || shows_table_content;
 
+        // Show result-tabs strip (Table | Chart) when the result shape is Table
+        // and chart auto-detection succeeded or the driver is TimeSeries.
+        let is_time_series_source =
+            DataGridPanel::connection_category(&self.source, &self.app_state, cx)
+                == Some(DatabaseCategory::TimeSeries);
+        let show_chart_tabs_strip = self.result.shape == QueryResultShape::Table
+            && (self.chart_available() || is_time_series_source)
+            && (shows_table_content || uses_result_view);
+
         // Get edit state from table
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
             .table_state
@@ -308,9 +317,12 @@ impl Render for DataGridPanel {
             // Grid, Document, or Result View
             .child({
                 let result_view_mode = self.result_view_mode;
+                let row_count_for_strip = row_count;
 
                 div()
                     .flex_1()
+                    .flex()
+                    .flex_col()
                     .overflow_hidden()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -320,38 +332,58 @@ impl Render for DataGridPanel {
                             }
                         }),
                     )
-                    .when(
-                        matches!(content_mode, DataGridContentMode::EmptyFallback),
-                        |d| {
-                            d.flex()
-                                .items_center()
-                                .justify_center()
-                                .child(if is_loading {
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::SM)
-                                        .child(
-                                            Icon::new(AppIcon::Loader)
-                                                .size(px(12.0))
-                                                .color(theme.muted_foreground),
-                                        )
-                                        .child(Text::muted("Loading…"))
-                                        .into_any_element()
-                                } else {
-                                    Text::muted("No data").into_any_element()
-                                })
-                        },
-                    )
-                    .when(
-                        matches!(content_mode, DataGridContentMode::ResultView),
-                        |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
-                    )
-                    .when(matches!(content_mode, DataGridContentMode::Document), |d| {
-                        d.child(self.render_document_view(&theme, cx))
+                    // Result-tabs strip (Table | Chart) at the top of the content area.
+                    .when(show_chart_tabs_strip, |d| {
+                        d.child(
+                            self.render_result_tabs_strip(row_count_for_strip, &theme, cx),
+                        )
                     })
-                    .when(matches!(content_mode, DataGridContentMode::Table), |d| {
-                        d.when_some(self.data_table.clone(), |d, data_table| d.child(data_table))
+                    // Content body — fills remaining space below the strip.
+                    .child({
+                        let content = div().flex_1().overflow_hidden();
+
+                        let content = content.when(
+                            matches!(content_mode, DataGridContentMode::EmptyFallback),
+                            |d| {
+                                d.flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(if is_loading {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::SM)
+                                            .child(
+                                                Icon::new(AppIcon::Loader)
+                                                    .size(px(12.0))
+                                                    .color(theme.muted_foreground),
+                                            )
+                                            .child(Text::muted("Loading…"))
+                                            .into_any_element()
+                                    } else {
+                                        Text::muted("No data").into_any_element()
+                                    })
+                            },
+                        );
+
+                        let content = content.when(
+                            matches!(content_mode, DataGridContentMode::ResultView),
+                            |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
+                        );
+
+                        let content = content.when(
+                            matches!(content_mode, DataGridContentMode::Document),
+                            |d| d.child(self.render_document_view(&theme, cx)),
+                        );
+
+                        content.when(
+                            matches!(content_mode, DataGridContentMode::Table),
+                            |d| {
+                                d.when_some(self.data_table.clone(), |d, data_table| {
+                                    d.child(data_table)
+                                })
+                            },
+                        )
                     })
             })
             // Status bar
@@ -971,6 +1003,88 @@ impl DataGridPanel {
     }
 
     // -- Result View Renderers --
+
+    /// Render the Table / Chart tab strip that appears above the result content
+    /// area when the result is Table-shaped and chart detection succeeded (or the
+    /// driver is TimeSeries).
+    ///
+    /// Each tab switches `result_view_mode` on click. The active tab is underlined
+    /// with the theme accent and shown in full foreground weight.
+    pub(super) fn render_result_tabs_strip(
+        &self,
+        row_count: usize,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let current_mode = self.result_view_mode;
+
+        let tabs: &[(ResultViewMode, &str)] = &[
+            (ResultViewMode::Table, "Data"),
+            (ResultViewMode::Chart, "Chart"),
+        ];
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(px(30.0))
+            .px(Spacing::SM)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .children(tabs.iter().map(|(mode, label)| {
+                let mode = *mode;
+                let is_active = mode == current_mode;
+                let label_text: SharedString = (*label).into();
+
+                div()
+                    .id(ElementId::Name(
+                        format!("result-tab-{}", label.to_lowercase()).into(),
+                    ))
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .h_full()
+                    .px(Spacing::SM)
+                    .cursor_pointer()
+                    .border_b_2()
+                    .border_color(if is_active {
+                        theme.accent
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .text_color(if is_active {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_result_view_mode(mode, cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .when(is_active, |d| {
+                                d.font_weight(gpui::FontWeight::SEMIBOLD)
+                            })
+                            .child(label_text),
+                    )
+                    // Row-count badge on the Data tab only.
+                    .when(mode == ResultViewMode::Table, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(theme.muted_foreground)
+                                .font(font("JetBrains Mono"))
+                                .child(SharedString::from(format!("{}", row_count))),
+                        )
+                    })
+            }))
+    }
 
     pub(super) fn render_result_view(
         &mut self,
@@ -1825,29 +1939,19 @@ impl DataGridPanel {
             None
         };
 
-        // The Chart toggle is offered whenever the result is shape Table and
-        // either auto-detection produced a chartable column set OR the driver
-        // category is TimeSeries (REQ-CHART-015 — always reachable for
-        // TimeSeries so the user can fall back to the manual picker).
-        let is_time_series = DataGridPanel::connection_category(&self.source, &self.app_state, cx)
-            == Some(DatabaseCategory::TimeSeries);
-        let show_chart = self.result.shape == QueryResultShape::Table
-            && (self.chart_available() || is_time_series);
-
+        // Chart toggling for Table-shaped results is now handled by the
+        // result-tabs strip rendered at the top of the content area (T12).
+        // The status-bar pill row must NOT include Chart for Table-shaped results
+        // to avoid duplicating the control.
+        //
+        // For non-Table shapes (Json / Text / Binary), the pill row remains the
+        // only mode selector and Chart is never eligible there.
+        // Chart toggling for Table-shaped results is now handled by the
+        // result-tabs strip rendered at the top of the content area (T12).
+        // The status-bar pills never include Chart — for non-Table shapes,
+        // `available_for_shape` never returns Chart anyway.
         let available_modes = if uses_result_view {
-            // Result shapes other than Table (Json / Text / Binary) drive the
-            // mode selector unconditionally — Chart joins the list when this
-            // result is chartable.
-            if show_chart {
-                ResultViewMode::available_for_chartable_result()
-            } else {
-                ResultViewMode::available_for_shape(&self.result.shape)
-            }
-        } else if show_chart {
-            // Table shape: the panel renders the data grid directly (no
-            // result-view path), but the user still needs the toggle so they
-            // can opt into Chart mode for time-series results.
-            ResultViewMode::available_for_chartable_result()
+            ResultViewMode::available_for_shape(&self.result.shape)
         } else {
             vec![]
         };
@@ -1899,76 +2003,6 @@ impl DataGridPanel {
                                     .child(Self::result_mode_label(mode.label(), is_active))
                             }),
                         ))
-                    })
-                    // Legend toggle — only visible in Chart mode (REQ-CHART-029).
-                    .when(current_result_mode == ResultViewMode::Chart, |d| {
-                        let legend_visible = self.chart_legend_visible;
-                        let icon = if legend_visible {
-                            AppIcon::Eye
-                        } else {
-                            AppIcon::EyeOff
-                        };
-                        d.child(
-                            div()
-                                .id("chart-legend-toggle")
-                                .ml(Spacing::XS)
-                                .px(Spacing::XS)
-                                .py(px(2.0))
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .tooltip(move |window, cx| {
-                                    let label = if legend_visible {
-                                        "Hide legend"
-                                    } else {
-                                        "Show legend"
-                                    };
-                                    gpui_component::tooltip::Tooltip::new(label).build(window, cx)
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.toggle_chart_legend(cx);
-                                }))
-                                .child(
-                                    Icon::new(icon).size(px(12.0)).color(theme.muted_foreground),
-                                ),
-                        )
-                    })
-                    // Configure-series gear button — only visible in Chart mode.
-                    .when(current_result_mode == ResultViewMode::Chart, |d| {
-                        let rail_open = self.chart_rail_open;
-                        let accent = theme.accent;
-                        let muted = theme.muted_foreground;
-                        d.child(
-                            div()
-                                .id("chart-configure-rail-toggle")
-                                .ml(Spacing::XS)
-                                .px(Spacing::XS)
-                                .py(px(2.0))
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .when(rail_open, |d| d.bg(theme.secondary).text_color(accent))
-                                .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new("Configure series")
-                                        .build(window, cx)
-                                })
-                                .on_mouse_down(
-                                    gpui::MouseButton::Left,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.chart_rail_open = !this.chart_rail_open;
-                                        if this.chart_rail_open {
-                                            this.prime_chart_rail_picker_from_spec();
-                                        }
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(
-                                    Icon::new(AppIcon::Settings)
-                                        .size(px(12.0))
-                                        .when(rail_open, |i| i.color(accent))
-                                        .when(!rail_open, |i| i.color(muted)),
-                                ),
-                        )
                     })
                     // Shape badge
                     .when_some(result_shape_label, |d, shape| {

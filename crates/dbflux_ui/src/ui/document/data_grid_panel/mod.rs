@@ -961,23 +961,6 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// Flip the user-controlled legend visibility for the current chart panel
-    /// and sync the change to the live `ChartView` entity, if one exists.
-    /// Has no visible effect when the chart has only one series — the engine
-    /// hides the legend by default in that case.
-    pub(super) fn toggle_chart_legend(&mut self, cx: &mut Context<Self>) {
-        self.chart_legend_visible = !self.chart_legend_visible;
-
-        if let Some(chart_entity) = self.chart_view.clone() {
-            let visible = self.chart_legend_visible;
-            chart_entity.update(cx, |view, cx| {
-                view.set_legend_visible(visible, cx);
-            });
-        }
-
-        cx.notify();
-    }
-
     /// Reset the manual picker state for a new result's column list.
     ///
     /// X defaults to the first Timestamp column, or column 0 if none.
