@@ -29,6 +29,11 @@ pub struct AxisSpec {
     pub label: String,
     /// Determines tick-formatting strategy.
     pub kind: AxisKind,
+    /// Optional unit label rendered near the axis (e.g. "ms", "req/s").
+    ///
+    /// `None` in v0.6 — drivers do not yet supply unit metadata.
+    /// This field is a forward-compatibility seam for v0.7 driver metadata.
+    pub unit: Option<String>,
 }
 
 /// Specification for one Y series.
@@ -85,6 +90,7 @@ impl ChartSpec {
             column_index: time_col,
             label: x_col_meta.name.clone(),
             kind: AxisKind::Time,
+            unit: None,
         };
 
         let series: Vec<SeriesSpec> = numeric_cols
@@ -133,6 +139,7 @@ impl ChartSpec {
             column_index: selection.x_col,
             label: x_col_meta.name.clone(),
             kind: axis_kind,
+            unit: None,
         };
 
         let y_cols: Vec<usize> = selection

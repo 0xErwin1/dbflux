@@ -47,45 +47,27 @@ pub enum ChartBuildError {
 // Palette
 // ---------------------------------------------------------------------------
 
-/// Default palette for chart series (HSLA, 1.0 alpha).
+/// Design-aligned palette: exact Ayu Dark chart tokens from `tokens.css`.
+///
+/// HSL values computed from the hex palette:
+///   #59C2FF → h=0.578, s=1.0,  l=0.673   (chart-1 cyan)
+///   #AAD94C → h=0.228, s=0.673, l=0.572  (chart-2 lime)
+///   #FFB454 → h=0.097, s=1.0,  l=0.666   (chart-3 amber / primary)
+///   #F07178 → h=0.985, s=0.819, l=0.694  (chart-4 rose)
+///   #D2A6FF → h=0.758, s=1.0,  l=0.826   (chart-5 lavender)
 pub const CHART_PALETTE: &[Hsla] = &[
-    Hsla {
-        h: 0.60,
-        s: 0.70,
-        l: 0.55,
-        a: 1.0,
-    }, // blue
-    Hsla {
-        h: 0.10,
-        s: 0.80,
-        l: 0.55,
-        a: 1.0,
-    }, // orange
-    Hsla {
-        h: 0.37,
-        s: 0.55,
-        l: 0.45,
-        a: 1.0,
-    }, // green
-    Hsla {
-        h: 0.00,
-        s: 0.70,
-        l: 0.55,
-        a: 1.0,
-    }, // red
-    Hsla {
-        h: 0.80,
-        s: 0.55,
-        l: 0.55,
-        a: 1.0,
-    }, // purple
-    Hsla {
-        h: 0.13,
-        s: 0.75,
-        l: 0.45,
-        a: 1.0,
-    }, // amber
+    Hsla { h: 0.578, s: 1.0,   l: 0.673, a: 1.0 }, // #59C2FF chart-1 cyan
+    Hsla { h: 0.228, s: 0.673, l: 0.572, a: 1.0 }, // #AAD94C chart-2 lime
+    Hsla { h: 0.097, s: 1.0,   l: 0.666, a: 1.0 }, // #FFB454 chart-3 amber
+    Hsla { h: 0.985, s: 0.819, l: 0.694, a: 1.0 }, // #F07178 chart-4 rose
+    Hsla { h: 0.758, s: 1.0,   l: 0.826, a: 1.0 }, // #D2A6FF chart-5 lavender
 ];
+
+/// Accent cyan — #95E6CB (min/max/avg stat values in the Stats dock).
+pub const CHART_ACCENT_CYAN: Hsla = Hsla { h: 0.444, s: 0.618, l: 0.741, a: 1.0 };
+
+/// Accent primary — #FFB454 (p99 stat value, matches theme primary).
+pub const CHART_ACCENT_PRIMARY: Hsla = Hsla { h: 0.097, s: 1.0, l: 0.666, a: 1.0 };
 
 // ---------------------------------------------------------------------------
 // RenderModel
@@ -498,6 +480,7 @@ impl Render for ChartView {
         let decimated_canvas = decimated.clone();
         let palette_canvas = palette.clone();
         let y_ticks_canvas = model.y_ticks.clone();
+        let x_ticks_canvas = model.x_ticks.clone();
         let hover_x_canvas = hover_x;
 
         // Shared plot-area bounds: written by the canvas prepaint closure,
@@ -644,7 +627,25 @@ impl Render for ChartView {
                                                         height: gpui::px(1.0),
                                                     },
                                                 },
-                                                gpui::hsla(0.0, 0.0, 0.5, 0.2),
+                                                gpui::hsla(0.0, 0.0, 0.5, 0.18),
+                                            ));
+                                        }
+
+                                        // --- Vertical gridlines at each X tick ---
+                                        for tick in &x_ticks_canvas {
+                                            let sx = data_to_screen_x(tick.value);
+                                            window.paint_quad(fill(
+                                                gpui::Bounds {
+                                                    origin: point(
+                                                        gpui::px(sx - 0.5),
+                                                        gpui::px(plot_y0),
+                                                    ),
+                                                    size: gpui::Size {
+                                                        width: gpui::px(1.0),
+                                                        height: gpui::px(plot_h),
+                                                    },
+                                                },
+                                                gpui::hsla(0.0, 0.0, 0.5, 0.18),
                                             ));
                                         }
 
@@ -699,7 +700,7 @@ impl Render for ChartView {
                                             }
                                         };
 
-                                        // Pass 1 — non-focused series at 2.0 px.
+                                        // Pass 1 — non-focused series at 1.4 px.
                                         for (s_idx, pts) in decimated_canvas.iter().enumerate() {
                                             if s_idx == focused_idx {
                                                 continue;
@@ -708,35 +709,91 @@ impl Render for ChartView {
                                                 .get(s_idx)
                                                 .copied()
                                                 .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                            paint_series(pts, color, 2.0, window);
+                                            paint_series(pts, color, 1.4, window);
                                         }
 
-                                        // Pass 2 — focused series at 2.8 px (composited on top).
+                                        // Pass 2 — focused series at 2.2 px (composited on top).
                                         if let Some(pts) = decimated_canvas.get(focused_idx) {
                                             let color = palette_canvas
                                                 .get(focused_idx)
                                                 .copied()
                                                 .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                            paint_series(pts, color, 2.8, window);
+                                            paint_series(pts, color, 2.2, window);
                                         }
 
-                                        // --- Crosshair ---
+                                        // --- Crosshair (dashed, amber #FFB454 at 0.7 opacity) ---
                                         if let Some(hx) = hover_x_canvas {
                                             let sx = f32::from(hx);
                                             if sx >= plot_x0 && sx <= plot_x0 + plot_w {
-                                                window.paint_quad(fill(
-                                                    gpui::Bounds {
-                                                        origin: point(
-                                                            gpui::px(sx - 0.5),
-                                                            gpui::px(plot_y0),
-                                                        ),
-                                                        size: gpui::Size {
-                                                            width: gpui::px(1.0),
-                                                            height: gpui::px(plot_h),
+                                                paint_dashed_vline(
+                                                    window,
+                                                    sx,
+                                                    plot_y0,
+                                                    plot_y0 + plot_h,
+                                                    gpui::hsla(0.097, 1.0, 0.666, 0.7),
+                                                    2.0,
+                                                    3.0,
+                                                );
+
+                                                // --- Hover dots per series ---
+                                                // Two-pass: fill background first, then stroke series color.
+                                                let cursor_data_x = x_min
+                                                    + ((sx - plot_x0) as f64 / plot_w as f64)
+                                                        * x_range;
+
+                                                for (s_idx, pts) in
+                                                    decimated_canvas.iter().enumerate()
+                                                {
+                                                    let Some(y_data) =
+                                                        crate::chart::stats::interpolate_y_at_x(
+                                                            pts,
+                                                            cursor_data_x,
+                                                        )
+                                                    else {
+                                                        continue;
+                                                    };
+
+                                                    let dot_sx = sx;
+                                                    let dot_sy = data_to_screen_y(y_data);
+                                                    let series_color = palette_canvas
+                                                        .get(s_idx)
+                                                        .copied()
+                                                        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+
+                                                    // Background fill circle (square proxy, r≈3.5 → side=7)
+                                                    let r = 3.5_f32;
+                                                    let d = r * 2.0;
+                                                    window.paint_quad(fill(
+                                                        gpui::Bounds {
+                                                            origin: point(
+                                                                gpui::px(dot_sx - r),
+                                                                gpui::px(dot_sy - r),
+                                                            ),
+                                                            size: gpui::Size {
+                                                                width: gpui::px(d),
+                                                                height: gpui::px(d),
+                                                            },
                                                         },
-                                                    },
-                                                    gpui::hsla(0.0, 0.0, 0.7, 0.5),
-                                                ));
+                                                        series_color,
+                                                    ));
+
+                                                    // Inner background circle
+                                                    let inner_r = r - 1.5;
+                                                    let inner_d = inner_r * 2.0;
+                                                    window.paint_quad(fill(
+                                                        gpui::Bounds {
+                                                            origin: point(
+                                                                gpui::px(dot_sx - inner_r),
+                                                                gpui::px(dot_sy - inner_r),
+                                                            ),
+                                                            size: gpui::Size {
+                                                                width: gpui::px(inner_d),
+                                                                height: gpui::px(inner_d),
+                                                            },
+                                                        },
+                                                        gpui::hsla(0.56, 0.17, 0.07, 1.0),
+                                                    ));
+                                                }
                                             }
                                         }
                                     },
@@ -773,6 +830,35 @@ impl Render for ChartView {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Paint a vertical dashed line using short filled quads.
+///
+/// `dash` is the length of each segment; `gap` is the space between segments.
+fn paint_dashed_vline(
+    window: &mut Window,
+    x: f32,
+    y0: f32,
+    y1: f32,
+    color: Hsla,
+    dash: f32,
+    gap: f32,
+) {
+    let mut y = y0;
+    while y < y1 {
+        let seg_end = (y + dash).min(y1);
+        window.paint_quad(fill(
+            gpui::Bounds {
+                origin: point(gpui::px(x - 0.5), gpui::px(y)),
+                size: gpui::Size {
+                    width: gpui::px(1.0),
+                    height: gpui::px(seg_end - y),
+                },
+            },
+            color,
+        ));
+        y = seg_end + gap;
+    }
+}
 
 /// Extract an f64 value from a `Value`, treating timestamps as ms-since-epoch.
 fn extract_f64(value: &Value, is_time: bool) -> Option<f64> {
@@ -1087,6 +1173,7 @@ mod tests {
                 column_index: x_col,
                 label: "time".to_string(),
                 kind: AxisKind::Time,
+                unit: None,
             },
             series: y_cols
                 .iter()
