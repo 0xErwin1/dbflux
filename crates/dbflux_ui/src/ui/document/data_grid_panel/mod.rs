@@ -416,6 +416,12 @@ pub struct DataGridPanel {
     /// Series indices hidden by the user via the legend. Cleared on set_result and Apply.
     pub(super) chart_hidden_series: HashSet<usize>,
 
+    /// Time-range panel from the source-context bar, set by CodeDocument after
+    /// the panel is built. Used by the chart toolbar RANGE chips to read/write
+    /// the active preset. `None` for non-TimeSeries sources or before the panel
+    /// has been created.
+    chart_source_time_range_panel: Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>>,
+
     // Chart Configure rail (feedback round)
     /// Whether the Configure rail is currently visible. Toggled by the gear button.
     pub(super) chart_rail_open: bool,
@@ -827,6 +833,7 @@ impl DataGridPanel {
             chart_picker_x_col: 0,
             chart_picker_y_checked: Vec::new(),
             chart_hidden_series: HashSet::new(),
+            chart_source_time_range_panel: None,
             chart_rail_open: false,
             chart_rail_tab: ChartRailTab::Configure,
             chart_rail_picker_x_col: 0,
@@ -958,6 +965,19 @@ impl DataGridPanel {
             });
         }
 
+        cx.notify();
+    }
+
+    /// Wire the source-context time-range panel into this chart panel.
+    ///
+    /// Called by `CodeDocument` after it lazily creates the `TimeRangePanel`.
+    /// The chart toolbar reads and writes the panel to drive RANGE chip selection.
+    pub fn set_chart_time_range_panel(
+        &mut self,
+        panel: Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart_source_time_range_panel = panel;
         cx.notify();
     }
 

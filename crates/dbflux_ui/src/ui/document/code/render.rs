@@ -802,6 +802,18 @@ impl Render for CodeDocument {
                 self.source_time_range_panel = Some(panel.clone());
                 self._source_time_range_sub = Some(sub);
 
+                // Wire the panel into the active result grid so the chart
+                // toolbar's RANGE chips can drive it.
+                if let Some(grid) = self
+                    .active_result_index
+                    .and_then(|i| self.result_tabs.get(i))
+                    .map(|t| t.grid.clone())
+                {
+                    grid.update(cx, |g, cx| {
+                        g.set_chart_time_range_panel(Some(panel.clone()), cx);
+                    });
+                }
+
                 // Seed the initial window for the default preset. The panel
                 // cannot emit during its constructor because the subscription
                 // above is not registered until after `cx.new` returns.
