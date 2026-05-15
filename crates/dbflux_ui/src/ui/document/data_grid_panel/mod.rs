@@ -878,6 +878,10 @@ impl DataGridPanel {
         super::data_view::DataViewMode::available_for(&self.source).len() > 1
     }
 
+    pub fn result_view_mode(&self) -> ResultViewMode {
+        self.result_view_mode
+    }
+
     pub fn set_result_view_mode(&mut self, mode: ResultViewMode, cx: &mut Context<Self>) {
         if self.result_view_mode == mode {
             return;

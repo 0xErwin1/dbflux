@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui::AsyncUpdateResultExt;
+use crate::ui::document::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
 use dbflux_components::primitives::{Icon, Text, focus_frame};
 
@@ -1134,10 +1135,19 @@ impl CodeDocument {
         let show_schema = self.should_show_schema_dropdown(cx);
         let source_spec = self.current_source_context_spec(cx);
 
+        // When the active result grid is in Chart mode the chart toolbar
+        // renders its own RANGE chips; hide the time-range widget here.
+        let is_chart_mode = self
+            .active_result_index
+            .and_then(|i| self.result_tabs.get(i))
+            .map(|t| t.grid.read(cx).result_view_mode() == ResultViewMode::Chart)
+            .unwrap_or(false);
+
         // Determine whether the custom date-range picker is active.  When it
         // is, the picker + hour/minute dropdowns + Apply button are rendered
         // on a dedicated second row so they don't overflow the bar width.
-        let custom_range_info = self.source_time_range_panel.as_ref().and_then(|p| {
+        // Hidden in Chart mode (chart toolbar covers the range selection).
+        let custom_range_info = (!is_chart_mode).then(|| ()).and_then(|_| self.source_time_range_panel.as_ref()).and_then(|p| {
             let panel = p.read(cx);
             let is_custom = panel.selected_time_range == Some(TimeRange::Custom);
 
@@ -1231,17 +1241,22 @@ impl CodeDocument {
                         cx,
                     )));
 
-                // Time-range preset dropdown — always on the main row.
+                // Time-range preset dropdown — always on the main row, unless the
+                // active result grid is in Chart mode (the chart toolbar has its own
+                // RANGE chips in that case).
                 // The custom date-range controls are on the second row (below).
                 let el = el.when_some(
-                    self.source_time_range_panel.as_ref().map(|p| {
-                        let panel = p.read(cx);
-                        let dropdown = panel.dropdown_time_range.clone();
-                        let label = source_spec
-                            .map(|s| s.start_label.clone())
-                            .unwrap_or_else(|| "Time".to_string());
-                        (dropdown, label)
-                    }),
+                    (!is_chart_mode)
+                        .then(|| self.source_time_range_panel.as_ref())
+                        .flatten()
+                        .map(|p| {
+                            let panel = p.read(cx);
+                            let dropdown = panel.dropdown_time_range.clone();
+                            let label = source_spec
+                                .map(|s| s.start_label.clone())
+                                .unwrap_or_else(|| "Time".to_string());
+                            (dropdown, label)
+                        }),
                     |el, (dropdown, label)| {
                         el.child(div().flex_none().child(Text::caption(label)))
                             .child(
@@ -1255,7 +1270,8 @@ impl CodeDocument {
 
                 // Text-input fallback when there is no time-range panel (specs
                 // without start/end labels — not InfluxDB but kept for generality).
-                el.when(self.source_time_range_panel.is_none(), |el| {
+                // Also hidden in Chart mode (chart toolbar covers this).
+                el.when(!is_chart_mode && self.source_time_range_panel.is_none(), |el| {
                     el.child(
                         div().flex_none().child(Text::caption(
                             source_spec
