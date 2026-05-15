@@ -1427,6 +1427,45 @@ impl DataGridPanel {
                                 ),
                         )
                     })
+                    // Configure-series gear button — only visible in Chart mode.
+                    .when(current_result_mode == ResultViewMode::Chart, |d| {
+                        let rail_open = self.chart_rail_open;
+                        let accent = theme.accent;
+                        let muted = theme.muted_foreground;
+                        d.child(
+                            div()
+                                .id("chart-configure-rail-toggle")
+                                .ml(Spacing::XS)
+                                .px(Spacing::XS)
+                                .py(px(2.0))
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(theme.secondary))
+                                .when(rail_open, |d| {
+                                    d.bg(theme.secondary).text_color(accent)
+                                })
+                                .tooltip(|window, cx| {
+                                    gpui_component::tooltip::Tooltip::new("Configure series")
+                                        .build(window, cx)
+                                })
+                                .on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.chart_rail_open = !this.chart_rail_open;
+                                        if this.chart_rail_open {
+                                            this.prime_chart_rail_picker_from_spec();
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(
+                                    Icon::new(AppIcon::Settings)
+                                        .size(px(12.0))
+                                        .when(rail_open, |i| i.color(accent))
+                                        .when(!rail_open, |i| i.color(muted)),
+                                ),
+                        )
+                    })
                     // Shape badge
                     .when_some(result_shape_label, |d, shape| {
                         let label = match &shape {
