@@ -1202,9 +1202,9 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
         .gap(gpui::px(2.0))
         .px(gpui::px(10.0))
         .py(gpui::px(8.0))
-        .bg(gpui::hsla(0.0, 0.0, 0.1, 0.95))
+        .bg(gpui::hsla(0.0, 0.0, 0.09, 1.0))
         .border_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.08))
+        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.18))
         .rounded(gpui::px(6.0))
         .text_size(FontSizes::XS)
         // Header: time + optional offset
