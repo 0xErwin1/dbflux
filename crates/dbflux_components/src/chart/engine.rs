@@ -337,6 +337,13 @@ impl ChartView {
         cx.notify();
     }
 
+    /// Currently focused series index — driven by legend clicks AND by the
+    /// hover hit-test. The Configure / Stats rail reads this to keep the
+    /// stats panel in sync with whichever series the user is pointing at.
+    pub fn focused_series_idx(&self) -> usize {
+        self.focused_series_idx
+    }
+
     /// Per-series descriptive statistics over post-decimation Y values.
     ///
     /// Indexed parallel to the chart's series list. `None` for empty series.

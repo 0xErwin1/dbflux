@@ -392,6 +392,10 @@ pub struct DataGridPanel {
     /// Built `ChartView` entity. Created on demand when the user switches to
     /// Chart mode or when detection succeeds and the mode is already Chart.
     chart_view: Option<Entity<ChartView>>,
+    /// Observation on `chart_view` that re-renders the panel when the chart's
+    /// internal state (focused series, hover, etc.) changes, so panel-side
+    /// surfaces such as the Stats tab stay in sync with hover-driven focus.
+    chart_view_observer: Option<Subscription>,
     /// Manual column selection overriding auto-detection. `None` = use detection.
     chart_manual_selection: Option<ManualChartSelection>,
     /// Index of the currently focused legend series.
@@ -812,6 +816,7 @@ impl DataGridPanel {
             export_menu_open: false,
             chart_detection: None,
             chart_view: None,
+            chart_view_observer: None,
             chart_manual_selection: None,
             chart_focused_series_idx: 0,
             chart_legend_visible: true,
@@ -917,7 +922,11 @@ impl DataGridPanel {
         match ChartView::build(&self.result, spec) {
             Ok(chart_view) => {
                 let entity = cx.new(|_cx| chart_view);
+                // Re-render the panel whenever the chart entity notifies, so
+                // hover-driven focus changes propagate to the Stats tab.
+                let observer = cx.observe(&entity, |_this, _chart, cx| cx.notify());
                 self.chart_view = Some(entity.clone());
+                self.chart_view_observer = Some(observer);
                 Some(entity)
             }
             Err(err) => {
@@ -1083,6 +1092,7 @@ impl DataGridPanel {
 
         self.chart_manual_selection = Some(ManualChartSelection { x_col, y_cols });
         self.chart_view = None;
+        self.chart_view_observer = None;
         cx.notify();
     }
 
@@ -1095,6 +1105,7 @@ impl DataGridPanel {
         }
         self.chart_manual_selection = None;
         self.chart_view = None;
+        self.chart_view_observer = None;
         // Re-prime the picker to reflect the detection columns.
         self.prime_chart_rail_picker_from_spec();
         cx.notify();
@@ -1257,6 +1268,7 @@ impl DataGridPanel {
         // Run chart detection on the new result; invalidate any stale chart view.
         self.chart_detection = Some(detect_chart_columns(&result));
         self.chart_view = None;
+        self.chart_view_observer = None;
         self.chart_manual_selection = None;
         self.chart_focused_series_idx = 0;
         self.reset_chart_picker(&result.columns);

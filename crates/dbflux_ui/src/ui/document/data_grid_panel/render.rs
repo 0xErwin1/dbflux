@@ -1228,6 +1228,7 @@ impl DataGridPanel {
                                 };
                                 this.chart_manual_selection = Some(selection);
                                 this.chart_view = None;
+                                this.chart_view_observer = None;
                                 cx.notify();
                             }),
                         )
@@ -1554,7 +1555,16 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let focused_idx = self.chart_focused_series_idx;
+        // Read focus from the live ChartView so hover-driven focus changes
+        // (which only mutate the chart entity's state) update the Stats tab
+        // on the next render. Falling back to the panel's cached index when
+        // the chart entity is not yet built keeps the Reset/rebuild path
+        // working without flicker.
+        let focused_idx = self
+            .chart_view
+            .as_ref()
+            .map(|cv| cv.read(cx).focused_series_idx())
+            .unwrap_or(self.chart_focused_series_idx);
 
         let (stats_opt, label, color, x_min, x_max, x_is_time) = if let Some(cv) = &self.chart_view
         {
