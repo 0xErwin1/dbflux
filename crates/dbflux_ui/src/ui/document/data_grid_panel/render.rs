@@ -1898,7 +1898,9 @@ impl DataGridPanel {
             .border_l_1()
             .border_color(theme.border)
             .bg(theme.background)
-            .child(div().flex_grow().child(body))
+            // min_h_0 allows the flex child to shrink below its content height so
+            // the inner overflow_y_scroll can take effect correctly.
+            .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
     }
 
     /// Section container helper for the right dock panels.
