@@ -17,6 +17,7 @@ use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
 use crate::chart::decimate::lttb;
 use crate::chart::legend::legend_element;
 use crate::chart::spec::{AxisKind, ChartSpec};
+use crate::chart::stats::{SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x};
 use crate::tokens::FontSizes;
 use dbflux_core::{ColumnKind, QueryResult, Value};
 
@@ -104,6 +105,9 @@ pub(crate) struct RenderModel {
     /// Data-space Y bounds.
     pub y_min: f64,
     pub y_max: f64,
+    /// Per-series descriptive stats over post-decimation Y values.
+    /// Indexed parallel to `decimated`; `None` for empty series.
+    pub series_stats: Vec<Option<SeriesStats>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +125,10 @@ pub struct ChartView {
     /// last `MouseMoveEvent`. `None` when the cursor has not yet entered the
     /// chart or after a rebuild.
     hover_x_screen: Option<Pixels>,
+    /// Window-space Y coordinate captured alongside `hover_x_screen`. Used by
+    /// `update_focused_from_hover` to project the cursor onto each series line
+    /// and pick the visually closest one.
+    hover_y_screen: Option<Pixels>,
     /// Index of the focused series used for the crosshair readout.
     focused_series_idx: usize,
     /// Plot-area bounds, written by the canvas prepaint closure and read by
@@ -287,6 +295,12 @@ impl ChartView {
             })
             .collect();
 
+        // Compute per-series stats over the post-decimation points.
+        let series_stats: Vec<Option<SeriesStats>> = decimated
+            .iter()
+            .map(|pts| compute_series_stats(pts))
+            .collect();
+
         let render_model = RenderModel {
             decimated,
             palette_colors,
@@ -296,12 +310,14 @@ impl ChartView {
             x_max,
             y_min,
             y_max,
+            series_stats,
         };
 
         Ok(ChartView {
             spec,
             render_model,
             hover_x_screen: None,
+            hover_y_screen: None,
             focused_series_idx: 0,
             plot_bounds: Rc::new(RefCell::new(None)),
         })
@@ -317,6 +333,101 @@ impl ChartView {
     pub fn set_focused_series_idx(&mut self, idx: usize, cx: &mut Context<Self>) {
         self.focused_series_idx = idx.min(self.spec.series.len().saturating_sub(1));
         cx.notify();
+    }
+
+    /// Per-series descriptive statistics over post-decimation Y values.
+    ///
+    /// Indexed parallel to the chart's series list. `None` for empty series.
+    pub fn series_stats(&self) -> &[Option<SeriesStats>] {
+        &self.render_model.series_stats
+    }
+
+    /// Data-space X bounds `(x_min, x_max)` for the current render model.
+    ///
+    /// Useful for deriving the window span when `resolved_window` is absent.
+    pub fn data_x_bounds(&self) -> (f64, f64) {
+        (self.render_model.x_min, self.render_model.x_max)
+    }
+
+    /// Re-evaluate which series the cursor hovers over and update
+    /// `focused_series_idx` with a 2 px dead-band to dampen jitter.
+    ///
+    /// Requires `plot_bounds` to have been written by the canvas prepaint.
+    /// Does nothing when bounds or hover coordinates are unavailable.
+    fn update_focused_from_hover(&mut self) {
+        let hover_x = match self.hover_x_screen {
+            Some(x) => x,
+            None => return,
+        };
+        let hover_y = match self.hover_y_screen {
+            Some(y) => y,
+            None => return,
+        };
+        let bounds = match *self.plot_bounds.borrow() {
+            Some(b) => b,
+            None => return,
+        };
+
+        let plot_x0 = f32::from(bounds.origin.x);
+        let plot_y0 = f32::from(bounds.origin.y) + MARGIN_TOP;
+        let plot_w = (f32::from(bounds.size.width) - MARGIN_RIGHT).max(1.0);
+        let plot_h = (f32::from(bounds.size.height) - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
+
+        let rel_x = f32::from(hover_x) - plot_x0;
+        if rel_x < 0.0 || rel_x > plot_w {
+            return;
+        }
+
+        let x_min = self.render_model.x_min;
+        let x_range = (self.render_model.x_max - x_min).max(1.0);
+        let y_min = self.render_model.y_min;
+        let y_range = (self.render_model.y_max - y_min).max(1.0);
+
+        let cursor_data_x = x_min + (rel_x as f64 / plot_w as f64) * x_range;
+
+        let data_to_screen_y = |dy: f64| -> f32 {
+            plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32
+        };
+
+        let cursor_screen_y = f32::from(hover_y);
+
+        let candidate = hit_test_focused_series(
+            &self.render_model.decimated,
+            cursor_data_x,
+            cursor_screen_y,
+            data_to_screen_y,
+            14.0,
+        );
+
+        let Some(new_idx) = candidate else { return };
+
+        if new_idx == self.focused_series_idx {
+            return;
+        }
+
+        // Dead-band: only switch when the new series is strictly closer than the
+        // current focused series by >= 2 px, mitigating jitter between near lines.
+        let dist_new = interpolate_y_at_x(
+            &self.render_model.decimated[new_idx],
+            cursor_data_x,
+        )
+        .map(|y| (data_to_screen_y(y) - cursor_screen_y).abs())
+        .unwrap_or(f32::INFINITY);
+
+        let dist_current = interpolate_y_at_x(
+            self.render_model
+                .decimated
+                .get(self.focused_series_idx)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]),
+            cursor_data_x,
+        )
+        .map(|y| (data_to_screen_y(y) - cursor_screen_y).abs())
+        .unwrap_or(f32::INFINITY);
+
+        if dist_new + 2.0 <= dist_current {
+            self.focused_series_idx = new_idx;
+        }
     }
 }
 
@@ -449,6 +560,8 @@ impl Render for ChartView {
                             .on_mouse_move(cx.listener(
                                 move |this, ev: &gpui::MouseMoveEvent, _window, cx| {
                                     this.hover_x_screen = Some(ev.position.x);
+                                    this.hover_y_screen = Some(ev.position.y);
+                                    this.update_focused_from_hover();
                                     cx.notify();
                                 },
                             ))
@@ -500,36 +613,40 @@ impl Render for ChartView {
                                             ));
                                         }
 
-                                        // --- Series polylines ---
-                                        for (s_idx, pts) in decimated_canvas.iter().enumerate() {
+                                        // --- Series polylines (two-pass) ---
+                                        //
+                                        // Pass 1: all non-focused series at 2.0 px so they
+                                        // render below the focused line.
+                                        // Pass 2: focused series at 2.8 px, composited on top.
+                                        let paint_series = |pts: &[(f64, f64)],
+                                                            color: Hsla,
+                                                            stroke_w: f32,
+                                                            window: &mut Window| {
                                             if pts.is_empty() {
-                                                continue;
+                                                return;
                                             }
-                                            let color = palette_canvas
-                                                .get(s_idx)
-                                                .copied()
-                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-
                                             if pts.len() == 1 {
-                                                // Single-point fallback: paint a 3×3 square.
+                                                // Single-point fallback: paint a square whose
+                                                // side scales with stroke width.
+                                                let half = stroke_w * 1.5;
                                                 let sx = data_to_screen_x(pts[0].0);
                                                 let sy = data_to_screen_y(pts[0].1);
                                                 window.paint_quad(fill(
                                                     gpui::Bounds {
                                                         origin: point(
-                                                            gpui::px(sx - 1.5),
-                                                            gpui::px(sy - 1.5),
+                                                            gpui::px(sx - half),
+                                                            gpui::px(sy - half),
                                                         ),
                                                         size: gpui::Size {
-                                                            width: gpui::px(3.0),
-                                                            height: gpui::px(3.0),
+                                                            width: gpui::px(half * 2.0),
+                                                            height: gpui::px(half * 2.0),
                                                         },
                                                     },
                                                     color,
                                                 ));
                                             } else {
                                                 let mut builder =
-                                                    PathBuilder::stroke(gpui::px(2.0));
+                                                    PathBuilder::stroke(gpui::px(stroke_w));
                                                 let (x0, y0) = pts[0];
                                                 builder.move_to(point(
                                                     gpui::px(data_to_screen_x(x0)),
@@ -545,6 +662,27 @@ impl Render for ChartView {
                                                     window.paint_path(path, color);
                                                 }
                                             }
+                                        };
+
+                                        // Pass 1 — non-focused series at 2.0 px.
+                                        for (s_idx, pts) in decimated_canvas.iter().enumerate() {
+                                            if s_idx == focused_idx {
+                                                continue;
+                                            }
+                                            let color = palette_canvas
+                                                .get(s_idx)
+                                                .copied()
+                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+                                            paint_series(pts, color, 2.0, window);
+                                        }
+
+                                        // Pass 2 — focused series at 2.8 px (composited on top).
+                                        if let Some(pts) = decimated_canvas.get(focused_idx) {
+                                            let color = palette_canvas
+                                                .get(focused_idx)
+                                                .copied()
+                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+                                            paint_series(pts, color, 2.8, window);
                                         }
 
                                         // --- Crosshair ---
@@ -991,5 +1129,40 @@ mod tests {
         let spec = simple_spec(0, &[1, 2]);
         let view = ChartView::build(&result, spec).expect("build should succeed");
         assert_eq!(view.render_model.palette_colors.len(), 2);
+    }
+
+    #[test]
+    fn build_records_series_stats_post_decimation() {
+        // Known input: 4 rows, below decimation threshold so stats are over all points.
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(1000), Value::Float(2.0)],
+            vec![Value::Int(2000), Value::Float(3.0)],
+            vec![Value::Int(3000), Value::Float(4.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let spec = simple_spec(0, &[1]);
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+
+        assert_eq!(
+            view.series_stats().len(),
+            1,
+            "stats length should match series count"
+        );
+
+        let s = view.series_stats()[0].expect("series should have stats");
+        assert_eq!(s.min, 1.0);
+        assert_eq!(s.max, 4.0);
+        assert_eq!(s.last, 4.0);
+        // avg of [1,2,3,4] = 2.5
+        assert!((s.avg - 2.5).abs() < 1e-9);
     }
 }
