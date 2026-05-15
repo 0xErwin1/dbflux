@@ -175,22 +175,22 @@ impl TimeRangePanel {
 
     pub fn preset_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::new("Last 5 min"),
-            DropdownItem::new("Last 30 min"),
-            DropdownItem::new("Last 1 h"),
-            DropdownItem::new("Last 3 h"),
-            DropdownItem::new("Last 12 h"),
-            DropdownItem::new("Custom"),
+            DropdownItem::new("15m"),
+            DropdownItem::new("1h"),
+            DropdownItem::new("6h"),
+            DropdownItem::new("24h"),
+            DropdownItem::new("7d"),
+            DropdownItem::new("Custom…"),
         ]
     }
 
     pub fn time_range_for_index(index: usize) -> Option<TimeRange> {
         match index {
-            0 => Some(TimeRange::Last5min),
-            1 => Some(TimeRange::Last30min),
-            2 => Some(TimeRange::LastHour),
-            3 => Some(TimeRange::Last3Hours),
-            4 => Some(TimeRange::Last12Hours),
+            0 => Some(TimeRange::Last15min),
+            1 => Some(TimeRange::LastHour),
+            2 => Some(TimeRange::Last6Hours),
+            3 => Some(TimeRange::Last24Hours),
+            4 => Some(TimeRange::Last7Days),
             5 => Some(TimeRange::Custom),
             _ => None,
         }
@@ -335,11 +335,11 @@ mod tests {
     #[test]
     fn preset_index_maps_to_correct_range_variant() {
         let cases = [
-            (0, TimeRange::Last5min),
-            (1, TimeRange::Last30min),
-            (2, TimeRange::LastHour),
-            (3, TimeRange::Last3Hours),
-            (4, TimeRange::Last12Hours),
+            (0, TimeRange::Last15min),
+            (1, TimeRange::LastHour),
+            (2, TimeRange::Last6Hours),
+            (3, TimeRange::Last24Hours),
+            (4, TimeRange::Last7Days),
             (5, TimeRange::Custom),
         ];
 
@@ -368,11 +368,11 @@ mod tests {
             .unwrap_or(0);
 
         for range in [
-            TimeRange::Last5min,
-            TimeRange::Last30min,
+            TimeRange::Last15min,
             TimeRange::LastHour,
-            TimeRange::Last3Hours,
-            TimeRange::Last12Hours,
+            TimeRange::Last6Hours,
+            TimeRange::Last24Hours,
+            TimeRange::Last7Days,
         ] {
             let (start_ms, end_ms) = TimeRangePanel::resolved_window_for_preset(range);
 

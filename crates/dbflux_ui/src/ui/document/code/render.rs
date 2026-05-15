@@ -793,8 +793,8 @@ impl Render for CodeDocument {
             let spec = self.current_source_context_spec(cx);
             if spec.is_some_and(|s| !s.start_label.is_empty() && !s.end_label.is_empty()) {
                 let panel = cx.new(|cx| {
-                    // Index 4 = Last 12 h (sensible default for time-series sources).
-                    TimeRangePanel::new("Last 12 h", Some(4), window, cx)
+                    // Index 3 = Last24Hours (24h is the sensible default for time-series sources).
+                    TimeRangePanel::new("24h", Some(3), window, cx)
                 });
                 let sub = cx.subscribe(&panel, |this, _panel, event: &TimeRangeChanged, cx| {
                     this.on_source_time_range_panel_changed(event.start_ms, event.end_ms, cx);
