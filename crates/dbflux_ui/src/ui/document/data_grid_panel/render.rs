@@ -1381,31 +1381,31 @@ impl DataGridPanel {
                 container = container.when_some(self.data_table.clone(), |d, dt| d.child(dt));
             }
             ResultViewMode::Chart => {
-                // Chart mode: vertical stack — chart+rail row, then legend row below.
-                let rail_open = self.chart_rail_open;
-
                 // Build chart_view on first render before checking whether it exists.
                 let _ = self.ensure_chart_view(cx);
                 let has_chart_view = self.chart_view.is_some();
+                let rail_open = self.chart_rail_open;
 
+                // The chart occupies 100% of the area regardless of whether the rail
+                // is open. The rail floats as an absolute-positioned overlay on the
+                // right edge so opening it does not resize the canvas.
                 let chart_area = if let Some(chart_entity) = self.chart_view.clone() {
                     div()
-                        .flex_grow()
                         .size_full()
                         .child(chart_entity)
                         .into_any_element()
                 } else {
                     div()
-                        .flex_grow()
                         .size_full()
                         .child(self.render_chart_degraded(cx))
                         .into_any_element()
                 };
 
-                let row = div()
-                    .flex()
-                    .flex_row()
+                // Relative container so the absolute rail is positioned against it.
+                let chart_row = div()
+                    .relative()
                     .flex_grow()
+                    .size_full()
                     .child(chart_area)
                     .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
 
@@ -1415,7 +1415,7 @@ impl DataGridPanel {
                     .size_full()
                     // Chart toolbar: RANGE chips, Refresh, window, points, Stats/Configure/PNG.
                     .child(self.render_chart_toolbar(theme, cx))
-                    .child(row)
+                    .child(chart_row)
                     // Legend row — always shown when a chart view exists.
                     .when(has_chart_view, |d| {
                         d.child(self.render_chart_legend_row(theme, cx))
@@ -1885,9 +1885,14 @@ impl DataGridPanel {
             ChartRailTab::Stats => self.render_rail_stats_tab(theme, cx).into_any_element(),
         };
 
+        // Rendered as an absolute overlay on the right edge of the chart area so
+        // the chart canvas is never resized when the rail opens or closes.
         div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .bottom_0()
             .w(gpui::px(320.0))
-            .flex_shrink_0()
             .flex()
             .flex_col()
             .border_l_1()
