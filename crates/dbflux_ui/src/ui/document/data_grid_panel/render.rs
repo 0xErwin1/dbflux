@@ -1901,8 +1901,11 @@ impl DataGridPanel {
             .border_l_1()
             .border_color(theme.border)
             .bg(theme.popover)
-            .on_mouse_move(|_, _, _| {})
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, _| {})
+            // `.occlude()` blocks all mouse events from reaching the chart
+            // beneath the rail. Empty `on_mouse_move`/`on_mouse_down` handlers
+            // are not enough — GPUI's hit-test still walks through to siblings
+            // unless this element is explicitly marked opaque to the cursor.
+            .occlude()
             // The inner Configure/Stats tab bodies own the `overflow_y_scroll`;
             // this wrapper just clips them to the rail's bounded height so the
             // scroll can take effect.
