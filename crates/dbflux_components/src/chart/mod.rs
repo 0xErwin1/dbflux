@@ -22,6 +22,6 @@ pub mod spec;
 pub mod stats;
 
 pub use detect::{ChartDetection, detect_chart_columns};
-pub use engine::{CHART_PALETTE, ChartBuildError, ChartView};
+pub use engine::{CHART_PALETTE, ChartBuildError, ChartView, format_x_value, format_y_value};
 pub use spec::{AxisKind, AxisSpec, ChartKind, ChartSpec, ManualChartSelection, SeriesSpec};
-pub use stats::{SeriesStats, compute_series_stats};
+pub use stats::{SeriesStats, compute_series_stats, format_span};

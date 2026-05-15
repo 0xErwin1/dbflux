@@ -349,6 +349,36 @@ impl ChartView {
         (self.render_model.x_min, self.render_model.x_max)
     }
 
+    /// Whether the X axis is a time axis.
+    pub fn x_is_time(&self) -> bool {
+        self.spec.x_axis.kind == AxisKind::Time
+    }
+
+    /// Resolved palette colour for the series at `idx`. Returns a neutral grey
+    /// when `idx` is out of range.
+    pub fn series_color(&self, idx: usize) -> Hsla {
+        self.render_model
+            .palette_colors
+            .get(idx)
+            .copied()
+            .unwrap_or(Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.5,
+                a: 1.0,
+            })
+    }
+
+    /// Label for the series at `idx`, taken from the series spec.
+    /// Returns an empty string when `idx` is out of range.
+    pub fn series_label(&self, idx: usize) -> &str {
+        self.spec
+            .series
+            .get(idx)
+            .map(|s| s.label.as_str())
+            .unwrap_or("")
+    }
+
     /// Re-evaluate which series the cursor hovers over and update
     /// `focused_series_idx` with a 2 px dead-band to dampen jitter.
     ///
@@ -899,7 +929,7 @@ fn nearest_sample(points: &[(f64, f64)], target_x: f64) -> (f64, f64) {
     }
 }
 
-pub(crate) fn format_x_value(x: f64, is_time: bool) -> String {
+pub fn format_x_value(x: f64, is_time: bool) -> String {
     if is_time {
         let secs = (x / 1000.0).trunc() as i64;
         let nsecs = ((x.rem_euclid(1000.0)) * 1_000_000.0) as u32;
@@ -912,7 +942,7 @@ pub(crate) fn format_x_value(x: f64, is_time: bool) -> String {
     }
 }
 
-pub(crate) fn format_y_value(y: f64) -> String {
+pub fn format_y_value(y: f64) -> String {
     if y.abs() >= 1000.0 || (y != 0.0 && y.abs() < 0.001) {
         format!("{:.3e}", y)
     } else {

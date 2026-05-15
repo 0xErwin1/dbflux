@@ -5,7 +5,9 @@ use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::chart::{ChartDetection, ManualChartSelection};
+use dbflux_components::chart::{
+    ChartDetection, ManualChartSelection, SeriesStats, format_span, format_x_value, format_y_value,
+};
 use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
 use dbflux_core::{
@@ -980,11 +982,24 @@ impl DataGridPanel {
                 container = container.when_some(self.data_table.clone(), |d, dt| d.child(dt));
             }
             ResultViewMode::Chart => {
-                if let Some(chart_entity) = self.ensure_chart_view(cx) {
-                    container = container.child(chart_entity);
+                // Chart mode: a horizontal flex row containing the chart area
+                // and (when open) a 280px Configure rail on the right.
+                let rail_open = self.chart_rail_open;
+
+                let chart_area = if let Some(chart_entity) = self.ensure_chart_view(cx) {
+                    div().flex_grow().size_full().child(chart_entity).into_any_element()
                 } else {
-                    container = container.child(self.render_chart_degraded(cx));
-                }
+                    div().flex_grow().size_full().child(self.render_chart_degraded(cx)).into_any_element()
+                };
+
+                let row = div()
+                    .flex()
+                    .flex_row()
+                    .size_full()
+                    .child(chart_area)
+                    .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
+
+                container = container.child(row);
             }
             ResultViewMode::Text => {
                 let text = self.derived_text().to_string();
@@ -1219,6 +1234,448 @@ impl DataGridPanel {
         }
 
         outer
+    }
+
+    /// Render the 280px Configure rail shown when `chart_rail_open` is true.
+    ///
+    /// Contains two tabs — Configure (column picker + Apply/Reset) and Stats
+    /// (focused-series descriptive statistics + window summary).
+    fn render_chart_rail(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use super::ChartRailTab;
+
+        let active_tab = self.chart_rail_tab;
+
+        // Tab header
+        let tab_header = div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .px_2()
+            .pt_2()
+            .pb_1()
+            .border_b_1()
+            .border_color(theme.border)
+            .child({
+                let is_active = active_tab == ChartRailTab::Configure;
+                div()
+                    .id("rail-tab-configure")
+                    .px(Spacing::SM)
+                    .py(gpui::px(2.0))
+                    .rounded(Radii::SM)
+                    .text_size(FontSizes::XS)
+                    .cursor_pointer()
+                    .when(is_active, |d| d.bg(gpui::hsla(0.0, 0.0, 0.15, 1.0)))
+                    .when(!is_active, |d| {
+                        d.border_1()
+                            .border_color(theme.border)
+                            .hover(|d| d.bg(theme.secondary))
+                    })
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.chart_rail_tab = ChartRailTab::Configure;
+                            cx.notify();
+                        }),
+                    )
+                    .child("Configure")
+            })
+            .child({
+                let is_active = active_tab == ChartRailTab::Stats;
+                div()
+                    .id("rail-tab-stats")
+                    .px(Spacing::SM)
+                    .py(gpui::px(2.0))
+                    .rounded(Radii::SM)
+                    .text_size(FontSizes::XS)
+                    .cursor_pointer()
+                    .when(is_active, |d| d.bg(gpui::hsla(0.0, 0.0, 0.15, 1.0)))
+                    .when(!is_active, |d| {
+                        d.border_1()
+                            .border_color(theme.border)
+                            .hover(|d| d.bg(theme.secondary))
+                    })
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.chart_rail_tab = ChartRailTab::Stats;
+                            cx.notify();
+                        }),
+                    )
+                    .child("Stats")
+            });
+
+        let body = match active_tab {
+            ChartRailTab::Configure => self.render_rail_configure_tab(theme, cx).into_any_element(),
+            ChartRailTab::Stats => self.render_rail_stats_tab(theme, cx).into_any_element(),
+        };
+
+        div()
+            .w(gpui::px(280.0))
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .border_l_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .child(tab_header)
+            .child(div().flex_grow().child(body))
+    }
+
+    /// Configure tab body: X-column selector, Y-column checkboxes with
+    /// inline avg/last, and Reset-to-auto + Apply footer buttons.
+    fn render_rail_configure_tab(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use dbflux_core::ColumnKind;
+
+        let columns = &self.result.columns;
+
+        let x_candidates: Vec<(usize, String)> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Timestamp | ColumnKind::Text | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, c)| (i, c.name.clone()))
+            .collect();
+
+        let y_candidates: Vec<(usize, String)> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, c)| (i, c.name.clone()))
+            .collect();
+
+        let selected_x = self.chart_rail_picker_x_col;
+        let y_checked = self.chart_rail_picker_y_checked.clone();
+        let any_y_checked = y_checked.iter().any(|&c| c);
+
+        // Build inline avg/last labels for Y candidates currently in the spec.
+        let stats: Vec<Option<SeriesStats>> = if let Some(cv) = &self.chart_view {
+            cv.read(cx).series_stats().to_vec()
+        } else {
+            vec![]
+        };
+
+        // Which column indices are currently charted (in order of series)?
+        let active_y_cols: Vec<usize> = if let Some(manual) = &self.chart_manual_selection {
+            manual.y_cols.clone()
+        } else if let Some(ChartDetection::Ok { numeric_cols, .. }) = &self.chart_detection {
+            numeric_cols.clone()
+        } else {
+            vec![]
+        };
+
+        let detection_ok = matches!(&self.chart_detection, Some(ChartDetection::Ok { .. }));
+        let has_manual = self.chart_manual_selection.is_some();
+        let reset_enabled = detection_ok || has_manual;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::SM)
+            .p_2()
+            // X-column section
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        Text::caption("Time column".to_string())
+                            .color(theme.muted_foreground),
+                    )
+                    .children(x_candidates.iter().enumerate().map(
+                        |(cand_idx, (col_idx, col_name))| {
+                            let col_idx = *col_idx;
+                            let is_selected = cand_idx == selected_x;
+                            let label = col_name.clone();
+                            div()
+                                .id(ElementId::Name(
+                                    format!("rail-x-col-{}", col_idx).into(),
+                                ))
+                                .px(Spacing::SM)
+                                .py(gpui::px(2.0))
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .text_size(FontSizes::XS)
+                                .when(is_selected, |d| {
+                                    d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2))
+                                })
+                                .when(!is_selected, |d| {
+                                    d.hover(|d| d.bg(theme.secondary))
+                                })
+                                .on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.chart_rail_picker_x_col = cand_idx;
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(label)
+                        },
+                    )),
+            )
+            // Y-column section
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        Text::caption("Y columns".to_string())
+                            .color(theme.muted_foreground),
+                    )
+                    .children(
+                        y_candidates
+                            .iter()
+                            .enumerate()
+                            .map(|(cand_idx, (col_idx, col_name))| {
+                                let col_idx = *col_idx;
+                                let checked =
+                                    y_checked.get(cand_idx).copied().unwrap_or(false);
+                                let label = col_name.clone();
+
+                                // Find this column's series index in active_y_cols.
+                                let series_idx_opt =
+                                    active_y_cols.iter().position(|&ci| ci == col_idx);
+                                let stat_label = series_idx_opt
+                                    .and_then(|si| stats.get(si).copied().flatten())
+                                    .map(|s| {
+                                        format!(
+                                            "avg {} · last {}",
+                                            format_y_value(s.avg),
+                                            format_y_value(s.last)
+                                        )
+                                    })
+                                    .unwrap_or_else(|| "—".to_string());
+
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(gpui::px(1.0))
+                                    .child(
+                                        Checkbox::new(ElementId::Name(
+                                            format!("rail-y-col-{}", cand_idx).into(),
+                                        ))
+                                        .checked(checked)
+                                        .label(label)
+                                        .on_click(cx.listener(
+                                            move |this, &new_checked, _, cx| {
+                                                if let Some(slot) = this
+                                                    .chart_rail_picker_y_checked
+                                                    .get_mut(cand_idx)
+                                                {
+                                                    *slot = new_checked;
+                                                }
+                                                cx.notify();
+                                            },
+                                        )),
+                                    )
+                                    .child(
+                                        div()
+                                            .pl(gpui::px(20.0))
+                                            .text_size(FontSizes::XS)
+                                            .text_color(theme.muted_foreground)
+                                            .child(stat_label),
+                                    )
+                            }),
+                    ),
+            )
+            // Footer: Reset + Apply
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .pt_1()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    // Reset-to-auto button
+                    .child(
+                        div()
+                            .id("rail-reset-btn")
+                            .px(Spacing::SM)
+                            .py(gpui::px(3.0))
+                            .rounded(Radii::SM)
+                            .text_size(FontSizes::XS)
+                            .when(reset_enabled, |d| {
+                                d.cursor_pointer()
+                                    .text_color(theme.foreground)
+                                    .hover(|d| d.bg(theme.secondary))
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.reset_chart_rail_to_auto(cx);
+                                        }),
+                                    )
+                            })
+                            .when(!reset_enabled, |d| {
+                                d.text_color(theme.muted_foreground).opacity(0.4)
+                            })
+                            .child("Reset"),
+                    )
+                    // Apply button
+                    .child(
+                        div()
+                            .id("rail-apply-btn")
+                            .px(Spacing::SM)
+                            .py(gpui::px(3.0))
+                            .rounded(Radii::SM)
+                            .text_size(FontSizes::XS)
+                            .when(any_y_checked, |d| {
+                                d.cursor_pointer()
+                                    .bg(gpui::hsla(0.6, 0.7, 0.55, 1.0))
+                                    .text_color(gpui::white())
+                                    .hover(|d| d.bg(gpui::hsla(0.6, 0.7, 0.50, 1.0)))
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.apply_chart_rail_selection(cx);
+                                        }),
+                                    )
+                            })
+                            .when(!any_y_checked, |d| {
+                                d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.3))
+                                    .text_color(gpui::hsla(0.0, 0.0, 0.5, 0.7))
+                            })
+                            .child("Apply"),
+                    ),
+            )
+    }
+
+    /// Stats tab body: focused-series descriptive statistics and window summary.
+    fn render_rail_stats_tab(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let focused_idx = self.chart_focused_series_idx;
+
+        let (stats_opt, label, color, x_min, x_max, x_is_time) =
+            if let Some(cv) = &self.chart_view {
+                let view = cv.read(cx);
+                let s = view.series_stats().get(focused_idx).copied().flatten();
+                let label = view.series_label(focused_idx).to_string();
+                let color = view.series_color(focused_idx);
+                let (x_min, x_max) = view.data_x_bounds();
+                let x_is_time = view.x_is_time();
+                (s, label, color, x_min, x_max, x_is_time)
+            } else {
+                // Rail may briefly be open while chart_view is None (e.g. during
+                // rebuild after Apply). Render an empty state.
+                return div()
+                    .p_2()
+                    .text_size(FontSizes::XS)
+                    .text_color(theme.muted_foreground)
+                    .child("Rebuilding chart…")
+                    .into_any_element();
+            };
+
+        let Some(stats) = stats_opt else {
+            return div()
+                .p_2()
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child("No stats available for this series.")
+                .into_any_element();
+        };
+
+        // Compute window span.
+        let span_ms = x_max - x_min;
+        let start_label = format_x_value(x_min, x_is_time);
+        let end_label = format_x_value(x_max, x_is_time);
+        let span_label = format_span(span_ms);
+        let points_count = self.result.rows.len();
+
+        let stat_row = |name: &str, value: String| -> gpui::AnyElement {
+            div()
+                .flex()
+                .flex_row()
+                .justify_between()
+                .py(gpui::px(1.0))
+                .text_size(FontSizes::XS)
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child(SharedString::from(name.to_string())),
+                )
+                .child(
+                    div()
+                        .text_color(theme.foreground)
+                        .child(SharedString::from(value)),
+                )
+                .into_any_element()
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            // Series header: swatch + label
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .pb_1()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(div().w(gpui::px(8.0)).h(gpui::px(8.0)).bg(color))
+                    .child(
+                        div()
+                            .text_size(FontSizes::XS)
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child(SharedString::from(label)),
+                    ),
+            )
+            // Stats rows
+            .child(stat_row("min", format_y_value(stats.min)))
+            .child(stat_row("max", format_y_value(stats.max)))
+            .child(stat_row("avg", format_y_value(stats.avg)))
+            .child(stat_row("p50", format_y_value(stats.p50)))
+            .child(stat_row("p95", format_y_value(stats.p95)))
+            .child(stat_row("p99", format_y_value(stats.p99)))
+            .child(stat_row("last", format_y_value(stats.last)))
+            // Window section
+            .child(
+                div()
+                    .pt_1()
+                    .mt_1()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .flex_col()
+                    .gap(gpui::px(1.0))
+                    .child(
+                        div()
+                            .text_size(FontSizes::XS)
+                            .text_color(theme.muted_foreground)
+                            .pb(gpui::px(1.0))
+                            .child("Window"),
+                    )
+                    .child(stat_row("start", start_label))
+                    .child(stat_row("end", end_label))
+                    .child(stat_row("span", span_label))
+                    .child(stat_row("points", format!("{}", points_count))),
+            )
+            .into_any_element()
     }
 
     fn render_text_view(
