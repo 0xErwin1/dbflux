@@ -146,7 +146,7 @@ impl DataDocument {
         cx: &mut Context<Self>,
     ) -> Self {
         let data_grid =
-            cx.new(|cx| DataGridPanel::new_for_result(result, query, app_state, window, cx));
+            cx.new(|cx| DataGridPanel::new_for_result(result, query, None, app_state, window, cx));
 
         let subscription =
             cx.subscribe(
@@ -219,7 +219,7 @@ impl DataDocument {
         match self.data_grid.read(cx).source() {
             DataSource::Table { profile_id, .. } => Some(*profile_id),
             DataSource::Collection { profile_id, .. } => Some(*profile_id),
-            DataSource::QueryResult { .. } => None,
+            DataSource::QueryResult { profile_id, .. } => *profile_id,
         }
     }
 

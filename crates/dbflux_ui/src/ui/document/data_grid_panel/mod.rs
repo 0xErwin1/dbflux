@@ -63,6 +63,11 @@ pub enum DataSource {
         result: Arc<QueryResult>,
         #[allow(dead_code)]
         original_query: String,
+        /// Backing connection profile, when the result came from a host
+        /// (CodeDocument, ScriptDocument) that knows which connection was
+        /// targeted. Used by category-driven UI gates such as the chart
+        /// toggle. `None` for ad-hoc results without an associated connection.
+        profile_id: Option<Uuid>,
     },
 }
 
@@ -555,6 +560,7 @@ impl DataGridPanel {
     pub fn new_for_result(
         result: Arc<QueryResult>,
         original_query: String,
+        profile_id: Option<Uuid>,
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -562,6 +568,7 @@ impl DataGridPanel {
         let source = DataSource::QueryResult {
             result: result.clone(),
             original_query,
+            profile_id,
         };
 
         // Query results are not editable (no PK info)
@@ -1111,6 +1118,7 @@ impl DataGridPanel {
         &mut self,
         result: Arc<QueryResult>,
         query: String,
+        profile_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) {
         self.refresh_policy = RefreshPolicy::Manual;
@@ -1122,6 +1130,7 @@ impl DataGridPanel {
         self.source = DataSource::QueryResult {
             result: result.clone(),
             original_query: query,
+            profile_id,
         };
         self.local_sort_state = None;
         self.original_row_order = None;
@@ -1557,9 +1566,12 @@ impl DataGridPanel {
 
     /// Resolve the database category for the connection backing this data source.
     ///
-    /// Returns `None` for `QueryResult` sources (no associated connection) or when
-    /// the connection is not found in `app_state`.
-    fn connection_category(
+    /// `QueryResult` sources carry an optional `profile_id` because the host
+    /// (CodeDocument, ScriptDocument) knows which connection produced the
+    /// result; this is what allows category-driven UI gates (chart toggle,
+    /// filter labels) to work on query results. Returns `None` when the
+    /// profile is unknown or no longer registered.
+    pub(super) fn connection_category(
         source: &DataSource,
         app_state: &Entity<AppStateEntity>,
         cx: &App,
@@ -1567,7 +1579,7 @@ impl DataGridPanel {
         let profile_id = match source {
             DataSource::Table { profile_id, .. } => *profile_id,
             DataSource::Collection { profile_id, .. } => *profile_id,
-            DataSource::QueryResult { .. } => return None,
+            DataSource::QueryResult { profile_id, .. } => (*profile_id)?,
         };
 
         app_state
@@ -1740,6 +1752,7 @@ mod tests {
                 std::time::Duration::ZERO,
             )),
             original_query: "PING".to_string(),
+            profile_id: None,
         };
 
         assert!(!source.is_table());
