@@ -802,39 +802,61 @@ impl Render for ChartView {
                                                 .copied()
                                                 .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
 
-                                            // Background fill circle (square proxy, r≈3.5 → side=7)
+                                            // Filled background disk + stroked series-color ring.
+                                            // Built from two SVG-style arcs (top + bottom semicircle)
+                                            // because GPUI's PathBuilder has no first-class circle.
                                             let r = 3.5_f32;
-                                            let d = r * 2.0;
-                                            window.paint_quad(fill(
-                                                gpui::Bounds {
-                                                    origin: point(
-                                                        gpui::px(dot_sx - r),
-                                                        gpui::px(dot_sy - r),
-                                                    ),
-                                                    size: gpui::Size {
-                                                        width: gpui::px(d),
-                                                        height: gpui::px(d),
-                                                    },
-                                                },
-                                                series_color,
-                                            ));
+                                            let radii = point(gpui::px(r), gpui::px(r));
+                                            let right =
+                                                point(gpui::px(dot_sx + r), gpui::px(dot_sy));
+                                            let left =
+                                                point(gpui::px(dot_sx - r), gpui::px(dot_sy));
 
-                                            // Inner background circle
-                                            let inner_r = r - 1.5;
-                                            let inner_d = inner_r * 2.0;
-                                            window.paint_quad(fill(
-                                                gpui::Bounds {
-                                                    origin: point(
-                                                        gpui::px(dot_sx - inner_r),
-                                                        gpui::px(dot_sy - inner_r),
-                                                    ),
-                                                    size: gpui::Size {
-                                                        width: gpui::px(inner_d),
-                                                        height: gpui::px(inner_d),
-                                                    },
-                                                },
-                                                gpui::hsla(0.56, 0.17, 0.07, 1.0),
-                                            ));
+                                            let mut fill_builder = PathBuilder::fill();
+                                            fill_builder.move_to(right);
+                                            fill_builder.arc_to(
+                                                radii,
+                                                gpui::px(0.0),
+                                                false,
+                                                true,
+                                                left,
+                                            );
+                                            fill_builder.arc_to(
+                                                radii,
+                                                gpui::px(0.0),
+                                                false,
+                                                true,
+                                                right,
+                                            );
+                                            fill_builder.close();
+                                            if let Ok(path) = fill_builder.build() {
+                                                window.paint_path(
+                                                    path,
+                                                    gpui::hsla(0.56, 0.17, 0.07, 1.0),
+                                                );
+                                            }
+
+                                            let mut stroke_builder =
+                                                PathBuilder::stroke(gpui::px(1.5));
+                                            stroke_builder.move_to(right);
+                                            stroke_builder.arc_to(
+                                                radii,
+                                                gpui::px(0.0),
+                                                false,
+                                                true,
+                                                left,
+                                            );
+                                            stroke_builder.arc_to(
+                                                radii,
+                                                gpui::px(0.0),
+                                                false,
+                                                true,
+                                                right,
+                                            );
+                                            stroke_builder.close();
+                                            if let Ok(path) = stroke_builder.build() {
+                                                window.paint_path(path, series_color);
+                                            }
                                         }
                                     }
                                 }
