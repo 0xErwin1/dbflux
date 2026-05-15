@@ -1087,7 +1087,9 @@ impl DataGridPanel {
                     .font(font("JetBrains Mono"))
                     .cursor_pointer()
                     .when(is_active, |d| {
-                        d.bg(primary).text_color(primary_fg).font_weight(FontWeight::SEMIBOLD)
+                        d.bg(primary)
+                            .text_color(primary_fg)
+                            .font_weight(FontWeight::SEMIBOLD)
                     })
                     .when(!is_active, |d| {
                         d.text_color(muted).hover(move |d| d.bg(secondary))
@@ -1123,31 +1125,29 @@ impl DataGridPanel {
 
         // --- Toolbar action button helper ---
         // Returns a compact ghost/primary pill button with an optional icon.
-        let toolbar_btn = |id: &'static str,
-                           icon: AppIcon,
-                           label: &'static str,
-                           is_active: bool| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .px(px(6.0))
-                .py(px(2.0))
-                .rounded(Radii::SM)
-                .text_size(FontSizes::XS)
-                .cursor_pointer()
-                .when(is_active, |d| d.bg(primary).text_color(primary_fg))
-                .when(!is_active, |d| {
-                    d.text_color(foreground).hover(move |d| d.bg(secondary))
-                })
-                .child(Icon::new(icon).size(px(11.0)).color(if is_active {
-                    primary_fg
-                } else {
-                    foreground
-                }))
-                .child(label)
-        };
+        let toolbar_btn =
+            |id: &'static str, icon: AppIcon, label: &'static str, is_active: bool| {
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .px(px(6.0))
+                    .py(px(2.0))
+                    .rounded(Radii::SM)
+                    .text_size(FontSizes::XS)
+                    .cursor_pointer()
+                    .when(is_active, |d| d.bg(primary).text_color(primary_fg))
+                    .when(!is_active, |d| {
+                        d.text_color(foreground).hover(move |d| d.bg(secondary))
+                    })
+                    .child(Icon::new(icon).size(px(11.0)).color(if is_active {
+                        primary_fg
+                    } else {
+                        foreground
+                    }))
+                    .child(label)
+            };
 
         div()
             .flex()
@@ -1227,19 +1227,24 @@ impl DataGridPanel {
             // Stats button (Issue 1: toggling same tab closes rail)
             .child({
                 let is_stats_active = rail_open && rail_tab == ChartRailTab::Stats;
-                toolbar_btn("chart-toolbar-stats", AppIcon::Zap, "Stats", is_stats_active)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if this.chart_rail_open && this.chart_rail_tab == ChartRailTab::Stats {
-                                this.chart_rail_open = false;
-                            } else {
-                                this.chart_rail_open = true;
-                                this.chart_rail_tab = ChartRailTab::Stats;
-                            }
-                            cx.notify();
-                        }),
-                    )
+                toolbar_btn(
+                    "chart-toolbar-stats",
+                    AppIcon::Zap,
+                    "Stats",
+                    is_stats_active,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        if this.chart_rail_open && this.chart_rail_tab == ChartRailTab::Stats {
+                            this.chart_rail_open = false;
+                        } else {
+                            this.chart_rail_open = true;
+                            this.chart_rail_tab = ChartRailTab::Stats;
+                        }
+                        cx.notify();
+                    }),
+                )
             })
             // Configure button (Issue 1: toggling same tab closes rail)
             .child({
@@ -1253,9 +1258,7 @@ impl DataGridPanel {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
-                        if this.chart_rail_open
-                            && this.chart_rail_tab == ChartRailTab::Configure
-                        {
+                        if this.chart_rail_open && this.chart_rail_tab == ChartRailTab::Configure {
                             this.chart_rail_open = false;
                         } else {
                             this.chart_rail_open = true;
@@ -1268,21 +1271,15 @@ impl DataGridPanel {
             })
             // PNG export (stub — shows an info toast)
             .child(
-                toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG", false)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, _cx| {
-                            this.pending_toast = Some(
-                                crate::ui::components::toast::PendingToast {
-                                    message: format!(
-                                        "PNG export coming in v0.7 — {}",
-                                        now_hms()
-                                    ),
-                                    is_error: false,
-                                },
-                            );
-                        }),
-                    ),
+                toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG", false).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _cx| {
+                        this.pending_toast = Some(crate::ui::components::toast::PendingToast {
+                            message: format!("PNG export coming in v0.7 — {}", now_hms()),
+                            is_error: false,
+                        });
+                    }),
+                ),
             )
     }
 
@@ -1390,10 +1387,7 @@ impl DataGridPanel {
                 // is open. The rail floats as an absolute-positioned overlay on the
                 // right edge so opening it does not resize the canvas.
                 let chart_area = if let Some(chart_entity) = self.chart_view.clone() {
-                    div()
-                        .size_full()
-                        .child(chart_entity)
-                        .into_any_element()
+                    div().size_full().child(chart_entity).into_any_element()
                 } else {
                     div()
                         .size_full()
