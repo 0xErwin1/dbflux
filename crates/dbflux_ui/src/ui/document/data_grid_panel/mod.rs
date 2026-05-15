@@ -416,6 +416,9 @@ pub struct DataGridPanel {
     /// Series indices hidden by the user via the legend. Cleared on set_result and Apply.
     pub(super) chart_hidden_series: HashSet<usize>,
 
+    /// Whether the manual column-picker overlay is visible in the degraded UX card.
+    pub(super) chart_picker_overlay_open: bool,
+
     /// Time-range panel from the source-context bar, set by CodeDocument after
     /// the panel is built. Used by the chart toolbar RANGE chips to read/write
     /// the active preset. `None` for non-TimeSeries sources or before the panel
@@ -833,6 +836,7 @@ impl DataGridPanel {
             chart_picker_x_col: 0,
             chart_picker_y_checked: Vec::new(),
             chart_hidden_series: HashSet::new(),
+            chart_picker_overlay_open: false,
             chart_source_time_range_panel: None,
             chart_rail_open: false,
             chart_rail_tab: ChartRailTab::Configure,
@@ -1306,8 +1310,9 @@ impl DataGridPanel {
         self.chart_focused_series_idx = 0;
         self.reset_chart_picker(&result.columns);
 
-        // Reset the Configure rail and hidden-series state for the new result.
+        // Reset the Configure rail, hidden-series, and degraded-picker state for the new result.
         self.chart_hidden_series = HashSet::new();
+        self.chart_picker_overlay_open = false;
         self.chart_rail_open = false;
         self.chart_rail_tab = ChartRailTab::Configure;
         self.chart_rail_picker_x_col = 0;
