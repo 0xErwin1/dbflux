@@ -799,8 +799,13 @@ impl Render for CodeDocument {
                 let sub = cx.subscribe(&panel, |this, _panel, event: &TimeRangeChanged, cx| {
                     this.on_source_time_range_panel_changed(event.start_ms, event.end_ms, cx);
                 });
-                self.source_time_range_panel = Some(panel);
+                self.source_time_range_panel = Some(panel.clone());
                 self._source_time_range_sub = Some(sub);
+
+                // Seed the initial window for the default preset. The panel
+                // cannot emit during its constructor because the subscription
+                // above is not registered until after `cx.new` returns.
+                panel.update(cx, |panel, cx| panel.emit_initial(cx));
             }
         }
 

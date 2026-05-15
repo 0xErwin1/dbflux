@@ -108,7 +108,7 @@ impl TimeRangePanel {
                     return;
                 }
 
-                let (start_ms, end_ms) = range.to_filter_values();
+                let (start_ms, end_ms) = Self::resolved_window_for_preset(range);
                 cx.emit(TimeRangeChanged { start_ms, end_ms });
                 cx.notify();
             },
@@ -248,6 +248,51 @@ impl TimeRangePanel {
         self.custom_date_range(cx).is_some() && self.custom_time_parts(cx).is_some()
     }
 
+    /// Resolve a relative preset to absolute `(start_ms, end_ms)` bounds.
+    ///
+    /// `to_filter_values` returns `None` for the end of relative presets so
+    /// that callers like the audit-log filter can express an unbounded tail.
+    /// `TimeRangeChanged` consumers (query execution, chart panels) need a
+    /// closed window, so the panel materialises `end = now` at emission time.
+    fn resolved_window_for_preset(range: TimeRange) -> (Option<i64>, Option<i64>) {
+        let (start_ms, end_ms) = range.to_filter_values();
+
+        // Only materialise `end` for ranges that resolve a real start (i.e. the
+        // relative presets). `Custom` returns `(None, None)` until the user
+        // applies the date picker — leave that case alone so the caller knows
+        // no window is selected yet.
+        let end_ms = if start_ms.is_some() {
+            end_ms.or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .ok()
+            })
+        } else {
+            end_ms
+        };
+
+        (start_ms, end_ms)
+    }
+
+    /// Emit a `TimeRangeChanged` event for the currently selected preset.
+    ///
+    /// Used by hosts after subscribing to seed the initial window — the
+    /// constructor selects a default preset but cannot emit during build
+    /// because no subscriber is registered yet. `Custom` is a no-op until
+    /// the user applies the date picker.
+    pub fn emit_initial(&self, cx: &mut Context<Self>) {
+        let Some(range) = self.selected_time_range else {
+            return;
+        };
+        if range == TimeRange::Custom {
+            return;
+        }
+
+        let (start_ms, end_ms) = Self::resolved_window_for_preset(range);
+        cx.emit(TimeRangeChanged { start_ms, end_ms });
+    }
+
     /// Validate and emit `TimeRangeChanged` for the current custom picker state.
     ///
     /// Returns `Err(message)` when the inputs are invalid or incomplete.
@@ -311,6 +356,45 @@ mod tests {
     fn out_of_range_index_returns_none() {
         assert_eq!(TimeRangePanel::time_range_for_index(6), None);
         assert_eq!(TimeRangePanel::time_range_for_index(100), None);
+    }
+
+    #[test]
+    fn resolved_window_for_relative_preset_materializes_end_as_now() {
+        // Sanity-check each relative preset emits a closed window where
+        // end is filled with the current epoch ms (within a 5s tolerance).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        for range in [
+            TimeRange::Last5min,
+            TimeRange::Last30min,
+            TimeRange::LastHour,
+            TimeRange::Last3Hours,
+            TimeRange::Last12Hours,
+        ] {
+            let (start_ms, end_ms) = TimeRangePanel::resolved_window_for_preset(range);
+
+            let start = start_ms.expect("relative preset must have a start");
+            let end = end_ms.expect("relative preset must materialise an end");
+
+            assert!(end >= start, "{range:?}: end should be >= start");
+            assert!(
+                (end - now).abs() < 5_000,
+                "{range:?}: end should be close to now (delta = {} ms)",
+                (end - now).abs()
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_window_for_custom_preserves_unbounded_end() {
+        // Custom returns (None, None) per the panel contract; the host has to
+        // apply the date picker to materialise concrete bounds.
+        let (start_ms, end_ms) = TimeRangePanel::resolved_window_for_preset(TimeRange::Custom);
+        assert!(start_ms.is_none());
+        assert!(end_ms.is_none());
     }
 
     #[test]
