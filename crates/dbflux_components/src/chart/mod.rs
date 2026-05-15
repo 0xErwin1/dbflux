@@ -19,7 +19,9 @@ pub mod detect;
 pub mod engine;
 pub mod legend;
 pub mod spec;
+pub mod stats;
 
 pub use detect::{ChartDetection, detect_chart_columns};
 pub use engine::{CHART_PALETTE, ChartBuildError, ChartView};
 pub use spec::{AxisKind, AxisSpec, ChartKind, ChartSpec, ManualChartSelection, SeriesSpec};
+pub use stats::{SeriesStats, compute_series_stats};

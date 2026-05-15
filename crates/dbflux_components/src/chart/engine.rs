@@ -529,7 +529,7 @@ impl Render for ChartView {
                                                 ));
                                             } else {
                                                 let mut builder =
-                                                    PathBuilder::stroke(gpui::px(1.5));
+                                                    PathBuilder::stroke(gpui::px(2.0));
                                                 let (x0, y0) = pts[0];
                                                 builder.move_to(point(
                                                     gpui::px(data_to_screen_x(x0)),
