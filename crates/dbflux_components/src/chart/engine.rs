@@ -5,12 +5,16 @@
 //! stored `RenderModel`.
 
 use gpui::prelude::*;
-use gpui::{App, Context, Hsla, PathBuilder, Pixels, Render, Window, canvas, div, fill, point};
+use gpui::{
+    App, Context, Hsla, PathBuilder, Pixels, Render, SharedString, Window, canvas, div, fill,
+    point,
+};
 
 use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
 use crate::chart::decimate::lttb;
 use crate::chart::legend::legend_element;
 use crate::chart::spec::{AxisKind, ChartSpec};
+use crate::tokens::FontSizes;
 use dbflux_core::{ColumnKind, QueryResult, Value};
 
 // ---------------------------------------------------------------------------
@@ -87,10 +91,9 @@ pub(crate) struct RenderModel {
     pub decimated: Vec<Vec<(f64, f64)>>,
     /// Resolved palette colour per series.
     pub palette_colors: Vec<Hsla>,
-    /// X-axis tick labels (reserved for future tick-label overlay).
-    #[allow(dead_code)]
+    /// X-axis tick labels rendered below the plot area.
     pub x_ticks: Vec<TickLabel>,
-    /// Y-axis tick labels.
+    /// Y-axis tick labels rendered to the left of the plot area.
     pub y_ticks: Vec<TickLabel>,
     /// Data-space X bounds.
     pub x_min: f64,
@@ -98,9 +101,6 @@ pub(crate) struct RenderModel {
     /// Data-space Y bounds.
     pub y_min: f64,
     pub y_max: f64,
-    /// Whether the X axis is time-formatted (reserved for tick formatting).
-    #[allow(dead_code)]
-    pub x_is_time: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +288,6 @@ impl ChartView {
             x_max,
             y_min,
             y_max,
-            x_is_time,
         };
 
         Ok(ChartView {
@@ -345,6 +344,23 @@ impl Render for ChartView {
         let y_ticks_canvas = model.y_ticks.clone();
         let hover_x_canvas = hover_x;
 
+        // Y-axis labels (rendered reversed: highest value at top, lowest at bottom).
+        // `justify_between` distributes them evenly in the label column, matching
+        // the evenly-spaced gridlines produced by the nice-tick algorithm.
+        let y_label_texts: Vec<SharedString> = model
+            .y_ticks
+            .iter()
+            .rev()
+            .map(|t| SharedString::from(t.label.clone()))
+            .collect();
+
+        // X-axis labels (left-to-right, matching data order).
+        let x_label_texts: Vec<SharedString> = model
+            .x_ticks
+            .iter()
+            .map(|t| SharedString::from(t.label.clone()))
+            .collect();
+
         // Legend element (built outside the canvas closure so it can be a div child).
         let legend = if spec.legend_visible && spec.series.len() > 1 {
             let entity = cx.entity().clone();
@@ -366,129 +382,182 @@ impl Render for ChartView {
             .flex()
             .flex_col()
             .size_full()
-            // Main chart canvas
+            // Chart body: Y-label column + plot area side by side.
             .child(
                 div()
+                    .flex()
                     .flex_grow()
-                    .relative()
-                    .on_mouse_move(cx.listener(
-                        move |this, ev: &gpui::MouseMoveEvent, _window, cx| {
-                            this.hover_x_screen = Some(ev.position.x);
-                            cx.notify();
-                        },
-                    ))
-                    .child({
-                        canvas(
-                            move |bounds, _window, _cx| bounds,
-                            move |_bounds, bounds_data, window, _cx| {
-                                let b = bounds_data;
-                                let w = f32::from(b.size.width);
-                                let h = f32::from(b.size.height);
-                                let ox = f32::from(b.origin.x);
-                                let oy = f32::from(b.origin.y);
+                    // Y-axis label column — sits in the left margin.
+                    .child(
+                        div()
+                            .w(gpui::px(MARGIN_LEFT))
+                            .flex_shrink_0()
+                            // Inset by MARGIN_TOP at the top so labels align with
+                            // the plot area, not the full container height.
+                            .pt(gpui::px(MARGIN_TOP))
+                            .flex()
+                            .flex_col()
+                            .justify_between()
+                            .overflow_hidden()
+                            .children(y_label_texts.into_iter().map(|label| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_end()
+                                    .pr(gpui::px(4.0))
+                                    .text_size(FontSizes::XS)
+                                    .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                                    .child(label)
+                            })),
+                    )
+                    // Plot area: canvas (absolute, size_full) inside a relative container.
+                    .child(
+                        div()
+                            .flex_grow()
+                            .relative()
+                            .on_mouse_move(cx.listener(
+                                move |this, ev: &gpui::MouseMoveEvent, _window, cx| {
+                                    this.hover_x_screen = Some(ev.position.x);
+                                    cx.notify();
+                                },
+                            ))
+                            .child({
+                                canvas(
+                                    move |bounds, _window, _cx| bounds,
+                                    move |_bounds, bounds_data, window, _cx| {
+                                        let b = bounds_data;
+                                        let w = f32::from(b.size.width);
+                                        let h = f32::from(b.size.height);
+                                        let ox = f32::from(b.origin.x);
+                                        let oy = f32::from(b.origin.y);
 
-                                // Plot area in screen space.
-                                let plot_x0 = ox + MARGIN_LEFT;
-                                let plot_y0 = oy + MARGIN_TOP;
-                                let plot_w = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
-                                let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
+                                        // Plot area in screen space (no left margin here;
+                                        // the Y-label column already occupies MARGIN_LEFT).
+                                        let plot_x0 = ox;
+                                        let plot_y0 = oy + MARGIN_TOP;
+                                        let plot_w = (w - MARGIN_RIGHT).max(1.0);
+                                        let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
 
-                                let data_to_screen_x = |dx: f64| -> f32 {
-                                    plot_x0 + ((dx - x_min) / x_range * plot_w as f64) as f32
-                                };
-                                let data_to_screen_y = |dy: f64| -> f32 {
-                                    // Y is inverted: top = y_max, bottom = y_min.
-                                    plot_y0 + plot_h
-                                        - ((dy - y_min) / y_range * plot_h as f64) as f32
-                                };
+                                        let data_to_screen_x = |dx: f64| -> f32 {
+                                            plot_x0
+                                                + ((dx - x_min) / x_range * plot_w as f64) as f32
+                                        };
+                                        let data_to_screen_y = |dy: f64| -> f32 {
+                                            // Y is inverted: top = y_max, bottom = y_min.
+                                            plot_y0 + plot_h
+                                                - ((dy - y_min) / y_range * plot_h as f64) as f32
+                                        };
 
-                                // --- Horizontal gridlines at each Y tick ---
-                                for tick in &y_ticks_canvas {
-                                    let sy = data_to_screen_y(tick.value);
-                                    window.paint_quad(fill(
-                                        gpui::Bounds {
-                                            origin: point(gpui::px(plot_x0), gpui::px(sy - 0.5)),
-                                            size: gpui::Size {
-                                                width: gpui::px(plot_w),
-                                                height: gpui::px(1.0),
-                                            },
-                                        },
-                                        gpui::hsla(0.0, 0.0, 0.5, 0.2),
-                                    ));
-                                }
-
-                                // --- Series polylines ---
-                                for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                    if pts.is_empty() {
-                                        continue;
-                                    }
-                                    let color = palette_canvas
-                                        .get(s_idx)
-                                        .copied()
-                                        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-
-                                    if pts.len() == 1 {
-                                        // Single-point fallback: paint a 3×3 square.
-                                        let sx = data_to_screen_x(pts[0].0);
-                                        let sy = data_to_screen_y(pts[0].1);
-                                        window.paint_quad(fill(
-                                            gpui::Bounds {
-                                                origin: point(
-                                                    gpui::px(sx - 1.5),
-                                                    gpui::px(sy - 1.5),
-                                                ),
-                                                size: gpui::Size {
-                                                    width: gpui::px(3.0),
-                                                    height: gpui::px(3.0),
+                                        // --- Horizontal gridlines at each Y tick ---
+                                        for tick in &y_ticks_canvas {
+                                            let sy = data_to_screen_y(tick.value);
+                                            window.paint_quad(fill(
+                                                gpui::Bounds {
+                                                    origin: point(
+                                                        gpui::px(plot_x0),
+                                                        gpui::px(sy - 0.5),
+                                                    ),
+                                                    size: gpui::Size {
+                                                        width: gpui::px(plot_w),
+                                                        height: gpui::px(1.0),
+                                                    },
                                                 },
-                                            },
-                                            color,
-                                        ));
-                                    } else {
-                                        let mut builder = PathBuilder::stroke(gpui::px(1.5));
-                                        let (x0, y0) = pts[0];
-                                        builder.move_to(point(
-                                            gpui::px(data_to_screen_x(x0)),
-                                            gpui::px(data_to_screen_y(y0)),
-                                        ));
-                                        for &(x, y) in pts.iter().skip(1) {
-                                            builder.line_to(point(
-                                                gpui::px(data_to_screen_x(x)),
-                                                gpui::px(data_to_screen_y(y)),
+                                                gpui::hsla(0.0, 0.0, 0.5, 0.2),
                                             ));
                                         }
-                                        if let Ok(path) = builder.build() {
-                                            window.paint_path(path, color);
-                                        }
-                                    }
-                                }
 
-                                // --- Crosshair ---
-                                if let Some(hx) = hover_x_canvas {
-                                    let sx = f32::from(hx);
-                                    if sx >= plot_x0 && sx <= plot_x0 + plot_w {
-                                        window.paint_quad(fill(
-                                            gpui::Bounds {
-                                                origin: point(
-                                                    gpui::px(sx - 0.5),
-                                                    gpui::px(plot_y0),
-                                                ),
-                                                size: gpui::Size {
-                                                    width: gpui::px(1.0),
-                                                    height: gpui::px(plot_h),
-                                                },
-                                            },
-                                            gpui::hsla(0.0, 0.0, 0.7, 0.5),
-                                        ));
-                                    }
-                                }
-                            },
-                        )
-                        .absolute()
-                        .size_full()
-                    }),
+                                        // --- Series polylines ---
+                                        for (s_idx, pts) in decimated_canvas.iter().enumerate() {
+                                            if pts.is_empty() {
+                                                continue;
+                                            }
+                                            let color = palette_canvas
+                                                .get(s_idx)
+                                                .copied()
+                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+
+                                            if pts.len() == 1 {
+                                                // Single-point fallback: paint a 3×3 square.
+                                                let sx = data_to_screen_x(pts[0].0);
+                                                let sy = data_to_screen_y(pts[0].1);
+                                                window.paint_quad(fill(
+                                                    gpui::Bounds {
+                                                        origin: point(
+                                                            gpui::px(sx - 1.5),
+                                                            gpui::px(sy - 1.5),
+                                                        ),
+                                                        size: gpui::Size {
+                                                            width: gpui::px(3.0),
+                                                            height: gpui::px(3.0),
+                                                        },
+                                                    },
+                                                    color,
+                                                ));
+                                            } else {
+                                                let mut builder =
+                                                    PathBuilder::stroke(gpui::px(1.5));
+                                                let (x0, y0) = pts[0];
+                                                builder.move_to(point(
+                                                    gpui::px(data_to_screen_x(x0)),
+                                                    gpui::px(data_to_screen_y(y0)),
+                                                ));
+                                                for &(x, y) in pts.iter().skip(1) {
+                                                    builder.line_to(point(
+                                                        gpui::px(data_to_screen_x(x)),
+                                                        gpui::px(data_to_screen_y(y)),
+                                                    ));
+                                                }
+                                                if let Ok(path) = builder.build() {
+                                                    window.paint_path(path, color);
+                                                }
+                                            }
+                                        }
+
+                                        // --- Crosshair ---
+                                        if let Some(hx) = hover_x_canvas {
+                                            let sx = f32::from(hx);
+                                            if sx >= plot_x0 && sx <= plot_x0 + plot_w {
+                                                window.paint_quad(fill(
+                                                    gpui::Bounds {
+                                                        origin: point(
+                                                            gpui::px(sx - 0.5),
+                                                            gpui::px(plot_y0),
+                                                        ),
+                                                        size: gpui::Size {
+                                                            width: gpui::px(1.0),
+                                                            height: gpui::px(plot_h),
+                                                        },
+                                                    },
+                                                    gpui::hsla(0.0, 0.0, 0.7, 0.5),
+                                                ));
+                                            }
+                                        }
+                                    },
+                                )
+                                .absolute()
+                                .size_full()
+                            }),
+                    ),
             )
-            // Legend row (below chart)
+            // X-axis label row — sits below the chart body, inset by the Y-label column width.
+            .child(
+                div()
+                    .h(gpui::px(MARGIN_BOTTOM))
+                    .flex_shrink_0()
+                    // Left padding equal to the Y-label column so labels start at plot_x0.
+                    .pl(gpui::px(MARGIN_LEFT))
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .overflow_hidden()
+                    .children(x_label_texts.into_iter().map(|label| {
+                        div()
+                            .text_size(FontSizes::XS)
+                            .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                            .child(label)
+                    })),
+            )
+            // Legend row (below X labels)
             .when_some(legend, |d, leg| d.child(leg))
     }
 }
