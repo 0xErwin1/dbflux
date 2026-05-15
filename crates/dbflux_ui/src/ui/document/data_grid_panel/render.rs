@@ -1387,6 +1387,39 @@ impl DataGridPanel {
                             }),
                         ))
                     })
+                    // Legend toggle — only visible in Chart mode (REQ-CHART-029).
+                    .when(current_result_mode == ResultViewMode::Chart, |d| {
+                        let legend_visible = self.chart_legend_visible;
+                        let icon = if legend_visible {
+                            AppIcon::Eye
+                        } else {
+                            AppIcon::EyeOff
+                        };
+                        d.child(
+                            div()
+                                .id("chart-legend-toggle")
+                                .ml(Spacing::XS)
+                                .px(Spacing::XS)
+                                .py(px(2.0))
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(theme.secondary))
+                                .tooltip(move |window, cx| {
+                                    let label = if legend_visible {
+                                        "Hide legend"
+                                    } else {
+                                        "Show legend"
+                                    };
+                                    gpui_component::tooltip::Tooltip::new(label).build(window, cx)
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_chart_legend(cx);
+                                }))
+                                .child(
+                                    Icon::new(icon).size(px(12.0)).color(theme.muted_foreground),
+                                ),
+                        )
+                    })
                     // Shape badge
                     .when_some(result_shape_label, |d, shape| {
                         let label = match &shape {

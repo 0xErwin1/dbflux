@@ -2064,7 +2064,10 @@ mod tests {
         assert_eq!(kind_from_decltype(Some("DOUBLE")), ColumnKind::Float);
         assert_eq!(kind_from_decltype(Some("NUMERIC")), ColumnKind::Float);
         assert_eq!(kind_from_decltype(Some("DECIMAL")), ColumnKind::Float);
-        assert_eq!(kind_from_decltype(Some("double precision")), ColumnKind::Float);
+        assert_eq!(
+            kind_from_decltype(Some("double precision")),
+            ColumnKind::Float
+        );
     }
 
     #[test]

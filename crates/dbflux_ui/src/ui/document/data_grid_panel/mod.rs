@@ -383,6 +383,9 @@ pub struct DataGridPanel {
     chart_manual_selection: Option<ManualChartSelection>,
     /// Index of the currently focused legend series.
     chart_focused_series_idx: usize,
+    /// User-controlled legend visibility (REQ-CHART-029). Defaults to `true`;
+    /// the engine still hides the legend automatically when series count <= 1.
+    chart_legend_visible: bool,
 
     // Manual column picker state — used when chart_detection is not Ok and the
     // user is choosing columns manually. Reset whenever chart_detection changes.
@@ -786,6 +789,7 @@ impl DataGridPanel {
             chart_view: None,
             chart_manual_selection: None,
             chart_focused_series_idx: 0,
+            chart_legend_visible: true,
             chart_picker_x_col: 0,
             chart_picker_y_checked: Vec::new(),
         }
@@ -859,7 +863,7 @@ impl DataGridPanel {
             return self.chart_view.clone();
         }
 
-        let spec = if let Some(manual) = &self.chart_manual_selection {
+        let mut spec = if let Some(manual) = &self.chart_manual_selection {
             ChartSpec::from_manual_selection(manual, &self.result.columns, 10_000)
         } else {
             match &self.chart_detection {
@@ -876,6 +880,11 @@ impl DataGridPanel {
             }
         }?;
 
+        // Apply the user-controlled legend override: the engine's default rule
+        // (`series.len() > 1`) is preserved when the user hasn't toggled the
+        // legend off; once toggled off it stays off regardless of series count.
+        spec.legend_visible = self.chart_legend_visible && spec.series.len() > 1;
+
         match ChartView::build(&self.result, spec) {
             Ok(chart_view) => {
                 let entity = cx.new(|_cx| chart_view);
@@ -887,6 +896,23 @@ impl DataGridPanel {
                 None
             }
         }
+    }
+
+    /// Flip the user-controlled legend visibility for the current chart panel
+    /// and sync the change to the live `ChartView` entity, if one exists.
+    /// Has no visible effect when the chart has only one series — the engine
+    /// hides the legend by default in that case.
+    pub(super) fn toggle_chart_legend(&mut self, cx: &mut Context<Self>) {
+        self.chart_legend_visible = !self.chart_legend_visible;
+
+        if let Some(chart_entity) = self.chart_view.clone() {
+            let visible = self.chart_legend_visible;
+            chart_entity.update(cx, |view, cx| {
+                view.set_legend_visible(visible, cx);
+            });
+        }
+
+        cx.notify();
     }
 
     /// Reset the manual picker state for a new result's column list.
