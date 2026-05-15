@@ -8,7 +8,7 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::Input;
 use dbflux_components::controls::InputState;
 use dbflux_components::primitives::{Icon, Text, surface_raised};
-use dbflux_core::{Pagination, SortDirection, Value};
+use dbflux_core::{Pagination, QueryResultShape, SortDirection, Value};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -977,6 +977,22 @@ impl DataGridPanel {
             ResultViewMode::Table => {
                 container = container.when_some(self.data_table.clone(), |d, dt| d.child(dt));
             }
+            ResultViewMode::Chart => {
+                // Build the chart view on first access; display a banner if unavailable.
+                if let Some(chart_entity) = self.ensure_chart_view(cx) {
+                    container = container.child(chart_entity);
+                } else {
+                    container = container
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            dbflux_components::primitives::Text::muted(
+                                "Chart unavailable: no Timestamp column with numeric series detected.",
+                            ),
+                        );
+                }
+            }
             ResultViewMode::Text => {
                 let text = self.derived_text().to_string();
                 container = container.child(self.render_text_view(&text, theme));
@@ -1099,7 +1115,11 @@ impl DataGridPanel {
         };
 
         let available_modes = if uses_result_view {
-            ResultViewMode::available_for_shape(&self.result.shape)
+            if self.chart_available() && self.result.shape == QueryResultShape::Table {
+                ResultViewMode::available_for_chartable_result()
+            } else {
+                ResultViewMode::available_for_shape(&self.result.shape)
+            }
         } else {
             vec![]
         };

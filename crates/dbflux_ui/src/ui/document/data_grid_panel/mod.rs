@@ -25,6 +25,9 @@ use crate::ui::overlays::document_preview_modal::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
+use dbflux_components::chart::{
+    ChartDetection, ChartSpec, ChartView, ManualChartSelection, detect_chart_columns,
+};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
@@ -368,6 +371,18 @@ pub struct DataGridPanel {
     row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
 
     export_menu_open: bool,
+
+    // Chart view (T10-T13)
+    /// Auto-detection result for the current result set. `None` means detection
+    /// has not run yet or the result is incompatible.
+    chart_detection: Option<ChartDetection>,
+    /// Built `ChartView` entity. Created on demand when the user switches to
+    /// Chart mode or when detection succeeds and the mode is already Chart.
+    chart_view: Option<Entity<ChartView>>,
+    /// Manual column selection overriding auto-detection. `None` = use detection.
+    chart_manual_selection: Option<ManualChartSelection>,
+    /// Index of the currently focused legend series.
+    chart_focused_series_idx: usize,
 }
 
 impl DataGridPanel {
@@ -759,6 +774,10 @@ impl DataGridPanel {
             pending_document_preview: None,
             row_inspector_content: None,
             export_menu_open: false,
+            chart_detection: None,
+            chart_view: None,
+            chart_manual_selection: None,
+            chart_focused_series_idx: 0,
         }
     }
 
@@ -810,6 +829,53 @@ impl DataGridPanel {
 
     fn uses_result_view(&self) -> bool {
         matches!(self.source, DataSource::QueryResult { .. }) && !self.result_view_mode.is_table()
+    }
+
+    /// Returns `true` when the current result has a `Timestamp` column and at
+    /// least one numeric column — i.e., chart mode is available.
+    pub(super) fn chart_available(&self) -> bool {
+        matches!(
+            &self.chart_detection,
+            Some(ChartDetection::Ok { .. })
+        )
+    }
+
+    /// Build or return the existing `ChartView` entity for the current result.
+    ///
+    /// Returns `None` when detection failed or the result is incompatible.
+    /// Uses the manual selection if set, otherwise auto-detection.
+    pub(super) fn ensure_chart_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<ChartView>> {
+        if self.chart_view.is_some() {
+            return self.chart_view.clone();
+        }
+
+        let spec = if let Some(manual) = &self.chart_manual_selection {
+            ChartSpec::from_manual_selection(manual, &self.result.columns, 10_000)
+        } else {
+            match &self.chart_detection {
+                Some(ChartDetection::Ok { time_col, numeric_cols }) => {
+                    ChartSpec::from_detection(
+                        *time_col,
+                        numeric_cols.clone(),
+                        &self.result.columns,
+                        10_000,
+                    )
+                }
+                _ => None,
+            }
+        }?;
+
+        match ChartView::build(&self.result, spec) {
+            Ok(chart_view) => {
+                let entity = cx.new(|_cx| chart_view);
+                self.chart_view = Some(entity.clone());
+                Some(entity)
+            }
+            Err(err) => {
+                log::warn!("[chart] ChartView::build failed: {}", err);
+                None
+            }
+        }
     }
 
     pub(super) fn derived_text(&mut self) -> &str {
@@ -965,6 +1031,13 @@ impl DataGridPanel {
         self.result_view_mode = ResultViewMode::default_for_shape(&result.shape);
         self.derived_json = None;
         self.derived_text = None;
+
+        // Run chart detection on the new result; invalidate any stale chart view.
+        self.chart_detection = Some(detect_chart_columns(&result));
+        self.chart_view = None;
+        self.chart_manual_selection = None;
+        self.chart_focused_series_idx = 0;
+
         self.result = result;
         self.rebuild_table(None, cx);
         self.state = GridState::Ready;
