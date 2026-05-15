@@ -1319,22 +1319,29 @@ impl DataGridPanel {
             None
         };
 
-        let available_modes = if uses_result_view {
-            // The Chart toggle is visible when the result shape is a table AND:
-            // - auto-detection succeeded (chart_available()), OR
-            // - the driver's category is TimeSeries (REQ-CHART-015: always show for TimeSeries
-            //   so the user can reach the manual picker even when detection fails).
-            let is_time_series =
-                DataGridPanel::connection_category(&self.source, &self.app_state, cx)
-                    == Some(DatabaseCategory::TimeSeries);
-            let show_chart = self.result.shape == QueryResultShape::Table
-                && (self.chart_available() || is_time_series);
+        // The Chart toggle is offered whenever the result is shape Table and
+        // either auto-detection produced a chartable column set OR the driver
+        // category is TimeSeries (REQ-CHART-015 — always reachable for
+        // TimeSeries so the user can fall back to the manual picker).
+        let is_time_series = DataGridPanel::connection_category(&self.source, &self.app_state, cx)
+            == Some(DatabaseCategory::TimeSeries);
+        let show_chart = self.result.shape == QueryResultShape::Table
+            && (self.chart_available() || is_time_series);
 
+        let available_modes = if uses_result_view {
+            // Result shapes other than Table (Json / Text / Binary) drive the
+            // mode selector unconditionally — Chart joins the list when this
+            // result is chartable.
             if show_chart {
                 ResultViewMode::available_for_chartable_result()
             } else {
                 ResultViewMode::available_for_shape(&self.result.shape)
             }
+        } else if show_chart {
+            // Table shape: the panel renders the data grid directly (no
+            // result-view path), but the user still needs the toggle so they
+            // can opt into Chart mode for time-series results.
+            ResultViewMode::available_for_chartable_result()
         } else {
             vec![]
         };
