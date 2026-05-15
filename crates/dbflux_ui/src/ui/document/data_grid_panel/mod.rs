@@ -1011,10 +1011,7 @@ impl DataGridPanel {
             .map(|(i, _)| i)
             .collect();
 
-        self.chart_rail_picker_x_col = x_candidates
-            .iter()
-            .position(|&ci| ci == x_col)
-            .unwrap_or(0);
+        self.chart_rail_picker_x_col = x_candidates.iter().position(|&ci| ci == x_col).unwrap_or(0);
 
         // Y-candidate list: Float, Integer, or Unknown columns.
         let y_candidates: Vec<usize> = columns

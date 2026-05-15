@@ -252,13 +252,8 @@ mod tests {
         let decimated = vec![series_0, series_1, series_2];
 
         // Cursor near y=20 line in screen space (identity mapping).
-        let result = hit_test_focused_series(
-            &decimated,
-            5.0,
-            20.0_f32,
-            |y_data| y_data as f32,
-            14.0,
-        );
+        let result =
+            hit_test_focused_series(&decimated, 5.0, 20.0_f32, |y_data| y_data as f32, 14.0);
         assert_eq!(result, Some(1));
     }
 
@@ -268,13 +263,8 @@ mod tests {
         let decimated = vec![series_0];
 
         // Cursor is 50px away — exceeds tolerance of 14px.
-        let result = hit_test_focused_series(
-            &decimated,
-            5.0,
-            60.0_f32,
-            |y_data| y_data as f32,
-            14.0,
-        );
+        let result =
+            hit_test_focused_series(&decimated, 5.0, 60.0_f32, |y_data| y_data as f32, 14.0);
         assert!(result.is_none());
     }
 

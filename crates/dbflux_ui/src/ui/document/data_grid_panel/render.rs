@@ -987,9 +987,17 @@ impl DataGridPanel {
                 let rail_open = self.chart_rail_open;
 
                 let chart_area = if let Some(chart_entity) = self.ensure_chart_view(cx) {
-                    div().flex_grow().size_full().child(chart_entity).into_any_element()
+                    div()
+                        .flex_grow()
+                        .size_full()
+                        .child(chart_entity)
+                        .into_any_element()
                 } else {
-                    div().flex_grow().size_full().child(self.render_chart_degraded(cx)).into_any_element()
+                    div()
+                        .flex_grow()
+                        .size_full()
+                        .child(self.render_chart_degraded(cx))
+                        .into_any_element()
                 };
 
                 let row = div()
@@ -1395,30 +1403,21 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(
-                        Text::caption("Time column".to_string())
-                            .color(theme.muted_foreground),
-                    )
+                    .child(Text::caption("Time column".to_string()).color(theme.muted_foreground))
                     .children(x_candidates.iter().enumerate().map(
                         |(cand_idx, (col_idx, col_name))| {
                             let col_idx = *col_idx;
                             let is_selected = cand_idx == selected_x;
                             let label = col_name.clone();
                             div()
-                                .id(ElementId::Name(
-                                    format!("rail-x-col-{}", col_idx).into(),
-                                ))
+                                .id(ElementId::Name(format!("rail-x-col-{}", col_idx).into()))
                                 .px(Spacing::SM)
                                 .py(gpui::px(2.0))
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
                                 .text_size(FontSizes::XS)
-                                .when(is_selected, |d| {
-                                    d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2))
-                                })
-                                .when(!is_selected, |d| {
-                                    d.hover(|d| d.bg(theme.secondary))
-                                })
+                                .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2)))
+                                .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
                                 .on_mouse_down(
                                     gpui::MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -1436,65 +1435,56 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(
-                        Text::caption("Y columns".to_string())
-                            .color(theme.muted_foreground),
-                    )
-                    .children(
-                        y_candidates
-                            .iter()
-                            .enumerate()
-                            .map(|(cand_idx, (col_idx, col_name))| {
-                                let col_idx = *col_idx;
-                                let checked =
-                                    y_checked.get(cand_idx).copied().unwrap_or(false);
-                                let label = col_name.clone();
+                    .child(Text::caption("Y columns".to_string()).color(theme.muted_foreground))
+                    .children(y_candidates.iter().enumerate().map(
+                        |(cand_idx, (col_idx, col_name))| {
+                            let col_idx = *col_idx;
+                            let checked = y_checked.get(cand_idx).copied().unwrap_or(false);
+                            let label = col_name.clone();
 
-                                // Find this column's series index in active_y_cols.
-                                let series_idx_opt =
-                                    active_y_cols.iter().position(|&ci| ci == col_idx);
-                                let stat_label = series_idx_opt
-                                    .and_then(|si| stats.get(si).copied().flatten())
-                                    .map(|s| {
-                                        format!(
-                                            "avg {} · last {}",
-                                            format_y_value(s.avg),
-                                            format_y_value(s.last)
-                                        )
-                                    })
-                                    .unwrap_or_else(|| "—".to_string());
+                            // Find this column's series index in active_y_cols.
+                            let series_idx_opt = active_y_cols.iter().position(|&ci| ci == col_idx);
+                            let stat_label = series_idx_opt
+                                .and_then(|si| stats.get(si).copied().flatten())
+                                .map(|s| {
+                                    format!(
+                                        "avg {} · last {}",
+                                        format_y_value(s.avg),
+                                        format_y_value(s.last)
+                                    )
+                                })
+                                .unwrap_or_else(|| "—".to_string());
 
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(gpui::px(1.0))
-                                    .child(
-                                        Checkbox::new(ElementId::Name(
-                                            format!("rail-y-col-{}", cand_idx).into(),
-                                        ))
-                                        .checked(checked)
-                                        .label(label)
-                                        .on_click(cx.listener(
-                                            move |this, &new_checked, _, cx| {
-                                                if let Some(slot) = this
-                                                    .chart_rail_picker_y_checked
-                                                    .get_mut(cand_idx)
-                                                {
-                                                    *slot = new_checked;
-                                                }
-                                                cx.notify();
-                                            },
-                                        )),
-                                    )
-                                    .child(
-                                        div()
-                                            .pl(gpui::px(20.0))
-                                            .text_size(FontSizes::XS)
-                                            .text_color(theme.muted_foreground)
-                                            .child(stat_label),
-                                    )
-                            }),
-                    ),
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(gpui::px(1.0))
+                                .child(
+                                    Checkbox::new(ElementId::Name(
+                                        format!("rail-y-col-{}", cand_idx).into(),
+                                    ))
+                                    .checked(checked)
+                                    .label(label)
+                                    .on_click(cx.listener(
+                                        move |this, &new_checked, _, cx| {
+                                            if let Some(slot) =
+                                                this.chart_rail_picker_y_checked.get_mut(cand_idx)
+                                            {
+                                                *slot = new_checked;
+                                            }
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    div()
+                                        .pl(gpui::px(20.0))
+                                        .text_size(FontSizes::XS)
+                                        .text_color(theme.muted_foreground)
+                                        .child(stat_label),
+                                )
+                        },
+                    )),
             )
             // Footer: Reset + Apply
             .child(
@@ -1566,25 +1556,25 @@ impl DataGridPanel {
     ) -> impl IntoElement {
         let focused_idx = self.chart_focused_series_idx;
 
-        let (stats_opt, label, color, x_min, x_max, x_is_time) =
-            if let Some(cv) = &self.chart_view {
-                let view = cv.read(cx);
-                let s = view.series_stats().get(focused_idx).copied().flatten();
-                let label = view.series_label(focused_idx).to_string();
-                let color = view.series_color(focused_idx);
-                let (x_min, x_max) = view.data_x_bounds();
-                let x_is_time = view.x_is_time();
-                (s, label, color, x_min, x_max, x_is_time)
-            } else {
-                // Rail may briefly be open while chart_view is None (e.g. during
-                // rebuild after Apply). Render an empty state.
-                return div()
-                    .p_2()
-                    .text_size(FontSizes::XS)
-                    .text_color(theme.muted_foreground)
-                    .child("Rebuilding chart…")
-                    .into_any_element();
-            };
+        let (stats_opt, label, color, x_min, x_max, x_is_time) = if let Some(cv) = &self.chart_view
+        {
+            let view = cv.read(cx);
+            let s = view.series_stats().get(focused_idx).copied().flatten();
+            let label = view.series_label(focused_idx).to_string();
+            let color = view.series_color(focused_idx);
+            let (x_min, x_max) = view.data_x_bounds();
+            let x_is_time = view.x_is_time();
+            (s, label, color, x_min, x_max, x_is_time)
+        } else {
+            // Rail may briefly be open while chart_view is None (e.g. during
+            // rebuild after Apply). Render an empty state.
+            return div()
+                .p_2()
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child("Rebuilding chart…")
+                .into_any_element();
+        };
 
         let Some(stats) = stats_opt else {
             return div()
@@ -1898,9 +1888,7 @@ impl DataGridPanel {
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
                                 .hover(|d| d.bg(theme.secondary))
-                                .when(rail_open, |d| {
-                                    d.bg(theme.secondary).text_color(accent)
-                                })
+                                .when(rail_open, |d| d.bg(theme.secondary).text_color(accent))
                                 .tooltip(|window, cx| {
                                     gpui_component::tooltip::Tooltip::new("Configure series")
                                         .build(window, cx)

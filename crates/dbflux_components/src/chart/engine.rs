@@ -17,7 +17,9 @@ use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
 use crate::chart::decimate::lttb;
 use crate::chart::legend::legend_element;
 use crate::chart::spec::{AxisKind, ChartSpec};
-use crate::chart::stats::{SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x};
+use crate::chart::stats::{
+    SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x,
+};
 use crate::tokens::FontSizes;
 use dbflux_core::{ColumnKind, QueryResult, Value};
 
@@ -415,9 +417,8 @@ impl ChartView {
 
         let cursor_data_x = x_min + (rel_x as f64 / plot_w as f64) * x_range;
 
-        let data_to_screen_y = |dy: f64| -> f32 {
-            plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32
-        };
+        let data_to_screen_y =
+            |dy: f64| -> f32 { plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32 };
 
         let cursor_screen_y = f32::from(hover_y);
 
@@ -437,12 +438,9 @@ impl ChartView {
 
         // Dead-band: only switch when the new series is strictly closer than the
         // current focused series by >= 2 px, mitigating jitter between near lines.
-        let dist_new = interpolate_y_at_x(
-            &self.render_model.decimated[new_idx],
-            cursor_data_x,
-        )
-        .map(|y| (data_to_screen_y(y) - cursor_screen_y).abs())
-        .unwrap_or(f32::INFINITY);
+        let dist_new = interpolate_y_at_x(&self.render_model.decimated[new_idx], cursor_data_x)
+            .map(|y| (data_to_screen_y(y) - cursor_screen_y).abs())
+            .unwrap_or(f32::INFINITY);
 
         let dist_current = interpolate_y_at_x(
             self.render_model
@@ -989,30 +987,23 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
                 .child(r.x_label),
         )
         // One row per series; focused row gets a brighter background + bold text.
-        .children(
-            r.series
-                .into_iter()
-                .enumerate()
-                .map(move |(idx, entry)| {
-                    let is_focused = idx == focused_idx;
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py(gpui::px(1.0))
-                        .when(is_focused, |d| {
-                            d.bg(gpui::hsla(0.0, 0.0, 0.2, 0.95))
-                                .font_weight(gpui::FontWeight::BOLD)
-                        })
-                        .when(!is_focused, |d| {
-                            d.bg(gpui::hsla(0.0, 0.0, 0.1, 0.92))
-                        })
-                        .child(div().w(gpui::px(8.0)).h(gpui::px(8.0)).bg(entry.color))
-                        .child(div().flex_grow().child(entry.label))
-                        .child(entry.y_label)
-                }),
-        )
+        .children(r.series.into_iter().enumerate().map(move |(idx, entry)| {
+            let is_focused = idx == focused_idx;
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py(gpui::px(1.0))
+                .when(is_focused, |d| {
+                    d.bg(gpui::hsla(0.0, 0.0, 0.2, 0.95))
+                        .font_weight(gpui::FontWeight::BOLD)
+                })
+                .when(!is_focused, |d| d.bg(gpui::hsla(0.0, 0.0, 0.1, 0.92)))
+                .child(div().w(gpui::px(8.0)).h(gpui::px(8.0)).bg(entry.color))
+                .child(div().flex_grow().child(entry.label))
+                .child(entry.y_label)
+        }))
 }
 
 // ---------------------------------------------------------------------------
