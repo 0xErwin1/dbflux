@@ -2437,6 +2437,8 @@ dependencies = [
  "dbflux_core",
  "gpui",
  "gpui-component",
+ "log",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
