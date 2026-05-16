@@ -1407,9 +1407,12 @@ impl Workspace {
         let connection_id = active_doc.connection_id(cx);
 
         if query.is_none() {
-            Toast::warning("Active document has no query to chart")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(
+                "No re-runnable query in this view. Open a SQL/Flux editor and run a query, \
+                 or use the Chart tab inside this view to plot it in place.",
+            )
+            .meta_right(now_hms())
+            .push(cx);
             return;
         }
 
