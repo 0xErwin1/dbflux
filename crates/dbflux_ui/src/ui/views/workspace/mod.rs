@@ -1211,11 +1211,6 @@ impl Workspace {
             PaletteCommand::new("open_audit_viewer", "Open Audit Viewer", "View")
                 .with_shortcut(SC.open_audit_viewer),
             // Charts
-            PaletteCommand::new(
-                "new_chart_from_current_query",
-                "New Chart from Current Query",
-                "Charts",
-            ),
             PaletteCommand::new("open_saved_chart", "Open Chart...", "Charts"),
         ]
     }

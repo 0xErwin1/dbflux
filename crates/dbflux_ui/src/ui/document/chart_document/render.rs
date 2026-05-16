@@ -2,13 +2,11 @@
 //!
 //! Layout:
 //!   ┌──────────────────────────────────────────────┐
-//!   │ header: title · Save button                  │
+//!   │ header: title · Run · Save                   │
 //!   ├──────────────────────────────────────────────┤
-//!   │ collapsible editor drawer                    │
-//!   │   [chevron] Query  [Run]                     │
-//!   │   ┌───────────────────────────────────────┐  │
-//!   │   │ SQL editor (when expanded)            │  │
-//!   │   └───────────────────────────────────────┘  │
+//!   │ chart toolbar (RANGE/REFRESH/...)            │
+//!   ├──────────────────────────────────────────────┤
+//!   │ axis bar (bindings)                          │
 //!   ├──────────────────────────────────────────────┤
 //!   │ chart area (fills remaining space)           │
 //!   └──────────────────────────────────────────────┘
@@ -20,11 +18,10 @@ use crate::ui::document::chart::ChartRailTab;
 use crate::ui::document::chart::toolbar::{
     ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar,
 };
-use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Spacing};
 use dbflux_components::chart::{ChartDetection, axis_bar_element};
-use dbflux_components::controls::{GpuiInput, Input};
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::controls::Input;
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
@@ -75,8 +72,6 @@ impl Render for ChartDocument {
         let theme = cx.theme().clone();
 
         let is_executing = self.exec_state == super::ExecState::Running;
-        let drawer_open = self.editor_drawer_open;
-        let editor_input = self.editor_input.clone();
         let focus_handle = self.focus_handle.clone();
         let title = self.title.clone();
         let show_name_prompt = self.name_prompt.is_some();
@@ -162,82 +157,34 @@ impl Render for ChartDocument {
                 )
         });
 
-        let chevron_icon = if drawer_open {
-            AppIcon::ChevronDown
-        } else {
-            AppIcon::ChevronRight
-        };
-
-        let header =
-            div()
-                .flex()
-                .flex_col()
-                .border_b_1()
-                .border_color(theme.border)
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .h(Heights::TOOLBAR)
-                        .px(Spacing::MD)
-                        .gap(Spacing::SM)
-                        .child(
-                            div()
-                                .id("chart-doc-drawer-toggle")
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, _window, cx| {
-                                    this.toggle_editor_drawer(cx);
-                                }))
-                                .child(Icon::new(chevron_icon).small())
-                                .child(Text::label(title)),
-                        )
-                        .child(
-                            Button::new("run-query")
-                                .label(if is_executing { "Running…" } else { "Run" })
-                                .small()
-                                .with_variant(ButtonVariant::Primary)
-                                .disabled(is_executing)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.request_reexecute(window, cx);
-                                })),
-                        )
-                        .child(div().flex_grow())
-                        .child(Button::new("save-chart").label("Save").small().on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.open_name_prompt(window, cx);
-                            }),
-                        )),
-                )
-                .when(drawer_open, |el| {
-                    let input_for_click = editor_input.clone();
-                    let mono_font = cx.theme().mono_font_family.clone();
-                    let mono_size = cx.theme().mono_font_size;
-                    el.child(
-                        div()
-                            .h(px(180.0))
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .border_t_1()
-                            .border_color(theme.border)
-                            .font_family(mono_font)
-                            .text_size(mono_size)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                move |_, window, cx| {
-                                    input_for_click.update(cx, |state, cx| {
-                                        state.focus(window, cx);
-                                    });
-                                },
-                            )
-                            .child(GpuiInput::new(&editor_input).h_full()),
-                    )
-                });
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(Heights::TOOLBAR)
+            .px(Spacing::MD)
+            .gap(Spacing::SM)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(Text::label(title))
+            .child(
+                Button::new("run-query")
+                    .label(if is_executing { "Running…" } else { "Run" })
+                    .small()
+                    .with_variant(ButtonVariant::Primary)
+                    .disabled(is_executing)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.request_reexecute(window, cx);
+                    })),
+            )
+            .child(div().flex_grow())
+            .child(
+                Button::new("save-chart").label("Save").small().on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.open_name_prompt(window, cx);
+                    },
+                )),
+            );
 
         // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / PNG / Save --
         let chart_toolbar_row = {

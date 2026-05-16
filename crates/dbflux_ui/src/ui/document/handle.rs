@@ -159,19 +159,6 @@ impl DocumentHandle {
         }
     }
 
-    /// Returns a query string suitable for seeding a new `ChartDocument`.
-    ///
-    /// - `Code` documents: full editor text (trimmed), `None` when blank.
-    /// - `Data` documents: `synthesized_query` from the underlying query result source.
-    /// - All other document types: `None`.
-    pub fn current_chartable_query(&self, cx: &App) -> Option<String> {
-        match self {
-            Self::Code { entity, .. } => entity.read(cx).current_query_text(cx),
-            Self::Data { entity, .. } => entity.read(cx).synthesized_query(cx),
-            _ => None,
-        }
-    }
-
     /// Returns the connection (profile) ID for code, data, key-value, and chart documents.
     pub fn connection_id(&self, cx: &App) -> Option<uuid::Uuid> {
         match self {

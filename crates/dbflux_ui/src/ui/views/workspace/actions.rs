@@ -1391,53 +1391,6 @@ impl Workspace {
             }
         }
     }
-    /// Opens a new unsaved `ChartDocument` seeded with the active document's current query.
-    ///
-    /// Silently no-ops when the active document has no current query or no connection.
-    pub(super) fn open_chart_from_current_document(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(active_doc) = self.tab_manager.read(cx).active_document().cloned() else {
-            return;
-        };
-
-        let query = active_doc.current_chartable_query(cx);
-        let connection_id = active_doc.connection_id(cx);
-
-        if query.is_none() {
-            Toast::warning(
-                "No re-runnable query in this view. Open a SQL/Flux editor and run a query, \
-                 or use the Chart tab inside this view to plot it in place.",
-            )
-            .meta_right(now_hms())
-            .push(cx);
-            return;
-        }
-
-        let doc = cx.new(|cx| {
-            crate::ui::document::ChartDocument::new(
-                connection_id,
-                query.unwrap_or_default(),
-                self.app_state.clone(),
-                window,
-                cx,
-            )
-        });
-        let handle = DocumentHandle::chart(doc, cx);
-
-        self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
-        });
-
-        self.set_focus(FocusTarget::Document, window, cx);
-
-        Toast::info("Opened new chart document")
-            .meta_right(now_hms())
-            .push(cx);
-    }
-
     /// Opens a new `ChartDocument` seeded with the given query.
     ///
     /// Called when the user selects "Chart this query" from a data grid context menu.

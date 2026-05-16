@@ -3,8 +3,8 @@
 //!
 //! Unlike DataGridPanel-embedded charts, `ChartDocument` implements `ChartHost`
 //! natively: it owns its `TimeRangePanel`, `RefreshDropdown`, and execution loop.
-//! The collapsible editor drawer lets users edit and re-run the query without
-//! leaving the chart view.
+//! Created exclusively by promoting a query result (e.g. "Chart this query"
+//! from a data grid); the query is fixed for the document's lifetime.
 
 mod render;
 
@@ -92,11 +92,6 @@ pub struct ChartDocument {
     // Shell
     chart_shell: Entity<ChartShell>,
 
-    // Editor drawer
-    editor_drawer_open: bool,
-    editor_input: Entity<InputState>,
-    _editor_subscription: Subscription,
-
     // Toolbar controls
     time_range_panel: Option<Entity<TimeRangePanel>>,
     _time_range_sub: Option<Subscription>,
@@ -131,7 +126,7 @@ impl ChartDocument {
         profile_id: Option<Uuid>,
         query: String,
         app_state: Entity<AppStateEntity>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let chart_shell = cx.new(|cx| {
@@ -147,49 +142,6 @@ impl ChartDocument {
             // drives set_result directly without going through HostAdapter.
             ChartShell::new_standalone(cx)
         });
-
-        let editor_language = profile_id
-            .and_then(|pid| {
-                app_state
-                    .read(cx)
-                    .connections()
-                    .get(&pid)
-                    .map(|c| c.connection.metadata().query_language.clone())
-            })
-            .unwrap_or(dbflux_core::QueryLanguage::Sql);
-
-        let editor_mode = editor_language.editor_mode();
-        let placeholder = editor_language.placeholder();
-
-        let editor_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(editor_mode)
-                .line_number(true)
-                .soft_wrap(false)
-                .placeholder(placeholder)
-        });
-
-        // Populate the editor with the initial query text.
-        if !query.is_empty() {
-            let initial_query = query.clone();
-            editor_input.update(cx, |state, cx| {
-                state.set_value(&initial_query, window, cx);
-            });
-        }
-
-        let editor_sub = cx.subscribe_in(
-            &editor_input,
-            window,
-            |this: &mut Self,
-             input: &Entity<InputState>,
-             event: &dbflux_components::controls::InputEvent,
-             _window,
-             cx| {
-                if matches!(event, dbflux_components::controls::InputEvent::Change) {
-                    this.query = input.read(cx).value().to_string();
-                }
-            },
-        );
 
         let refresh_dropdown = cx.new(|_cx| {
             Dropdown::new("chart-doc-refresh").items(vec![
@@ -220,9 +172,6 @@ impl ChartDocument {
             pending_result: None,
             pending_run_on_first_render: pending_run,
             chart_shell,
-            editor_drawer_open: true,
-            editor_input,
-            _editor_subscription: editor_sub,
             time_range_panel: None,
             _time_range_sub: None,
             refresh_dropdown,
@@ -340,13 +289,6 @@ impl ChartDocument {
 
     pub fn change_summary(&self, _cx: &App) -> Option<String> {
         None
-    }
-
-    // ---- editor drawer ----
-
-    pub fn toggle_editor_drawer(&mut self, cx: &mut Context<Self>) {
-        self.editor_drawer_open = !self.editor_drawer_open;
-        cx.notify();
     }
 
     // ---- execution ----

@@ -783,11 +783,6 @@ impl CommandDispatcher for Workspace {
                 false
             }
 
-            Command::NewChartFromCurrentQuery => {
-                self.open_chart_from_current_document(window, cx);
-                true
-            }
-
             Command::OpenSavedChart => {
                 // Build a palette populated only with saved chart items,
                 // then open the command palette so the user can fuzzy-search them.
