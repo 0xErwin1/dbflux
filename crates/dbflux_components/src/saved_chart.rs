@@ -8,12 +8,51 @@
 //! `SavedChart` lives in `dbflux_components` rather than `dbflux_core` because
 //! it embeds `ChartSpec` and `BindingSpec`, which are owned by this crate.
 //! The JSON store and item manager infrastructure is imported from `dbflux_core`.
+//!
+//! # Schema note
+//!
+//! `SavedChartSource` was introduced as a breaking change from the old
+//! `query: String` field. The `chart-everywhere` feature was unreleased at the
+//! time, so no migration is needed. Old JSON without a `source` field
+//! deserialises to `SavedChartSource::Query { query: "" }` via the
+//! `#[serde(default)]` path.
 
 use crate::chart::{BindingSpec, ChartSpec};
 use chrono::{DateTime, Utc};
-use dbflux_core::{Identifiable, JsonStore};
+use dbflux_core::{CollectionRef, Identifiable, JsonStore, ResolvedWindow};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// SavedChartSource
+// ---------------------------------------------------------------------------
+
+/// The data source for a saved chart.
+///
+/// `Query` wraps a SQL/Flux/etc. query string and is executed inside
+/// `ChartDocument`. `Collection` represents a collection-browse source
+/// (Mongo collection, InfluxDB measurement) — opening it re-opens the
+/// underlying `DataDocument` in chart mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum SavedChartSource {
+    /// A query-string source executed inside ChartDocument.
+    Query { query: String },
+    /// A collection-browse source (no query string; the driver builds the request).
+    Collection {
+        collection_ref: CollectionRef,
+        /// The time window that was active when the chart was saved, if any.
+        time_window: Option<ResolvedWindow>,
+    },
+}
+
+impl Default for SavedChartSource {
+    fn default() -> Self {
+        SavedChartSource::Query {
+            query: String::new(),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Supporting types
@@ -52,8 +91,9 @@ pub enum SavedChartRefreshPolicy {
 
 /// A persisted chart record.
 ///
-/// Only the query string is persisted — raw result data is never stored.
-/// `chart_spec` and `bindings` carry the full rendering configuration.
+/// Only the query string (or collection reference) is persisted — raw result
+/// data is never stored. `chart_spec` and `bindings` carry the full rendering
+/// configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedChart {
     /// Stable identity for upsert and deduplication.
@@ -62,8 +102,13 @@ pub struct SavedChart {
     pub name: String,
     /// The connection profile this chart was created under.
     pub profile_id: Uuid,
-    /// Query string executed to produce data for the chart.
-    pub query: String,
+    /// Data source for this chart.
+    ///
+    /// Old JSON without this field (or with only a `query` top-level key) will
+    /// fail to parse; since the chart-everywhere feature was unreleased when
+    /// this field was introduced, no migration is needed.
+    #[serde(default)]
+    pub source: SavedChartSource,
     /// Serialized chart spec. Uses `#[serde(default)]` fields so old JSON
     /// without newer fields is still loadable.
     pub chart_spec: ChartSpec,
@@ -82,8 +127,8 @@ pub struct SavedChart {
 }
 
 impl SavedChart {
-    /// Create a new `SavedChart` with a fresh `Uuid` and timestamps set to now.
-    pub fn new(
+    /// Create a new `SavedChart` from a query string source.
+    pub fn new_query(
         name: String,
         profile_id: Uuid,
         query: String,
@@ -95,7 +140,7 @@ impl SavedChart {
             id: Uuid::new_v4(),
             name,
             profile_id,
-            query,
+            source: SavedChartSource::Query { query },
             chart_spec,
             bindings,
             time_range_preset: None,
@@ -103,6 +148,46 @@ impl SavedChart {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// Create a new `SavedChart` from a collection-browse source.
+    pub fn new_collection(
+        name: String,
+        profile_id: Uuid,
+        collection_ref: CollectionRef,
+        time_window: Option<ResolvedWindow>,
+        chart_spec: ChartSpec,
+        bindings: BindingSpec,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            profile_id,
+            source: SavedChartSource::Collection {
+                collection_ref,
+                time_window,
+            },
+            chart_spec,
+            bindings,
+            time_range_preset: None,
+            refresh_policy: SavedChartRefreshPolicy::Off,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// Convenience: returns the query string if this chart has a `Query` source.
+    pub fn query(&self) -> Option<&str> {
+        match &self.source {
+            SavedChartSource::Query { query } => Some(query.as_str()),
+            SavedChartSource::Collection { .. } => None,
+        }
+    }
+
+    /// Returns `true` if this chart has a `Collection` source.
+    pub fn is_collection_source(&self) -> bool {
+        matches!(self.source, SavedChartSource::Collection { .. })
     }
 }
 
@@ -237,6 +322,7 @@ impl SavedChartManager {
 mod tests {
     use super::*;
     use crate::chart::{AggKind, AxisKind, AxisSpec, ChartKind, SeriesSpec};
+    use dbflux_core::CollectionRef;
 
     fn sample_spec() -> ChartSpec {
         ChartSpec {
@@ -260,10 +346,27 @@ mod tests {
     }
 
     fn sample_chart(name: &str, profile_id: Uuid) -> SavedChart {
-        SavedChart::new(
+        SavedChart::new_query(
             name.to_string(),
             profile_id,
             "SELECT * FROM test".to_string(),
+            sample_spec(),
+            BindingSpec {
+                x: 0,
+                y: vec![1],
+                group_by: None,
+                filter: None,
+                aggregation: AggKind::None,
+            },
+        )
+    }
+
+    fn sample_collection_chart(name: &str, profile_id: Uuid) -> SavedChart {
+        SavedChart::new_collection(
+            name.to_string(),
+            profile_id,
+            CollectionRef::new("mydb", "measurements"),
+            None,
             sample_spec(),
             BindingSpec {
                 x: 0,
@@ -371,6 +474,104 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         let parsed: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&content);
         assert!(parsed.is_ok(), "saved_charts.json must be valid JSON");
+    }
+
+    /// T-CE-I07: Round-trip — Collection source survives save + reload.
+    #[test]
+    fn collection_source_round_trips_through_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("saved_charts.json");
+
+        let profile_id = Uuid::new_v4();
+        let chart_id;
+        let collection = CollectionRef::new("mydb", "measurements");
+
+        {
+            let store = SavedChartStore::from_path(path.clone());
+            let mut manager = SavedChartManager::from_store(store).unwrap();
+            let chart = sample_collection_chart("CPU chart", profile_id);
+            chart_id = chart.id;
+            manager.upsert(chart);
+        }
+
+        {
+            let store = SavedChartStore::from_path(path.clone());
+            let manager = SavedChartManager::from_store(store).unwrap();
+            let charts = manager.charts_for_profile(profile_id);
+            assert_eq!(charts.len(), 1);
+            let loaded = &charts[0];
+            assert_eq!(loaded.id, chart_id);
+            assert!(
+                loaded.is_collection_source(),
+                "source must be Collection after reload"
+            );
+            match &loaded.source {
+                SavedChartSource::Collection {
+                    collection_ref,
+                    time_window,
+                } => {
+                    assert_eq!(*collection_ref, collection);
+                    assert!(time_window.is_none());
+                }
+                _ => panic!("expected Collection source"),
+            }
+        }
+    }
+
+    /// T-CE-I07: Backward compat — JSON without `source` field deserialises
+    /// into `Query { query: "" }` default.
+    #[test]
+    fn json_without_source_field_uses_default_query_source() {
+        // Old-format JSON: no `source` key at all.
+        let old_json = serde_json::json!([{
+            "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "name": "old chart",
+            "profile_id": "9c4fab12-1234-5678-abcd-000000000001",
+            "chart_spec": {
+                "kind": "Line",
+                "x_axis": { "column_index": 0, "label": "time", "kind": "Time", "unit": null },
+                "series": [],
+                "legend_visible": false,
+                "decimation_threshold": 10000,
+                "binding": {
+                    "x": 0, "y": [], "group_by": null, "filter": null, "aggregation": "None"
+                },
+                "track_source_indices": false
+            },
+            "bindings": { "x": 0, "y": [], "group_by": null, "filter": null, "aggregation": "None" },
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }]);
+
+        let charts: Vec<SavedChart> = serde_json::from_value(old_json)
+            .expect("old JSON without source field must deserialise without panic");
+
+        assert_eq!(charts.len(), 1);
+        match &charts[0].source {
+            SavedChartSource::Query { query } => {
+                // Default yields an empty query string.
+                assert_eq!(query, "", "default source must be Query with empty string");
+            }
+            other => panic!("expected default Query source, got: {:?}", other),
+        }
+    }
+
+    /// T-CE-I07: Query source query() helper returns Some.
+    #[test]
+    fn query_helper_returns_some_for_query_source() {
+        let profile_id = Uuid::new_v4();
+        let chart = sample_chart("test", profile_id);
+        assert_eq!(chart.query(), Some("SELECT * FROM test"));
+        assert!(!chart.is_collection_source());
+    }
+
+    /// T-CE-I07: Collection source query() helper returns None.
+    #[test]
+    fn query_helper_returns_none_for_collection_source() {
+        let profile_id = Uuid::new_v4();
+        let chart = sample_collection_chart("test", profile_id);
+        assert_eq!(chart.query(), None);
+        assert!(chart.is_collection_source());
     }
 
     /// T-CE-C05: Chart with unknown profile loads without panic.
