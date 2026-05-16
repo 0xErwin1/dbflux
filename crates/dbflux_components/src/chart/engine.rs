@@ -529,6 +529,36 @@ const MARGIN_BOTTOM: f32 = 32.0;
 
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::chart::spec::ChartKind;
+
+        // Non-Line chart kinds render a placeholder frame. The full Bar and
+        // Scatter implementations ship in the next change once the seams are
+        // in place. This branch must never panic.
+        let is_placeholder = match self.spec.kind {
+            ChartKind::Line => false,
+            ChartKind::Bar | ChartKind::Scatter => true,
+        };
+
+        if is_placeholder {
+            let label = match self.spec.kind {
+                ChartKind::Bar => "Bar chart coming soon",
+                ChartKind::Scatter => "Scatter chart coming soon",
+                ChartKind::Line => unreachable!(),
+            };
+            return div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(gpui::hsla(0.0, 0.0, 0.5, 0.4))
+                .rounded(gpui::px(4.0))
+                .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                .text_size(FontSizes::SM)
+                .child(label);
+        }
+
         let model = &self.render_model;
         let spec = &self.spec;
         let hover_x = self.hover_x_screen;
@@ -1521,6 +1551,55 @@ mod tests {
         assert_eq!(s.last, 4.0);
         // avg of [1,2,3,4] = 2.5
         assert!((s.avg - 2.5).abs() < 1e-9);
+    }
+
+    /// `ChartView::build` with `ChartKind::Bar` must not panic.
+    ///
+    /// The Bar paint arm renders a placeholder; it must never call `panic!()` or
+    /// `todo!()`. This test drives the implementation of the placeholder branch.
+    #[test]
+    fn build_with_bar_kind_does_not_panic() {
+        use crate::chart::spec::{AggKind, BindingSpec};
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(1000), Value::Float(2.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.kind = crate::chart::spec::ChartKind::Bar;
+
+        // Must succeed; the Bar arm renders a placeholder, it does not panic.
+        let _ = ChartView::build(&result, spec).expect("build with Bar kind must not fail");
+    }
+
+    /// `ChartView::build` with `ChartKind::Scatter` must not panic.
+    #[test]
+    fn build_with_scatter_kind_does_not_panic() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(1000), Value::Float(2.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.kind = crate::chart::spec::ChartKind::Scatter;
+
+        let _ = ChartView::build(&result, spec).expect("build with Scatter kind must not fail");
     }
 
     /// Regression baseline: captures the deterministic RenderModel snapshot for a

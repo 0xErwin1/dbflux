@@ -4,6 +4,7 @@
 //! the stored `TickLabel` strings.
 
 use dbflux_core::chrono::{DateTime, TimeZone, Utc};
+use gpui::SharedString;
 
 /// A single axis tick with its data-space value and pre-formatted label.
 #[derive(Debug, Clone, PartialEq)]
@@ -181,6 +182,30 @@ fn format_time_ms(ms: f64, step_ms: f64) -> String {
 use dbflux_core::chrono;
 
 // ---------------------------------------------------------------------------
+// Categorical ticks (Bar / Scatter X axis — seam for next change)
+// ---------------------------------------------------------------------------
+
+/// Generate tick labels for a categorical (string) X axis.
+///
+/// Each distinct value in `values` becomes one tick; values are used verbatim
+/// as labels. Position is the ordinal index (0, 1, 2, …).
+///
+/// This function is declared here as a seam for the Bar/Scatter change that
+/// follows. The body returns an empty vec until the next change wires up the
+/// full categorical-axis implementation.
+#[allow(dead_code)]
+pub fn ticks_categorical(values: &[SharedString]) -> Vec<TickLabel> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| TickLabel {
+            value: i as f64,
+            label: v.to_string(),
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests (strict TDD)
 // ---------------------------------------------------------------------------
 
@@ -247,6 +272,33 @@ mod tests {
                 t.label
             );
         }
+    }
+
+    /// Seam preservation: ensures `ticks_categorical` signature is stable.
+    ///
+    /// This test must remain green so that the Bar/Scatter change cannot land
+    /// without satisfying the categorical-axis contract.
+    #[test]
+    fn ticks_categorical_returns_one_tick_per_value() {
+        let values = vec![
+            SharedString::from("alpha"),
+            SharedString::from("beta"),
+            SharedString::from("gamma"),
+        ];
+        let ticks = ticks_categorical(&values);
+        assert_eq!(ticks.len(), 3, "one tick per input value");
+        assert_eq!(ticks[0].value, 0.0);
+        assert_eq!(ticks[0].label, "alpha");
+        assert_eq!(ticks[1].value, 1.0);
+        assert_eq!(ticks[1].label, "beta");
+        assert_eq!(ticks[2].value, 2.0);
+        assert_eq!(ticks[2].label, "gamma");
+    }
+
+    #[test]
+    fn ticks_categorical_empty_input_returns_empty() {
+        let ticks = ticks_categorical(&[]);
+        assert!(ticks.is_empty());
     }
 
     #[test]

@@ -26,7 +26,10 @@ pub use engine::{
     CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, CHART_PALETTE, ChartBuildError, ChartView,
     format_x_value, format_y_value,
 };
-pub use spec::{AxisKind, AxisSpec, ChartKind, ChartSpec, ManualChartSelection, SeriesSpec};
+pub use spec::{
+    AggKind, AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, ManualChartSelection,
+    SeriesSpec,
+};
 pub use stats::{
     SeriesStats, compute_series_stats, count_columns_for_why, format_resolution, format_span,
 };

@@ -11,17 +11,12 @@ use serde::{Deserialize, Serialize};
 /// `#[serde(default)]` on the containing `ChartSpec.kind` field ensures that
 /// existing serialized `ChartSpec` JSON without a `kind` key deserializes to
 /// `Line` — preserving forward compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ChartKind {
+    #[default]
     Line,
     Bar,
     Scatter,
-}
-
-impl Default for ChartKind {
-    fn default() -> Self {
-        Self::Line
-    }
 }
 
 /// Axis classification used to pick the appropriate tick and label format.
@@ -61,20 +56,15 @@ pub struct SeriesSpec {
 }
 
 /// Aggregation kind for the AxisBar binding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum AggKind {
     /// No aggregation — raw values are passed through.
+    #[default]
     None,
     Sum,
     Avg,
     Min,
     Max,
-}
-
-impl Default for AggKind {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Column binding specification for the AxisBar.
