@@ -1311,26 +1311,48 @@ impl DataGridPanel {
 
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+        let was_chart_mode = matches!(self.result_view_mode, ResultViewMode::Chart);
+        let prev_rail_open = self.chart_rail_open;
+        let prev_rail_tab = self.chart_rail_tab;
+        let prev_hidden = std::mem::take(&mut self.chart_hidden_series);
+        let prev_manual = self.chart_manual_selection.clone();
+        let prev_focused = self.chart_focused_series_idx;
+
         self.view_config = super::data_view::DataViewConfig::for_source(&self.source);
-        self.result_view_mode = ResultViewMode::default_for_shape(&result.shape);
         self.derived_json = None;
         self.derived_text = None;
 
-        // Run chart detection on the new result; invalidate any stale chart view.
-        self.chart_detection = Some(detect_chart_columns(&result));
+        let detection = detect_chart_columns(&result);
+        let detection_ok = matches!(detection, ChartDetection::Ok { .. });
+        self.chart_detection = Some(detection);
+
+        self.result_view_mode = if was_chart_mode && detection_ok {
+            ResultViewMode::Chart
+        } else {
+            ResultViewMode::default_for_shape(&result.shape)
+        };
+
         self.chart_view = None;
         self.chart_view_observer = None;
-        self.chart_manual_selection = None;
-        self.chart_focused_series_idx = 0;
         self.reset_chart_picker(&result.columns);
 
-        // Reset the Configure rail, hidden-series, and degraded-picker state for the new result.
-        self.chart_hidden_series = HashSet::new();
         self.chart_picker_overlay_open = false;
-        self.chart_rail_open = false;
-        self.chart_rail_tab = ChartRailTab::Configure;
-        self.chart_rail_picker_x_col = 0;
-        self.chart_rail_picker_y_checked = Vec::new();
+
+        if was_chart_mode && detection_ok {
+            self.chart_hidden_series = prev_hidden;
+            self.chart_manual_selection = prev_manual;
+            self.chart_focused_series_idx = prev_focused;
+            self.chart_rail_open = prev_rail_open;
+            self.chart_rail_tab = prev_rail_tab;
+        } else {
+            self.chart_hidden_series = HashSet::new();
+            self.chart_manual_selection = None;
+            self.chart_focused_series_idx = 0;
+            self.chart_rail_open = false;
+            self.chart_rail_tab = ChartRailTab::Configure;
+            self.chart_rail_picker_x_col = 0;
+            self.chart_rail_picker_y_checked = Vec::new();
+        }
 
         self.result = result;
         self.rebuild_table(None, cx);
