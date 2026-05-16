@@ -214,6 +214,7 @@ impl Render for ChartDocument {
                         )),
                 )
                 .when(drawer_open, |el| {
+                    let input_for_click = editor_input.clone();
                     el.child(
                         div()
                             .h(px(180.0))
@@ -223,12 +224,20 @@ impl Render for ChartDocument {
                             .flex()
                             .flex_col()
                             .min_h_0()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                move |_, window, cx| {
+                                    input_for_click.update(cx, |state, cx| {
+                                        state.focus(window, cx);
+                                    });
+                                },
+                            )
                             .child(
                                 div().flex_1().min_h_0().overflow_hidden().child(
                                     GpuiInput::new(&editor_input)
                                         .appearance(false)
-                                        .w_full()
-                                        .h_full(),
+                                        .h_full()
+                                        .w_full(),
                                 ),
                             ),
                     )
