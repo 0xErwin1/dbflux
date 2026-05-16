@@ -16,8 +16,8 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Corner, ElementId, MouseButton, SharedString, Window, anchored, deferred,
-    div, point, px,
+    AnyElement, App, Corner, ElementId, MouseButton, SharedString, Window, anchored, deferred, div,
+    point, px,
 };
 
 use crate::chart::spec::{AggKind, BindingSpec};

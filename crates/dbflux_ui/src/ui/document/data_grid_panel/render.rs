@@ -1281,18 +1281,16 @@ impl DataGridPanel {
                     }),
                 ),
             )
-            // "Save chart" button — only visible for Collection sources.
-            .when(self.source.is_collection(), |row| {
-                row.child(vdivider()).child(
-                    toolbar_btn("chart-toolbar-save", AppIcon::Save, "Save chart", false)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, window, cx| {
-                                this.open_collection_chart_save(window, cx);
-                            }),
-                        ),
-                )
-            });
+            .child(vdivider())
+            .child(
+                toolbar_btn("chart-toolbar-save", AppIcon::Save, "Save chart", false)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.open_collection_chart_save(window, cx);
+                        }),
+                    ),
+            );
 
         // AxisBar row: shown below the main toolbar when a chart view is live.
         // Reads bindings and open-pill state from the shell.

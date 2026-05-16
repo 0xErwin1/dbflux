@@ -824,14 +824,18 @@ impl DataGridPanel {
 
     // ---- Collection chart save flow ----
 
-    /// Open the name-prompt overlay for saving a chart from a Collection source.
+    /// Open the name-prompt overlay for saving a chart from a Collection or
+    /// QueryResult source.
     ///
-    /// Captures the current chart spec and bindings from the shell. No-op if
-    /// the source is not a Collection or no chart shell exists.
+    /// Captures the current chart spec and bindings from the shell. No-op when
+    /// no chart shell exists or the source has no associated profile.
     pub fn open_collection_chart_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let DataSource::Collection { .. } = &self.source else {
+        if !matches!(
+            &self.source,
+            DataSource::Collection { .. } | DataSource::QueryResult { .. }
+        ) {
             return;
-        };
+        }
 
         let Some(shell) = &self.chart_shell else {
             return;
@@ -878,25 +882,45 @@ impl DataGridPanel {
             return;
         }
 
-        let (profile_id, collection_ref) = match &self.source {
+        let chart = match &self.source {
             DataSource::Collection {
                 profile_id,
                 collection,
                 ..
-            } => (*profile_id, collection.clone()),
+            } => {
+                let time_window = self.result.resolved_window.clone();
+                dbflux_components::saved_chart::SavedChart::new_collection(
+                    name.clone(),
+                    *profile_id,
+                    collection.clone(),
+                    time_window,
+                    state.chart_spec,
+                    state.bindings,
+                )
+            }
+            DataSource::QueryResult {
+                profile_id,
+                original_query,
+                ..
+            } => {
+                let Some(profile_id) = profile_id else {
+                    self.pending_toast = Some(crate::ui::components::toast::PendingToast {
+                        message: "Cannot save chart: query has no profile binding".into(),
+                        is_error: true,
+                    });
+                    cx.notify();
+                    return;
+                };
+                dbflux_components::saved_chart::SavedChart::new_query(
+                    name.clone(),
+                    *profile_id,
+                    original_query.clone(),
+                    state.chart_spec,
+                    state.bindings,
+                )
+            }
             _ => return,
         };
-
-        let time_window = self.result.resolved_window.clone();
-
-        let chart = dbflux_components::saved_chart::SavedChart::new_collection(
-            name.clone(),
-            profile_id,
-            collection_ref,
-            time_window,
-            state.chart_spec,
-            state.bindings,
-        );
 
         self.app_state.update(cx, |app, _cx| {
             app.saved_charts.upsert(chart);

@@ -131,35 +131,39 @@ impl Render for ChartDocument {
                 )
         });
 
-        // -- Editor drawer --
         let chevron_icon = if drawer_open {
             AppIcon::ChevronDown
         } else {
             AppIcon::ChevronRight
         };
 
-        let drawer = div()
+        let header = div()
             .flex()
             .flex_col()
             .border_b_1()
             .border_color(theme.border)
             .child(
-                // Drawer header: click the whole bar to toggle.
                 div()
-                    .id("chart-doc-drawer-toggle")
                     .flex()
                     .flex_row()
                     .items_center()
                     .h(Heights::TOOLBAR)
                     .px(Spacing::MD)
                     .gap(Spacing::SM)
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.toggle_editor_drawer(cx);
-                    }))
-                    .child(Icon::new(chevron_icon).small())
-                    .child(Text::muted("Query"))
-                    .child(div().flex_grow())
+                    .child(
+                        div()
+                            .id("chart-doc-drawer-toggle")
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(Spacing::XS)
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.toggle_editor_drawer(cx);
+                            }))
+                            .child(Icon::new(chevron_icon).small())
+                            .child(Text::label(title)),
+                    )
                     .child(
                         Button::new("run-query")
                             .label(if is_executing { "Running…" } else { "Run" })
@@ -168,6 +172,15 @@ impl Render for ChartDocument {
                             .disabled(is_executing)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.request_reexecute(window, cx);
+                            })),
+                    )
+                    .child(div().flex_grow())
+                    .child(
+                        Button::new("save-chart")
+                            .label("Save")
+                            .small()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_name_prompt(window, cx);
                             })),
                     ),
             )
@@ -180,27 +193,6 @@ impl Render for ChartDocument {
                         .child(Input::new(&editor_input).placeholder("Enter SQL query")),
                 )
             });
-
-        // -- Document header --
-        let header = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(Heights::TOOLBAR)
-            .px(Spacing::MD)
-            .gap(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .child(Text::label(title))
-            .child(div().flex_grow())
-            .child(
-                Button::new("save-chart")
-                    .label("Save")
-                    .small()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_name_prompt(window, cx);
-                    })),
-            );
 
         // -- AxisBar row: shown when result is available --
         let (bindings, open_pill, columns) = {
@@ -275,14 +267,12 @@ impl Render for ChartDocument {
             .bg(theme.secondary)
             .child(axis_bar);
 
-        // -- Root container --
         div()
             .flex()
             .flex_col()
             .size_full()
             .track_focus(&focus_handle)
             .child(header)
-            .child(drawer)
             .child(axis_row)
             .child(div().flex_grow().min_h_0().child(chart_area))
             .when_some(name_prompt_element, |el, modal| el.child(modal))

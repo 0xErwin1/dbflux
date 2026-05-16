@@ -298,6 +298,26 @@ impl CodeDocument {
                         .child(Icon::new(AppIcon::Info).size(px(12.0)).color(fg)),
                 )
             })
+            .child(
+                div()
+                    .id("toolbar-chart-btn")
+                    .h(Heights::BUTTON)
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(secondary)
+                    .hover(|d| d.bg(secondary_hover))
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.emit_chart_this_query(cx);
+                    }))
+                    .tooltip(|window, cx| {
+                        Tooltip::new("Open current query in a chart document").build(window, cx)
+                    })
+                    .child(Icon::new(AppIcon::Zap).size(px(12.0)).color(fg)),
+            )
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

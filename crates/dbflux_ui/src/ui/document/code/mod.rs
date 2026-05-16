@@ -702,6 +702,24 @@ impl CodeDocument {
         if text.is_empty() { None } else { Some(text) }
     }
 
+    /// Emit a `ChartThisQuery` event with the current editor text.
+    ///
+    /// Wired to the editor toolbar "Chart" button. When the editor is blank,
+    /// surfaces a toast instead of emitting so the user gets feedback.
+    pub fn emit_chart_this_query(&mut self, cx: &mut Context<Self>) {
+        let Some(query) = self.current_query_text(cx) else {
+            Toast::warning("Write a query first to open it in a chart")
+                .meta_right(now_hms())
+                .push(cx);
+            return;
+        };
+
+        cx.emit(DocumentEvent::ChartThisQuery {
+            query,
+            connection_id: self.connection_id,
+        });
+    }
+
     pub fn set_active_tab(&mut self, active: bool) {
         self.is_active_tab = active;
     }
