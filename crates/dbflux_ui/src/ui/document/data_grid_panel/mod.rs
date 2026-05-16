@@ -400,6 +400,22 @@ pub struct DataGridPanel {
     /// has been created.
     chart_source_time_range_panel:
         Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>>,
+
+    /// Pending "Save chart from collection" state.
+    ///
+    /// Present when the user clicked "Save chart" from a Collection-source
+    /// DataDocument in chart mode. Holds the input state for the name prompt
+    /// overlay. On confirm, the chart is upserted via `app_state.saved_charts`.
+    pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
+}
+
+/// State held while the "Save chart" name-prompt overlay is visible for a
+/// Collection-source DataDocument.
+pub(super) struct CollectionChartSaveState {
+    pub(super) name_input: Entity<dbflux_components::controls::InputState>,
+    pub(super) chart_spec: dbflux_components::chart::ChartSpec,
+    pub(super) bindings: dbflux_components::chart::BindingSpec,
+    pub(super) _subscription: gpui::Subscription,
 }
 
 impl DataGridPanel {
@@ -795,6 +811,7 @@ impl DataGridPanel {
             export_menu_open: false,
             chart_shell: None,
             chart_source_time_range_panel: None,
+            pending_collection_chart_save: None,
         }
     }
 
@@ -803,6 +820,100 @@ impl DataGridPanel {
     pub fn with_panel_controls(mut self) -> Self {
         self.show_panel_controls = true;
         self
+    }
+
+    // ---- Collection chart save flow ----
+
+    /// Open the name-prompt overlay for saving a chart from a Collection source.
+    ///
+    /// Captures the current chart spec and bindings from the shell. No-op if
+    /// the source is not a Collection or no chart shell exists.
+    pub fn open_collection_chart_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let DataSource::Collection { .. } = &self.source else {
+            return;
+        };
+
+        let Some(shell) = &self.chart_shell else {
+            return;
+        };
+
+        let columns = self.result.columns.clone();
+        let spec = shell.read(cx).current_chart_spec(&columns);
+        let bindings = shell.read(cx).active_bindings();
+
+        let name_input = cx.new(|cx| {
+            dbflux_components::controls::InputState::new(window, cx).placeholder("Chart name")
+        });
+
+        let sub = cx.subscribe_in(
+            &name_input,
+            window,
+            |_this: &mut Self,
+             _input: &Entity<dbflux_components::controls::InputState>,
+             _event: &dbflux_components::controls::InputEvent,
+             _window,
+             _cx| {},
+        );
+
+        self.pending_collection_chart_save = Some(CollectionChartSaveState {
+            name_input,
+            chart_spec: spec,
+            bindings,
+            _subscription: sub,
+        });
+
+        cx.notify();
+    }
+
+    /// Confirm the collection-chart name prompt and persist the chart.
+    pub fn confirm_collection_chart_save(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.pending_collection_chart_save.take() else {
+            return;
+        };
+
+        let name = state.name_input.read(cx).value().trim().to_string();
+        if name.is_empty() {
+            // Put it back — user must enter a name.
+            self.pending_collection_chart_save = Some(state);
+            return;
+        }
+
+        let (profile_id, collection_ref) = match &self.source {
+            DataSource::Collection {
+                profile_id,
+                collection,
+                ..
+            } => (*profile_id, collection.clone()),
+            _ => return,
+        };
+
+        let time_window = self.result.resolved_window.clone();
+
+        let chart = dbflux_components::saved_chart::SavedChart::new_collection(
+            name.clone(),
+            profile_id,
+            collection_ref,
+            time_window,
+            state.chart_spec,
+            state.bindings,
+        );
+
+        self.app_state.update(cx, |app, _cx| {
+            app.saved_charts.upsert(chart);
+        });
+
+        self.pending_toast = Some(crate::ui::components::toast::PendingToast {
+            message: format!("Chart \"{}\" saved", name),
+            is_error: false,
+        });
+
+        cx.notify();
+    }
+
+    /// Cancel the collection-chart name prompt without saving.
+    pub fn cancel_collection_chart_save(&mut self, cx: &mut Context<Self>) {
+        self.pending_collection_chart_save = None;
+        cx.notify();
     }
 
     /// Update the maximized state (called by parent).

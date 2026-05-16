@@ -1280,7 +1280,19 @@ impl DataGridPanel {
                         });
                     }),
                 ),
-            );
+            )
+            // "Save chart" button — only visible for Collection sources.
+            .when(self.source.is_collection(), |row| {
+                row.child(vdivider()).child(
+                    toolbar_btn("chart-toolbar-save", AppIcon::Save, "Save chart", false)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.open_collection_chart_save(window, cx);
+                            }),
+                        ),
+                )
+            });
 
         // AxisBar row: shown below the main toolbar when a chart view is live.
         // Reads bindings and open-pill state from the shell.
@@ -1492,8 +1504,8 @@ impl DataGridPanel {
                         )
                     });
 
-                let hovered_source = hovered_point
-                    .and_then(|point| self.chart_host_source_for_point(point, cx));
+                let hovered_source =
+                    hovered_point.and_then(|point| self.chart_host_source_for_point(point, cx));
 
                 // The chart occupies 100% of the area regardless of whether the rail
                 // is open. The rail floats as an absolute-positioned overlay on the
@@ -1542,12 +1554,26 @@ impl DataGridPanel {
                     .child(body)
                     .when_some(inspector_dock, |row, dock| row.child(dock));
 
+                // Name-prompt overlay for "Save chart" on Collection sources.
+                // Build the overlay outside of a closure to avoid borrow conflicts.
+                let save_overlay: Option<AnyElement> =
+                    if self.pending_collection_chart_save.is_some() {
+                        Some(
+                            self.render_collection_chart_save_overlay(theme, cx)
+                                .into_any_element(),
+                        )
+                    } else {
+                        None
+                    };
+
                 let col = div()
+                    .relative()
                     .flex()
                     .flex_col()
                     .size_full()
                     .child(self.render_chart_toolbar(theme, cx))
-                    .child(chart_with_inspector);
+                    .child(chart_with_inspector)
+                    .when_some(save_overlay, |el, overlay| el.child(overlay));
 
                 container = container.child(col);
             }
@@ -1727,6 +1753,73 @@ impl DataGridPanel {
     /// Render the degraded-state chart panel when `ensure_chart_view` returned `None`.
     ///
     /// Shows a card frame with an icon, title, body text, a result-shape preview,
+    /// Render the name-prompt overlay for "Save chart" on a Collection source.
+    ///
+    /// Reads the name input from `pending_collection_chart_save`. Must only be
+    /// called when `pending_collection_chart_save.is_some()`.
+    fn render_collection_chart_save_overlay(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use dbflux_components::controls::Input;
+        use dbflux_components::primitives::Text;
+        use gpui_component::Sizable;
+        use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
+
+        let name_input = self
+            .pending_collection_chart_save
+            .as_ref()
+            .expect("render_collection_chart_save_overlay called when state is None")
+            .name_input
+            .clone();
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.background.opacity(0.6))
+            .child(
+                div()
+                    .bg(theme.secondary)
+                    .border_1()
+                    .border_color(theme.border)
+                    .p(px(16.0))
+                    .w(px(360.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(Text::label("Save chart"))
+                    .child(Input::new(&name_input).placeholder("Chart name"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(6.0))
+                            .justify_end()
+                            .child(
+                                Button::new("cancel-collection-chart-save")
+                                    .label("Cancel")
+                                    .small()
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.cancel_collection_chart_save(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("confirm-collection-chart-save")
+                                    .label("Save")
+                                    .small()
+                                    .with_variant(ButtonVariant::Primary)
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.confirm_collection_chart_save(cx);
+                                    })),
+                            ),
+                    ),
+            )
+    }
+
     /// and two action buttons:
     /// - "Open Table tab" — switches back to Table mode.
     /// - "Pick time column…" — toggles `chart_picker_overlay_open`.

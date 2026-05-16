@@ -328,6 +328,47 @@ impl ChartShell {
         }
     }
 
+    /// Returns the current `ChartSpec` built from the active bindings and a
+    /// caller-supplied column slice.
+    ///
+    /// Pass `result.columns` from the host. Returns a minimal placeholder when
+    /// the column info is insufficient to build a real spec.
+    pub fn current_chart_spec(&self, columns: &[dbflux_core::ColumnMeta]) -> ChartSpec {
+        // Manual selection takes priority.
+        if let Some(manual) = &self.chart_manual_selection
+            && let Some(spec) = ChartSpec::from_manual_selection(manual, columns, 10_000)
+        {
+            return spec;
+        }
+
+        // Auto-detection fallback.
+        if let Some(ChartDetection::Ok {
+            time_col,
+            numeric_cols,
+        }) = &self.chart_detection
+            && let Some(spec) =
+                ChartSpec::from_detection(*time_col, numeric_cols.clone(), columns, 10_000)
+        {
+            return spec;
+        }
+
+        // Minimal placeholder.
+        ChartSpec {
+            kind: dbflux_components::chart::ChartKind::Line,
+            x_axis: dbflux_components::chart::AxisSpec {
+                column_index: 0,
+                label: String::new(),
+                kind: dbflux_components::chart::AxisKind::Time,
+                unit: None,
+            },
+            series: Vec::new(),
+            legend_visible: false,
+            decimation_threshold: 10_000,
+            binding: self.active_bindings(),
+            track_source_indices: false,
+        }
+    }
+
     /// Returns the current binding spec derived from the active chart selection.
     ///
     /// When a manual selection is set, the binding is derived from it. When
