@@ -9,4 +9,4 @@ pub mod host;
 pub mod shell;
 
 pub use host::{ChartHost, HostAdapter};
-pub use shell::ChartShell;
+pub use shell::{ChartRailTab, ChartShell};

@@ -86,6 +86,14 @@ pub struct ChartShell {
 }
 
 impl ChartShell {
+    /// Create a `ChartShell` for a native `ChartDocument` host.
+    ///
+    /// Uses `HostAdapter::Standalone` — the document drives `set_result` directly
+    /// and does not route re-execute requests through the adapter.
+    pub fn new_standalone(cx: &mut Context<Self>) -> Self {
+        Self::new(HostAdapter::Standalone, cx)
+    }
+
     /// Create a new `ChartShell` bound to the given host adapter.
     ///
     /// The shell starts with no chart view. Call `set_result` to provide the

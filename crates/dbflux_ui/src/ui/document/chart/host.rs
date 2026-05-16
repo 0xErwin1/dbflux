@@ -65,36 +65,49 @@ pub trait ChartHost {
 pub enum HostAdapter {
     /// Chart hosted by a `DataGridPanel` (CodeDocument result tab).
     DataGrid(Entity<DataGridPanel>),
+
+    /// Chart hosted by a native `ChartDocument` that drives the shell
+    /// directly. Re-execute requests are no-ops via the adapter; the host
+    /// calls `ChartShell::set_result` directly after each execution.
+    Standalone,
 }
 
 impl ChartHost for HostAdapter {
     fn current_query(&self, cx: &App) -> Option<String> {
         match self {
             HostAdapter::DataGrid(entity) => entity.read(cx).chart_host_current_query(cx),
+            HostAdapter::Standalone => None,
         }
     }
 
     fn connection_id(&self, cx: &App) -> Option<Uuid> {
         match self {
             HostAdapter::DataGrid(entity) => entity.read(cx).chart_host_connection_id(cx),
+            HostAdapter::Standalone => None,
         }
     }
 
     fn time_range_panel(&self, cx: &App) -> Option<Entity<TimeRangePanel>> {
         match self {
             HostAdapter::DataGrid(entity) => entity.read(cx).chart_host_time_range_panel(cx),
+            HostAdapter::Standalone => None,
         }
     }
 
     fn refresh_dropdown(&self, cx: &App) -> Entity<Dropdown> {
         match self {
             HostAdapter::DataGrid(entity) => entity.read(cx).chart_host_refresh_dropdown(cx),
+            HostAdapter::Standalone => panic!(
+                "HostAdapter::Standalone does not own a refresh dropdown; \
+                 the host must render its own dropdown separately"
+            ),
         }
     }
 
     fn current_result(&self, cx: &App) -> Option<Arc<QueryResult>> {
         match self {
             HostAdapter::DataGrid(entity) => entity.read(cx).chart_host_current_result(cx),
+            HostAdapter::Standalone => None,
         }
     }
 
@@ -105,6 +118,8 @@ impl ChartHost for HostAdapter {
                     panel.chart_host_request_reexecute(cx);
                 });
             }
+            // No-op: ChartDocument drives re-execution without going through the adapter.
+            HostAdapter::Standalone => {}
         }
     }
 }
