@@ -92,6 +92,101 @@ pub fn lttb(points: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
     sampled
 }
 
+/// Downsample `points` to at most `target` points using LTTB, also returning
+/// the original source index for each selected point.
+///
+/// Returns a `Vec` of `(point, source_index)` pairs. The `source_index` maps
+/// back to the original row in the unsorted `QueryResult` (the caller must
+/// account for any prior sort reindexing via `original_indices`).
+///
+/// Shares the same invariants as `lttb`.
+pub fn lttb_with_indices(
+    points: &[(f64, f64)],
+    original_indices: &[usize],
+    target: usize,
+) -> Vec<((f64, f64), usize)> {
+    let n = points.len();
+    assert_eq!(
+        points.len(),
+        original_indices.len(),
+        "points and original_indices must have the same length"
+    );
+
+    if n == 0 {
+        return vec![];
+    }
+
+    if n == 1 {
+        return vec![(points[0], original_indices[0])];
+    }
+
+    if target >= n {
+        return points
+            .iter()
+            .zip(original_indices.iter())
+            .map(|(&p, &i)| (p, i))
+            .collect();
+    }
+
+    if target < 3 {
+        return vec![(points[0], original_indices[0]), (points[n - 1], original_indices[n - 1])];
+    }
+
+    let mut sampled = Vec::with_capacity(target);
+
+    sampled.push((points[0], original_indices[0]));
+
+    let bucket_count = target - 2;
+    let every = (n - 2) as f64 / bucket_count as f64;
+
+    let mut a = 0usize;
+
+    for i in 0..bucket_count {
+        let b_start = (((i + 1) as f64) * every + 1.0) as usize;
+        let b_end = (((i + 2) as f64) * every + 1.0).min(n as f64) as usize;
+        let b_end = b_end.min(n);
+
+        let c_start = b_end;
+        let c_end = ((((i + 2) as f64) * every + 1.0).min(n as f64)) as usize;
+        let c_end = c_end.min(n);
+
+        let (avg_x, avg_y) = if c_start < c_end {
+            let mut sum_x = 0.0f64;
+            let mut sum_y = 0.0f64;
+            let count = (c_end - c_start) as f64;
+            for &(x, y) in &points[c_start..c_end] {
+                sum_x += x;
+                sum_y += y;
+            }
+            (sum_x / count, sum_y / count)
+        } else {
+            let last = points[n - 1];
+            (last.0, last.1)
+        };
+
+        let (ax, ay) = points[a];
+
+        let mut max_area = -1.0f64;
+        let mut best = b_start.min(n - 1);
+
+        for j in b_start..b_end {
+            let (bx, by) = points[j.min(n - 1)];
+            let area = ((ax - avg_x) * (by - ay) - (ax - bx) * (avg_y - ay)).abs();
+            if area > max_area {
+                max_area = area;
+                best = j;
+            }
+        }
+
+        sampled.push((points[best.min(n - 1)], original_indices[best.min(n - 1)]));
+        a = best;
+    }
+
+    sampled.push((points[n - 1], original_indices[n - 1]));
+
+    sampled
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests (strict TDD)
 // ---------------------------------------------------------------------------
@@ -154,5 +249,65 @@ mod tests {
             "expected at least 4 extrema preserved, got {}",
             extrema_count
         );
+    }
+
+    // T-CE-G04: lttb_with_indices tests
+
+    #[test]
+    fn lttb_with_indices_identity_when_target_ge_len() {
+        let pts: Vec<(f64, f64)> = (0..5).map(|i| (i as f64, i as f64)).collect();
+        let idx: Vec<usize> = (0..5).collect();
+        let result = lttb_with_indices(&pts, &idx, 10);
+        assert_eq!(result.len(), 5);
+        for (i, ((pt, src_idx), orig_pt)) in result.iter().zip(pts.iter()).enumerate() {
+            assert_eq!(pt, orig_pt);
+            assert_eq!(*src_idx, i);
+        }
+    }
+
+    #[test]
+    fn lttb_with_indices_preserves_source_indices_when_decimating() {
+        // 10 points, target=5 — indices must map to the originals selected by LTTB.
+        let pts: Vec<(f64, f64)> = (0..10).map(|i| (i as f64, (i as f64).sin())).collect();
+        let idx: Vec<usize> = (0..10).collect();
+        let result = lttb_with_indices(&pts, &idx, 5);
+        assert_eq!(result.len(), 5);
+        // First and last must be the original first/last.
+        assert_eq!(result[0].1, 0, "first source index must be 0");
+        assert_eq!(result[4].1, 9, "last source index must be 9");
+        // Every source index must be within the original range.
+        for &(_, src) in &result {
+            assert!(src < 10, "source index out of range: {}", src);
+        }
+    }
+
+    #[test]
+    fn lttb_with_indices_custom_index_mapping() {
+        // Simulate a sorted-then-remapped dataset: original indices 5,3,7,1,9.
+        let pts = vec![(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 2.0), (4.0, 1.0)];
+        let idx = vec![5usize, 3, 7, 1, 9];
+        let result = lttb_with_indices(&pts, &idx, 3);
+        assert_eq!(result.len(), 3);
+        // First must map to source 5, last to source 9.
+        assert_eq!(result[0].1, 5);
+        assert_eq!(result[2].1, 9);
+    }
+
+    #[test]
+    fn lttb_with_indices_handles_empty_input() {
+        let pts: Vec<(f64, f64)> = vec![];
+        let idx: Vec<usize> = vec![];
+        let result = lttb_with_indices(&pts, &idx, 10);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn lttb_with_indices_single_point() {
+        let pts = vec![(0.0, 1.0)];
+        let idx = vec![42usize];
+        let result = lttb_with_indices(&pts, &idx, 10);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, (0.0, 1.0));
+        assert_eq!(result[0].1, 42);
     }
 }

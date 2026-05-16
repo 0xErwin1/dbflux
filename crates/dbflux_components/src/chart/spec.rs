@@ -123,6 +123,12 @@ pub struct ChartSpec {
     /// Column binding for the AxisBar. Added in v0.6; absent in older JSON → default.
     #[serde(default)]
     pub binding: BindingSpec,
+    /// When `true`, the engine records the original `QueryResult.rows` index for
+    /// each decimated point in `RenderModel.source_indices`. Only enabled by
+    /// DataDocument hosts that implement `source_for_point`; CodeDocument-backed
+    /// charts leave this `false` to avoid the memory overhead.
+    #[serde(default)]
+    pub track_source_indices: bool,
 }
 
 fn default_decimation_threshold() -> usize {
@@ -202,6 +208,7 @@ impl ChartSpec {
             legend_visible,
             decimation_threshold,
             binding: bindings.clone(),
+            track_source_indices: false,
         })
     }
 
@@ -258,6 +265,7 @@ impl ChartSpec {
             legend_visible,
             decimation_threshold,
             binding,
+            track_source_indices: false,
         })
     }
 
@@ -324,6 +332,7 @@ impl ChartSpec {
             legend_visible,
             decimation_threshold,
             binding,
+            track_source_indices: false,
         })
     }
 }

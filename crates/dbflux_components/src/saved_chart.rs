@@ -255,6 +255,7 @@ mod tests {
             legend_visible: false,
             decimation_threshold: 10_000,
             binding: BindingSpec::default(),
+            track_source_indices: false,
         }
     }
 

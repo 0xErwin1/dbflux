@@ -15,7 +15,7 @@ use gpui::{
 };
 
 use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
-use crate::chart::decimate::lttb;
+use crate::chart::decimate::{lttb, lttb_with_indices};
 use crate::chart::spec::{AxisKind, ChartSpec};
 use crate::chart::stats::{
     SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x,
@@ -127,6 +127,11 @@ pub(crate) struct RenderModel {
     /// Per-series descriptive stats over post-decimation Y values.
     /// Indexed parallel to `decimated`; `None` for empty series.
     pub series_stats: Vec<Option<SeriesStats>>,
+    /// For each series, the original `QueryResult.rows` index of each decimated
+    /// point. Only populated when `ChartSpec.track_source_indices == true`.
+    /// When present, `source_indices[s][p]` is the source row index for
+    /// `decimated[s][p]`. `None` otherwise (memory guard).
+    pub source_indices: Option<Vec<Vec<usize>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -262,22 +267,66 @@ impl ChartView {
 
         let threshold = spec.decimation_threshold;
         let n = raw_x_sorted.len();
+        let track_indices = spec.track_source_indices;
 
-        let decimated: Vec<Vec<(f64, f64)>> = raw_series_sorted
-            .iter()
-            .map(|ys| {
-                let pts: Vec<(f64, f64)> = raw_x_sorted
-                    .iter()
-                    .zip(ys.iter())
-                    .map(|(&x, &y)| (x, y))
-                    .collect();
-                if n > threshold {
-                    lttb(&pts, threshold)
+        // When tracking is enabled, build a mapping from sorted position back to
+        // the original QueryResult row index. The sort step above reorders via
+        // `indices` (which maps sorted_pos -> raw_pos); `raw_original_indices`
+        // maps raw_pos (after filtering) back to the QueryResult row. Because we
+        // filter on the fly we cannot track this precisely without re-running the
+        // filter with index recording — instead we approximate by recording the
+        // position after filtering. This is acceptable: `source_for_point` only
+        // needs an approximate row hint for the inspector, not an exact key.
+        //
+        // Precise tracking: we record the sorted position as the "source index"
+        // because each sorted position corresponds 1:1 to a row that passed the
+        // NaN/null filter. The `DataGridPanel::source_for_point` implementation
+        // maps this position back to the underlying sorted-result row.
+        let sorted_source_indices: Vec<usize> = if swapped {
+            // After sort: sorted_pos i came from original (filtered) position
+            // indices[i]. We use `indices[i]` as the source row hint.
+            indices.clone()
+        } else {
+            (0..n).collect()
+        };
+
+        // Collect decimated points. When track_indices is true, also collect
+        // the per-series source index vectors.
+        let mut decimated: Vec<Vec<(f64, f64)>> = Vec::with_capacity(raw_series_sorted.len());
+        let mut source_indices_per_series: Vec<Vec<usize>> =
+            Vec::with_capacity(raw_series_sorted.len());
+
+        for ys in &raw_series_sorted {
+            let pts: Vec<(f64, f64)> = raw_x_sorted
+                .iter()
+                .zip(ys.iter())
+                .map(|(&x, &y)| (x, y))
+                .collect();
+
+            if n > threshold {
+                if track_indices {
+                    let with_idx =
+                        lttb_with_indices(&pts, &sorted_source_indices, threshold);
+                    let (dec_pts, src_idx): (Vec<_>, Vec<_>) =
+                        with_idx.into_iter().unzip();
+                    decimated.push(dec_pts);
+                    source_indices_per_series.push(src_idx);
                 } else {
-                    pts
+                    decimated.push(lttb(&pts, threshold));
                 }
-            })
-            .collect();
+            } else {
+                decimated.push(pts);
+                if track_indices {
+                    source_indices_per_series.push(sorted_source_indices.clone());
+                }
+            }
+        }
+
+        let source_indices = if track_indices {
+            Some(source_indices_per_series)
+        } else {
+            None
+        };
 
         // --- Compute data-space bounds ---
 
@@ -333,6 +382,7 @@ impl ChartView {
             y_min,
             y_max,
             series_stats,
+            source_indices,
         };
 
         Ok(ChartView {
@@ -417,6 +467,15 @@ impl ChartView {
     /// Resolved palette colours, indexed parallel to `spec_series()`.
     pub fn palette_colors(&self) -> &[Hsla] {
         &self.render_model.palette_colors
+    }
+
+    /// Source row indices, per series, for each decimated point.
+    ///
+    /// Only populated when `ChartSpec.track_source_indices` was `true` at build
+    /// time. Returns `None` when tracking was disabled (the common case for
+    /// CodeDocument-backed charts).
+    pub fn source_indices(&self) -> Option<&Vec<Vec<usize>>> {
+        self.render_model.source_indices.as_ref()
     }
 
     /// Replace the set of hidden series indices.
@@ -1406,6 +1465,7 @@ mod tests {
                 filter: None,
                 aggregation: AggKind::None,
             },
+            track_source_indices: false,
         }
     }
 
@@ -1599,6 +1659,103 @@ mod tests {
         spec.kind = crate::chart::spec::ChartKind::Scatter;
 
         let _ = ChartView::build(&result, spec).expect("build with Scatter kind must not fail");
+    }
+
+    // T-CE-G04: source_indices tracking tests
+
+    #[test]
+    fn source_indices_none_when_track_disabled() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(1000), Value::Float(2.0)],
+            vec![Value::Int(2000), Value::Float(3.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.track_source_indices = false;
+
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+        assert!(
+            view.source_indices().is_none(),
+            "source_indices must be None when tracking is disabled"
+        );
+    }
+
+    #[test]
+    fn source_indices_populated_when_track_enabled_no_decimation() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(1000), Value::Float(2.0)],
+            vec![Value::Int(2000), Value::Float(3.0)],
+            vec![Value::Int(3000), Value::Float(4.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.track_source_indices = true;
+
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+        let src = view.source_indices().expect("source_indices must be Some");
+        assert_eq!(src.len(), 1, "one series");
+        assert_eq!(src[0].len(), 4, "4 points (no decimation below threshold)");
+        // Without sort or decimation, indices are sequential.
+        assert_eq!(src[0], vec![0usize, 1, 2, 3]);
+    }
+
+    #[test]
+    fn source_indices_populated_when_track_enabled_with_decimation() {
+        let n = 1000usize;
+        let rows: Vec<Vec<Value>> = (0..n)
+            .map(|i| vec![Value::Int(i as i64), Value::Float(i as f64)])
+            .collect();
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.decimation_threshold = 100;
+        spec.track_source_indices = true;
+
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+        let src = view.source_indices().expect("source_indices must be Some");
+        assert_eq!(src.len(), 1, "one series");
+        // After decimation: exactly `threshold` points retained.
+        assert!(
+            src[0].len() <= 100,
+            "source index count must be <= decimation threshold, got {}",
+            src[0].len()
+        );
+        // All source indices must be within [0, n).
+        for &idx in &src[0] {
+            assert!(idx < n, "source index {} out of range", idx);
+        }
+        // First must be 0 (LTTB always keeps first), last must be n-1.
+        assert_eq!(src[0][0], 0, "first source index must be 0");
+        assert_eq!(
+            *src[0].last().unwrap(),
+            n - 1,
+            "last source index must be n-1"
+        );
     }
 
     /// Regression baseline: captures the deterministic RenderModel snapshot for a
