@@ -552,7 +552,7 @@ impl Render for ChartView {
             .map(|t| (t.value, SharedString::from(t.label.clone())))
             .collect();
 
-        let x_tick_labels: Vec<(f64, SharedString)> = model
+        let _x_tick_labels: Vec<(f64, SharedString)> = model
             .x_ticks
             .iter()
             .map(|t| (t.value, SharedString::from(t.label.clone())))
@@ -562,10 +562,8 @@ impl Render for ChartView {
         let decimated_canvas = decimated.clone();
         let palette_canvas = palette.clone();
         let y_ticks_canvas = model.y_ticks.clone();
-        let x_ticks_canvas = model.x_ticks.clone();
         let hover_x_canvas = hover_x;
         let y_tick_labels_canvas = y_tick_labels.clone();
-        let x_tick_labels_canvas = x_tick_labels.clone();
         let hidden_canvas = self.hidden.clone();
 
         // Shared plot-area bounds: written by the canvas prepaint closure,
@@ -670,6 +668,17 @@ impl Render for ChartView {
                                         - ((dy - y_min) / y_range * plot_h as f64) as f32
                                 };
 
+                                // Dynamic X tick density: roughly one tick per 120px,
+                                // clamped to a sane range so very narrow or very wide
+                                // charts stay legible.
+                                let x_tick_target =
+                                    ((plot_w / 120.0).round() as usize).clamp(4, 16);
+                                let x_ticks_dynamic = if x_is_time {
+                                    ticks_time(x_min, x_max, x_tick_target)
+                                } else {
+                                    ticks_numeric(x_min, x_max, x_tick_target)
+                                };
+
                                 // --- Horizontal gridlines at each Y tick ---
                                 for tick in &y_ticks_canvas {
                                     let sy = data_to_screen_y(tick.value);
@@ -686,7 +695,7 @@ impl Render for ChartView {
                                 }
 
                                 // --- Vertical gridlines at each X tick ---
-                                for tick in &x_ticks_canvas {
+                                for tick in &x_ticks_dynamic {
                                     let sx = data_to_screen_x(tick.value);
                                     window.paint_quad(fill(
                                         gpui::Bounds {
@@ -914,8 +923,10 @@ impl Render for ChartView {
                                 // Centered below each tick, in the MARGIN_BOTTOM band.
                                 let x_baseline_y = plot_y0 + plot_h + 10.0;
 
-                                for (value, label) in &x_tick_labels_canvas {
-                                    let sx = data_to_screen_x(*value);
+                                for tick in &x_ticks_dynamic {
+                                    let value = tick.value;
+                                    let label = SharedString::from(tick.label.clone());
+                                    let sx = data_to_screen_x(value);
                                     let run = TextRun {
                                         len: label.len(),
                                         font: tick_font.clone(),
