@@ -142,7 +142,26 @@ impl ChartDocument {
             ChartShell::new_standalone(cx)
         });
 
-        let editor_input = cx.new(|cx| InputState::new(window, cx).placeholder("Enter SQL query"));
+        let editor_language = profile_id
+            .and_then(|pid| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&pid)
+                    .map(|c| c.connection.metadata().query_language.clone())
+            })
+            .unwrap_or(dbflux_core::QueryLanguage::Sql);
+
+        let editor_mode = editor_language.editor_mode();
+        let placeholder = editor_language.placeholder();
+
+        let editor_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor(editor_mode)
+                .line_number(true)
+                .soft_wrap(false)
+                .placeholder(placeholder)
+        });
 
         // Populate the editor with the initial query text.
         if !query.is_empty() {
