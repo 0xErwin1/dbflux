@@ -129,7 +129,10 @@ pub fn lttb_with_indices(
     }
 
     if target < 3 {
-        return vec![(points[0], original_indices[0]), (points[n - 1], original_indices[n - 1])];
+        return vec![
+            (points[0], original_indices[0]),
+            (points[n - 1], original_indices[n - 1]),
+        ];
     }
 
     let mut sampled = Vec::with_capacity(target);

@@ -305,10 +305,8 @@ impl ChartView {
 
             if n > threshold {
                 if track_indices {
-                    let with_idx =
-                        lttb_with_indices(&pts, &sorted_source_indices, threshold);
-                    let (dec_pts, src_idx): (Vec<_>, Vec<_>) =
-                        with_idx.into_iter().unzip();
+                    let with_idx = lttb_with_indices(&pts, &sorted_source_indices, threshold);
+                    let (dec_pts, src_idx): (Vec<_>, Vec<_>) = with_idx.into_iter().unzip();
                     decimated.push(dec_pts);
                     source_indices_per_series.push(src_idx);
                 } else {
@@ -476,6 +474,60 @@ impl ChartView {
     /// CodeDocument-backed charts).
     pub fn source_indices(&self) -> Option<&Vec<Vec<usize>>> {
         self.render_model.source_indices.as_ref()
+    }
+
+    /// Find the index of the decimated point in `series_idx` that is nearest to
+    /// `cursor_data_x`. Returns `None` when the series is empty or out of range.
+    pub fn nearest_point_idx(&self, series_idx: usize, cursor_data_x: f64) -> Option<usize> {
+        let pts = self.render_model.decimated.get(series_idx)?;
+        if pts.is_empty() {
+            return None;
+        }
+        // Binary search for the insertion position then compare neighbours.
+        let pos = pts.partition_point(|&(x, _)| x < cursor_data_x);
+        if pos == 0 {
+            Some(0)
+        } else if pos >= pts.len() {
+            Some(pts.len() - 1)
+        } else {
+            let lo = pts[pos - 1].0;
+            let hi = pts[pos].0;
+            if (cursor_data_x - lo).abs() <= (hi - cursor_data_x).abs() {
+                Some(pos - 1)
+            } else {
+                Some(pos)
+            }
+        }
+    }
+
+    /// Access the decimated points for a specific series by index.
+    ///
+    /// Returns `None` when `series_idx` is out of range. Used by the host to
+    /// resolve the Y value of the nearest decimated point for the inspector.
+    pub fn render_model_decimated_series(&self, series_idx: usize) -> Option<&[(f64, f64)]> {
+        self.render_model
+            .decimated
+            .get(series_idx)
+            .map(|v| v.as_slice())
+    }
+
+    /// Current hover X coordinate in data space.
+    ///
+    /// Returns `None` when the cursor is outside the chart or no hover has
+    /// been recorded yet. Requires `plot_bounds` to have been written by a
+    /// previous paint.
+    pub fn hover_data_x(&self) -> Option<f64> {
+        let hover_x = self.hover_x_screen?;
+        let bounds = self.plot_bounds.borrow();
+        let b = (*bounds)?;
+        let plot_x0 = f32::from(b.origin.x);
+        let plot_w = (f32::from(b.size.width) - MARGIN_RIGHT).max(1.0);
+        let rel_x = f32::from(hover_x) - plot_x0;
+        if rel_x < 0.0 || rel_x > plot_w {
+            return None;
+        }
+        let x_range = (self.render_model.x_max - self.render_model.x_min).max(1.0);
+        Some(self.render_model.x_min + (rel_x as f64 / plot_w as f64) * x_range)
     }
 
     /// Replace the set of hidden series indices.

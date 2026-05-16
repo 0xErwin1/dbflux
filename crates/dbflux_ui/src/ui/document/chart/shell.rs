@@ -15,8 +15,8 @@ pub enum ChartRailTab {
 
 use super::host::{ChartHost, HostAdapter};
 use dbflux_components::chart::{
-    AxisPill, BindingSpec, ChartDetection, ChartSpec, ChartView, ManualChartSelection,
-    detect_chart_columns,
+    AxisPill, BindingSpec, ChartDetection, ChartSpec, ChartView, DataPointRef,
+    ManualChartSelection, SourceRowRef, detect_chart_columns,
 };
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult};
 use gpui::prelude::*;
@@ -253,6 +253,33 @@ impl ChartShell {
     /// Returns the host adapter for this shell.
     pub fn host(&self) -> &HostAdapter {
         &self.host
+    }
+
+    /// Compute the `DataPointRef` for the current hover position.
+    ///
+    /// Returns `None` when the cursor is outside the chart, no chart view exists,
+    /// or the focused series has no usable decimated points. This is called during
+    /// render to decide whether to show the PointInspector.
+    pub fn hovered_data_point(&self, cx: &gpui::App) -> Option<DataPointRef> {
+        let chart_entity = self.chart_view.as_ref()?;
+        let chart = chart_entity.read(cx);
+        let series_idx = chart.focused_series_idx();
+        let cursor_data_x = chart.hover_data_x()?;
+        let point_idx_in_series = chart.nearest_point_idx(series_idx, cursor_data_x)?;
+        Some(DataPointRef {
+            series_idx,
+            point_idx_in_series,
+        })
+    }
+
+    /// Look up the source row for the currently hovered chart point.
+    ///
+    /// Calls `hovered_data_point` then delegates to the host's `source_for_point`.
+    /// Returns `None` when source tracking is disabled (CodeDocument-backed charts
+    /// always return None here).
+    pub fn hovered_source_row(&self, cx: &gpui::App) -> Option<SourceRowRef> {
+        let point = self.hovered_data_point(cx)?;
+        self.host.source_for_point(point, cx)
     }
 
     /// Apply a new `BindingSpec` from the AxisBar without re-running the query.

@@ -14,6 +14,7 @@ use dbflux_components::chart::{
     SeriesStats, count_columns_for_why, format_resolution, format_span, format_x_value,
     format_y_value,
 };
+use dbflux_components::chart::{SourceRowRef, point_inspector_element};
 use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
 use dbflux_core::{
@@ -1477,13 +1478,17 @@ impl DataGridPanel {
                 // Build chart_view on first render before checking whether it exists.
                 let _ = self.ensure_chart_view(cx);
 
-                let (has_chart_view, rail_open, chart_view_entity) =
-                    self.chart_shell.as_ref().map_or((false, false, None), |s| {
+                let (has_chart_view, rail_open, chart_view_entity, hovered_source) = self
+                    .chart_shell
+                    .as_ref()
+                    .map_or((false, false, None, None), |s| {
                         let shell = s.read(cx);
+                        let source = shell.hovered_source_row(cx);
                         (
                             shell.chart_view().is_some(),
                             shell.chart_rail_open,
                             shell.chart_view().cloned(),
+                            source,
                         )
                     });
 
@@ -1520,12 +1525,26 @@ impl DataGridPanel {
                     })
                     .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
 
+                // PointInspector right dock — only visible when the host has a back-link
+                // to the source row (DataDocument with track_source_indices=true).
+                // CodeDocument-backed charts always get None here and the dock stays hidden.
+                let inspector_dock =
+                    hovered_source.map(|source| self.render_point_inspector(source, cx));
+
+                let chart_with_inspector = div()
+                    .flex()
+                    .flex_row()
+                    .size_full()
+                    .min_h_0()
+                    .child(body)
+                    .when_some(inspector_dock, |row, dock| row.child(dock));
+
                 let col = div()
                     .flex()
                     .flex_col()
                     .size_full()
                     .child(self.render_chart_toolbar(theme, cx))
-                    .child(body);
+                    .child(chart_with_inspector);
 
                 container = container.child(col);
             }
@@ -1550,6 +1569,111 @@ impl DataGridPanel {
         }
 
         container
+    }
+
+    /// Render the PointInspector right-dock for the given source row.
+    ///
+    /// Builds the row-value list from the `QueryResult` columns and the raw row
+    /// at `source.row_idx`, then delegates to `point_inspector_element`. Wires
+    /// "Show in tree" via an element ID pattern: the caller listens for mousedown
+    /// on the action button's element ID and calls `chart_host_scroll_to_row`.
+    fn render_point_inspector(
+        &mut self,
+        source: SourceRowRef,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let row_idx = source.row_idx;
+        let row = self.result.rows.get(row_idx);
+
+        let row_values: Vec<(String, String)> = if let Some(row) = row {
+            self.result
+                .columns
+                .iter()
+                .zip(row.iter())
+                .map(|(col, val)| {
+                    use dbflux_core::Value as V;
+                    let display = match val {
+                        V::Null => "null".to_string(),
+                        V::Bool(b) => b.to_string(),
+                        V::Int(i) => i.to_string(),
+                        V::Float(f) => format!("{:.3}", f),
+                        V::Text(s) | V::Json(s) | V::Decimal(s) | V::ObjectId(s) => s.clone(),
+                        V::Bytes(b) => format!("<{} bytes>", b.len()),
+                        V::DateTime(dt) => dt.to_rfc3339(),
+                        V::Date(d) => d.to_string(),
+                        V::Time(t) => t.to_string(),
+                        V::Array(a) => format!("[{} items]", a.len()),
+                        V::Document(o) => format!("{{...{} keys}}", o.len()),
+                        V::Unsupported(s) => format!("<unsupported: {}>", s),
+                    };
+                    (col.name.clone(), display)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        let focused_series_idx = self
+            .chart_shell
+            .as_ref()
+            .map_or(0, |s| s.read(cx).chart_focused_series_idx);
+
+        let series_name = self
+            .chart_shell
+            .as_ref()
+            .and_then(|s| s.read(cx).chart_view().cloned())
+            .map(|cv| cv.read(cx).series_label(focused_series_idx).to_string())
+            .unwrap_or_default();
+
+        let (hovered_x, hovered_y) = self
+            .chart_shell
+            .as_ref()
+            .and_then(|s| {
+                let shell = s.read(cx);
+                let chart_entity = shell.chart_view()?.clone();
+                let chart = chart_entity.read(cx);
+                let x = chart.hover_data_x()?;
+                let series_idx = chart.focused_series_idx();
+                let x_is_time = chart.x_is_time();
+                let x_str = dbflux_components::chart::format_x_value(x, x_is_time);
+                // Resolve Y from the nearest decimated point.
+                let y_str = chart
+                    .nearest_point_idx(series_idx, x)
+                    .and_then(|pi| {
+                        // Read the Y value from the decimated point directly.
+                        let pts = chart.render_model_decimated_series(series_idx)?;
+                        Some(dbflux_components::chart::format_y_value(pts.get(pi)?.1))
+                    })
+                    .unwrap_or_default();
+                Some((x_str, y_str))
+            })
+            .unwrap_or_default();
+
+        div()
+            .h_full()
+            .flex_shrink_0()
+            .child(point_inspector_element(
+                source,
+                &row_values,
+                &series_name,
+                &hovered_x,
+                &hovered_y,
+                None,
+                None,
+            ))
+            // Overlay listener: catch mousedown events bubbling up from the
+            // "Show in tree" button and scroll the table to the source row.
+            // The action button's element ID encodes the row index; the mousedown
+            // target check is coarse (any click in the inspector dock scrolls to
+            // the hovered source row). Precise per-button wiring would require
+            // element hit-test support that GPUI does not expose in listeners.
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                    this.chart_host_scroll_to_row(row_idx, cx);
+                    cx.notify();
+                }),
+            )
     }
 
     /// Render the legend row below the chart canvas.

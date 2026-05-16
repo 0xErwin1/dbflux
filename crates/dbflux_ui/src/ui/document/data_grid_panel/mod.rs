@@ -27,7 +27,9 @@ use crate::ui::overlays::document_preview_modal::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
-use dbflux_components::chart::{ChartDetection, ChartView, detect_chart_columns};
+use dbflux_components::chart::{
+    ChartDetection, ChartView, DataPointRef, SourceRowRef, detect_chart_columns,
+};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
@@ -1747,6 +1749,39 @@ impl DataGridPanel {
                 self.pending_refresh = true;
                 cx.notify();
             }
+        }
+    }
+
+    /// Look up the source row for a decimated chart point.
+    ///
+    /// Consults the `RenderModel.source_indices` built by `ChartView::build`
+    /// when `ChartSpec.track_source_indices` was enabled. Returns `None` when
+    /// source tracking is disabled (e.g. CodeDocument-backed charts) or when
+    /// the index is out of range.
+    pub(crate) fn chart_host_source_for_point(
+        &self,
+        point: DataPointRef,
+        cx: &App,
+    ) -> Option<SourceRowRef> {
+        let shell = self.chart_shell.as_ref()?.read(cx);
+        let chart_entity = shell.chart_view()?.clone();
+        let chart = chart_entity.read(cx);
+
+        let src_indices = chart.source_indices()?;
+        let series_indices = src_indices.get(point.series_idx)?;
+        let row_idx = *series_indices.get(point.point_idx_in_series)?;
+
+        Some(SourceRowRef { row_idx })
+    }
+
+    /// Scroll the underlying table view to the given row index.
+    ///
+    /// Uses `DataTableState::scroll_to_row` when the table state is available.
+    /// For document-tree sources this is a no-op (document tree manages its own
+    /// scroll via `DocumentTreeState`).
+    pub(crate) fn chart_host_scroll_to_row(&self, row_idx: usize, cx: &App) {
+        if let Some(table_state) = &self.table_state {
+            table_state.read(cx).scroll_to_row(row_idx);
         }
     }
 }

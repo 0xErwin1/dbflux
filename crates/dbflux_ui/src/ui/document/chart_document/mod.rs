@@ -489,6 +489,7 @@ impl ChartDocument {
                 legend_visible: false,
                 decimation_threshold: 10_000,
                 binding: dbflux_components::chart::BindingSpec::default(),
+                track_source_indices: false,
             });
 
         let bindings = spec.binding.clone();
