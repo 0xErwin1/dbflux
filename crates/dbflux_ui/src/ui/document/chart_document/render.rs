@@ -18,7 +18,7 @@ use crate::ui::components::toast::flush_pending_toast;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Spacing};
 use dbflux_components::chart::{AxisPill, ChartDetection, axis_bar_element};
-use dbflux_components::controls::Input;
+use dbflux_components::controls::{GpuiInput, Input};
 use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::*;
 use gpui::*;
@@ -190,7 +190,18 @@ impl Render for ChartDocument {
                         .h(px(180.0))
                         .border_t_1()
                         .border_color(theme.border)
-                        .child(Input::new(&editor_input).placeholder("Enter SQL query")),
+                        .bg(theme.background)
+                        .flex()
+                        .flex_col()
+                        .min_h_0()
+                        .child(
+                            div().flex_1().min_h_0().overflow_hidden().child(
+                                GpuiInput::new(&editor_input)
+                                    .appearance(false)
+                                    .w_full()
+                                    .h_full(),
+                            ),
+                        ),
                 )
             });
 
