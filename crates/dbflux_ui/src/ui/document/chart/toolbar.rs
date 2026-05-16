@@ -14,12 +14,12 @@
 //! The AxisBar row is NOT part of this toolbar — it lives below and is
 //! assembled separately in each caller.
 
+use super::shell::{ChartRailTab, ChartShell};
 use crate::ui::common::time_range::state::TimeRange;
 use crate::ui::common::time_range::view::TimeRangePanel;
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
-use super::shell::{ChartRailTab, ChartShell};
 use dbflux_components::chart::{format_resolution, format_x_value};
 use dbflux_components::primitives::Icon;
 use gpui::prelude::*;
@@ -207,44 +207,50 @@ pub fn render_chart_toolbar(
     });
 
     // --- Toolbar action button helper ---
-    let toolbar_btn =
-        |id: &'static str, icon: AppIcon, label: &'static str, is_active: bool| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .px(px(6.0))
-                .py(px(2.0))
-                .rounded(Radii::SM)
-                .text_size(FontSizes::XS)
-                .cursor_pointer()
-                .when(is_active, |d| d.bg(primary).text_color(primary_fg))
-                .when(!is_active, |d| {
-                    d.text_color(foreground).hover(move |d| d.bg(secondary))
-                })
-                .child(Icon::new(icon).size(px(11.0)).color(if is_active {
-                    primary_fg
-                } else {
-                    foreground
-                }))
-                .child(label)
-        };
+    let toolbar_btn = |id: &'static str, icon: AppIcon, label: &'static str, is_active: bool| {
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .px(px(6.0))
+            .py(px(2.0))
+            .rounded(Radii::SM)
+            .text_size(FontSizes::XS)
+            .cursor_pointer()
+            .when(is_active, |d| d.bg(primary).text_color(primary_fg))
+            .when(!is_active, |d| {
+                d.text_color(foreground).hover(move |d| d.bg(secondary))
+            })
+            .child(Icon::new(icon).size(px(11.0)).color(if is_active {
+                primary_fg
+            } else {
+                foreground
+            }))
+            .child(label)
+    };
 
     let is_stats_active = rail_open && rail_tab == ChartRailTab::Stats;
     let on_stats = handlers.on_toggle_stats_rail.clone();
     let on_png = handlers.on_png_export.clone();
     let on_save = handlers.on_save_chart.clone();
 
-    let stats_btn = toolbar_btn("chart-toolbar-stats", AppIcon::Zap, "Stats", is_stats_active)
-        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            on_stats(window, cx);
-        });
+    let stats_btn = toolbar_btn(
+        "chart-toolbar-stats",
+        AppIcon::Zap,
+        "Stats",
+        is_stats_active,
+    )
+    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+        on_stats(window, cx);
+    });
 
-    let png_btn = toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG", false)
-        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+    let png_btn = toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG", false).on_mouse_down(
+        MouseButton::Left,
+        move |_, window, cx| {
             on_png(window, cx);
-        });
+        },
+    );
 
     let save_btn = toolbar_btn("chart-toolbar-save", AppIcon::Save, "Save chart", false)
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
