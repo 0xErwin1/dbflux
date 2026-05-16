@@ -1502,6 +1502,7 @@ impl Workspace {
                     name: chart.name.clone(),
                     profile_name,
                     profile_id: chart.profile_id,
+                    is_collection_source: chart.is_collection_source(),
                 }
             })
             .collect()
@@ -1549,22 +1550,42 @@ impl Workspace {
             return;
         };
 
-        let doc = cx.new(|cx| {
-            crate::ui::document::ChartDocument::from_saved(
-                &chart,
-                self.app_state.clone(),
-                window,
-                cx,
-            )
-        });
+        // Route based on source type.
+        match &chart.source {
+            dbflux_components::saved_chart::SavedChartSource::Collection {
+                collection_ref, ..
+            } => {
+                // Collection charts open as a DataDocument tab in Chart mode.
+                // The DataDocument's auto-select logic will switch to Chart mode
+                // after the data loads (TimeSeries shape triggers auto-select).
+                let collection = collection_ref.clone();
+                self.open_collection_document(chart.profile_id, collection, window, cx);
+            }
+            dbflux_components::saved_chart::SavedChartSource::Query { .. } => {
+                // Validate before allocating an entity — from_saved checks the source variant.
+                let validation = crate::ui::document::ChartDocument::validate_saved_source(&chart);
+                if let Err(e) = validation {
+                    log::error!("Failed to open saved chart: {e}");
+                    Toast::error(format!("Cannot open chart: {e}"))
+                        .meta_right(now_hms())
+                        .push(cx);
+                    return;
+                }
 
-        let handle = DocumentHandle::chart(doc, cx);
+                let app_state = self.app_state.clone();
+                let doc = cx.new(|cx| {
+                    // from_saved is guaranteed Ok for Query source (validated above).
+                    crate::ui::document::ChartDocument::from_saved(&chart, app_state, window, cx)
+                        .expect("Query source validated before entity creation")
+                });
 
-        self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
-        });
-
-        self.set_focus(FocusTarget::Document, window, cx);
+                let handle = DocumentHandle::chart(doc, cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.open(handle, cx);
+                });
+                self.set_focus(FocusTarget::Document, window, cx);
+            }
+        }
     }
 
     /// Reconnects to profiles referenced by restored session documents.
@@ -1809,6 +1830,7 @@ mod tests {
             name: "My Chart".to_string(),
             profile_name: "test".to_string(),
             profile_id: Uuid::new_v4(),
+            is_collection_source: false,
         };
         let resource = sample_table("test", "t");
         let script = sample_script("test");
