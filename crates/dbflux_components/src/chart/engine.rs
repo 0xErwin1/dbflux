@@ -1514,4 +1514,75 @@ mod tests {
         // avg of [1,2,3,4] = 2.5
         assert!((s.avg - 2.5).abs() < 1e-9);
     }
+
+    /// Regression baseline: captures the deterministic RenderModel snapshot for a
+    /// known two-series time-series fixture. This test must remain green through
+    /// all Phase A–H modifications to confirm the Line arm is never accidentally
+    /// broken.
+    ///
+    /// Fixture: 5 rows, two numeric series, decimation_threshold = 10_000 (no
+    /// decimation applied). All assertions are over data-space values and tick
+    /// counts, which are fully deterministic for this input.
+    #[test]
+    fn regression_baseline_line_chart_render_model() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0), Value::Float(10.0)],
+            vec![Value::Int(1000), Value::Float(2.0), Value::Float(20.0)],
+            vec![Value::Int(2000), Value::Float(3.0), Value::Float(15.0)],
+            vec![Value::Int(3000), Value::Float(4.0), Value::Float(25.0)],
+            vec![Value::Int(4000), Value::Float(5.0), Value::Float(30.0)],
+        ];
+
+        let result = QueryResult::table(
+            vec![
+                make_col("ts", ColumnKind::Timestamp),
+                make_col("val_a", ColumnKind::Float),
+                make_col("val_b", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+
+        let spec = simple_spec(0, &[1, 2]);
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+
+        // Series count preserved.
+        assert_eq!(view.render_model.decimated.len(), 2, "two series");
+
+        // No decimation below threshold — all 5 points retained.
+        assert_eq!(view.render_model.decimated[0].len(), 5, "series 0: 5 pts");
+        assert_eq!(view.render_model.decimated[1].len(), 5, "series 1: 5 pts");
+
+        // Data-space bounds are deterministic.
+        assert_eq!(view.render_model.x_min, 0.0);
+        assert_eq!(view.render_model.x_max, 4000.0);
+        assert_eq!(view.render_model.y_min, 1.0);
+        assert_eq!(view.render_model.y_max, 30.0);
+
+        // At least one tick generated on each axis.
+        assert!(
+            !view.render_model.x_ticks.is_empty(),
+            "x_ticks must be non-empty"
+        );
+        assert!(
+            !view.render_model.y_ticks.is_empty(),
+            "y_ticks must be non-empty"
+        );
+
+        // Palette colours resolved for both series.
+        assert_eq!(view.render_model.palette_colors.len(), 2);
+
+        // Series stats over post-decimation (= all) points.
+        let s0 = view.render_model.series_stats[0].expect("series 0 stats present");
+        assert_eq!(s0.min, 1.0);
+        assert_eq!(s0.max, 5.0);
+        assert_eq!(s0.last, 5.0);
+        assert!((s0.avg - 3.0).abs() < 1e-9, "avg of [1..5] == 3.0");
+
+        let s1 = view.render_model.series_stats[1].expect("series 1 stats present");
+        assert_eq!(s1.min, 10.0);
+        assert_eq!(s1.max, 30.0);
+        assert_eq!(s1.last, 30.0);
+    }
 }
