@@ -19,6 +19,7 @@ pub mod decimate;
 pub mod detect;
 pub mod engine;
 pub mod legend;
+pub mod point_inspector;
 pub mod spec;
 pub mod stats;
 
@@ -28,6 +29,7 @@ pub use engine::{
     CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, CHART_PALETTE, ChartBuildError, ChartView,
     format_x_value, format_y_value,
 };
+pub use point_inspector::{DataPointRef, SourceRowRef, point_inspector_element};
 pub use spec::{
     AggKind, AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, ManualChartSelection,
     SeriesSpec,
