@@ -598,22 +598,36 @@ impl Render for ChartView {
         // The `spec.legend_visible` field is preserved for future use / API compat.
         let legend: Option<AnyElement> = None;
 
+        let plot_bounds_for_hover = plot_bounds_rc.clone();
+
         div()
             .flex()
             .flex_col()
             .size_full()
-            // Chart body: canvas covers the full area including Y-label margin.
-            // Tick labels are painted directly onto the canvas.
+            .overflow_hidden()
             .child(
                 div()
                     .flex_grow()
                     .relative()
+                    .overflow_hidden()
                     .on_mouse_move(cx.listener(
                         move |this, ev: &gpui::MouseMoveEvent, _window, cx| {
-                            this.hover_x_screen = Some(ev.position.x);
-                            this.hover_y_screen = Some(ev.position.y);
-                            this.update_focused_from_hover();
-                            cx.notify();
+                            let inside = plot_bounds_for_hover
+                                .borrow()
+                                .as_ref()
+                                .map(|b| b.contains(&ev.position))
+                                .unwrap_or(false);
+                            let had_hover = this.hover_x_screen.is_some();
+                            if inside {
+                                this.hover_x_screen = Some(ev.position.x);
+                                this.hover_y_screen = Some(ev.position.y);
+                                this.update_focused_from_hover();
+                                cx.notify();
+                            } else if had_hover {
+                                this.hover_x_screen = None;
+                                this.hover_y_screen = None;
+                                cx.notify();
+                            }
                         },
                     ))
                     .child({
@@ -1023,6 +1037,7 @@ struct HoverReadout {
     /// Cursor X relative to the plot origin (used to position the overlay).
     screen_x_relative: Pixels,
     plot_width: Pixels,
+    plot_height: Pixels,
 }
 
 /// Derive readout content from the captured plot-area bounds and the
@@ -1051,6 +1066,7 @@ fn build_readout(
         return None;
     }
     let plot_w = gpui::px(plot_w_px);
+    let plot_h = bounds.size.height;
 
     let relative_x = hover_x - plot_x0;
     let rel_x_f = f32::from(relative_x);
@@ -1124,6 +1140,7 @@ fn build_readout(
         focused_idx,
         screen_x_relative: relative_x,
         plot_width: plot_w,
+        plot_height: plot_h,
     })
 }
 
@@ -1191,12 +1208,14 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
     let left_px = (MARGIN_LEFT + left_in_plot).max(MARGIN_LEFT + 4.0);
 
     let focused_idx = r.focused_idx;
+    let max_h_px = (f32::from(r.plot_height) - 24.0).max(80.0);
 
     div()
         .absolute()
         .left(gpui::px(left_px))
         .top(gpui::px(18.0))
         .min_w(gpui::px(PANEL_MIN_WIDTH))
+        .max_h(gpui::px(max_h_px))
         .flex()
         .flex_col()
         .gap(gpui::px(2.0))
@@ -1207,6 +1226,7 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
         .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.18))
         .rounded(gpui::px(6.0))
         .text_size(FontSizes::XS)
+        .overflow_hidden()
         // Header: time + optional offset
         .child(
             div()
