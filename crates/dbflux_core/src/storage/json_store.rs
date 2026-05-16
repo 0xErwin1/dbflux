@@ -26,7 +26,10 @@ impl<T: Serialize + DeserializeOwned> JsonStore<T> {
         })
     }
 
-    #[cfg(test)]
+    /// Create a store pointing at an explicit path without using `dirs::config_dir()`.
+    ///
+    /// Intended for testing; production code should use the named constructors
+    /// (`profiles()`, `saved_charts()`, etc.) so the path is always canonical.
     pub fn from_path(path: PathBuf) -> Self {
         Self {
             path,

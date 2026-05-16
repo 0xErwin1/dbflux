@@ -299,7 +299,11 @@ mod tests {
         }"#;
 
         let spec: ChartSpec = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(spec.kind, ChartKind::Line, "missing 'kind' should default to Line");
+        assert_eq!(
+            spec.kind,
+            ChartKind::Line,
+            "missing 'kind' should default to Line"
+        );
     }
 
     #[test]

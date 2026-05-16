@@ -1559,7 +1559,6 @@ mod tests {
     /// `todo!()`. This test drives the implementation of the placeholder branch.
     #[test]
     fn build_with_bar_kind_does_not_panic() {
-        use crate::chart::spec::{AggKind, BindingSpec};
         let rows = vec![
             vec![Value::Int(0), Value::Float(1.0)],
             vec![Value::Int(1000), Value::Float(2.0)],

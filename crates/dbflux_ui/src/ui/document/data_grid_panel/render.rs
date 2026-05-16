@@ -1057,10 +1057,8 @@ impl DataGridPanel {
             .map(|item| item.label)
             .collect();
 
-        let active_preset_label: Option<SharedString> = self
-            .chart_source_time_range_panel
-            .as_ref()
-            .and_then(|p| {
+        let active_preset_label: Option<SharedString> =
+            self.chart_source_time_range_panel.as_ref().and_then(|p| {
                 let panel = p.read(cx);
                 let range = panel.selected_time_range?;
                 let index = match range {
@@ -2544,28 +2542,28 @@ impl DataGridPanel {
                         )
                     })
                     .when(
-                        available_modes.len() > 1
-                            && current_result_mode != ResultViewMode::Chart,
+                        available_modes.len() > 1 && current_result_mode != ResultViewMode::Chart,
                         |d| {
-                        d.child(div().flex().items_center().gap_0().children(
-                            available_modes.iter().enumerate().map(|(i, mode)| {
-                                let mode = *mode;
-                                let is_active = mode == current_result_mode;
-                                div()
-                                    .id(ElementId::Name(format!("result-view-{}", i).into()))
-                                    .px(Spacing::SM)
-                                    .text_size(FontSizes::XS)
-                                    .cursor_pointer()
-                                    .rounded(Radii::SM)
-                                    .when(is_active, |d| d.bg(theme.accent.opacity(0.15)))
-                                    .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.set_result_view_mode(mode, cx);
-                                    }))
-                                    .child(Self::result_mode_label(mode.label(), is_active))
-                            }),
-                        ))
-                    })
+                            d.child(div().flex().items_center().gap_0().children(
+                                available_modes.iter().enumerate().map(|(i, mode)| {
+                                    let mode = *mode;
+                                    let is_active = mode == current_result_mode;
+                                    div()
+                                        .id(ElementId::Name(format!("result-view-{}", i).into()))
+                                        .px(Spacing::SM)
+                                        .text_size(FontSizes::XS)
+                                        .cursor_pointer()
+                                        .rounded(Radii::SM)
+                                        .when(is_active, |d| d.bg(theme.accent.opacity(0.15)))
+                                        .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.set_result_view_mode(mode, cx);
+                                        }))
+                                        .child(Self::result_mode_label(mode.label(), is_active))
+                                }),
+                            ))
+                        },
+                    )
                     // Shape badge
                     .when_some(result_shape_label, |d, shape| {
                         let label = match &shape {
