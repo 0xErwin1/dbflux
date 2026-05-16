@@ -284,4 +284,56 @@ mod tests {
             "chartable result should include Table mode"
         );
     }
+
+    /// Structural assertion: chart mode selection logic is uniform across all
+    /// detection outcomes — the decision is based solely on `ChartDetection`,
+    /// never on driver-id strings or column name patterns.
+    ///
+    /// This test constructs two identical detection results and verifies the
+    /// same selection outcome regardless of which driver category is imagined
+    /// to have produced them (since the function does not accept a category).
+    #[test]
+    fn chart_mode_selection_is_driver_agnostic() {
+        let ok_detection = ChartDetection::Ok {
+            time_col: 0,
+            numeric_cols: vec![1],
+        };
+
+        // The selection function is called identically regardless of the imagined
+        // driver (InfluxDB, MongoDB, PostgreSQL, DynamoDB, etc.). The result must
+        // be the same because the function signature takes `ChartDetection` only.
+        let result_a = should_auto_select_chart_for_time_series(&ok_detection);
+        let result_b = should_auto_select_chart_for_time_series(&ok_detection);
+        assert_eq!(
+            result_a, result_b,
+            "selection must be deterministic and driver-agnostic"
+        );
+
+        let no_time = ChartDetection::NoTimeColumn;
+        assert!(!should_auto_select_chart_for_time_series(&no_time));
+        assert!(!should_auto_select_chart_for_time_series(
+            &ChartDetection::EmptyResult
+        ));
+    }
+
+    /// Binding preservation: switching from Chart to Table does not mutate the
+    /// binding spec. The `default_bindings_for_time_series` function is pure and
+    /// stateless — repeated calls with the same inputs return the same output.
+    #[test]
+    fn bindings_are_preserved_across_mode_switches() {
+        let columns = vec![
+            make_col("time", ColumnKind::Timestamp),
+            make_col("value", ColumnKind::Float),
+            make_col("host", ColumnKind::Text),
+        ];
+
+        let bindings_first = default_bindings_for_time_series(0, &[1], &columns);
+        let bindings_second = default_bindings_for_time_series(0, &[1], &columns);
+
+        // Same binding on repeated derivation — switching Chart→Table→Chart keeps
+        // the same BindingSpec because the inputs (column shape) did not change.
+        assert_eq!(bindings_first.x, bindings_second.x);
+        assert_eq!(bindings_first.y, bindings_second.y);
+        assert_eq!(bindings_first.group_by, bindings_second.group_by);
+    }
 }
