@@ -1006,291 +1006,87 @@ impl DataGridPanel {
     /// Render the chart toolbar that sits between the result-tabs strip and the
     /// canvas + rail row.
     ///
-    /// Contains (left to right):
-    /// - RANGE label + preset chips (driven by `chart_source_time_range_panel`)
-    /// - Refresh dropdown (only in Chart mode)
-    /// - Resolved window string
-    /// - Spacer
-    /// - Points + resolution
-    /// - Stats / Configure buttons
-    /// - PNG stub button
+    /// Delegates the toolbar row to the shared `render_chart_toolbar` function
+    /// and assembles the AxisBar row below it. The AxisBar row is kept here and
+    /// is not part of the shared toolbar.
     pub(super) fn render_chart_toolbar(
         &mut self,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let muted = theme.muted_foreground;
-        let border = theme.border;
-        let foreground = theme.foreground;
-        let secondary = theme.secondary;
-        let primary = theme.primary;
-        let primary_fg = theme.primary_foreground;
+        use crate::ui::document::chart::toolbar::{
+            ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar,
+        };
+        use std::sync::Arc;
 
-        // --- Read chart state from the shell ---
-        let (chart_view_entity, rail_open, rail_tab) =
-            self.chart_shell
-                .as_ref()
-                .map_or((None, false, ChartRailTab::Configure), |s| {
-                    let shell = s.read(cx);
-                    (
-                        shell.chart_view().cloned(),
-                        shell.chart_rail_open,
-                        shell.chart_rail_tab,
-                    )
-                });
-
-        // --- Resolved window label ---
-        let row_count = self.result.row_count();
-        let (window_label, x_span_ms) = if let Some(rw) = &self.result.resolved_window {
-            let start_str = format_x_value(rw.start_ms as f64, true);
-            let end_str = format_x_value(rw.end_ms as f64, true);
-            let span = (rw.end_ms - rw.start_ms) as f64;
-            (format!("{} → {} UTC", start_str, end_str), span)
-        } else if let Some(cv) = &chart_view_entity {
-            let (x_min, x_max) = cv.read(cx).data_x_bounds();
-            let start_str = format_x_value(x_min, true);
-            let end_str = format_x_value(x_max, true);
-            let span = x_max - x_min;
-            (format!("{} → {} UTC", start_str, end_str), span)
-        } else {
-            ("—".to_string(), 0.0)
+        // The shell is required for chart mode; fall back gracefully if absent.
+        let Some(chart_shell) = self.chart_shell.clone() else {
+            return div().into_any_element();
         };
 
-        let resolution_label = SharedString::from(format_resolution(x_span_ms, row_count));
-        let window_label: SharedString = window_label.into();
+        let resolved_window = self
+            .result
+            .resolved_window
+            .as_ref()
+            .map(|rw| (rw.start_ms, rw.end_ms));
 
-        // --- RANGE chips ---
-        // All presets including "Custom…" are shown; each chip drives the
-        // chart_source_time_range_panel dropdown directly.
-        let all_presets: Vec<SharedString> = TimeRangePanel::preset_items()
-            .into_iter()
-            .map(|item| item.label)
-            .collect();
+        // Capture clones for the handlers before borrowing self mutably.
+        let shell_for_stats = chart_shell.clone();
+        let time_range_panel_for_preset = self.chart_source_time_range_panel.clone();
 
-        let active_preset_label: Option<SharedString> =
-            self.chart_source_time_range_panel.as_ref().and_then(|p| {
-                let panel = p.read(cx);
-                let range = panel.selected_time_range?;
-                let index = match range {
-                    crate::ui::common::time_range::state::TimeRange::Last15min => 0,
-                    crate::ui::common::time_range::state::TimeRange::LastHour => 1,
-                    crate::ui::common::time_range::state::TimeRange::Last6Hours => 2,
-                    crate::ui::common::time_range::state::TimeRange::Last24Hours => 3,
-                    crate::ui::common::time_range::state::TimeRange::Last7Days => 4,
-                    crate::ui::common::time_range::state::TimeRange::Custom => 5,
-                };
-                TimeRangePanel::preset_items()
-                    .get(index)
-                    .map(|item| item.label.clone())
-            });
+        let ctx = ChartToolbarContext {
+            theme,
+            chart_shell,
+            refresh_dropdown: self.refresh_dropdown.clone(),
+            time_range_panel: self.chart_source_time_range_panel.clone(),
+            row_count: self.result.row_count(),
+            resolved_window,
+            source_supports_save: true,
+        };
 
-        let time_range_panel = self.chart_source_time_range_panel.clone();
-        let num_presets = all_presets.len();
+        let weak_panel = cx.weak_entity();
+        let weak_panel_for_save = cx.weak_entity();
 
-        // Segmented chip row — no gap between chips, shared border.
-        // Active chip: primary bg + primary-fg text. Inactive: muted + hover secondary.
-        let chips = div()
-            .flex()
-            .items_center()
-            .border_1()
-            .border_color(border)
-            .rounded(Radii::SM)
-            .overflow_hidden()
-            .children(all_presets.into_iter().enumerate().map(|(i, label)| {
-                let is_active = active_preset_label.as_ref().is_some_and(|a| a == &label);
-                let is_last = i == num_presets - 1;
-                let trp = time_range_panel.clone();
-
-                let mut chip = div()
-                    .id(ElementId::Name(format!("range-chip-{i}").into()))
-                    .px(px(8.0))
-                    .py(px(3.0))
-                    .text_size(px(11.0))
-                    .font(font("JetBrains Mono"))
-                    .cursor_pointer()
-                    .when(is_active, |d| {
-                        d.bg(primary)
-                            .text_color(primary_fg)
-                            .font_weight(FontWeight::SEMIBOLD)
-                    })
-                    .when(!is_active, |d| {
-                        d.text_color(muted).hover(move |d| d.bg(secondary))
-                    })
-                    .when(!is_last, |d| d.border_r_1().border_color(border))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |_this, _, _, cx| {
-                            if let Some(ref panel_entity) = trp {
-                                panel_entity.update(cx, |panel, cx| {
-                                    panel.select_preset(i, cx);
-                                });
-                            }
-                        }),
-                    )
-                    .child(label);
-
-                // Left-side rounding only on first chip; right-side only on last.
-                if i == 0 {
-                    chip = chip.rounded_tl(Radii::SM).rounded_bl(Radii::SM);
-                } else if is_last {
-                    chip = chip.rounded_tr(Radii::SM).rounded_br(Radii::SM);
+        let handlers = ChartToolbarHandlers {
+            on_select_range_preset: Arc::new(move |i, _window, cx| {
+                if let Some(ref panel) = time_range_panel_for_preset {
+                    panel.update(cx, |p, cx| p.select_preset(i, cx));
                 }
-
-                chip
-            }));
-
-        // --- Vertical divider helper ---
-        let vdivider = || div().w(px(1.0)).h(px(12.0)).mx(px(4.0)).bg(border);
-
-        // --- Toolbar action button helper ---
-        // Returns a compact ghost/primary pill button with an optional icon.
-        let toolbar_btn =
-            |id: &'static str, icon: AppIcon, label: &'static str, is_active: bool| {
-                div()
-                    .id(id)
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .px(px(6.0))
-                    .py(px(2.0))
-                    .rounded(Radii::SM)
-                    .text_size(FontSizes::XS)
-                    .cursor_pointer()
-                    .when(is_active, |d| d.bg(primary).text_color(primary_fg))
-                    .when(!is_active, |d| {
-                        d.text_color(foreground).hover(move |d| d.bg(secondary))
-                    })
-                    .child(Icon::new(icon).size(px(11.0)).color(if is_active {
-                        primary_fg
+            }),
+            on_toggle_stats_rail: Arc::new(move |_window, cx| {
+                shell_for_stats.update(cx, |s, cx| {
+                    if s.chart_rail_open && s.chart_rail_tab == ChartRailTab::Stats {
+                        s.chart_rail_open = false;
                     } else {
-                        foreground
-                    }))
-                    .child(label)
-            };
-
-        let toolbar_row = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(px(34.0))
-            .px(Spacing::SM)
-            .gap(px(4.0))
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            // RANGE label
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(muted)
-                    .font_weight(FontWeight::BOLD)
-                    .child("RANGE"),
-            )
-            // Segmented range chips
-            .child(chips)
-            // Divider
-            .child(vdivider())
-            // REFRESH label + dropdown
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(muted)
-                            .font_weight(FontWeight::BOLD)
-                            .child("REFRESH"),
-                    )
-                    .child(
-                        div()
-                            .w(px(80.0))
-                            .h(px(22.0))
-                            .child(self.refresh_dropdown.clone()),
-                    ),
-            )
-            // Divider
-            .child(vdivider())
-            // Clock icon + resolved window string
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(Icon::new(AppIcon::Clock).size(px(11.0)).color(muted))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(muted)
-                            .font(font("JetBrains Mono"))
-                            .child(window_label),
-                    ),
-            )
-            // Spacer pushes right-side items to the end
-            .child(div().flex_1())
-            // Points · resolution
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .text_size(px(11.0))
-                    .text_color(muted)
-                    .font(font("JetBrains Mono"))
-                    .child(SharedString::from(format!("{row_count} pts")))
-                    .child("·")
-                    .child(resolution_label),
-            )
-            .child(vdivider())
-            // Stats button (Issue 1: toggling same tab closes rail)
-            .child({
-                let is_stats_active = rail_open && rail_tab == ChartRailTab::Stats;
-                toolbar_btn(
-                    "chart-toolbar-stats",
-                    AppIcon::Zap,
-                    "Stats",
-                    is_stats_active,
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        if let Some(shell) = &this.chart_shell {
-                            shell.update(cx, |s, _| {
-                                if s.chart_rail_open && s.chart_rail_tab == ChartRailTab::Stats {
-                                    s.chart_rail_open = false;
-                                } else {
-                                    s.chart_rail_open = true;
-                                    s.chart_rail_tab = ChartRailTab::Stats;
-                                }
-                            });
-                        }
-                        cx.notify();
-                    }),
-                )
-            })
-            // PNG export (stub — shows an info toast)
-            .child(
-                toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG", false).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, _cx| {
+                        s.chart_rail_open = true;
+                        s.chart_rail_tab = ChartRailTab::Stats;
+                    }
+                    cx.notify();
+                });
+            }),
+            on_png_export: Arc::new(move |_window, cx| {
+                if let Some(panel) = weak_panel.upgrade() {
+                    panel.update(cx, |this, _cx| {
                         this.pending_toast = Some(crate::ui::components::toast::PendingToast {
-                            message: format!("PNG export coming in v0.7 — {}", now_hms()),
+                            message: format!(
+                                "PNG export coming in v0.7 — {}",
+                                crate::ui::components::toast::now_hms()
+                            ),
                             is_error: false,
                         });
-                    }),
-                ),
-            )
-            .child(vdivider())
-            .child(
-                toolbar_btn("chart-toolbar-save", AppIcon::Save, "Save chart", false)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.open_collection_chart_save(window, cx);
-                        }),
-                    ),
-            );
+                    });
+                }
+            }),
+            on_save_chart: Arc::new(move |window, cx| {
+                if let Some(panel) = weak_panel_for_save.upgrade() {
+                    panel.update(cx, |this, cx| {
+                        this.open_collection_chart_save(window, cx);
+                    });
+                }
+            }),
+        };
+
+        let toolbar_row = render_chart_toolbar(ctx, handlers, cx);
 
         // AxisBar row: shown below the main toolbar when a chart view is live.
         // Reads bindings and open-pill state from the shell.
@@ -1388,6 +1184,7 @@ impl DataGridPanel {
                     .bg(theme.tab_bar)
                     .child(axis_row),
             )
+            .into_any_element()
     }
 
     // -- Result View Renderers --
