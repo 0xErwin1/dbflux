@@ -1,0 +1,12 @@
+//! Chart shell and host trait for the DBFlux chart subsystem.
+//!
+//! This module provides the `ChartHost` trait seam and the `ChartShell` entity
+//! that absorbs chart state from concrete host surfaces such as `DataGridPanel`.
+//! Any surface that can mount a chart implements `ChartHost`; the shell owns
+//! `ChartView`, hidden-series state, the rail, and toolbar rendering.
+
+pub mod host;
+pub mod shell;
+
+pub use host::{ChartHost, HostAdapter};
+pub use shell::ChartShell;

@@ -149,13 +149,9 @@ pub enum DataGridEvent {
     },
 }
 
-/// Active tab in the Chart Configure rail.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum ChartRailTab {
-    #[default]
-    Configure,
-    Stats,
-}
+// Re-export the rail tab enum from the chart module so DataGridPanel's render
+// code can reference it without a long path.
+pub(super) use crate::ui::document::chart::shell::ChartRailTab;
 
 /// Internal state for grid loading/ready/error.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -1875,6 +1871,82 @@ impl DataGridPanel {
             Some(DatabaseCategory::Document) => r#"e.g. {"name": {"$regex": "test"}}"#,
             Some(DatabaseCategory::TimeSeries) => "",
             _ => "e.g. id > 10 AND name LIKE '%test%'",
+        }
+    }
+
+    // ---- ChartHost delegation methods ----
+    // These are called by `HostAdapter::DataGrid` to implement `ChartHost`
+    // without requiring a mutable self-borrow in read contexts.
+
+    /// Returns the original query text for the current `QueryResult` source.
+    ///
+    /// Returns `None` for `Table` and `Collection` sources that do not expose
+    /// a user-authored query string.
+    pub(crate) fn chart_host_current_query(&self, _cx: &App) -> Option<String> {
+        match &self.source {
+            DataSource::QueryResult { original_query, .. } => {
+                if original_query.is_empty() {
+                    None
+                } else {
+                    Some(original_query.clone())
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns the profile ID for the current source, if any.
+    pub(crate) fn chart_host_connection_id(&self, _cx: &App) -> Option<Uuid> {
+        match &self.source {
+            DataSource::Table { profile_id, .. } => Some(*profile_id),
+            DataSource::Collection { profile_id, .. } => Some(*profile_id),
+            DataSource::QueryResult { profile_id, .. } => *profile_id,
+        }
+    }
+
+    /// Returns the time-range panel wired in by the parent document.
+    pub(crate) fn chart_host_time_range_panel(
+        &self,
+        _cx: &App,
+    ) -> Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>> {
+        self.chart_source_time_range_panel.clone()
+    }
+
+    /// Returns the refresh-policy dropdown entity.
+    pub(crate) fn chart_host_refresh_dropdown(&self, _cx: &App) -> Entity<Dropdown> {
+        self.refresh_dropdown.clone()
+    }
+
+    /// Returns the current result as a shared `Arc<QueryResult>`.
+    ///
+    /// For `QueryResult` sources the result is already `Arc`-wrapped in the
+    /// source; for other sources we wrap the live `result` field in a new
+    /// `Arc` (shallow clone, no data copy).
+    pub(crate) fn chart_host_current_result(&self, _cx: &App) -> Option<Arc<QueryResult>> {
+        match &self.source {
+            DataSource::QueryResult { result, .. } => Some(result.clone()),
+            DataSource::Table { .. } | DataSource::Collection { .. } => {
+                Some(Arc::new(self.result.clone()))
+            }
+        }
+    }
+
+    /// Trigger a re-execution of the current query.
+    ///
+    /// For `QueryResult` sources this emits the time-range panel's initial
+    /// event, which causes `CodeDocument` to re-run the query. For table /
+    /// collection sources this calls `refresh`.
+    pub(crate) fn chart_host_request_reexecute(&mut self, cx: &mut Context<Self>) {
+        match &self.source {
+            DataSource::QueryResult { .. } => {
+                if let Some(trp) = self.chart_source_time_range_panel.clone() {
+                    trp.update(cx, |p, cx| p.emit_initial(cx));
+                }
+            }
+            _ => {
+                self.pending_refresh = true;
+                cx.notify();
+            }
         }
     }
 }

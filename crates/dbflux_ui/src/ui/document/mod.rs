@@ -2,6 +2,7 @@
 
 mod add_member_modal;
 mod audit;
+pub mod chart;
 mod chrome;
 mod code;
 mod data_document;
