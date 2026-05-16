@@ -119,13 +119,9 @@ where
     // X pill
     let x_pill = {
         let handler = on_pill_click.clone();
-        pill_element(
-            "axis-pill-x",
-            "X",
-            x_label,
-            x_open,
-            move |w, cx| handler(AxisPill::X, w, cx),
-        )
+        pill_element("axis-pill-x", "X", x_label, x_open, move |w, cx| {
+            handler(AxisPill::X, w, cx)
+        })
     };
 
     // X picker dropdown (shown when x_open == true)
@@ -158,13 +154,9 @@ where
     // Y pill
     let y_pill = {
         let handler = on_pill_click.clone();
-        pill_element(
-            "axis-pill-y",
-            "Y",
-            y_label,
-            y_open,
-            move |w, cx| handler(AxisPill::Y, w, cx),
-        )
+        pill_element("axis-pill-y", "Y", y_label, y_open, move |w, cx| {
+            handler(AxisPill::Y, w, cx)
+        })
     };
 
     // Y picker (multi-select: show all numeric columns with checkboxes)
@@ -180,9 +172,13 @@ where
             .collect();
 
         Some(
-            y_picker_element("axis-picker-y", y_candidates, move |col_idx, checked, w, cx| {
-                on_y_toggle(col_idx, checked, w, cx);
-            })
+            y_picker_element(
+                "axis-picker-y",
+                y_candidates,
+                move |col_idx, checked, w, cx| {
+                    on_y_toggle(col_idx, checked, w, cx);
+                },
+            )
             .into_any_element(),
         )
     } else {
@@ -232,13 +228,9 @@ where
     // Agg pill
     let agg_pill = {
         let handler = on_pill_click.clone();
-        pill_element(
-            "axis-pill-agg",
-            "Agg",
-            agg_label,
-            agg_open,
-            move |w, cx| handler(AxisPill::Agg, w, cx),
-        )
+        pill_element("axis-pill-agg", "Agg", agg_label, agg_open, move |w, cx| {
+            handler(AxisPill::Agg, w, cx)
+        })
     };
 
     // Agg picker (enum dropdown)
@@ -270,18 +262,10 @@ where
         .gap(px(4.0))
         .px(px(8.0))
         .py(px(2.0))
-        .child(
-            pill_group("axis-x-group", x_pill, x_picker)
-        )
-        .child(
-            pill_group("axis-y-group", y_pill, y_picker)
-        )
-        .child(
-            pill_group("axis-group-group", group_pill, group_picker)
-        )
-        .child(
-            pill_group("axis-agg-group", agg_pill, agg_picker)
-        )
+        .child(pill_group("axis-x-group", x_pill, x_picker))
+        .child(pill_group("axis-y-group", y_pill, y_picker))
+        .child(pill_group("axis-group-group", group_pill, group_picker))
+        .child(pill_group("axis-agg-group", agg_pill, agg_picker))
 }
 
 // ---------------------------------------------------------------------------
@@ -341,12 +325,7 @@ fn pill_group(
     pill: impl IntoElement,
     picker: Option<AnyElement>,
 ) -> impl IntoElement {
-    let mut container = div()
-        .id(id.into())
-        .relative()
-        .flex()
-        .flex_col()
-        .child(pill);
+    let mut container = div().id(id.into()).relative().flex().flex_col().child(pill);
 
     if let Some(picker_el) = picker {
         container = container.child(
@@ -378,9 +357,7 @@ where
             let handler = on_select.clone();
 
             div()
-                .id(ElementId::Name(
-                    format!("col-pick-{}", col_idx).into(),
-                ))
+                .id(ElementId::Name(format!("col-pick-{}", col_idx).into()))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -421,9 +398,7 @@ where
             let handler = on_toggle.clone();
 
             div()
-                .id(ElementId::Name(
-                    format!("y-pick-{}", col_idx).into(),
-                ))
+                .id(ElementId::Name(format!("y-pick-{}", col_idx).into()))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -482,7 +457,9 @@ where
                 .id(ElementId::Name(
                     format!(
                         "grp-pick-{}",
-                        col_idx_opt.map(|i| i.to_string()).unwrap_or_else(|| "none".to_string())
+                        col_idx_opt
+                            .map(|i| i.to_string())
+                            .unwrap_or_else(|| "none".to_string())
                     )
                     .into(),
                 ))
@@ -528,9 +505,7 @@ where
             let handler = on_select.clone();
 
             div()
-                .id(ElementId::Name(
-                    format!("agg-pick-{:?}", kind).into(),
-                ))
+                .id(ElementId::Name(format!("agg-pick-{:?}", kind).into()))
                 .flex()
                 .flex_row()
                 .items_center()

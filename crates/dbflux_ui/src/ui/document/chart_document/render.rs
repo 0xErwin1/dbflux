@@ -60,17 +60,9 @@ impl Render for ChartDocument {
         }
 
         // -- Read chart view entity from shell --
-        let chart_view_entity = self
-            .chart_shell
-            .read(cx)
-            .chart_view()
-            .cloned();
+        let chart_view_entity = self.chart_shell.read(cx).chart_view().cloned();
 
-        let chart_detection = self
-            .chart_shell
-            .read(cx)
-            .chart_detection
-            .clone();
+        let chart_detection = self.chart_shell.read(cx).chart_detection.clone();
 
         // -- Chart area content --
         let chart_area: AnyElement = if let Some(chart_entity) = chart_view_entity {
@@ -121,14 +113,11 @@ impl Render for ChartDocument {
                                 .flex_row()
                                 .gap(Spacing::SM)
                                 .justify_end()
-                                .child(
-                                    Button::new("cancel-save")
-                                        .label("Cancel")
-                                        .small()
-                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                            this.cancel_save(cx);
-                                        })),
-                                )
+                                .child(Button::new("cancel-save").label("Cancel").small().on_click(
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.cancel_save(cx);
+                                    }),
+                                ))
                                 .child(
                                     Button::new("confirm-save")
                                         .label("Save")

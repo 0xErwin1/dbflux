@@ -71,7 +71,11 @@ pub fn default_bindings_for_time_series(
     numeric_cols: &[usize],
     columns: &[ColumnMeta],
 ) -> BindingSpec {
-    let y = numeric_cols.first().copied().map(|idx| vec![idx]).unwrap_or_default();
+    let y = numeric_cols
+        .first()
+        .copied()
+        .map(|idx| vec![idx])
+        .unwrap_or_default();
 
     let group_by = columns
         .iter()
@@ -162,7 +166,11 @@ mod tests {
 
         assert_eq!(bindings.x, 0, "X must be the time column");
         assert_eq!(bindings.y, vec![1], "Y must be the first numeric column");
-        assert_eq!(bindings.group_by, Some(2), "group_by must be first Text column");
+        assert_eq!(
+            bindings.group_by,
+            Some(2),
+            "group_by must be first Text column"
+        );
         assert_eq!(bindings.aggregation, AggKind::None);
         assert!(bindings.filter.is_none());
     }

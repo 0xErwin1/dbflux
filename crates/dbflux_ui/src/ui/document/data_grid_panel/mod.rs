@@ -1105,11 +1105,11 @@ impl DataGridPanel {
             && Self::connection_category(&self.source, &self.app_state, cx)
                 == Some(DatabaseCategory::TimeSeries);
 
-        self.result_view_mode = if is_time_series_collection
-            && should_auto_select_chart_for_time_series(&detection)
-        {
-            ResultViewMode::Chart
-        } else if was_chart_mode && detection_ok {
+        let auto_chart = (is_time_series_collection
+            && should_auto_select_chart_for_time_series(&detection))
+            || (was_chart_mode && detection_ok);
+
+        self.result_view_mode = if auto_chart {
             ResultViewMode::Chart
         } else {
             ResultViewMode::default_for_shape(&result.shape)
@@ -1135,20 +1135,17 @@ impl DataGridPanel {
             // AxisBar shows sensible defaults (time, first numeric, first Text tag).
             // Only applied on the initial load (!was_chart_mode) to avoid clobbering
             // user adjustments made during a refresh.
-            if is_time_series_collection && !was_chart_mode {
-                if let ChartDetection::Ok {
+            if is_time_series_collection
+                && !was_chart_mode
+                && let ChartDetection::Ok {
                     time_col,
                     ref numeric_cols,
                 } = detection
-                {
-                    let bindings = default_bindings_for_time_series(
-                        time_col,
-                        numeric_cols,
-                        &result.columns,
-                    );
-                    if let Some(shell) = &self.chart_shell {
-                        shell.update(cx, |s, cx| s.apply_bindings(bindings, cx));
-                    }
+            {
+                let bindings =
+                    default_bindings_for_time_series(time_col, numeric_cols, &result.columns);
+                if let Some(shell) = &self.chart_shell {
+                    shell.update(cx, |s, cx| s.apply_bindings(bindings, cx));
                 }
             }
         }

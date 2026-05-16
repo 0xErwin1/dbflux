@@ -437,15 +437,13 @@ impl DocumentHandle {
                     }
                 })
             }
-            Self::Chart { entity, .. } => {
-                cx.subscribe(entity, move |_entity, event, cx| {
-                    let doc_event = match event {
-                        ChartDocumentEvent::MetaChanged => DocumentEvent::MetaChanged,
-                        ChartDocumentEvent::RequestFocus => DocumentEvent::RequestFocus,
-                    };
-                    callback(&doc_event, cx);
-                })
-            }
+            Self::Chart { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
+                let doc_event = match event {
+                    ChartDocumentEvent::MetaChanged => DocumentEvent::MetaChanged,
+                    ChartDocumentEvent::RequestFocus => DocumentEvent::RequestFocus,
+                };
+                callback(&doc_event, cx);
+            }),
         }
     }
 }

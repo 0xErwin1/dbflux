@@ -8,7 +8,7 @@
 
 mod render;
 
-use super::chart::{ChartHost, HostAdapter, ChartShell};
+use super::chart::{ChartHost, ChartShell, HostAdapter};
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppStateEntity;
@@ -142,9 +142,7 @@ impl ChartDocument {
             ChartShell::new_standalone(cx)
         });
 
-        let editor_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Enter SQL query")
-        });
+        let editor_input = cx.new(|cx| InputState::new(window, cx).placeholder("Enter SQL query"));
 
         // Populate the editor with the initial query text.
         if !query.is_empty() {
@@ -157,7 +155,11 @@ impl ChartDocument {
         let editor_sub = cx.subscribe_in(
             &editor_input,
             window,
-            |this: &mut Self, input: &Entity<InputState>, event: &dbflux_components::controls::InputEvent, _window, cx| {
+            |this: &mut Self,
+             input: &Entity<InputState>,
+             event: &dbflux_components::controls::InputEvent,
+             _window,
+             cx| {
                 if matches!(event, dbflux_components::controls::InputEvent::Change) {
                     this.query = input.read(cx).value().to_string();
                 }
@@ -267,7 +269,12 @@ impl ChartDocument {
         self.focus_handle.focus(window);
     }
 
-    pub fn dispatch_command(&mut self, _cmd: Command, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
+    pub fn dispatch_command(
+        &mut self,
+        _cmd: Command,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> bool {
         false
     }
 
@@ -333,11 +340,9 @@ impl ChartDocument {
             }
         };
 
-        let (task_id, cancel_token) = self.runner.start_primary(
-            dbflux_core::TaskKind::Query,
-            "Chart query",
-            cx,
-        );
+        let (task_id, cancel_token) =
+            self.runner
+                .start_primary(dbflux_core::TaskKind::Query, "Chart query", cx);
 
         self.exec_state = ExecState::Running;
         self.state = DocumentState::Executing;
@@ -414,9 +419,7 @@ impl ChartDocument {
             String::new()
         };
 
-        let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Chart name")
-        });
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Chart name"));
 
         if !initial.is_empty() {
             input.update(cx, |state, cx| {
@@ -428,7 +431,11 @@ impl ChartDocument {
         let sub = cx.subscribe_in(
             &input,
             window,
-            |_this: &mut Self, _input: &Entity<InputState>, _event: &dbflux_components::controls::InputEvent, _window, _cx| {},
+            |_this: &mut Self,
+             _input: &Entity<InputState>,
+             _event: &dbflux_components::controls::InputEvent,
+             _window,
+             _cx| {},
         );
 
         self.name_prompt = Some(NamePromptState {
@@ -458,18 +465,17 @@ impl ChartDocument {
         let spec = self
             .last_result
             .as_ref()
-            .and_then(|r| {
-                match detect_chart_columns(r) {
-                    ChartDetection::Ok { time_col, numeric_cols } => {
-                        dbflux_components::chart::ChartSpec::from_detection(
-                            time_col,
-                            numeric_cols,
-                            &r.columns,
-                            10_000,
-                        )
-                    }
-                    _ => None,
-                }
+            .and_then(|r| match detect_chart_columns(r) {
+                ChartDetection::Ok {
+                    time_col,
+                    numeric_cols,
+                } => dbflux_components::chart::ChartSpec::from_detection(
+                    time_col,
+                    numeric_cols,
+                    &r.columns,
+                    10_000,
+                ),
+                _ => None,
             })
             .unwrap_or_else(|| dbflux_components::chart::ChartSpec {
                 kind: dbflux_components::chart::ChartKind::Line,
@@ -487,13 +493,8 @@ impl ChartDocument {
 
         let bindings = spec.binding.clone();
 
-        let mut saved = SavedChart::new(
-            name.clone(),
-            profile_id,
-            self.query.clone(),
-            spec,
-            bindings,
-        );
+        let mut saved =
+            SavedChart::new(name.clone(), profile_id, self.query.clone(), spec, bindings);
         // Preserve the ID so upsert overwrites the existing record.
         saved.id = id;
 
@@ -583,7 +584,10 @@ mod tests {
         let open = true;
         let after_first_toggle = !open;
         let after_second_toggle = !after_first_toggle;
-        assert_eq!(after_second_toggle, open, "two toggles must return to original state");
+        assert_eq!(
+            after_second_toggle, open,
+            "two toggles must return to original state"
+        );
     }
 
     // Helper: compute the `pending_run_on_first_render` flag from query text.
