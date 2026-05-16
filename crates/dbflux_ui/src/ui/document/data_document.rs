@@ -237,6 +237,27 @@ impl DataDocument {
             .update(cx, |grid, cx| grid.set_refresh_policy(policy, cx));
     }
 
+    /// Returns the synthesized query text that produced the current result, if available.
+    ///
+    /// For `QueryResult` sources the original query string is returned. For `Table`
+    /// and `Collection` sources the grid builds the query internally and does not
+    /// expose it as a user-readable string — `None` is returned in those cases.
+    ///
+    /// Callers such as `ChartHost::current_query` use this to decide whether
+    /// "Chart this query" is available. A `None` result silently disables that action.
+    pub fn synthesized_query(&self, cx: &App) -> Option<String> {
+        match self.data_grid.read(cx).source() {
+            DataSource::QueryResult { original_query, .. } => {
+                if original_query.is_empty() {
+                    None
+                } else {
+                    Some(original_query.clone())
+                }
+            }
+            DataSource::Table { .. } | DataSource::Collection { .. } => None,
+        }
+    }
+
     /// Returns the table reference if this is a table document.
     pub fn table_ref(&self, cx: &App) -> Option<TableRef> {
         self.data_grid.read(cx).source().table_ref().cloned()

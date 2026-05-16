@@ -6,7 +6,9 @@ mod render;
 pub mod row_inspector;
 mod utils;
 
-use super::result_view::ResultViewMode;
+use super::result_view::{
+    ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
+};
 use super::task_runner::DocumentTaskRunner;
 use crate::app::AppStateEntity;
 use crate::ui::AsyncUpdateResultExt;
@@ -1096,7 +1098,18 @@ impl DataGridPanel {
         let detection = detect_chart_columns(&result);
         let detection_ok = matches!(detection, ChartDetection::Ok { .. });
 
-        self.result_view_mode = if was_chart_mode && detection_ok {
+        // Auto-select Chart for TimeSeries Collection sources: fires on every fresh
+        // result when detection passes, regardless of previous mode. Non-TimeSeries
+        // and non-Collection sources follow the existing was_chart_mode preservation path.
+        let is_time_series_collection = matches!(self.source, DataSource::Collection { .. })
+            && Self::connection_category(&self.source, &self.app_state, cx)
+                == Some(DatabaseCategory::TimeSeries);
+
+        self.result_view_mode = if is_time_series_collection
+            && should_auto_select_chart_for_time_series(&detection)
+        {
+            ResultViewMode::Chart
+        } else if was_chart_mode && detection_ok {
             ResultViewMode::Chart
         } else {
             ResultViewMode::default_for_shape(&result.shape)
@@ -1116,6 +1129,27 @@ impl DataGridPanel {
                     shell
                 });
                 self.chart_shell = Some(shell);
+            }
+
+            // Pre-populate bindings for the first TimeSeries Collection result so the
+            // AxisBar shows sensible defaults (time, first numeric, first Text tag).
+            // Only applied on the initial load (!was_chart_mode) to avoid clobbering
+            // user adjustments made during a refresh.
+            if is_time_series_collection && !was_chart_mode {
+                if let ChartDetection::Ok {
+                    time_col,
+                    ref numeric_cols,
+                } = detection
+                {
+                    let bindings = default_bindings_for_time_series(
+                        time_col,
+                        numeric_cols,
+                        &result.columns,
+                    );
+                    if let Some(shell) = &self.chart_shell {
+                        shell.update(cx, |s, cx| s.apply_bindings(bindings, cx));
+                    }
+                }
             }
         }
 

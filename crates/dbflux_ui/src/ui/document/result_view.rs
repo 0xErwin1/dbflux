@@ -1,4 +1,5 @@
-use dbflux_core::QueryResultShape;
+use dbflux_components::chart::{AggKind, BindingSpec, ChartDetection};
+use dbflux_core::{ColumnKind, ColumnMeta, QueryResultShape};
 
 /// Controls how query results are rendered.
 ///
@@ -55,10 +56,162 @@ impl ResultViewMode {
     }
 }
 
+/// Derive the default `BindingSpec` for a TimeSeries auto-selected chart.
+///
+/// Called when a `Collection` source with `TimeSeries` category produces a result
+/// with `ChartDetection::Ok`. Uses column indices only — no column name sniffing,
+/// no driver-id branching.
+///
+/// - X: the detected `time_col` (always a `Timestamp` column)
+/// - Y: only the first numeric column (the user explicitly picks more via AxisBar)
+/// - Group: the first `Text` column if any (covers tag-style grouping)
+/// - Filter / Aggregation: both default to `None`
+pub fn default_bindings_for_time_series(
+    time_col: usize,
+    numeric_cols: &[usize],
+    columns: &[ColumnMeta],
+) -> BindingSpec {
+    let y = numeric_cols.first().copied().map(|idx| vec![idx]).unwrap_or_default();
+
+    let group_by = columns
+        .iter()
+        .enumerate()
+        .find(|(_, c)| c.kind == ColumnKind::Text)
+        .map(|(i, _)| i);
+
+    BindingSpec {
+        x: time_col,
+        y,
+        group_by,
+        filter: None,
+        aggregation: AggKind::None,
+    }
+}
+
+/// Whether a result with the given `ChartDetection` should auto-select
+/// `ResultViewMode::Chart` for a TimeSeries collection source.
+///
+/// Auto-select fires only when detection is `Ok` (has both a Timestamp column
+/// and at least one numeric column). Returning `false` leaves the default
+/// `Table` mode in place.
+pub fn should_auto_select_chart_for_time_series(detection: &ChartDetection) -> bool {
+    matches!(detection, ChartDetection::Ok { .. })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ResultViewMode;
-    use dbflux_core::QueryResultShape;
+    use super::{
+        ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
+    };
+    use dbflux_components::chart::{AggKind, ChartDetection};
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryResultShape};
+
+    fn make_col(name: &str, kind: ColumnKind) -> ColumnMeta {
+        ColumnMeta {
+            name: name.to_owned(),
+            type_name: String::new(),
+            kind,
+            nullable: true,
+            is_primary_key: false,
+        }
+    }
+
+    // ---- T-CE-F06: auto-select logic ----
+
+    /// When detection is Ok the result should auto-select Chart for TimeSeries.
+    #[test]
+    fn auto_select_chart_when_detection_ok() {
+        let detection = ChartDetection::Ok {
+            time_col: 0,
+            numeric_cols: vec![1],
+        };
+        assert!(
+            should_auto_select_chart_for_time_series(&detection),
+            "Ok detection must auto-select Chart for TimeSeries sources"
+        );
+    }
+
+    /// When there is no Timestamp column, do NOT auto-select Chart.
+    #[test]
+    fn no_auto_select_chart_when_no_timestamp() {
+        assert!(
+            !should_auto_select_chart_for_time_series(&ChartDetection::NoTimeColumn),
+            "NoTimeColumn must not auto-select Chart"
+        );
+        assert!(
+            !should_auto_select_chart_for_time_series(&ChartDetection::NoNumericSeries),
+            "NoNumericSeries must not auto-select Chart"
+        );
+        assert!(
+            !should_auto_select_chart_for_time_series(&ChartDetection::EmptyResult),
+            "EmptyResult must not auto-select Chart"
+        );
+    }
+
+    /// Default bindings for a TimeSeries result: X=time_col, Y=first numeric,
+    /// group=first Text column.
+    #[test]
+    fn default_bindings_for_time_series_presets_x_y_group() {
+        let columns = vec![
+            make_col("time", ColumnKind::Timestamp),
+            make_col("value", ColumnKind::Float),
+            make_col("host", ColumnKind::Text),
+        ];
+
+        let bindings = default_bindings_for_time_series(0, &[1], &columns);
+
+        assert_eq!(bindings.x, 0, "X must be the time column");
+        assert_eq!(bindings.y, vec![1], "Y must be the first numeric column");
+        assert_eq!(bindings.group_by, Some(2), "group_by must be first Text column");
+        assert_eq!(bindings.aggregation, AggKind::None);
+        assert!(bindings.filter.is_none());
+    }
+
+    /// When there is no Text column, group_by should be None.
+    #[test]
+    fn default_bindings_no_group_when_no_text_column() {
+        let columns = vec![
+            make_col("time", ColumnKind::Timestamp),
+            make_col("value", ColumnKind::Float),
+        ];
+
+        let bindings = default_bindings_for_time_series(0, &[1], &columns);
+
+        assert!(
+            bindings.group_by.is_none(),
+            "no Text column means no group_by"
+        );
+    }
+
+    /// Only the first numeric column is pre-bound as Y; user picks more via AxisBar.
+    #[test]
+    fn default_bindings_only_first_numeric_as_y() {
+        let columns = vec![
+            make_col("time", ColumnKind::Timestamp),
+            make_col("val_a", ColumnKind::Float),
+            make_col("val_b", ColumnKind::Float),
+            make_col("host", ColumnKind::Text),
+        ];
+
+        let bindings = default_bindings_for_time_series(0, &[1, 2], &columns);
+
+        assert_eq!(
+            bindings.y,
+            vec![1],
+            "only the first numeric should be pre-bound; user picks more via AxisBar"
+        );
+    }
+
+    /// Verify available_for_chartable_result returns expected set.
+    #[test]
+    fn available_for_chartable_result_includes_chart_table_json() {
+        let modes = ResultViewMode::available_for_chartable_result();
+        assert!(modes.contains(&ResultViewMode::Chart));
+        assert!(modes.contains(&ResultViewMode::Table));
+        assert!(modes.contains(&ResultViewMode::Json));
+    }
+
+    // ---- Existing stable tests ----
 
     #[test]
     fn default_for_shape_matches_expected_mode() {
