@@ -7,6 +7,11 @@
 
 pub mod host;
 pub mod shell;
+pub mod toolbar;
 
 pub use host::{ChartHost, HostAdapter};
 pub use shell::{ChartRailTab, ChartShell};
+pub use toolbar::{
+    ActionHandler, ChartToolbarContext, ChartToolbarHandlers, RangePresetHandler,
+    render_chart_toolbar,
+};
