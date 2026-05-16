@@ -218,12 +218,12 @@ impl Render for ChartDocument {
                     el.child(
                         div()
                             .h(px(180.0))
+                            .min_h(px(180.0))
+                            .flex_none()
                             .border_t_1()
                             .border_color(theme.border)
                             .bg(theme.background)
-                            .flex()
-                            .flex_col()
-                            .min_h_0()
+                            .overflow_hidden()
                             .on_mouse_down(
                                 MouseButton::Left,
                                 move |_, window, cx| {
@@ -232,14 +232,7 @@ impl Render for ChartDocument {
                                     });
                                 },
                             )
-                            .child(
-                                div().flex_1().min_h_0().overflow_hidden().child(
-                                    GpuiInput::new(&editor_input)
-                                        .appearance(false)
-                                        .h_full()
-                                        .w_full(),
-                                ),
-                            ),
+                            .child(GpuiInput::new(&editor_input).h_full().w_full()),
                     )
                 });
 
