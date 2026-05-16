@@ -25,9 +25,7 @@ use crate::ui::overlays::document_preview_modal::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
-use dbflux_components::chart::{
-    ChartDetection, ChartSpec, ChartView, ManualChartSelection, detect_chart_columns,
-};
+use dbflux_components::chart::{ChartDetection, ChartView, detect_chart_columns};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
@@ -35,7 +33,6 @@ use dbflux_core::{
 };
 use gpui::*;
 use gpui_component::Sizable;
-use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -382,38 +379,11 @@ pub struct DataGridPanel {
 
     export_menu_open: bool,
 
-    // Chart view (T10-T13)
-    /// Auto-detection result for the current result set. `None` means detection
-    /// has not run yet or the result is incompatible.
-    chart_detection: Option<ChartDetection>,
-    /// Built `ChartView` entity. Created on demand when the user switches to
-    /// Chart mode or when detection succeeds and the mode is already Chart.
-    chart_view: Option<Entity<ChartView>>,
-    /// Observation on `chart_view` that re-renders the panel when the chart's
-    /// internal state (focused series, hover, etc.) changes, so panel-side
-    /// surfaces such as the Stats tab stay in sync with hover-driven focus.
-    chart_view_observer: Option<Subscription>,
-    /// Manual column selection overriding auto-detection. `None` = use detection.
-    chart_manual_selection: Option<ManualChartSelection>,
-    /// Index of the currently focused legend series.
-    chart_focused_series_idx: usize,
-    /// User-controlled legend visibility (REQ-CHART-029). Defaults to `true`;
-    /// the engine still hides the legend automatically when series count <= 1.
-    chart_legend_visible: bool,
-
-    // Manual column picker state — used when chart_detection is not Ok and the
-    // user is choosing columns manually. Reset whenever chart_detection changes.
-    /// Index into the result's columns for the picker's selected X column.
-    chart_picker_x_col: usize,
-    /// Checked state for each Y-candidate column (parallel to the Y-candidate list
-    /// built from result columns with kind Float, Integer, or Unknown).
-    chart_picker_y_checked: Vec<bool>,
-
-    /// Series indices hidden by the user via the legend. Cleared on set_result and Apply.
-    pub(super) chart_hidden_series: HashSet<usize>,
-
-    /// Whether the manual column-picker overlay is visible in the degraded UX card.
-    pub(super) chart_picker_overlay_open: bool,
+    // Chart subsystem
+    /// Lazily-created chart shell entity. Created the first time the result
+    /// passes chart detection (or when the user is already in chart mode).
+    /// `None` for sources that have never produced a chartable result.
+    chart_shell: Option<Entity<crate::ui::document::chart::ChartShell>>,
 
     /// Time-range panel from the source-context bar, set by CodeDocument after
     /// the panel is built. Used by the chart toolbar RANGE chips to read/write
@@ -421,16 +391,6 @@ pub struct DataGridPanel {
     /// has been created.
     chart_source_time_range_panel:
         Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>>,
-
-    // Chart Configure rail (feedback round)
-    /// Whether the Configure rail is currently visible. Toggled by the gear button.
-    pub(super) chart_rail_open: bool,
-    /// Active tab inside the rail (Configure or Stats).
-    pub(super) chart_rail_tab: ChartRailTab,
-    /// Selected X-column index in the rail picker (mirrors the degraded picker).
-    pub(super) chart_rail_picker_x_col: usize,
-    /// Checked state per Y-candidate column in the rail picker.
-    pub(super) chart_rail_picker_y_checked: Vec<bool>,
 }
 
 impl DataGridPanel {
@@ -824,21 +784,8 @@ impl DataGridPanel {
             pending_document_preview: None,
             row_inspector_content: None,
             export_menu_open: false,
-            chart_detection: None,
-            chart_view: None,
-            chart_view_observer: None,
-            chart_manual_selection: None,
-            chart_focused_series_idx: 0,
-            chart_legend_visible: true,
-            chart_picker_x_col: 0,
-            chart_picker_y_checked: Vec::new(),
-            chart_hidden_series: HashSet::new(),
-            chart_picker_overlay_open: false,
+            chart_shell: None,
             chart_source_time_range_panel: None,
-            chart_rail_open: false,
-            chart_rail_tab: ChartRailTab::Configure,
-            chart_rail_picker_x_col: 0,
-            chart_rail_picker_y_checked: Vec::new(),
         }
     }
 
@@ -898,79 +845,33 @@ impl DataGridPanel {
 
     /// Returns `true` when the current result has a `Timestamp` column and at
     /// least one numeric column — i.e., chart mode is available.
-    pub(super) fn chart_available(&self) -> bool {
-        matches!(&self.chart_detection, Some(ChartDetection::Ok { .. }))
+    pub(super) fn chart_available(&self, cx: &App) -> bool {
+        self.chart_shell
+            .as_ref()
+            .is_some_and(|s| s.read(cx).chart_available())
     }
 
     /// Build or return the existing `ChartView` entity for the current result.
     ///
-    /// Returns `None` when detection failed or the result is incompatible.
-    /// Uses the manual selection if set, otherwise auto-detection.
+    /// Delegates to `ChartShell::ensure_chart_view`. Returns `None` when no
+    /// shell exists or when detection failed.
     pub(super) fn ensure_chart_view(
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<Entity<ChartView>> {
-        if self.chart_view.is_some() {
-            return self.chart_view.clone();
-        }
-
-        let mut spec = if let Some(manual) = &self.chart_manual_selection {
-            ChartSpec::from_manual_selection(manual, &self.result.columns, 10_000)
-        } else {
-            match &self.chart_detection {
-                Some(ChartDetection::Ok {
-                    time_col,
-                    numeric_cols,
-                }) => ChartSpec::from_detection(
-                    *time_col,
-                    numeric_cols.clone(),
-                    &self.result.columns,
-                    10_000,
-                ),
-                _ => None,
-            }
-        }?;
-
-        // Apply the user-controlled legend override: the engine's default rule
-        // (`series.len() > 1`) is preserved when the user hasn't toggled the
-        // legend off; once toggled off it stays off regardless of series count.
-        spec.legend_visible = self.chart_legend_visible && spec.series.len() > 1;
-
-        match ChartView::build(&self.result, spec) {
-            Ok(chart_view) => {
-                let entity = cx.new(|_cx| chart_view);
-                // Re-render the panel whenever the chart entity notifies, so
-                // hover-driven focus changes propagate to the Stats tab.
-                let observer = cx.observe(&entity, |_this, _chart, cx| cx.notify());
-                self.chart_view = Some(entity.clone());
-                self.chart_view_observer = Some(observer);
-                Some(entity)
-            }
-            Err(err) => {
-                log::warn!("[chart] ChartView::build failed: {}", err);
-                None
-            }
-        }
+        let result = self.result.clone();
+        self.chart_shell.as_ref()?.update(cx, |shell, cx| {
+            shell.ensure_chart_view(&result, cx)
+        })
     }
 
     /// Toggle the hidden state of a series by index.
     ///
-    /// Propagates the updated hidden set to the live `ChartView` entity.
+    /// Delegates to `ChartShell::toggle_chart_series_hidden`.
     pub(super) fn toggle_chart_series_hidden(&mut self, idx: usize, cx: &mut Context<Self>) {
-        if self.chart_hidden_series.contains(&idx) {
-            self.chart_hidden_series.remove(&idx);
-        } else {
-            self.chart_hidden_series.insert(idx);
+        if let Some(shell) = &self.chart_shell {
+            shell.update(cx, |s, cx| s.toggle_chart_series_hidden(idx, cx));
         }
-
-        if let Some(chart_entity) = self.chart_view.clone() {
-            let hidden = self.chart_hidden_series.clone();
-            chart_entity.update(cx, |view, cx| {
-                view.set_hidden_series(hidden, cx);
-            });
-        }
-
-        cx.notify();
     }
 
     /// Wire the source-context time-range panel into this chart panel.
@@ -992,163 +893,35 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// Reset the manual picker state for a new result's column list.
-    ///
-    /// X defaults to the first Timestamp column, or column 0 if none.
-    /// Y checkboxes default to `true` for Float and Integer columns.
-    pub(super) fn reset_chart_picker(&mut self, columns: &[dbflux_core::ColumnMeta]) {
-        use dbflux_core::ColumnKind;
-
-        self.chart_picker_x_col = columns
-            .iter()
-            .position(|c| c.kind == ColumnKind::Timestamp)
-            .unwrap_or(0);
-
-        self.chart_picker_y_checked = columns
-            .iter()
-            .filter(|c| {
-                matches!(
-                    c.kind,
-                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
-                )
-            })
-            .map(|c| matches!(c.kind, ColumnKind::Float | ColumnKind::Integer))
-            .collect();
-    }
-
-    /// Initialise the Configure rail picker from the current chart spec.
+    /// Prime the rail Configure picker from the current chart spec.
     ///
     /// Called when the rail is toggled open so the controls reflect what is
     /// currently rendered (either auto-detected or manual).
-    pub(super) fn prime_chart_rail_picker_from_spec(&mut self) {
-        use dbflux_core::ColumnKind;
-
-        let columns = &self.result.columns;
-
-        // Determine effective X and Y columns from current selection or detection.
-        let (x_col, y_col_indices) = if let Some(manual) = &self.chart_manual_selection {
-            let ys: Vec<usize> = manual.y_cols.clone();
-            (manual.x_col, ys)
-        } else if let Some(ChartDetection::Ok {
-            time_col,
-            numeric_cols,
-        }) = &self.chart_detection
-        {
-            (*time_col, numeric_cols.clone())
-        } else {
-            // No usable spec — fall back to defaults.
-            let x = columns
-                .iter()
-                .position(|c| c.kind == ColumnKind::Timestamp)
-                .unwrap_or(0);
-            (x, vec![])
-        };
-
-        // Map x_col to the rail picker's X index (index into X-candidate list).
-        // The rail picker uses the same X-candidates as the degraded picker:
-        // Timestamp, Text, or Unknown columns.
-        let x_candidates: Vec<usize> = columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                matches!(
-                    c.kind,
-                    ColumnKind::Timestamp | ColumnKind::Text | ColumnKind::Unknown
-                )
-            })
-            .map(|(i, _)| i)
-            .collect();
-
-        self.chart_rail_picker_x_col = x_candidates.iter().position(|&ci| ci == x_col).unwrap_or(0);
-
-        // Y-candidate list: Float, Integer, or Unknown columns.
-        let y_candidates: Vec<usize> = columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                matches!(
-                    c.kind,
-                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
-                )
-            })
-            .map(|(i, _)| i)
-            .collect();
-
-        self.chart_rail_picker_y_checked = y_candidates
-            .iter()
-            .map(|ci| y_col_indices.contains(ci))
-            .collect();
+    pub(super) fn prime_chart_rail_picker_from_spec(&mut self, cx: &mut Context<Self>) {
+        let result = self.result.clone();
+        if let Some(shell) = &self.chart_shell {
+            shell.update(cx, |s, _cx| s.prime_rail_picker_from_spec(&result));
+        }
     }
 
     /// Apply the current rail Configure picker state as a `ManualChartSelection`.
     ///
     /// Clears the existing `chart_view` so the next render triggers a rebuild.
-    /// The rail stays open so the user can see the updated chart.
     pub(super) fn apply_chart_rail_selection(&mut self, cx: &mut Context<Self>) {
-        use dbflux_core::ColumnKind;
-
-        let columns = &self.result.columns;
-
-        let x_candidates: Vec<usize> = columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                matches!(
-                    c.kind,
-                    ColumnKind::Timestamp | ColumnKind::Text | ColumnKind::Unknown
-                )
-            })
-            .map(|(i, _)| i)
-            .collect();
-
-        let x_col = x_candidates
-            .get(self.chart_rail_picker_x_col)
-            .copied()
-            .unwrap_or(0);
-
-        let y_candidates: Vec<usize> = columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                matches!(
-                    c.kind,
-                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
-                )
-            })
-            .map(|(i, _)| i)
-            .collect();
-
-        let y_cols: Vec<usize> = y_candidates
-            .iter()
-            .zip(self.chart_rail_picker_y_checked.iter())
-            .filter_map(|(&ci, &checked)| if checked { Some(ci) } else { None })
-            .collect();
-
-        if y_cols.is_empty() {
-            // Nothing to chart; do not trigger a rebuild.
-            return;
+        let result = self.result.clone();
+        if let Some(shell) = &self.chart_shell {
+            shell.update(cx, |s, cx| s.apply_rail_selection(&result, cx));
         }
-
-        self.chart_manual_selection = Some(ManualChartSelection { x_col, y_cols });
-        self.chart_view = None;
-        self.chart_view_observer = None;
-        self.chart_hidden_series = HashSet::new();
-        cx.notify();
     }
 
     /// Reset chart selection to auto-detection, clearing any manual override.
     ///
     /// Disabled (no-op) when detection did not produce an `Ok` result.
     pub(super) fn reset_chart_rail_to_auto(&mut self, cx: &mut Context<Self>) {
-        if !matches!(&self.chart_detection, Some(ChartDetection::Ok { .. })) {
-            return;
+        let result = self.result.clone();
+        if let Some(shell) = &self.chart_shell {
+            shell.update(cx, |s, cx| s.reset_rail_to_auto(&result, cx));
         }
-        self.chart_manual_selection = None;
-        self.chart_view = None;
-        self.chart_view_observer = None;
-        // Re-prime the picker to reflect the detection columns.
-        self.prime_chart_rail_picker_from_spec();
-        cx.notify();
     }
 
     pub(super) fn derived_text(&mut self) -> &str {
@@ -1308,11 +1081,6 @@ impl DataGridPanel {
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
         let was_chart_mode = matches!(self.result_view_mode, ResultViewMode::Chart);
-        let prev_rail_open = self.chart_rail_open;
-        let prev_rail_tab = self.chart_rail_tab;
-        let prev_hidden = std::mem::take(&mut self.chart_hidden_series);
-        let prev_manual = self.chart_manual_selection.clone();
-        let prev_focused = self.chart_focused_series_idx;
 
         self.view_config = super::data_view::DataViewConfig::for_source(&self.source);
         self.derived_json = None;
@@ -1320,7 +1088,6 @@ impl DataGridPanel {
 
         let detection = detect_chart_columns(&result);
         let detection_ok = matches!(detection, ChartDetection::Ok { .. });
-        self.chart_detection = Some(detection);
 
         self.result_view_mode = if was_chart_mode && detection_ok {
             ResultViewMode::Chart
@@ -1328,26 +1095,22 @@ impl DataGridPanel {
             ResultViewMode::default_for_shape(&result.shape)
         };
 
-        self.chart_view = None;
-        self.chart_view_observer = None;
-        self.reset_chart_picker(&result.columns);
-
-        self.chart_picker_overlay_open = false;
-
-        if was_chart_mode && detection_ok {
-            self.chart_hidden_series = prev_hidden;
-            self.chart_manual_selection = prev_manual;
-            self.chart_focused_series_idx = prev_focused;
-            self.chart_rail_open = prev_rail_open;
-            self.chart_rail_tab = prev_rail_tab;
-        } else {
-            self.chart_hidden_series = HashSet::new();
-            self.chart_manual_selection = None;
-            self.chart_focused_series_idx = 0;
-            self.chart_rail_open = false;
-            self.chart_rail_tab = ChartRailTab::Configure;
-            self.chart_rail_picker_x_col = 0;
-            self.chart_rail_picker_y_checked = Vec::new();
+        // Update or create the chart shell for this result.
+        if detection_ok || self.chart_shell.is_some() {
+            if let Some(shell) = &self.chart_shell {
+                let was_chart = was_chart_mode;
+                shell.update(cx, |s, cx| s.set_result(&result, was_chart, cx));
+            } else {
+                // Create the shell for the first chartable result.
+                let host = crate::ui::document::chart::HostAdapter::DataGrid(cx.entity().clone());
+                let shell = cx.new(|cx| {
+                    let mut shell =
+                        crate::ui::document::chart::ChartShell::new(host, cx);
+                    shell.set_result(&result, false, cx);
+                    shell
+                });
+                self.chart_shell = Some(shell);
+            }
         }
 
         self.result = result;
