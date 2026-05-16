@@ -59,6 +59,10 @@ pub enum PaletteItem {
         name: String,
         profile_name: String,
         profile_id: Uuid,
+        /// `true` when the chart's source is `Collection` (browse mode).
+        /// The palette appends a `[browse]` suffix to help users distinguish
+        /// collection charts from query charts.
+        is_collection_source: bool,
     },
 }
 
@@ -161,7 +165,18 @@ impl PaletteItem {
         match self {
             Self::Action { category, name, .. } => (category.to_string(), name.to_string()),
             Self::Connection { name, .. } => ("Connection".to_string(), name.clone()),
-            Self::SavedChart { name, .. } => ("Chart".to_string(), name.clone()),
+            Self::SavedChart {
+                name,
+                is_collection_source,
+                ..
+            } => {
+                let display = if *is_collection_source {
+                    format!("{} [browse]", name)
+                } else {
+                    name.clone()
+                };
+                ("Chart".to_string(), display)
+            }
             Self::Resource(r) => match r {
                 ResourceItem::Table { name, .. } => ("Table".to_string(), name.clone()),
                 ResourceItem::Collection { name, .. } => ("Collection".to_string(), name.clone()),
