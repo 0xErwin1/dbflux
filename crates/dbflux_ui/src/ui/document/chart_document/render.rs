@@ -14,6 +14,7 @@
 //!   └──────────────────────────────────────────────┘
 
 use super::ChartDocument;
+use crate::ui::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use crate::ui::components::toast::{PendingToast, flush_pending_toast, now_hms};
 use crate::ui::document::chart::ChartRailTab;
 use crate::ui::document::chart::toolbar::{
@@ -32,6 +33,31 @@ use std::sync::Arc;
 
 impl Render for ChartDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // -- Lazily create the TimeRangePanel on first render.
+        // Panel creation requires a Window reference (for DatePickerState), so
+        // it must be deferred here rather than done in the constructor.
+        // Index 3 = Last24Hours — same default as CodeDocument's source panel.
+        if self.time_range_panel.is_none() {
+            let panel = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+            let sub = cx.subscribe(
+                &panel,
+                |this: &mut Self, _panel, event: &TimeRangeChanged, cx| {
+                    this.on_time_range_changed(event.start_ms, event.end_ms, cx);
+                },
+            );
+            self.time_range_panel = Some(panel.clone());
+            self._time_range_sub = Some(sub);
+
+            // Seed the initial window. The subscription above is now registered,
+            // so emit_initial will reach on_time_range_changed.
+            panel.update(cx, |panel, cx| panel.emit_initial(cx));
+        }
+
+        // -- Drain pending chart re-execute triggered by time-range changes.
+        if std::mem::take(&mut self.pending_chart_reexecute) {
+            self.request_reexecute(window, cx);
+        }
+
         // -- Flush pending toasts --
         flush_pending_toast(self.pending_toast.take(), window, cx);
 
@@ -209,15 +235,6 @@ impl Render for ChartDocument {
                 });
 
         // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / PNG / Save --
-        //
-        // `time_range_panel` is `None` for ChartDocument until a future change
-        // wires a TimeRangePanel to standalone documents. When `None`, the shared
-        // toolbar hides the RANGE chip section automatically.
-        //
-        // TODO(chart-everywhere): wire `time_range_panel` for ChartDocument so
-        // standalone charts gain RANGE chip support. Requires a TimeRangePanel
-        // entity in ChartDocument::new and a subscription that re-executes the
-        // query on range change (same pattern as DataGridPanel).
         let chart_toolbar_row = {
             let resolved_window = self
                 .last_result
@@ -233,6 +250,7 @@ impl Render for ChartDocument {
             let shell_for_stats = self.chart_shell.clone();
             let weak_self_for_png = cx.weak_entity();
             let weak_self_for_save = cx.weak_entity();
+            let weak_self_for_range = cx.weak_entity();
 
             let ctx = ChartToolbarContext {
                 theme: &theme,
@@ -245,9 +263,14 @@ impl Render for ChartDocument {
             };
 
             let handlers = ChartToolbarHandlers {
-                on_select_range_preset: Arc::new(|_i, _window, _cx| {
-                    // No TimeRangePanel wired yet — this handler is never called
-                    // because the RANGE section is hidden when time_range_panel is None.
+                on_select_range_preset: Arc::new(move |idx, _window, cx| {
+                    if let Some(doc) = weak_self_for_range.upgrade() {
+                        doc.update(cx, |this, cx| {
+                            if let Some(panel) = this.time_range_panel.clone() {
+                                panel.update(cx, |p, cx| p.select_preset(idx, cx));
+                            }
+                        });
+                    }
                 }),
                 on_toggle_stats_rail: Arc::new(move |_window, cx| {
                     shell_for_stats.update(cx, |s, cx| {

@@ -19,6 +19,7 @@ use crate::ui::components::toast::PendingToast;
 use dbflux_components::chart::{ChartDetection, detect_chart_columns};
 use dbflux_components::controls::InputState;
 use dbflux_components::saved_chart::SavedChart;
+use dbflux_core::{ExecutionContext, ExecutionSourceContext};
 use dbflux_core::{QueryResult, RefreshPolicy};
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Task, Window};
@@ -98,10 +99,15 @@ pub struct ChartDocument {
 
     // Toolbar controls
     time_range_panel: Option<Entity<TimeRangePanel>>,
+    _time_range_sub: Option<Subscription>,
     refresh_dropdown: Entity<Dropdown>,
     refresh_policy: RefreshPolicy,
     _refresh_subscriptions: Vec<Subscription>,
     _refresh_timer: Option<Task<()>>,
+
+    // Pending state from time-range panel changes
+    pending_time_window: Option<(i64, i64)>,
+    pending_chart_reexecute: bool,
 
     // Save flow
     saved_chart_id: Option<Uuid>,
@@ -218,10 +224,13 @@ impl ChartDocument {
             editor_input,
             _editor_subscription: editor_sub,
             time_range_panel: None,
+            _time_range_sub: None,
             refresh_dropdown,
             refresh_policy: RefreshPolicy::default(),
             _refresh_subscriptions: Vec::new(),
             _refresh_timer: None,
+            pending_time_window: None,
+            pending_chart_reexecute: false,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
@@ -393,7 +402,22 @@ impl ChartDocument {
         self.state = DocumentState::Executing;
         cx.notify();
 
-        let request = dbflux_core::QueryRequest::new(query);
+        // Attach a CollectionWindow source context when the time-range panel
+        // has produced a resolved window. The driver uses it to inject time
+        // bounds into queries that have no hardcoded WHERE time predicate.
+        let exec_ctx = self
+            .pending_time_window
+            .map(|(start_ms, end_ms)| ExecutionContext {
+                source: Some(ExecutionSourceContext::CollectionWindow {
+                    targets: Vec::new(),
+                    start_ms,
+                    end_ms,
+                    query_mode: None,
+                }),
+                ..ExecutionContext::default()
+            });
+
+        let request = dbflux_core::QueryRequest::new(query).with_execution_context(exec_ctx);
         let conn_cleanup = conn.clone();
 
         let task = cx
@@ -452,6 +476,23 @@ impl ChartDocument {
         }
 
         cx.notify();
+    }
+
+    /// Handle a `TimeRangeChanged` event from the owned `TimeRangePanel`.
+    ///
+    /// Stashes the resolved window and schedules a re-execution on the next
+    /// render cycle, mirroring how `CodeDocument` reacts to range changes.
+    pub fn on_time_range_changed(
+        &mut self,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        if let (Some(start), Some(end)) = (start_ms, end_ms) {
+            self.pending_time_window = Some((start, end));
+            self.pending_chart_reexecute = true;
+            cx.notify();
+        }
     }
 
     // ---- save flow ----
@@ -605,8 +646,6 @@ mod tests {
     use super::*;
 
     /// Constructor with empty query must NOT set `pending_run_on_first_render`.
-    ///
-    /// RED: this test fails until ChartDocument is implemented.
     #[test]
     fn empty_query_does_not_schedule_auto_run() {
         let pending = compute_pending_run_flag("");
@@ -614,8 +653,6 @@ mod tests {
     }
 
     /// Constructor with non-empty query MUST set `pending_run_on_first_render`.
-    ///
-    /// RED: this test fails until ChartDocument is implemented.
     #[test]
     fn non_empty_query_schedules_auto_run() {
         let pending = compute_pending_run_flag("SELECT * FROM metrics");
@@ -623,8 +660,6 @@ mod tests {
     }
 
     /// Drawer toggle is reversible.
-    ///
-    /// RED: this test fails until ChartDocument is implemented.
     #[test]
     fn drawer_toggle_is_reversible() {
         let open = true;
@@ -636,8 +671,77 @@ mod tests {
         );
     }
 
-    // Helper: compute the `pending_run_on_first_render` flag from query text.
+    /// `on_time_range_changed` sets `pending_chart_reexecute` and stashes the
+    /// window when both ms values are `Some`.
+    ///
+    /// T-CR-06: unit test for the reexecute flag.
+    #[test]
+    fn on_time_range_changed_sets_reexecute_flag_when_both_some() {
+        let result = simulate_time_range_changed(Some(1_000), Some(2_000));
+        assert!(
+            result.pending_chart_reexecute,
+            "pending_chart_reexecute must be true when both start and end are Some"
+        );
+        assert_eq!(
+            result.pending_time_window,
+            Some((1_000, 2_000)),
+            "pending_time_window must be stashed as (start_ms, end_ms)"
+        );
+    }
+
+    /// `on_time_range_changed` must NOT set the flag when either value is None.
+    ///
+    /// T-CR-06: guard against Custom preset half-state.
+    #[test]
+    fn on_time_range_changed_ignores_partial_window() {
+        let result_start_none = simulate_time_range_changed(None, Some(2_000));
+        assert!(
+            !result_start_none.pending_chart_reexecute,
+            "must not reexecute when start_ms is None"
+        );
+
+        let result_end_none = simulate_time_range_changed(Some(1_000), None);
+        assert!(
+            !result_end_none.pending_chart_reexecute,
+            "must not reexecute when end_ms is None"
+        );
+
+        let result_both_none = simulate_time_range_changed(None, None);
+        assert!(
+            !result_both_none.pending_chart_reexecute,
+            "must not reexecute when both are None"
+        );
+    }
+
+    // ---- helpers ----
+
     fn compute_pending_run_flag(query: &str) -> bool {
         !query.trim().is_empty()
+    }
+
+    /// Simulated outcome of calling `on_time_range_changed` on a zeroed state.
+    struct TimeRangeChangedOutcome {
+        pending_chart_reexecute: bool,
+        pending_time_window: Option<(i64, i64)>,
+    }
+
+    /// Exercise `on_time_range_changed` logic without a GPUI runtime by
+    /// replicating the method's decision tree directly.
+    fn simulate_time_range_changed(
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
+    ) -> TimeRangeChangedOutcome {
+        let mut pending_chart_reexecute = false;
+        let mut pending_time_window: Option<(i64, i64)> = None;
+
+        if let (Some(start), Some(end)) = (start_ms, end_ms) {
+            pending_time_window = Some((start, end));
+            pending_chart_reexecute = true;
+        }
+
+        TimeRangeChangedOutcome {
+            pending_chart_reexecute,
+            pending_time_window,
+        }
     }
 }
