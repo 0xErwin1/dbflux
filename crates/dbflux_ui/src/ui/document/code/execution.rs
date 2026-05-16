@@ -1105,6 +1105,12 @@ impl CodeDocument {
             )
         });
 
+        if let Some(panel) = self.source_time_range_panel.clone() {
+            grid.update(cx, |g, cx| {
+                g.set_chart_time_range_panel(Some(panel), cx);
+            });
+        }
+
         let subscription = cx.subscribe(
             &grid,
             |this, _grid, event: &DataGridEvent, cx| match event {
