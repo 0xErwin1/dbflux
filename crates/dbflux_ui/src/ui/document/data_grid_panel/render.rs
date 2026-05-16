@@ -2543,8 +2543,10 @@ impl DataGridPanel {
                             .color(theme.warning),
                         )
                     })
-                    // Result view mode selector (for non-Table shapes)
-                    .when(available_modes.len() > 1, |d| {
+                    .when(
+                        available_modes.len() > 1
+                            && current_result_mode != ResultViewMode::Chart,
+                        |d| {
                         d.child(div().flex().items_center().gap_0().children(
                             available_modes.iter().enumerate().map(|(i, mode)| {
                                 let mode = *mode;
