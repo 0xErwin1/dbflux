@@ -275,6 +275,33 @@ impl TimeRangePanel {
         (start_ms, end_ms)
     }
 
+    /// Select a preset by index and emit `TimeRangeChanged`.
+    ///
+    /// Mirrors what the dropdown subscription does, but is callable from
+    /// external chip rows that drive the panel directly (the dropdown's
+    /// `set_selected_index` does not emit `DropdownSelectionChanged`).
+    /// `Custom` is selected without emitting — the host must call
+    /// `apply_custom_range` after the user confirms the picker.
+    pub fn select_preset(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(range) = Self::time_range_for_index(index) else {
+            return;
+        };
+
+        self.selected_time_range = Some(range);
+        self.dropdown_time_range.update(cx, |dd, cx| {
+            dd.set_selected_index(Some(index), cx);
+        });
+
+        if range == TimeRange::Custom {
+            cx.notify();
+            return;
+        }
+
+        let (start_ms, end_ms) = Self::resolved_window_for_preset(range);
+        cx.emit(TimeRangeChanged { start_ms, end_ms });
+        cx.notify();
+    }
+
     /// Emit a `TimeRangeChanged` event for the currently selected preset.
     ///
     /// Used by hosts after subscribing to seed the initial window — the

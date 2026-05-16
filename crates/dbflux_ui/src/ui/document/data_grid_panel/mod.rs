@@ -1229,7 +1229,8 @@ impl DataGridPanel {
         matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
-        )
+        ) || matches!(self.source, DataSource::QueryResult { .. })
+            && self.chart_source_time_range_panel.is_some()
     }
 
     pub fn set_active_tab(&mut self, active: bool) {
@@ -1288,8 +1289,14 @@ impl DataGridPanel {
                             return;
                         }
 
-                        panel.pending_refresh = true;
-                        cx.notify();
+                        if matches!(panel.source, DataSource::QueryResult { .. }) {
+                            if let Some(trp) = panel.chart_source_time_range_panel.clone() {
+                                trp.update(cx, |p, cx| p.emit_initial(cx));
+                            }
+                        } else {
+                            panel.pending_refresh = true;
+                            cx.notify();
+                        }
                     });
                 });
             }

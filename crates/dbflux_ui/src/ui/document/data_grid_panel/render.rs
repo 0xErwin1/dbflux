@@ -1060,7 +1060,21 @@ impl DataGridPanel {
         let active_preset_label: Option<SharedString> = self
             .chart_source_time_range_panel
             .as_ref()
-            .and_then(|p| p.read(cx).dropdown_time_range.read(cx).selected_label());
+            .and_then(|p| {
+                let panel = p.read(cx);
+                let range = panel.selected_time_range?;
+                let index = match range {
+                    crate::ui::common::time_range::state::TimeRange::Last15min => 0,
+                    crate::ui::common::time_range::state::TimeRange::LastHour => 1,
+                    crate::ui::common::time_range::state::TimeRange::Last6Hours => 2,
+                    crate::ui::common::time_range::state::TimeRange::Last24Hours => 3,
+                    crate::ui::common::time_range::state::TimeRange::Last7Days => 4,
+                    crate::ui::common::time_range::state::TimeRange::Custom => 5,
+                };
+                TimeRangePanel::preset_items()
+                    .get(index)
+                    .map(|item| item.label.clone())
+            });
 
         let time_range_panel = self.chart_source_time_range_panel.clone();
         let num_presets = all_presets.len();
@@ -1100,10 +1114,7 @@ impl DataGridPanel {
                         cx.listener(move |_this, _, _, cx| {
                             if let Some(ref panel_entity) = trp {
                                 panel_entity.update(cx, |panel, cx| {
-                                    panel.dropdown_time_range.update(cx, |dd, cx| {
-                                        dd.set_selected_index(Some(i), cx);
-                                    });
-                                    panel.emit_initial(cx);
+                                    panel.select_preset(i, cx);
                                 });
                             }
                         }),
