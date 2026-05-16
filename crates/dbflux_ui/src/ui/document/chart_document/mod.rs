@@ -220,7 +220,7 @@ impl ChartDocument {
             pending_result: None,
             pending_run_on_first_render: pending_run,
             chart_shell,
-            editor_drawer_open: true,
+            editor_drawer_open: false,
             editor_input,
             _editor_subscription: editor_sub,
             time_range_panel: None,
