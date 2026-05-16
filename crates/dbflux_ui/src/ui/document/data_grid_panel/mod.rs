@@ -987,6 +987,12 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) {
         self.chart_source_time_range_panel = panel;
+
+        let enabled = self.supports_auto_refresh();
+        self.refresh_dropdown.update(cx, |dd, cx| {
+            dd.set_disabled(!enabled, cx);
+        });
+
         cx.notify();
     }
 

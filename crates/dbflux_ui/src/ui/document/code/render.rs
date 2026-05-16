@@ -821,6 +821,10 @@ impl Render for CodeDocument {
             }
         }
 
+        if std::mem::take(&mut self.pending_chart_reexecute) && !self.result_tabs.is_empty() {
+            self.run_query(window, cx);
+        }
+
         if let Some(error) = self.pending_error.take() {
             let toast_msg = error.to_string();
             Toast::error(toast_msg.clone())

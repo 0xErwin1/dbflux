@@ -387,6 +387,10 @@ impl CodeDocument {
                 end_ms,
                 query_mode,
             });
+
+            if !self.result_tabs.is_empty() {
+                self.pending_chart_reexecute = true;
+            }
         }
 
         cx.emit(DocumentEvent::MetaChanged);

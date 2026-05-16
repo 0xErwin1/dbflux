@@ -240,6 +240,9 @@ pub struct CodeDocument {
     _history_subscriptions: Vec<Subscription>,
     pending_set_query: Option<HistoryQuerySelected>,
     pending_history_focus_restore: bool,
+    /// Set by chart-driven RANGE chip changes or auto-refresh ticks; the next
+    /// render reads it and calls `run_query` so updates land without a manual Run.
+    pending_chart_reexecute: bool,
 
     // Layout/focus
     layout: SqlQueryLayout,
@@ -650,6 +653,7 @@ impl CodeDocument {
             _history_subscriptions: vec![query_selected_sub, history_closed_sub],
             pending_set_query: None,
             pending_history_focus_restore: false,
+            pending_chart_reexecute: false,
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
