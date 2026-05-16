@@ -14,16 +14,22 @@
 //!   └──────────────────────────────────────────────┘
 
 use super::ChartDocument;
-use crate::ui::components::toast::flush_pending_toast;
+use crate::ui::components::toast::{PendingToast, flush_pending_toast, now_hms};
+use crate::ui::document::chart::toolbar::{
+    ActionHandler, ChartToolbarContext, ChartToolbarHandlers, RangePresetHandler,
+    render_chart_toolbar,
+};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Spacing};
-use dbflux_components::chart::{AxisPill, ChartDetection, axis_bar_element};
+use crate::ui::document::chart::ChartRailTab;
+use dbflux_components::chart::{ChartDetection, axis_bar_element};
 use dbflux_components::controls::{GpuiInput, Input};
 use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_component::{ActiveTheme, Disableable, Sizable};
+use std::sync::Arc;
 
 impl Render for ChartDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -205,6 +211,80 @@ impl Render for ChartDocument {
                 )
             });
 
+        // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / PNG / Save --
+        //
+        // `time_range_panel` is `None` for ChartDocument until a future change
+        // wires a TimeRangePanel to standalone documents. When `None`, the shared
+        // toolbar hides the RANGE chip section automatically.
+        //
+        // TODO(chart-everywhere): wire `time_range_panel` for ChartDocument so
+        // standalone charts gain RANGE chip support. Requires a TimeRangePanel
+        // entity in ChartDocument::new and a subscription that re-executes the
+        // query on range change (same pattern as DataGridPanel).
+        let chart_toolbar_row = {
+            let resolved_window = self
+                .last_result
+                .as_ref()
+                .and_then(|r| r.resolved_window.as_ref())
+                .map(|rw| (rw.start_ms, rw.end_ms));
+            let row_count = self
+                .last_result
+                .as_ref()
+                .map(|r| r.row_count())
+                .unwrap_or(0);
+
+            let shell_for_stats = self.chart_shell.clone();
+            let weak_self_for_png = cx.weak_entity();
+            let weak_self_for_save = cx.weak_entity();
+
+            let ctx = ChartToolbarContext {
+                theme: &theme,
+                chart_shell: self.chart_shell.clone(),
+                refresh_dropdown: self.refresh_dropdown.clone(),
+                time_range_panel: self.time_range_panel.clone(),
+                row_count,
+                resolved_window,
+                source_supports_save: true,
+            };
+
+            let handlers = ChartToolbarHandlers {
+                on_select_range_preset: Arc::new(|_i, _window, _cx| {
+                    // No TimeRangePanel wired yet — this handler is never called
+                    // because the RANGE section is hidden when time_range_panel is None.
+                }),
+                on_toggle_stats_rail: Arc::new(move |_window, cx| {
+                    shell_for_stats.update(cx, |s, cx| {
+                        if s.chart_rail_open && s.chart_rail_tab == ChartRailTab::Stats {
+                            s.chart_rail_open = false;
+                        } else {
+                            s.chart_rail_open = true;
+                            s.chart_rail_tab = ChartRailTab::Stats;
+                        }
+                        cx.notify();
+                    });
+                }),
+                on_png_export: Arc::new(move |_window, cx| {
+                    if let Some(doc) = weak_self_for_png.upgrade() {
+                        doc.update(cx, |this, _cx| {
+                            this.pending_toast = Some(PendingToast {
+                                message: format!("PNG export coming in v0.7 — {}", now_hms()),
+                                is_error: false,
+                            });
+                        });
+                    }
+                }),
+                on_save_chart: Arc::new(move |window, cx| {
+                    if let Some(doc) = weak_self_for_save.upgrade() {
+                        doc.update(cx, |this, cx| {
+                            this.open_name_prompt(window, cx);
+                        });
+                    }
+                }),
+            };
+
+            render_chart_toolbar(ctx, handlers, cx)
+        };
+
         // -- AxisBar row: shown when result is available --
         let (bindings, open_pill, columns) = {
             let shell = self.chart_shell.read(cx);
@@ -284,6 +364,7 @@ impl Render for ChartDocument {
             .size_full()
             .track_focus(&focus_handle)
             .child(header)
+            .child(chart_toolbar_row)
             .child(axis_row)
             .child(div().flex_grow().min_h_0().child(chart_area))
             .when_some(name_prompt_element, |el, modal| el.child(modal))
