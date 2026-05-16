@@ -179,11 +179,12 @@ impl Render for ChartDocument {
             )
             .child(div().flex_grow())
             .child(
-                Button::new("save-chart").label("Save").small().on_click(cx.listener(
-                    |this, _, window, cx| {
+                Button::new("save-chart")
+                    .label("Save")
+                    .small()
+                    .on_click(cx.listener(|this, _, window, cx| {
                         this.open_name_prompt(window, cx);
-                    },
-                )),
+                    })),
             );
 
         // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / PNG / Save --
