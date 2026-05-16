@@ -694,6 +694,14 @@ impl CodeDocument {
         dbflux_core::is_safe_read_query(&self.input_state.read(cx).value())
     }
 
+    /// Returns the full editor content trimmed, or `None` when blank.
+    ///
+    /// Used by the "New chart from current query" command to seed a new `ChartDocument`.
+    pub fn current_query_text(&self, cx: &App) -> Option<String> {
+        let text = self.input_state.read(cx).value().trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    }
+
     pub fn set_active_tab(&mut self, active: bool) {
         self.is_active_tab = active;
     }

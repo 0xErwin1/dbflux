@@ -105,6 +105,13 @@ pub enum Command {
     OpenMcpApprovals,
     #[cfg(feature = "mcp")]
     RefreshMcpGovernance,
+
+    // === Charts ===
+    /// Open a new unsaved ChartDocument seeded with the active document's current query.
+    /// Disabled when the active document has no query or no connection.
+    NewChartFromCurrentQuery,
+    /// Open the saved-chart fuzzy overlay (lists all SavedCharts for the current profile).
+    OpenSavedChart,
 }
 
 impl Command {
@@ -140,6 +147,8 @@ impl Command {
             "open_mcp_approvals" => Some(Command::OpenMcpApprovals),
             #[cfg(feature = "mcp")]
             "refresh_mcp_governance" => Some(Command::RefreshMcpGovernance),
+            "new_chart_from_current_query" => Some(Command::NewChartFromCurrentQuery),
+            "open_saved_chart" => Some(Command::OpenSavedChart),
             _ => None,
         }
     }
@@ -236,6 +245,8 @@ impl Command {
             Command::OpenMcpApprovals => "Open MCP Approvals",
             #[cfg(feature = "mcp")]
             Command::RefreshMcpGovernance => "Refresh MCP Governance",
+            Command::NewChartFromCurrentQuery => "New Chart from Current Query",
+            Command::OpenSavedChart => "Open Chart...",
         }
     }
 
@@ -328,6 +339,8 @@ impl Command {
 
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals | Command::RefreshMcpGovernance => "View",
+
+            Command::NewChartFromCurrentQuery | Command::OpenSavedChart => "Charts",
         }
     }
 
