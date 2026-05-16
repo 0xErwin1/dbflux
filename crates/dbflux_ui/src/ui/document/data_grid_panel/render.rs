@@ -1395,7 +1395,14 @@ impl DataGridPanel {
                         .into_any_element()
                 };
 
-                let chart_row = div().flex_grow().size_full().child(chart_area);
+                let chart_row = div()
+                    .flex_grow()
+                    .size_full()
+                    .pt(px(12.0))
+                    .pb(px(8.0))
+                    .pl(px(8.0))
+                    .pr(px(12.0))
+                    .child(chart_area);
 
                 let body = div()
                     .relative()

@@ -58,34 +58,24 @@ where
                 .flex_row()
                 .items_center()
                 .gap(gpui::px(4.0))
-                .px(gpui::px(8.0))
-                .py(gpui::px(4.0))
-                .rounded(gpui::px(4.0))
-                .border_1()
-                .border_color(if is_focused {
-                    color
-                } else {
-                    gpui::hsla(0.0, 0.0, 1.0, 0.12)
-                })
-                // Opacity signals hidden state (no strikethrough — GPUI 0.2.2 lacks it).
+                .px(gpui::px(4.0))
+                .py(gpui::px(1.0))
+                .text_size(gpui::px(11.0))
+                .when(is_focused, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
                 .when(is_hidden, |d| d.opacity(0.4))
-                // Colour swatch.
                 .child(
                     div()
-                        .w(gpui::px(8.0))
-                        .h(gpui::px(8.0))
+                        .w(gpui::px(6.0))
+                        .h(gpui::px(6.0))
                         .rounded_full()
                         .bg(color),
                 )
-                // Series label.
-                .child(div().text_sm().child(label));
+                .child(div().child(label));
 
-            // Append avg / last inline when available.
             if let Some(stat) = stat_str {
                 chip = chip.child(
                     div()
                         .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                        .text_sm()
                         .child(stat),
                 );
             }
@@ -109,20 +99,20 @@ where
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap(gpui::px(8.0))
-        .px(gpui::px(14.0))
-        .py(gpui::px(6.0))
+        .gap_x(gpui::px(12.0))
+        .gap_y(gpui::px(2.0))
+        .px(gpui::px(12.0))
+        .py(gpui::px(4.0))
         .border_t_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.08))
+        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.06))
         .children(chips)
-        // Counter at the right end.
         .child(
             div()
                 .flex_1()
                 .flex()
                 .justify_end()
-                .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                .text_sm()
+                .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+                .text_size(gpui::px(10.0))
                 .child(counter),
         )
 }
