@@ -17,7 +17,7 @@ use super::host::{ChartHost, HostAdapter};
 use dbflux_components::chart::{
     ChartDetection, ChartSpec, ChartView, ManualChartSelection, detect_chart_columns,
 };
-use dbflux_core::{ColumnMeta, ColumnKind, QueryResult};
+use dbflux_core::{ColumnKind, ColumnMeta, QueryResult};
 use gpui::prelude::*;
 use gpui::{Context, Entity, Subscription, Window};
 use std::collections::HashSet;
@@ -35,20 +35,20 @@ pub struct ChartShell {
     // ---- chart view ----
     /// The built `ChartView` entity. `None` before the first result arrives
     /// or after a column-shape change that forces a rebuild.
-    chart_view: Option<Entity<ChartView>>,
+    pub(crate) chart_view: Option<Entity<ChartView>>,
 
     /// Subscription that triggers `cx.notify()` on this shell whenever the
     /// `ChartView` entity notifies (e.g. hover changes, focus changes).
-    chart_view_observer: Option<Subscription>,
+    pub(crate) chart_view_observer: Option<Subscription>,
 
     // ---- column selection ----
     /// Last result used to build the current `chart_view`. Used to detect
     /// when a rebuild is necessary after `set_result`.
-    chart_detection: Option<ChartDetection>,
+    pub(crate) chart_detection: Option<ChartDetection>,
 
     /// Manual column selection overriding auto-detection. `None` = use
     /// detection result.
-    chart_manual_selection: Option<ManualChartSelection>,
+    pub(crate) chart_manual_selection: Option<ManualChartSelection>,
 
     // ---- interaction state ----
     /// Series indices hidden by the user via the legend.
@@ -66,10 +66,10 @@ pub struct ChartShell {
     pub(crate) chart_picker_overlay_open: bool,
 
     /// X-column index in the degraded picker (into result columns).
-    chart_picker_x_col: usize,
+    pub(crate) chart_picker_x_col: usize,
 
     /// Checked state per Y-candidate column in the degraded picker.
-    chart_picker_y_checked: Vec<bool>,
+    pub(crate) chart_picker_y_checked: Vec<bool>,
 
     // ---- rail state ----
     /// Whether the Configure/Stats rail is open.
@@ -90,11 +90,7 @@ impl ChartShell {
     ///
     /// The shell starts with no chart view. Call `set_result` to provide the
     /// first `QueryResult` and trigger chart detection + view construction.
-    pub fn new(
-        host: HostAdapter,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(host: HostAdapter, _cx: &mut Context<Self>) -> Self {
         Self {
             host,
             chart_view: None,
@@ -296,10 +292,7 @@ impl ChartShell {
             .map(|(i, _)| i)
             .collect();
 
-        self.chart_rail_picker_x_col = x_candidates
-            .iter()
-            .position(|&ci| ci == x_col)
-            .unwrap_or(0);
+        self.chart_rail_picker_x_col = x_candidates.iter().position(|&ci| ci == x_col).unwrap_or(0);
 
         let y_candidates: Vec<usize> = columns
             .iter()
@@ -323,11 +316,7 @@ impl ChartShell {
     ///
     /// Clears the existing `chart_view` so the next render triggers a rebuild.
     #[allow(dead_code)]
-    pub(crate) fn apply_rail_selection(
-        &mut self,
-        result: &QueryResult,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn apply_rail_selection(&mut self, result: &QueryResult, cx: &mut Context<Self>) {
         let columns = &result.columns;
 
         let x_candidates: Vec<usize> = columns

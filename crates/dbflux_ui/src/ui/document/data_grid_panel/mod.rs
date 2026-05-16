@@ -860,9 +860,9 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> Option<Entity<ChartView>> {
         let result = self.result.clone();
-        self.chart_shell.as_ref()?.update(cx, |shell, cx| {
-            shell.ensure_chart_view(&result, cx)
-        })
+        self.chart_shell
+            .as_ref()?
+            .update(cx, |shell, cx| shell.ensure_chart_view(&result, cx))
     }
 
     /// Toggle the hidden state of a series by index.
@@ -1104,8 +1104,7 @@ impl DataGridPanel {
                 // Create the shell for the first chartable result.
                 let host = crate::ui::document::chart::HostAdapter::DataGrid(cx.entity().clone());
                 let shell = cx.new(|cx| {
-                    let mut shell =
-                        crate::ui::document::chart::ChartShell::new(host, cx);
+                    let mut shell = crate::ui::document::chart::ChartShell::new(host, cx);
                     shell.set_result(&result, false, cx);
                     shell
                 });

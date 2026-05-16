@@ -1027,14 +1027,16 @@ impl DataGridPanel {
 
         // --- Read chart state from the shell ---
         let (chart_view_entity, rail_open, rail_tab) =
-            self.chart_shell.as_ref().map_or((None, false, ChartRailTab::Configure), |s| {
-                let shell = s.read(cx);
-                (
-                    shell.chart_view().cloned(),
-                    shell.chart_rail_open,
-                    shell.chart_rail_tab,
-                )
-            });
+            self.chart_shell
+                .as_ref()
+                .map_or((None, false, ChartRailTab::Configure), |s| {
+                    let shell = s.read(cx);
+                    (
+                        shell.chart_view().cloned(),
+                        shell.chart_rail_open,
+                        shell.chart_rail_tab,
+                    )
+                });
 
         // --- Resolved window label ---
         let row_count = self.result.row_count();
@@ -1282,7 +1284,9 @@ impl DataGridPanel {
                             let open = shell.read(cx).chart_rail_open;
                             let tab = shell.read(cx).chart_rail_tab;
                             if open && tab == ChartRailTab::Configure {
-                                shell.update(cx, |s, _| { s.chart_rail_open = false; });
+                                shell.update(cx, |s, _| {
+                                    s.chart_rail_open = false;
+                                });
                             } else {
                                 shell.update(cx, |s, _| {
                                     s.chart_rail_open = true;
@@ -1542,7 +1546,10 @@ impl DataGridPanel {
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);
-                (shell.chart_detection.clone(), shell.chart_picker_overlay_open)
+                (
+                    shell.chart_detection.clone(),
+                    shell.chart_picker_overlay_open,
+                )
             })
             .unwrap_or((None, false));
 
@@ -1772,7 +1779,10 @@ impl DataGridPanel {
             .as_ref()
             .map(|s| {
                 let shell = s.read(cx);
-                (shell.chart_picker_x_col, shell.chart_picker_y_checked.clone())
+                (
+                    shell.chart_picker_x_col,
+                    shell.chart_picker_y_checked.clone(),
+                )
             })
             .unwrap_or((0, Vec::new()));
         let any_y_checked = y_checked.iter().any(|&c| c);
@@ -2063,15 +2073,16 @@ impl DataGridPanel {
                         .map(|cv| cv.read(cx).series_stats().to_vec())
                         .unwrap_or_default();
 
-                    let active_y_cols: Vec<usize> = if let Some(manual) = &shell.chart_manual_selection {
-                        manual.y_cols.clone()
-                    } else if let Some(ChartDetection::Ok { numeric_cols, .. }) =
-                        &shell.chart_detection
-                    {
-                        numeric_cols.clone()
-                    } else {
-                        vec![]
-                    };
+                    let active_y_cols: Vec<usize> =
+                        if let Some(manual) = &shell.chart_manual_selection {
+                            manual.y_cols.clone()
+                        } else if let Some(ChartDetection::Ok { numeric_cols, .. }) =
+                            &shell.chart_detection
+                        {
+                            numeric_cols.clone()
+                        } else {
+                            vec![]
+                        };
 
                     let detection_ok =
                         matches!(&shell.chart_detection, Some(ChartDetection::Ok { .. }));
@@ -2204,8 +2215,9 @@ impl DataGridPanel {
                                         move |this, &new_checked, _, cx| {
                                             if let Some(shell) = &this.chart_shell {
                                                 shell.update(cx, |s, _| {
-                                                    if let Some(slot) =
-                                                        s.chart_rail_picker_y_checked.get_mut(cand_idx)
+                                                    if let Some(slot) = s
+                                                        .chart_rail_picker_y_checked
+                                                        .get_mut(cand_idx)
                                                     {
                                                         *slot = new_checked;
                                                     }
@@ -2343,8 +2355,7 @@ impl DataGridPanel {
             })
             .unwrap_or((0, None));
 
-        let (stats_opt, label, color, x_min, x_max, x_is_time) = if let Some(cv) = &chart_view_opt
-        {
+        let (stats_opt, label, color, x_min, x_max, x_is_time) = if let Some(cv) = &chart_view_opt {
             let view = cv.read(cx);
             let s = view.series_stats().get(focused_idx).copied().flatten();
             let label = view.series_label(focused_idx).to_string();
