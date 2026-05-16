@@ -36,6 +36,11 @@ pub enum DataDocumentEvent {
         title: SharedString,
         content: AnyView,
     },
+    /// User requested "Chart this query" from the context menu.
+    ChartThisQuery {
+        query: String,
+        connection_id: Option<Uuid>,
+    },
 }
 
 impl DataDocument {
@@ -72,6 +77,15 @@ impl DataDocument {
                         cx.emit(DataDocumentEvent::OpenInspector {
                             title: title.clone(),
                             content: content.clone(),
+                        });
+                    }
+                    DataGridEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    } => {
+                        cx.emit(DataDocumentEvent::ChartThisQuery {
+                            query: query.clone(),
+                            connection_id: *connection_id,
                         });
                     }
                     _ => {}
@@ -122,6 +136,15 @@ impl DataDocument {
                             content: content.clone(),
                         });
                     }
+                    DataGridEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    } => {
+                        cx.emit(DataDocumentEvent::ChartThisQuery {
+                            query: query.clone(),
+                            connection_id: *connection_id,
+                        });
+                    }
                     _ => {}
                 },
             );
@@ -168,6 +191,15 @@ impl DataDocument {
                         cx.emit(DataDocumentEvent::OpenInspector {
                             title: title.clone(),
                             content: content.clone(),
+                        });
+                    }
+                    DataGridEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    } => {
+                        cx.emit(DataDocumentEvent::ChartThisQuery {
+                            query: query.clone(),
+                            connection_id: *connection_id,
                         });
                     }
                     _ => {}

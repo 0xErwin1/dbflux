@@ -148,6 +148,11 @@ pub enum DataGridEvent {
         title: SharedString,
         content: AnyView,
     },
+    /// User requested "Chart this query" from the context menu.
+    ChartThisQuery {
+        query: String,
+        connection_id: Option<Uuid>,
+    },
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render

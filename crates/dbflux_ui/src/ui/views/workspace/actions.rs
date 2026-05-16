@@ -1391,6 +1391,179 @@ impl Workspace {
             }
         }
     }
+    /// Opens a new unsaved `ChartDocument` seeded with the active document's current query.
+    ///
+    /// Silently no-ops when the active document has no current query or no connection.
+    pub(super) fn open_chart_from_current_document(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(active_doc) = self.tab_manager.read(cx).active_document().cloned() else {
+            return;
+        };
+
+        let query = active_doc.current_chartable_query(cx);
+        let connection_id = active_doc.connection_id(cx);
+
+        if query.is_none() {
+            Toast::warning("Active document has no query to chart")
+                .meta_right(now_hms())
+                .push(cx);
+            return;
+        }
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::ChartDocument::new(
+                connection_id,
+                query.unwrap_or_default(),
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let handle = DocumentHandle::chart(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+
+        Toast::info("Opened new chart document")
+            .meta_right(now_hms())
+            .push(cx);
+    }
+
+    /// Opens a new `ChartDocument` seeded with the given query.
+    ///
+    /// Called when the user selects "Chart this query" from a data grid context menu.
+    pub(super) fn open_chart_from_query(
+        &mut self,
+        query: String,
+        connection_id: Option<uuid::Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let doc = cx.new(|cx| {
+            crate::ui::document::ChartDocument::new(
+                connection_id,
+                query,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let handle = DocumentHandle::chart(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    /// Builds palette items for all saved charts in the current profile (or all profiles).
+    ///
+    /// Used by the "Open chart..." command to show a fuzzy-searchable chart list.
+    pub(super) fn build_saved_chart_palette_items(&self, cx: &Context<Self>) -> Vec<PaletteItem> {
+        let app_state = self.app_state.read(cx);
+        let active_profile_id = app_state.active_connection_id();
+
+        let charts: Vec<dbflux_components::SavedChart> = app_state
+            .saved_charts
+            .all_charts()
+            .iter()
+            .filter(|chart| {
+                // Show charts for the active profile, or all charts when no profile is active.
+                active_profile_id
+                    .map(|id| chart.profile_id == id)
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+
+        let profiles = app_state.profiles();
+
+        charts
+            .into_iter()
+            .map(|chart| {
+                let profile_name = profiles
+                    .iter()
+                    .find(|p| p.id == chart.profile_id)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "(orphaned)".to_string());
+
+                PaletteItem::SavedChart {
+                    id: chart.id,
+                    name: chart.name.clone(),
+                    profile_name,
+                    profile_id: chart.profile_id,
+                }
+            })
+            .collect()
+    }
+
+    /// Opens a `ChartDocument` for the given saved chart ID.
+    ///
+    /// If a tab for this chart is already open, focuses it instead.
+    pub(super) fn open_saved_chart(
+        &mut self,
+        chart_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Focus existing tab if the chart is already open.
+        let existing_id = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .find(|doc| doc.is_chart(chart_id, cx))
+            .map(|doc| doc.id());
+
+        if let Some(id) = existing_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(id, cx);
+            });
+            self.set_focus(FocusTarget::Document, window, cx);
+            return;
+        }
+
+        let saved_chart = self
+            .app_state
+            .read(cx)
+            .saved_charts
+            .all_charts()
+            .iter()
+            .find(|c| c.id == chart_id)
+            .cloned();
+
+        let Some(chart) = saved_chart else {
+            Toast::error("Saved chart not found")
+                .meta_right(now_hms())
+                .push(cx);
+            return;
+        };
+
+        let doc = cx.new(|cx| {
+            crate::ui::document::ChartDocument::from_saved(
+                &chart,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+
+        let handle = DocumentHandle::chart(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Reconnects to profiles referenced by restored session documents.
     pub(super) fn reopen_last_connections(&mut self, cx: &mut Context<Self>) {
         let profile_ids: std::collections::HashSet<uuid::Uuid> = self
@@ -1628,16 +1801,24 @@ mod tests {
     fn palette_item_type_priority_ordering() {
         let action = sample_action();
         let connection = sample_connection("test", false);
+        let saved_chart = PaletteItem::SavedChart {
+            id: Uuid::new_v4(),
+            name: "My Chart".to_string(),
+            profile_name: "test".to_string(),
+            profile_id: Uuid::new_v4(),
+        };
         let resource = sample_table("test", "t");
         let script = sample_script("test");
 
         assert_eq!(action.type_priority(), 0);
         assert_eq!(connection.type_priority(), 1);
-        assert_eq!(resource.type_priority(), 2);
-        assert_eq!(script.type_priority(), 3);
+        assert_eq!(saved_chart.type_priority(), 2);
+        assert_eq!(resource.type_priority(), 3);
+        assert_eq!(script.type_priority(), 4);
 
         assert!(action.type_priority() < connection.type_priority());
-        assert!(connection.type_priority() < resource.type_priority());
+        assert!(connection.type_priority() < saved_chart.type_priority());
+        assert!(saved_chart.type_priority() < resource.type_priority());
         assert!(resource.type_priority() < script.type_priority());
     }
 

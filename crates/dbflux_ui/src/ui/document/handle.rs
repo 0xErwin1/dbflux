@@ -159,9 +159,23 @@ impl DocumentHandle {
         }
     }
 
-    /// Returns the connection (profile) ID for data, key-value, and chart documents.
+    /// Returns a query string suitable for seeding a new `ChartDocument`.
+    ///
+    /// - `Code` documents: full editor text (trimmed), `None` when blank.
+    /// - `Data` documents: `synthesized_query` from the underlying query result source.
+    /// - All other document types: `None`.
+    pub fn current_chartable_query(&self, cx: &App) -> Option<String> {
+        match self {
+            Self::Code { entity, .. } => entity.read(cx).current_query_text(cx),
+            Self::Data { entity, .. } => entity.read(cx).synthesized_query(cx),
+            _ => None,
+        }
+    }
+
+    /// Returns the connection (profile) ID for code, data, key-value, and chart documents.
     pub fn connection_id(&self, cx: &App) -> Option<uuid::Uuid> {
         match self {
+            Self::Code { entity, .. } => entity.read(cx).connection_id(),
             Self::Data { entity, .. } => entity.read(cx).connection_id(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).connection_id(),
             Self::Chart { entity, .. } => entity.read(cx).connection_id(),
@@ -421,6 +435,13 @@ impl DocumentHandle {
                             content: content.clone(),
                         }
                     }
+                    DataDocumentEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    } => DocumentEvent::ChartThisQuery {
+                        query: query.clone(),
+                        connection_id: *connection_id,
+                    },
                 };
                 callback(&doc_event, cx);
             }),
@@ -468,5 +489,10 @@ pub enum DocumentEvent {
     OpenInspector {
         title: gpui::SharedString,
         content: gpui::AnyView,
+    },
+    /// User requested "Chart this query" from a data document's context menu.
+    ChartThisQuery {
+        query: String,
+        connection_id: Option<uuid::Uuid>,
     },
 }

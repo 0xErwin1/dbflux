@@ -1140,6 +1140,11 @@ impl CodeDocument {
                         content: content.clone(),
                     });
                 }
+                DataGridEvent::ChartThisQuery { .. } => {
+                    // CodeDocument result tabs use QueryResult sources created without an
+                    // original_query, so can_chart_from_context_menu is always false for them.
+                    // This arm exists only for exhaustiveness.
+                }
             },
         );
 
