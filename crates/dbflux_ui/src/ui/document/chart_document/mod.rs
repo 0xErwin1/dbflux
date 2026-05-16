@@ -213,22 +213,48 @@ impl ChartDocument {
     }
 
     /// Create a `ChartDocument` from a previously saved chart record.
+    ///
+    /// Only `SavedChartSource::Query` sources are supported. Callers must
+    /// route `Collection` sources to a `DataDocument` instead — passing a
+    /// `Collection`-source chart here will produce a document with an empty
+    /// query and no data.
     pub fn from_saved(
         saved: &SavedChart,
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Self {
-        let mut doc = Self::new(
-            Some(saved.profile_id),
-            saved.query.clone(),
-            app_state,
-            window,
-            cx,
-        );
+    ) -> Result<Self, String> {
+        use dbflux_components::saved_chart::SavedChartSource;
+
+        let query = match &saved.source {
+            SavedChartSource::Query { query } => query.clone(),
+            SavedChartSource::Collection { .. } => {
+                return Err(
+                    "Collection source not supported in ChartDocument; open via DataDocument"
+                        .to_string(),
+                );
+            }
+        };
+
+        let mut doc = Self::new(Some(saved.profile_id), query, app_state, window, cx);
         doc.title = saved.name.clone();
         doc.saved_chart_id = Some(saved.id);
-        doc
+        Ok(doc)
+    }
+
+    /// Check whether a `SavedChart` source is compatible with `ChartDocument`.
+    ///
+    /// Returns `Ok(())` for `Query` sources and `Err` for `Collection` sources.
+    /// Call this before allocating an entity to avoid panicking inside `cx.new`.
+    pub fn validate_saved_source(saved: &SavedChart) -> Result<(), String> {
+        use dbflux_components::saved_chart::SavedChartSource;
+        match &saved.source {
+            SavedChartSource::Query { .. } => Ok(()),
+            SavedChartSource::Collection { .. } => Err(
+                "Collection source not supported in ChartDocument; open via DataDocument"
+                    .to_string(),
+            ),
+        }
     }
 
     // ---- public accessors ----
@@ -495,7 +521,7 @@ impl ChartDocument {
         let bindings = spec.binding.clone();
 
         let mut saved =
-            SavedChart::new(name.clone(), profile_id, self.query.clone(), spec, bindings);
+            SavedChart::new_query(name.clone(), profile_id, self.query.clone(), spec, bindings);
         // Preserve the ID so upsert overwrites the existing record.
         saved.id = id;
 
