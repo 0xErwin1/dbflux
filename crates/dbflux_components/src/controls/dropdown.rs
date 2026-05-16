@@ -201,6 +201,13 @@ impl Dropdown {
         self
     }
 
+    pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
+        if self.disabled != disabled {
+            self.disabled = disabled;
+            cx.notify();
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn on_select(
         mut self,

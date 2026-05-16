@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use super::audit::AuditDocument;
+use super::chart_document::{ChartDocument, ChartDocumentEvent};
 use super::code::CodeDocument;
 use super::data_document::{DataDocument, DataDocumentEvent};
 use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
@@ -35,6 +36,11 @@ pub enum DocumentHandle {
         id: DocumentId,
         entity: Entity<AuditDocument>,
     },
+    /// Standalone chart document.
+    Chart {
+        id: DocumentId,
+        entity: Entity<ChartDocument>,
+    },
 }
 
 impl DocumentHandle {
@@ -61,6 +67,12 @@ impl DocumentHandle {
         Self::Audit { id, entity }
     }
 
+    /// Creates a new Chart document handle.
+    pub fn chart(entity: Entity<ChartDocument>, cx: &App) -> Self {
+        let id = entity.read(cx).id();
+        Self::Chart { id, entity }
+    }
+
     /// Document ID (no cx required).
     pub fn id(&self) -> DocumentId {
         match self {
@@ -68,6 +80,7 @@ impl DocumentHandle {
             Self::Data { id, .. } => *id,
             Self::KeyValue { id, .. } => *id,
             Self::Audit { id, .. } => *id,
+            Self::Chart { id, .. } => *id,
         }
     }
 
@@ -78,6 +91,18 @@ impl DocumentHandle {
             Self::Data { .. } => DocumentKind::Data,
             Self::KeyValue { .. } => DocumentKind::RedisKeyBrowser,
             Self::Audit { .. } => DocumentKind::Audit,
+            Self::Chart { .. } => DocumentKind::Chart,
+        }
+    }
+
+    /// Returns `true` when this is a chart document for the given saved chart ID.
+    pub fn is_chart(&self, saved_chart_id: uuid::Uuid, cx: &App) -> bool {
+        match self {
+            Self::Chart { entity, .. } => {
+                entity.read(cx).connection_id().is_some()
+                    && entity.read(cx).saved_chart_id() == Some(saved_chart_id)
+            }
+            _ => false,
         }
     }
 
@@ -134,11 +159,13 @@ impl DocumentHandle {
         }
     }
 
-    /// Returns the connection (profile) ID for data and key-value documents.
+    /// Returns the connection (profile) ID for code, data, key-value, and chart documents.
     pub fn connection_id(&self, cx: &App) -> Option<uuid::Uuid> {
         match self {
+            Self::Code { entity, .. } => entity.read(cx).connection_id(),
             Self::Data { entity, .. } => entity.read(cx).connection_id(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).connection_id(),
+            Self::Chart { entity, .. } => entity.read(cx).connection_id(),
             _ => None,
         }
     }
@@ -204,6 +231,18 @@ impl DocumentHandle {
                     connection_id: None,
                 }
             }
+            Self::Chart { id, entity } => {
+                let doc = entity.read(cx);
+                DocumentMetaSnapshot {
+                    id: *id,
+                    kind: DocumentKind::Chart,
+                    title: doc.title(),
+                    icon: DocumentIcon::Chart,
+                    state: doc.state(),
+                    closable: true,
+                    connection_id: doc.connection_id(),
+                }
+            }
         }
     }
 
@@ -219,6 +258,7 @@ impl DocumentHandle {
             Self::Data { entity, .. } => entity.read(cx).can_close(),
             Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
             Self::Audit { .. } => true,
+            Self::Chart { entity, .. } => entity.read(cx).can_close(),
         }
     }
 
@@ -226,6 +266,7 @@ impl DocumentHandle {
         if let Self::Code { entity, .. } = self {
             entity.read(cx).flush_auto_save(cx);
         }
+        // Chart and other document types do not have auto-save.
     }
 
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
@@ -234,6 +275,7 @@ impl DocumentHandle {
             Self::Data { entity, .. } => entity.read(cx).refresh_policy(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).refresh_policy(),
             Self::Audit { .. } => RefreshPolicy::default(),
+            Self::Chart { entity, .. } => entity.read(cx).refresh_policy(),
         }
     }
 
@@ -250,6 +292,9 @@ impl DocumentHandle {
             }
             Self::Audit { .. } => {
                 // AuditDocument doesn't need tab state
+            }
+            Self::Chart { entity, .. } => {
+                entity.update(cx, |doc, _cx| doc.set_active_tab(active));
             }
         }
     }
@@ -268,6 +313,9 @@ impl DocumentHandle {
             Self::Audit { .. } => {
                 // AuditDocument doesn't use refresh policy
             }
+            Self::Chart { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
+            }
         }
     }
 
@@ -278,6 +326,7 @@ impl DocumentHandle {
             Self::Data { entity, .. } => entity.clone().into_any_element(),
             Self::KeyValue { entity, .. } => entity.clone().into_any_element(),
             Self::Audit { entity, .. } => entity.clone().into_any_element(),
+            Self::Chart { entity, .. } => entity.clone().into_any_element(),
         }
     }
 
@@ -294,6 +343,9 @@ impl DocumentHandle {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
             Self::Audit { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
+            }
+            Self::Chart { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
         }
@@ -314,6 +366,9 @@ impl DocumentHandle {
             Self::Audit { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
+            Self::Chart { entity, .. } => {
+                entity.update(cx, |doc, cx| doc.focus(window, cx));
+            }
         }
     }
 
@@ -325,6 +380,7 @@ impl DocumentHandle {
             Self::Data { entity, .. } => entity.read(cx).active_context(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).active_context(cx),
             Self::Audit { entity, .. } => entity.read(cx).active_context(),
+            Self::Chart { entity, .. } => entity.read(cx).active_context(),
         }
     }
 
@@ -335,7 +391,7 @@ impl DocumentHandle {
         match self {
             Self::Code { entity, .. } => entity.read(cx).change_summary(cx),
             Self::Data { entity, .. } => entity.read(cx).change_summary(cx),
-            Self::KeyValue { .. } | Self::Audit { .. } => None,
+            Self::KeyValue { .. } | Self::Audit { .. } | Self::Chart { .. } => None,
         }
     }
 
@@ -366,6 +422,13 @@ impl DocumentHandle {
                             content: content.clone(),
                         }
                     }
+                    DataDocumentEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    } => DocumentEvent::ChartThisQuery {
+                        query: query.clone(),
+                        connection_id: *connection_id,
+                    },
                 };
                 callback(&doc_event, cx);
             }),
@@ -382,6 +445,13 @@ impl DocumentHandle {
                     }
                 })
             }
+            Self::Chart { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
+                let doc_event = match event {
+                    ChartDocumentEvent::MetaChanged => DocumentEvent::MetaChanged,
+                    ChartDocumentEvent::RequestFocus => DocumentEvent::RequestFocus,
+                };
+                callback(&doc_event, cx);
+            }),
         }
     }
 }
@@ -406,5 +476,10 @@ pub enum DocumentEvent {
     OpenInspector {
         title: gpui::SharedString,
         content: gpui::AnyView,
+    },
+    /// User requested "Chart this query" from a data document's context menu.
+    ChartThisQuery {
+        query: String,
+        connection_id: Option<uuid::Uuid>,
     },
 }

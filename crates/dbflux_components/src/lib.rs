@@ -13,6 +13,13 @@ pub mod semantic;
 pub mod tokens;
 pub mod typography;
 
+pub mod chart;
 pub mod composites;
 pub mod controls;
 pub mod primitives;
+pub mod saved_chart;
+
+pub use saved_chart::{
+    SavedChart, SavedChartManager, SavedChartRefreshPolicy, SavedChartStore, TimeRangePreset,
+    open_saved_charts_store,
+};

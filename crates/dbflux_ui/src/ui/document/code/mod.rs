@@ -240,6 +240,9 @@ pub struct CodeDocument {
     _history_subscriptions: Vec<Subscription>,
     pending_set_query: Option<HistoryQuerySelected>,
     pending_history_focus_restore: bool,
+    /// Set by chart-driven RANGE chip changes or auto-refresh ticks; the next
+    /// render reads it and calls `run_query` so updates land without a manual Run.
+    pending_chart_reexecute: bool,
 
     // Layout/focus
     layout: SqlQueryLayout,
@@ -650,6 +653,7 @@ impl CodeDocument {
             _history_subscriptions: vec![query_selected_sub, history_closed_sub],
             pending_set_query: None,
             pending_history_focus_restore: false,
+            pending_chart_reexecute: false,
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
@@ -688,6 +692,32 @@ impl CodeDocument {
 
     pub fn can_auto_refresh(&self, cx: &App) -> bool {
         dbflux_core::is_safe_read_query(&self.input_state.read(cx).value())
+    }
+
+    /// Returns the full editor content trimmed, or `None` when blank.
+    ///
+    /// Used by the "New chart from current query" command to seed a new `ChartDocument`.
+    pub fn current_query_text(&self, cx: &App) -> Option<String> {
+        let text = self.input_state.read(cx).value().trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    }
+
+    /// Emit a `ChartThisQuery` event with the current editor text.
+    ///
+    /// Wired to the editor toolbar "Chart" button. When the editor is blank,
+    /// surfaces a toast instead of emitting so the user gets feedback.
+    pub fn emit_chart_this_query(&mut self, cx: &mut Context<Self>) {
+        let Some(query) = self.current_query_text(cx) else {
+            Toast::warning("Write a query first to open it in a chart")
+                .meta_right(now_hms())
+                .push(cx);
+            return;
+        };
+
+        cx.emit(DocumentEvent::ChartThisQuery {
+            query,
+            connection_id: self.connection_id,
+        });
     }
 
     pub fn set_active_tab(&mut self, active: bool) {

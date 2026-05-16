@@ -1,4 +1,4 @@
-use dbflux_core::{ColumnMeta, DefaultSqlDialect, DriverKey, KeySetRequest};
+use dbflux_core::{ColumnKind, ColumnMeta, DefaultSqlDialect, DriverKey, KeySetRequest};
 use dbflux_core::{
     Connection, ConnectionProfile, DbConfig, DbDriver, DbKind, DocumentFilter, DocumentUpdate,
     GeneratedQuery, MutationCategory, MutationRequest, QueryGenerator, QueryLanguage, QueryResult,
@@ -78,6 +78,7 @@ fn count_table_parses_integer_count_from_first_cell() {
         vec![ColumnMeta {
             name: "count".to_string(),
             type_name: "int8".to_string(),
+            kind: ColumnKind::Unknown,
             nullable: false,
             is_primary_key: false,
         }],
@@ -109,6 +110,7 @@ fn count_table_falls_back_to_zero_for_non_integer_cell() {
         vec![ColumnMeta {
             name: "count".to_string(),
             type_name: "text".to_string(),
+            kind: ColumnKind::Unknown,
             nullable: false,
             is_primary_key: false,
         }],

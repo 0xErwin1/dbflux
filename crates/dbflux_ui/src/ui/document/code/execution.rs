@@ -1075,8 +1075,10 @@ impl CodeDocument {
         } else if let Some(index) = self.active_result_index
             && let Some(tab) = self.result_tabs.get_mut(index)
         {
-            tab.grid
-                .update(cx, |g, cx| g.set_query_result(result, query.clone(), cx));
+            let profile_id = self.connection_id;
+            tab.grid.update(cx, |g, cx| {
+                g.set_query_result(result, query.clone(), profile_id, cx)
+            });
         }
     }
 
@@ -1092,8 +1094,22 @@ impl CodeDocument {
         let title = format!("Result {}", self.result_tab_counter);
 
         let app_state = self.app_state.clone();
-        let grid = cx
-            .new(|cx| DataGridPanel::new_for_result(result, query.clone(), app_state, window, cx));
+        let grid = cx.new(|cx| {
+            DataGridPanel::new_for_result(
+                result,
+                query.clone(),
+                self.connection_id,
+                app_state,
+                window,
+                cx,
+            )
+        });
+
+        if let Some(panel) = self.source_time_range_panel.clone() {
+            grid.update(cx, |g, cx| {
+                g.set_chart_time_range_panel(Some(panel), cx);
+            });
+        }
 
         let subscription = cx.subscribe(
             &grid,
@@ -1123,6 +1139,11 @@ impl CodeDocument {
                         title: title.clone(),
                         content: content.clone(),
                     });
+                }
+                DataGridEvent::ChartThisQuery { .. } => {
+                    // CodeDocument result tabs use QueryResult sources created without an
+                    // original_query, so can_chart_from_context_menu is always false for them.
+                    // This arm exists only for exhaustiveness.
                 }
             },
         );

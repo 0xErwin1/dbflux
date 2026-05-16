@@ -149,7 +149,7 @@ impl IntoErrorData for String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::{ColumnMeta, QueryResult, Value};
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
     use std::time::Duration;
 
     #[test]
@@ -165,6 +165,7 @@ mod tests {
             vec![ColumnMeta {
                 name: "id".into(),
                 type_name: "int".into(),
+                kind: ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: true,
             }],

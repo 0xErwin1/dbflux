@@ -1,3 +1,4 @@
+#![recursion_limit = "2048"]
 //! `dbflux_ui` — GPUI UI layer for DBFlux.
 //!
 //! This crate contains all GPUI-dependent code:

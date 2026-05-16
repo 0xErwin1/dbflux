@@ -757,7 +757,8 @@ impl AuditDocument {
     fn initial_time_range(source: &AuditDocumentSource) -> Option<usize> {
         match source {
             AuditDocumentSource::ExternalEventStream { .. } => None,
-            AuditDocumentSource::Internal { .. } => Some(4),
+            // Index 3 = Last24Hours in the new preset mapping.
+            AuditDocumentSource::Internal { .. } => Some(3),
         }
     }
 
@@ -765,7 +766,7 @@ impl AuditDocument {
         let mut filters = AuditFilters::default();
 
         if !matches!(source, AuditDocumentSource::ExternalEventStream { .. }) {
-            let (start_ms, end_ms) = TimeRange::Last12Hours.to_filter_values();
+            let (start_ms, end_ms) = TimeRange::Last24Hours.to_filter_values();
             filters.start_ms = start_ms;
             filters.end_ms = end_ms;
         }
@@ -1369,11 +1370,11 @@ impl AuditDocument {
 
     fn time_range_for_index(index: usize) -> Option<TimeRange> {
         match index {
-            0 => Some(TimeRange::Last5min),
-            1 => Some(TimeRange::Last30min),
-            2 => Some(TimeRange::LastHour),
-            3 => Some(TimeRange::Last3Hours),
-            4 => Some(TimeRange::Last12Hours),
+            0 => Some(TimeRange::Last15min),
+            1 => Some(TimeRange::LastHour),
+            2 => Some(TimeRange::Last6Hours),
+            3 => Some(TimeRange::Last24Hours),
+            4 => Some(TimeRange::Last7Days),
             5 => Some(TimeRange::Custom),
             _ => None,
         }

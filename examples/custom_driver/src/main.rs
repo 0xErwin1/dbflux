@@ -436,12 +436,14 @@ fn execute_query(
             ColumnMeta {
                 name: "key".to_string(),
                 type_name: "TEXT".to_string(),
+                kind: dbflux_core::ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "value".to_string(),
                 type_name: "TEXT".to_string(),
+                kind: dbflux_core::ColumnKind::Unknown,
                 nullable: true,
                 is_primary_key: false,
             },

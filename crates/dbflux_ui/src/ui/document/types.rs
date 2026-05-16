@@ -36,6 +36,8 @@ pub enum DocumentKind {
     MongoCollection,
     // Global audit viewer
     Audit,
+    // Standalone chart document
+    Chart,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -61,6 +63,7 @@ pub enum DocumentIcon {
     Mongo,
     Collection,
     Audit,
+    Chart,
 }
 
 impl DocumentIcon {
@@ -75,6 +78,7 @@ impl DocumentIcon {
             Self::Mongo => "database",
             Self::Collection => "folder",
             Self::Audit => "shield",
+            Self::Chart => "bar-chart-2",
         }
     }
 }

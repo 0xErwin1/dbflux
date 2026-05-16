@@ -2,6 +2,8 @@
 
 mod add_member_modal;
 mod audit;
+pub mod chart;
+pub mod chart_document;
 mod chrome;
 mod code;
 mod data_document;
@@ -21,6 +23,7 @@ mod task_runner;
 mod types;
 
 pub use audit::AuditDocument;
+pub use chart_document::ChartDocument;
 pub use code::CodeDocument;
 pub use data_document::DataDocument;
 pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};

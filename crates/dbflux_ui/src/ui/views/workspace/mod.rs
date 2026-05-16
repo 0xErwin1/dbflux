@@ -7,6 +7,7 @@ mod render;
 pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 
 use crate::app::{AppStateChanged, AppStateEntity};
+use dbflux_components;
 use dbflux_core::observability::actions::CONFIG_CHANGE;
 
 #[cfg(feature = "mcp")]
@@ -200,6 +201,9 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
         },
         PaletteItem::Script { path, .. } => {
             Some(PaletteSelection::OpenScript { path: path.clone() })
+        }
+        PaletteItem::SavedChart { id, .. } => {
+            Some(PaletteSelection::OpenSavedChart { chart_id: *id })
         }
     }
 }
@@ -518,6 +522,9 @@ impl Workspace {
                 }
                 PaletteSelection::OpenScript { path } => {
                     this.open_script_from_path(path.clone(), cx);
+                }
+                PaletteSelection::OpenSavedChart { chart_id } => {
+                    this.open_saved_chart(*chart_id, window, cx);
                 }
             },
         )
@@ -899,6 +906,12 @@ impl Workspace {
 
                         this.write_session_manifest(cx);
                     }
+                    TabManagerEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    } => {
+                        this.open_chart_from_query(query.clone(), *connection_id, window, cx);
+                    }
                     TabManagerEvent::Opened(_)
                     | TabManagerEvent::Closed(_)
                     | TabManagerEvent::Reordered => {
@@ -1197,6 +1210,8 @@ impl Workspace {
             PaletteCommand::new("refresh_mcp_governance", "Refresh MCP Governance", "View"),
             PaletteCommand::new("open_audit_viewer", "Open Audit Viewer", "View")
                 .with_shortcut(SC.open_audit_viewer),
+            // Charts
+            PaletteCommand::new("open_saved_chart", "Open Chart...", "Charts"),
         ]
     }
 

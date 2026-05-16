@@ -105,6 +105,34 @@ impl QueryRequest {
 /// A single row of query results.
 pub type Row = Vec<Value>;
 
+/// Semantic classification of a result column.
+///
+/// Drivers populate this from their native type information. The chart engine
+/// relies on this seam to detect time and numeric columns without inspecting
+/// `type_name` strings or driver identifiers. `Unknown` is an explicit choice —
+/// no `Default` impl is provided so every construction site opts in consciously.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ColumnKind {
+    /// A date/time or timestamp column.
+    Timestamp,
+    /// A floating-point numeric column.
+    Float,
+    /// An integer numeric column.
+    Integer,
+    /// A text/string column.
+    Text,
+    /// The driver could not classify this column.
+    Unknown,
+}
+
+/// Returns `ColumnKind::Unknown`. Used as a serde default so that JSON
+/// fixtures serialised before this field was introduced deserialise cleanly.
+pub fn default_column_kind_unknown() -> ColumnKind {
+    ColumnKind::Unknown
+}
+
 /// Metadata for a result column.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnMeta {
@@ -113,6 +141,14 @@ pub struct ColumnMeta {
 
     /// Database-specific type name (e.g., "varchar", "int4", "TEXT").
     pub type_name: String,
+
+    /// Semantic classification inferred from the driver's native type system.
+    ///
+    /// The chart engine uses this to detect `Timestamp` (X axis) and
+    /// `Float`/`Integer` (Y axis) candidates without inspecting `type_name`.
+    /// Callers that do not have enough type information should pass `Unknown`.
+    #[serde(default = "default_column_kind_unknown")]
+    pub kind: ColumnKind,
 
     /// Whether the column allows NULL values.
     pub nullable: bool,

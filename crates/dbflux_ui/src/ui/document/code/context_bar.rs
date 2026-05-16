@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui::AsyncUpdateResultExt;
+use crate::ui::document::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
 use dbflux_components::primitives::{Icon, Text, focus_frame};
 
@@ -386,6 +387,10 @@ impl CodeDocument {
                 end_ms,
                 query_mode,
             });
+
+            if !self.result_tabs.is_empty() {
+                self.pending_chart_reexecute = true;
+            }
         }
 
         cx.emit(DocumentEvent::MetaChanged);
@@ -1134,25 +1139,37 @@ impl CodeDocument {
         let show_schema = self.should_show_schema_dropdown(cx);
         let source_spec = self.current_source_context_spec(cx);
 
+        // When the active result grid is in Chart mode the chart toolbar
+        // renders its own RANGE chips; hide the time-range widget here.
+        let is_chart_mode = self
+            .active_result_index
+            .and_then(|i| self.result_tabs.get(i))
+            .map(|t| t.grid.read(cx).result_view_mode() == ResultViewMode::Chart)
+            .unwrap_or(false);
+
         // Determine whether the custom date-range picker is active.  When it
         // is, the picker + hour/minute dropdowns + Apply button are rendered
         // on a dedicated second row so they don't overflow the bar width.
-        let custom_range_info = self.source_time_range_panel.as_ref().and_then(|p| {
-            let panel = p.read(cx);
-            let is_custom = panel.selected_time_range == Some(TimeRange::Custom);
+        // Hidden in Chart mode (chart toolbar covers the range selection).
+        let custom_range_info = (!is_chart_mode)
+            .then_some(())
+            .and(self.source_time_range_panel.as_ref())
+            .and_then(|p| {
+                let panel = p.read(cx);
+                let is_custom = panel.selected_time_range == Some(TimeRange::Custom);
 
-            is_custom.then(|| {
-                (
-                    p.clone(),
-                    panel.custom_date_range_picker.clone(),
-                    panel.custom_start_hour_dropdown.clone(),
-                    panel.custom_start_minute_dropdown.clone(),
-                    panel.custom_end_hour_dropdown.clone(),
-                    panel.custom_end_minute_dropdown.clone(),
-                    panel.can_apply_custom_range(cx),
-                )
-            })
-        });
+                is_custom.then(|| {
+                    (
+                        p.clone(),
+                        panel.custom_date_range_picker.clone(),
+                        panel.custom_start_hour_dropdown.clone(),
+                        panel.custom_start_minute_dropdown.clone(),
+                        panel.custom_end_hour_dropdown.clone(),
+                        panel.custom_end_minute_dropdown.clone(),
+                        panel.can_apply_custom_range(cx),
+                    )
+                })
+            });
 
         // Build the primary (always-visible) controls row.
         // flex_wrap() allows controls to wrap to the next line on narrow viewports
@@ -1231,17 +1248,22 @@ impl CodeDocument {
                         cx,
                     )));
 
-                // Time-range preset dropdown — always on the main row.
+                // Time-range preset dropdown — always on the main row, unless the
+                // active result grid is in Chart mode (the chart toolbar has its own
+                // RANGE chips in that case).
                 // The custom date-range controls are on the second row (below).
                 let el = el.when_some(
-                    self.source_time_range_panel.as_ref().map(|p| {
-                        let panel = p.read(cx);
-                        let dropdown = panel.dropdown_time_range.clone();
-                        let label = source_spec
-                            .map(|s| s.start_label.clone())
-                            .unwrap_or_else(|| "Time".to_string());
-                        (dropdown, label)
-                    }),
+                    (!is_chart_mode)
+                        .then_some(self.source_time_range_panel.as_ref())
+                        .flatten()
+                        .map(|p| {
+                            let panel = p.read(cx);
+                            let dropdown = panel.dropdown_time_range.clone();
+                            let label = source_spec
+                                .map(|s| s.start_label.clone())
+                                .unwrap_or_else(|| "Time".to_string());
+                            (dropdown, label)
+                        }),
                     |el, (dropdown, label)| {
                         el.child(div().flex_none().child(Text::caption(label)))
                             .child(
@@ -1255,42 +1277,46 @@ impl CodeDocument {
 
                 // Text-input fallback when there is no time-range panel (specs
                 // without start/end labels — not InfluxDB but kept for generality).
-                el.when(self.source_time_range_panel.is_none(), |el| {
-                    el.child(
-                        div().flex_none().child(Text::caption(
-                            source_spec
-                                .map(|spec| spec.start_label.clone())
-                                .unwrap_or_else(|| "Start".to_string()),
-                        )),
-                    )
-                    .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
-                        context_slot_is_keyboard_focused(
-                            self.focus_mode,
-                            self.context_bar_slot,
-                            ContextBarSlot::SourceStart,
-                        ),
-                        Some(theme.ring),
-                        control_shell(Input::new(&self.source_start_input), cx),
-                        cx,
-                    )))
-                    .child(
-                        div().flex_none().child(Text::caption(
-                            source_spec
-                                .map(|spec| spec.end_label.clone())
-                                .unwrap_or_else(|| "End".to_string()),
-                        )),
-                    )
-                    .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
-                        context_slot_is_keyboard_focused(
-                            self.focus_mode,
-                            self.context_bar_slot,
-                            ContextBarSlot::SourceEnd,
-                        ),
-                        Some(theme.ring),
-                        control_shell(Input::new(&self.source_end_input), cx),
-                        cx,
-                    )))
-                })
+                // Also hidden in Chart mode (chart toolbar covers this).
+                el.when(
+                    !is_chart_mode && self.source_time_range_panel.is_none(),
+                    |el| {
+                        el.child(
+                            div().flex_none().child(Text::caption(
+                                source_spec
+                                    .map(|spec| spec.start_label.clone())
+                                    .unwrap_or_else(|| "Start".to_string()),
+                            )),
+                        )
+                        .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
+                            context_slot_is_keyboard_focused(
+                                self.focus_mode,
+                                self.context_bar_slot,
+                                ContextBarSlot::SourceStart,
+                            ),
+                            Some(theme.ring),
+                            control_shell(Input::new(&self.source_start_input), cx),
+                            cx,
+                        )))
+                        .child(
+                            div().flex_none().child(Text::caption(
+                                source_spec
+                                    .map(|spec| spec.end_label.clone())
+                                    .unwrap_or_else(|| "End".to_string()),
+                            )),
+                        )
+                        .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
+                            context_slot_is_keyboard_focused(
+                                self.focus_mode,
+                                self.context_bar_slot,
+                                ContextBarSlot::SourceEnd,
+                            ),
+                            Some(theme.ring),
+                            control_shell(Input::new(&self.source_end_input), cx),
+                            cx,
+                        )))
+                    },
+                )
             })
             .when(!show_source_controls && show_db, |el| {
                 el.child(div().flex_none().child(Text::caption("Database:")))

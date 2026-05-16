@@ -24,11 +24,22 @@
 //! so the caller can distinguish rows from different statements. When only one
 //! statement is present the column is omitted to avoid cluttering the output.
 
-use dbflux_core::{ColumnMeta, Value};
+use dbflux_core::{ColumnKind, ColumnMeta, Value};
 use serde_json::Value as Json;
 
 use super::{ParseError, build_query_result, infer_column_type};
 use dbflux_core::QueryResult;
+
+/// Map an InfluxDB type name string to a semantic `ColumnKind`.
+fn kind_from_influx_type_name(s: &str) -> ColumnKind {
+    match s {
+        "timestamp" | "timestamp_ms" | "time" | "datetime" => ColumnKind::Timestamp,
+        "integer" => ColumnKind::Integer,
+        "double" | "float" | "float64" => ColumnKind::Float,
+        "text" | "string" => ColumnKind::Text,
+        _ => ColumnKind::Unknown,
+    }
+}
 
 const SERIES_COLUMN: &str = "_series";
 const STATEMENT_INDEX_COLUMN: &str = "statement_index";
@@ -125,6 +136,7 @@ pub fn parse_influxql_json(body: &str) -> Result<QueryResult, ParseError> {
                     all_columns.push(ColumnMeta {
                         name: STATEMENT_INDEX_COLUMN.to_string(),
                         type_name: "integer".to_string(),
+                        kind: ColumnKind::Integer,
                         nullable: false,
                         is_primary_key: false,
                     });
@@ -134,6 +146,7 @@ pub fn parse_influxql_json(body: &str) -> Result<QueryResult, ParseError> {
                     all_columns.push(ColumnMeta {
                         name: SERIES_COLUMN.to_string(),
                         type_name: "text".to_string(),
+                        kind: ColumnKind::Text,
                         nullable: false,
                         is_primary_key: false,
                     });
@@ -143,6 +156,7 @@ pub fn parse_influxql_json(body: &str) -> Result<QueryResult, ParseError> {
                     all_columns.push(ColumnMeta {
                         name: name.clone(),
                         type_name: type_name.clone(),
+                        kind: kind_from_influx_type_name(type_name),
                         nullable: true,
                         is_primary_key: name == "time",
                     });
@@ -259,6 +273,32 @@ fn json_to_value(json: &Json, type_name: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn time_column_populates_column_kind_timestamp() {
+        // The inferred type for InfluxDB's `time` column is `timestamp_ms`;
+        // this must map to `ColumnKind::Timestamp` so the chart engine picks
+        // it as the time axis and renders formatted time labels.
+        let body = r#"{
+            "results": [{
+                "statement_id": 0,
+                "series": [{
+                    "name": "cpu",
+                    "columns": ["time", "value"],
+                    "values": [[1704067200000, 0.5]]
+                }]
+            }]
+        }"#;
+
+        let result = parse_influxql_json(body).expect("parse must succeed");
+        let time_col = result
+            .columns
+            .iter()
+            .find(|c| c.name == "time")
+            .expect("time column must be present");
+        assert_eq!(time_col.kind, ColumnKind::Timestamp);
+        assert_eq!(time_col.type_name, "timestamp_ms");
+    }
 
     // C.3.1 — single series
     #[test]

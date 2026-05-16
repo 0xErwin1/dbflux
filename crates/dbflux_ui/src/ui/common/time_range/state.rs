@@ -7,14 +7,13 @@ use dbflux_core::chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, 
 
 /// Quick-select presets for a time window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)]
 pub enum TimeRange {
-    Last5min,
-    Last30min,
+    Last15min,
     LastHour,
-    Last3Hours,
+    Last6Hours,
     #[default]
-    Last12Hours,
+    Last24Hours,
+    Last7Days,
     Custom,
 }
 
@@ -38,11 +37,11 @@ impl TimeRange {
             .unwrap_or(0);
 
         match self {
-            TimeRange::Last5min => (Some(now - 5 * 60 * 1000), None),
-            TimeRange::Last30min => (Some(now - 30 * 60 * 1000), None),
-            TimeRange::LastHour => (Some(now - 60 * 60 * 1000), None),
-            TimeRange::Last3Hours => (Some(now - 3 * 60 * 60 * 1000), None),
-            TimeRange::Last12Hours => (Some(now - 12 * 60 * 60 * 1000), None),
+            TimeRange::Last15min => (Some(now - 15 * 60_000), None),
+            TimeRange::LastHour => (Some(now - 60 * 60_000), None),
+            TimeRange::Last6Hours => (Some(now - 6 * 60 * 60_000), None),
+            TimeRange::Last24Hours => (Some(now - 24 * 60 * 60_000), None),
+            TimeRange::Last7Days => (Some(now - 7 * 24 * 60 * 60_000), None),
             TimeRange::Custom => (None, None),
         }
     }
@@ -129,11 +128,11 @@ mod tests {
             .unwrap_or(0);
 
         let cases = [
-            (TimeRange::Last5min, 5 * 60 * 1000),
-            (TimeRange::Last30min, 30 * 60 * 1000),
-            (TimeRange::LastHour, 60 * 60 * 1000),
-            (TimeRange::Last3Hours, 3 * 60 * 60 * 1000),
-            (TimeRange::Last12Hours, 12 * 60 * 60 * 1000),
+            (TimeRange::Last15min, 15 * 60_000),
+            (TimeRange::LastHour, 60 * 60_000),
+            (TimeRange::Last6Hours, 6 * 60 * 60_000),
+            (TimeRange::Last24Hours, 24 * 60 * 60_000),
+            (TimeRange::Last7Days, 7 * 24 * 60 * 60_000),
         ];
 
         for (range, expected_ms) in cases {

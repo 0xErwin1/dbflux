@@ -2434,9 +2434,16 @@ dependencies = [
 name = "dbflux_components"
 version = "0.6.0-dev.2"
 dependencies = [
+ "chrono",
  "dbflux_core",
  "gpui",
  "gpui-component",
+ "log",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -2510,7 +2517,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_influxdb"
-version = "0.6.0-dev.0"
+version = "0.6.0-dev.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",

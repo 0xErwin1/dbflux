@@ -21,7 +21,7 @@ use aws_sdk_dynamodb::{Client, types::TableDescription};
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, CollectionInfo,
-    CollectionRef, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
+    CollectionRef, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
     ConnectionProfile, DYNAMODB_FORM, DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig,
     DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DocumentConnection,
     DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
@@ -2977,6 +2977,7 @@ fn items_to_query_result(
                 ColumnMeta {
                     name: name.clone(),
                     type_name: "DynamoDB".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: true,
                     is_primary_key,
                 }
@@ -2996,6 +2997,7 @@ fn items_to_query_result(
             ColumnMeta {
                 name: name.clone(),
                 type_name: "DynamoDB".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: true,
                 is_primary_key,
             }

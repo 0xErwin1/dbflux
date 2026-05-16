@@ -783,6 +783,24 @@ impl CommandDispatcher for Workspace {
                 false
             }
 
+            Command::OpenSavedChart => {
+                // Build a palette populated only with saved chart items,
+                // then open the command palette so the user can fuzzy-search them.
+                let chart_items = self.build_saved_chart_palette_items(cx);
+                if chart_items.is_empty() {
+                    Toast::warning("No saved charts for the current profile")
+                        .meta_right(now_hms())
+                        .push(cx);
+                } else {
+                    // Prepend the chart items before any other items so the
+                    // palette opens showing only charts (the user searched "open chart").
+                    self.command_palette.update(cx, |palette, cx| {
+                        palette.open_with_items(chart_items, window, cx);
+                    });
+                }
+                true
+            }
+
             Command::OpenTabMenu => {
                 self.tab_bar
                     .update(cx, |tb, cx| tb.open_context_menu_for_active(cx));

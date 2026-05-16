@@ -53,6 +53,17 @@ pub enum PaletteItem {
         /// Path relative to the scripts root directory (for display/search).
         relative_path: String,
     },
+    /// A saved chart record surfaced by the "Open chart..." command.
+    SavedChart {
+        id: Uuid,
+        name: String,
+        profile_name: String,
+        profile_id: Uuid,
+        /// `true` when the chart's source is `Collection` (browse mode).
+        /// The palette appends a `[browse]` suffix to help users distinguish
+        /// collection charts from query charts.
+        is_collection_source: bool,
+    },
 }
 
 /// Schema resource variants surfaced by connected profiles.
@@ -91,6 +102,9 @@ impl PaletteItem {
         match self {
             Self::Action { category, name, .. } => format!("{} {}", category, name),
             Self::Connection { name, .. } => format!("Connection {}", name),
+            Self::SavedChart {
+                name, profile_name, ..
+            } => format!("Chart {} {}", name, profile_name),
             Self::Resource(r) => match r {
                 ResourceItem::Table {
                     profile_name,
@@ -151,6 +165,18 @@ impl PaletteItem {
         match self {
             Self::Action { category, name, .. } => (category.to_string(), name.to_string()),
             Self::Connection { name, .. } => ("Connection".to_string(), name.clone()),
+            Self::SavedChart {
+                name,
+                is_collection_source,
+                ..
+            } => {
+                let display = if *is_collection_source {
+                    format!("{} [browse]", name)
+                } else {
+                    name.clone()
+                };
+                ("Chart".to_string(), display)
+            }
             Self::Resource(r) => match r {
                 ResourceItem::Table { name, .. } => ("Table".to_string(), name.clone()),
                 ResourceItem::Collection { name, .. } => ("Collection".to_string(), name.clone()),
@@ -168,8 +194,9 @@ impl PaletteItem {
         match self {
             Self::Action { .. } => 0,
             Self::Connection { .. } => 1,
-            Self::Resource(_) => 2,
-            Self::Script { .. } => 3,
+            Self::SavedChart { .. } => 2,
+            Self::Resource(_) => 3,
+            Self::Script { .. } => 4,
         }
     }
 
@@ -177,6 +204,7 @@ impl PaletteItem {
     pub fn qualifier(&self) -> Option<String> {
         match self {
             Self::Action { shortcut, .. } => shortcut.map(|s| s.to_string()),
+            Self::SavedChart { profile_name, .. } => Some(profile_name.clone()),
             Self::Resource(r) => match r {
                 ResourceItem::Table {
                     profile_name,
@@ -270,6 +298,7 @@ const VISIBLE_ITEMS: usize = 8;
 enum PaletteSection {
     Connections,
     Commands,
+    Charts,
     Tables,
     Scripts,
 }
@@ -279,6 +308,7 @@ impl PaletteSection {
         match self {
             Self::Connections => "Connections",
             Self::Commands => "Commands",
+            Self::Charts => "Charts",
             Self::Tables => "Tables",
             Self::Scripts => "Scripts",
         }
@@ -288,6 +318,7 @@ impl PaletteSection {
         match item {
             PaletteItem::Connection { .. } => Self::Connections,
             PaletteItem::Action { .. } => Self::Commands,
+            PaletteItem::SavedChart { .. } => Self::Charts,
             PaletteItem::Resource(_) => Self::Tables,
             PaletteItem::Script { .. } => Self::Scripts,
         }
@@ -323,7 +354,7 @@ fn palette_item_name(
     };
 
     match item {
-        PaletteItem::Resource(_) | PaletteItem::Script { .. } => {
+        PaletteItem::Resource(_) | PaletteItem::Script { .. } | PaletteItem::SavedChart { .. } => {
             MonoLabel::new(name).color(color).into_any_element()
         }
         _ => Body::new(name).color(color).into_any_element(),
@@ -558,6 +589,9 @@ pub enum PaletteSelection {
     },
     OpenScript {
         path: PathBuf,
+    },
+    OpenSavedChart {
+        chart_id: Uuid,
     },
 }
 
@@ -810,6 +844,9 @@ impl CommandPalette {
                 PaletteItem::Script { path, .. } => {
                     PaletteSelection::OpenScript { path: path.clone() }
                 }
+                PaletteItem::SavedChart { id, .. } => {
+                    PaletteSelection::OpenSavedChart { chart_id: *id }
+                }
             };
 
             self.visible = false;
@@ -836,7 +873,8 @@ impl CommandPalette {
             }),
             PaletteItem::Connection { .. }
             | PaletteItem::Resource(_)
-            | PaletteItem::Script { .. } => item
+            | PaletteItem::Script { .. }
+            | PaletteItem::SavedChart { .. } => item
                 .qualifier()
                 .map(|q| palette_qualifier_text(q, is_selected, theme).into_any_element()),
         };
@@ -909,6 +947,7 @@ impl Render for CommandPalette {
         let section_order = [
             PaletteSection::Connections,
             PaletteSection::Commands,
+            PaletteSection::Charts,
             PaletteSection::Tables,
             PaletteSection::Scripts,
         ];
