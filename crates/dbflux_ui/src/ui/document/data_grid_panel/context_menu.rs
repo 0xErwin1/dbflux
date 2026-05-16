@@ -578,8 +578,12 @@ impl DataGridPanel {
         //   [Order trigger]?          (if has_order, shares separator with filter)
         //   [sep + GenSQL trigger]?   (if has_generate_sql)
         //   [sep + CopyQuery trigger]?(if has_copy_query)
-        let base_items =
-            Self::build_context_menu_items(is_editable, is_document_view, has_row_target, can_chart);
+        let base_items = Self::build_context_menu_items(
+            is_editable,
+            is_document_view,
+            has_row_target,
+            can_chart,
+        );
         let base_count = base_items.len();
 
         // Filter: sep(1) + filter(1) = 2; Order adds 1 more
@@ -1268,8 +1272,12 @@ impl DataGridPanel {
         // Build visible menu items list for keyboard navigation
         let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
         let can_chart = self.can_chart_from_context_menu(cx);
-        let visible_items =
-            Self::build_context_menu_items(is_editable, menu.is_document_view, has_row_target, can_chart);
+        let visible_items = Self::build_context_menu_items(
+            is_editable,
+            menu.is_document_view,
+            has_row_target,
+            can_chart,
+        );
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
 
@@ -3905,7 +3913,10 @@ impl DataGridPanel {
             return false;
         }
 
-        matches!(detect_chart_columns(&self.result), dbflux_components::chart::ChartDetection::Ok { .. })
+        matches!(
+            detect_chart_columns(&self.result),
+            dbflux_components::chart::ChartDetection::Ok { .. }
+        )
     }
 
     pub(super) fn handle_copy_as_query(
