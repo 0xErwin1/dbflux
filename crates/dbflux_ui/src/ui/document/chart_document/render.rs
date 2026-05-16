@@ -168,67 +168,76 @@ impl Render for ChartDocument {
             AppIcon::ChevronRight
         };
 
-        let header_bar = div()
-            .flex()
-            .flex_row()
-            .flex_none()
-            .items_center()
-            .h(Heights::TOOLBAR)
-            .px(Spacing::MD)
-            .gap(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .id("chart-doc-drawer-toggle")
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.toggle_editor_drawer(cx);
-                    }))
-                    .child(Icon::new(chevron_icon).small())
-                    .child(Text::label(title)),
-            )
-            .child(
-                Button::new("run-query")
-                    .label(if is_executing { "Running…" } else { "Run" })
-                    .small()
-                    .with_variant(ButtonVariant::Primary)
-                    .disabled(is_executing)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.request_reexecute(window, cx);
-                    })),
-            )
-            .child(div().flex_grow())
-            .child(
-                Button::new("save-chart").label("Save").small().on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.open_name_prompt(window, cx);
-                    }),
-                ),
-            );
-
-        let editor_drawer_body = drawer_open.then(|| {
-            let input_for_click = editor_input.clone();
+        let header =
             div()
-                .h(px(180.0))
-                .min_h(px(180.0))
-                .flex_none()
+                .flex()
+                .flex_col()
                 .border_b_1()
                 .border_color(theme.border)
-                .bg(theme.background)
-                .overflow_hidden()
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    input_for_click.update(cx, |state, cx| {
-                        state.focus(window, cx);
-                    });
-                })
-                .child(GpuiInput::new(&editor_input).h_full().w_full())
-                .into_any_element()
-        });
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .h(Heights::TOOLBAR)
+                        .px(Spacing::MD)
+                        .gap(Spacing::SM)
+                        .child(
+                            div()
+                                .id("chart-doc-drawer-toggle")
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(Spacing::XS)
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _window, cx| {
+                                    this.toggle_editor_drawer(cx);
+                                }))
+                                .child(Icon::new(chevron_icon).small())
+                                .child(Text::label(title)),
+                        )
+                        .child(
+                            Button::new("run-query")
+                                .label(if is_executing { "Running…" } else { "Run" })
+                                .small()
+                                .with_variant(ButtonVariant::Primary)
+                                .disabled(is_executing)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.request_reexecute(window, cx);
+                                })),
+                        )
+                        .child(div().flex_grow())
+                        .child(Button::new("save-chart").label("Save").small().on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.open_name_prompt(window, cx);
+                            }),
+                        )),
+                )
+                .when(drawer_open, |el| {
+                    let input_for_click = editor_input.clone();
+                    let mono_font = cx.theme().mono_font_family.clone();
+                    let mono_size = cx.theme().mono_font_size;
+                    el.child(
+                        div()
+                            .h(px(180.0))
+                            .flex_none()
+                            .flex()
+                            .flex_col()
+                            .border_t_1()
+                            .border_color(theme.border)
+                            .font_family(mono_font)
+                            .text_size(mono_size)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                move |_, window, cx| {
+                                    input_for_click.update(cx, |state, cx| {
+                                        state.focus(window, cx);
+                                    });
+                                },
+                            )
+                            .child(GpuiInput::new(&editor_input).h_full()),
+                    )
+                });
 
         // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / PNG / Save --
         let chart_toolbar_row = {
@@ -379,8 +388,7 @@ impl Render for ChartDocument {
             .flex_col()
             .size_full()
             .track_focus(&focus_handle)
-            .child(header_bar)
-            .when_some(editor_drawer_body, |el, body| el.child(body))
+            .child(header)
             .child(chart_toolbar_row)
             .child(axis_row)
             .child(div().flex_grow().min_h_0().child(chart_area))
