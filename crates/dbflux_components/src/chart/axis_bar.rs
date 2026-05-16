@@ -15,7 +15,10 @@
 //!   kinds as a forward-compatibility seam.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, ElementId, MouseButton, SharedString, Window, div, px};
+use gpui::{
+    AnyElement, App, Corner, ElementId, MouseButton, SharedString, Window, anchored, deferred,
+    div, point, px,
+};
 
 use crate::chart::spec::{AggKind, BindingSpec};
 use dbflux_core::{ColumnKind, ColumnMeta};
@@ -329,11 +332,14 @@ fn pill_group(
 
     if let Some(picker_el) = picker {
         container = container.child(
-            div()
-                .absolute()
-                .top(px(24.0))
-                .left(px(0.0))
-                .child(picker_el),
+            deferred(
+                anchored()
+                    .anchor(Corner::TopLeft)
+                    .offset(point(px(0.0), px(24.0)))
+                    .snap_to_window()
+                    .child(picker_el),
+            )
+            .with_priority(1),
         );
     }
 
@@ -544,6 +550,7 @@ fn picker_container(id: impl Into<ElementId>, rows: Vec<AnyElement>) -> impl Int
         .rounded(px(4.0))
         .shadow_lg()
         .py(px(2.0))
+        .occlude()
         .children(rows)
 }
 
