@@ -1478,19 +1478,22 @@ impl DataGridPanel {
                 // Build chart_view on first render before checking whether it exists.
                 let _ = self.ensure_chart_view(cx);
 
-                let (has_chart_view, rail_open, chart_view_entity, hovered_source) = self
+                let (has_chart_view, rail_open, chart_view_entity, hovered_point) = self
                     .chart_shell
                     .as_ref()
                     .map_or((false, false, None, None), |s| {
                         let shell = s.read(cx);
-                        let source = shell.hovered_source_row(cx);
+                        let point = shell.hovered_data_point(cx);
                         (
                             shell.chart_view().is_some(),
                             shell.chart_rail_open,
                             shell.chart_view().cloned(),
-                            source,
+                            point,
                         )
                     });
+
+                let hovered_source = hovered_point
+                    .and_then(|point| self.chart_host_source_for_point(point, cx));
 
                 // The chart occupies 100% of the area regardless of whether the rail
                 // is open. The rail floats as an absolute-positioned overlay on the
