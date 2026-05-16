@@ -1167,7 +1167,7 @@ impl DataGridPanel {
                     .child(label)
             };
 
-        div()
+        let toolbar_row = div()
             .flex()
             .flex_row()
             .items_center()
@@ -1268,37 +1268,6 @@ impl DataGridPanel {
                     }),
                 )
             })
-            // Configure button (Issue 1: toggling same tab closes rail)
-            .child({
-                let is_configure_active = rail_open && rail_tab == ChartRailTab::Configure;
-                toolbar_btn(
-                    "chart-toolbar-configure",
-                    AppIcon::Settings,
-                    "Configure",
-                    is_configure_active,
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        if let Some(shell) = &this.chart_shell {
-                            let open = shell.read(cx).chart_rail_open;
-                            let tab = shell.read(cx).chart_rail_tab;
-                            if open && tab == ChartRailTab::Configure {
-                                shell.update(cx, |s, _| {
-                                    s.chart_rail_open = false;
-                                });
-                            } else {
-                                shell.update(cx, |s, _| {
-                                    s.chart_rail_open = true;
-                                    s.chart_rail_tab = ChartRailTab::Configure;
-                                });
-                                this.prime_chart_rail_picker_from_spec(cx);
-                            }
-                        }
-                        cx.notify();
-                    }),
-                )
-            })
             // PNG export (stub — shows an info toast)
             .child(
                 toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG", false).on_mouse_down(
@@ -1310,6 +1279,103 @@ impl DataGridPanel {
                         });
                     }),
                 ),
+            );
+
+        // AxisBar row: shown below the main toolbar when a chart view is live.
+        // Reads bindings and open-pill state from the shell.
+        let (bindings, open_pill, columns) = self
+            .chart_shell
+            .as_ref()
+            .map(|s| {
+                let shell = s.read(cx);
+                (
+                    shell.active_bindings(),
+                    shell.axis_open_pill,
+                    self.result.columns.clone(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    dbflux_components::chart::BindingSpec::default(),
+                    None,
+                    Vec::new(),
+                )
+            });
+
+        let shell_for_pill = self.chart_shell.clone();
+        let shell_for_x = self.chart_shell.clone();
+        let shell_for_y = self.chart_shell.clone();
+        let shell_for_group = self.chart_shell.clone();
+        let shell_for_agg = self.chart_shell.clone();
+
+        let axis_row = dbflux_components::chart::axis_bar_element(
+            &bindings,
+            &columns,
+            open_pill,
+            move |pill, _window, cx| {
+                if let Some(shell) = &shell_for_pill {
+                    shell.update(cx, |s, cx| s.toggle_axis_pill(pill, cx));
+                }
+            },
+            move |col_idx, _window, cx| {
+                if let Some(shell) = &shell_for_x {
+                    shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        b.x = col_idx;
+                        s.apply_bindings(b, cx);
+                    });
+                }
+            },
+            move |col_idx, checked, _window, cx| {
+                if let Some(shell) = &shell_for_y {
+                    shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        if checked {
+                            if !b.y.contains(&col_idx) {
+                                b.y.push(col_idx);
+                            }
+                        } else {
+                            b.y.retain(|&i| i != col_idx);
+                        }
+                        s.apply_bindings(b, cx);
+                    });
+                }
+            },
+            move |group_col, _window, cx| {
+                if let Some(shell) = &shell_for_group {
+                    shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        b.group_by = group_col;
+                        s.apply_bindings(b, cx);
+                    });
+                }
+            },
+            move |agg, _window, cx| {
+                if let Some(shell) = &shell_for_agg {
+                    shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        b.aggregation = agg;
+                        s.apply_bindings(b, cx);
+                    });
+                }
+            },
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(toolbar_row)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .h(px(28.0))
+                    .px(Spacing::SM)
+                    .bg(theme.tab_bar)
+                    .child(axis_row),
             )
     }
 
@@ -1948,25 +2014,16 @@ impl DataGridPanel {
         picker.child(apply_btn)
     }
 
-    /// Render the 320px Configure/Stats rail shown when `chart_rail_open` is true.
+    /// Render the 320px Stats rail shown when `chart_rail_open` is true.
     ///
-    /// The active tab is controlled by the chart toolbar buttons (Stats / Configure).
-    /// There is no in-dock tab header — the toolbar is the single source of truth.
+    /// The Configure tab was removed in Phase E (replaced by AxisBar pills).
+    /// Only the Stats tab remains accessible via the Stats toolbar button.
     fn render_chart_rail(
         &mut self,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let active_tab = self
-            .chart_shell
-            .as_ref()
-            .map(|s| s.read(cx).chart_rail_tab)
-            .unwrap_or(ChartRailTab::Configure);
-
-        let body = match active_tab {
-            ChartRailTab::Configure => self.render_rail_configure_tab(theme, cx).into_any_element(),
-            ChartRailTab::Stats => self.render_rail_stats_tab(theme, cx).into_any_element(),
-        };
+        let body = self.render_rail_stats_tab(theme, cx).into_any_element();
 
         div()
             .absolute()
@@ -2026,9 +2083,12 @@ impl DataGridPanel {
             .child(div().flex_1().text_size(px(11.0)).child(v))
     }
 
+    #[allow(dead_code)]
     /// Configure tab body: WHY paragraph, X-column selector, Y-column
     /// checkboxes with inline avg/last, AXIS & STACKING read-only markers,
     /// and Reset-to-auto + Apply footer buttons.
+    ///
+    /// Preserved for reference only. Replaced by `AxisBar` as of Phase E.
     fn render_rail_configure_tab(
         &mut self,
         theme: &gpui_component::theme::Theme,

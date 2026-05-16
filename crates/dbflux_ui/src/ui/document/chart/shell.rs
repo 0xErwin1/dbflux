@@ -15,7 +15,8 @@ pub enum ChartRailTab {
 
 use super::host::{ChartHost, HostAdapter};
 use dbflux_components::chart::{
-    ChartDetection, ChartSpec, ChartView, ManualChartSelection, detect_chart_columns,
+    AxisPill, BindingSpec, ChartDetection, ChartSpec, ChartView, ManualChartSelection,
+    detect_chart_columns,
 };
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult};
 use gpui::prelude::*;
@@ -72,17 +73,23 @@ pub struct ChartShell {
     pub(crate) chart_picker_y_checked: Vec<bool>,
 
     // ---- rail state ----
-    /// Whether the Configure/Stats rail is open.
+    /// Whether the Stats rail is open.
     pub(crate) chart_rail_open: bool,
 
-    /// Active tab inside the rail.
+    /// Active tab inside the rail (Stats only after AxisBar landing).
     pub(crate) chart_rail_tab: ChartRailTab,
 
     /// Selected X-column index in the rail Configure picker.
+    /// Kept for backward compat; no longer driven by a UI tab.
     pub(crate) chart_rail_picker_x_col: usize,
 
     /// Checked state per Y-candidate column in the rail Configure picker.
+    /// Kept for backward compat; no longer driven by a UI tab.
     pub(crate) chart_rail_picker_y_checked: Vec<bool>,
+
+    // ---- AxisBar state ----
+    /// Which AxisBar pill picker is currently open.
+    pub(crate) axis_open_pill: Option<AxisPill>,
 }
 
 impl ChartShell {
@@ -115,6 +122,7 @@ impl ChartShell {
             chart_rail_tab: ChartRailTab::Configure,
             chart_rail_picker_x_col: 0,
             chart_rail_picker_y_checked: Vec::new(),
+            axis_open_pill: None,
         }
     }
 
@@ -245,6 +253,83 @@ impl ChartShell {
     /// Returns the host adapter for this shell.
     pub fn host(&self) -> &HostAdapter {
         &self.host
+    }
+
+    /// Apply a new `BindingSpec` from the AxisBar without re-running the query.
+    ///
+    /// Stores the binding as a manual chart selection and clears the existing
+    /// `chart_view` so the next `ensure_chart_view` call rebuilds from the
+    /// new binding. Also closes any open AxisBar picker.
+    ///
+    /// The `QueryResult` is NOT required here; the host supplies it when calling
+    /// `ensure_chart_view`. When `bindings.y` is empty the chart will show the
+    /// degraded state on the next render.
+    pub fn apply_bindings(&mut self, bindings: BindingSpec, cx: &mut Context<Self>) {
+        // Always store the manual selection — even if y is empty — so the AxisBar
+        // pill labels stay consistent with what the user last picked.
+        self.chart_manual_selection = Some(ManualChartSelection {
+            x_col: bindings.x,
+            y_cols: bindings.y,
+        });
+
+        self.chart_view = None;
+        self.chart_view_observer = None;
+        self.axis_open_pill = None;
+        self.chart_hidden_series = HashSet::new();
+
+        cx.notify();
+    }
+
+    /// Toggle the open/closed state of an AxisBar pill picker.
+    ///
+    /// Clicking the same pill again closes it (toggle). Clicking a different
+    /// pill closes the previous one and opens the new one.
+    pub fn toggle_axis_pill(&mut self, pill: AxisPill, cx: &mut Context<Self>) {
+        if self.axis_open_pill == Some(pill) {
+            self.axis_open_pill = None;
+        } else {
+            self.axis_open_pill = Some(pill);
+        }
+        cx.notify();
+    }
+
+    /// Close any open AxisBar picker.
+    pub fn close_axis_picker(&mut self, cx: &mut Context<Self>) {
+        if self.axis_open_pill.is_some() {
+            self.axis_open_pill = None;
+            cx.notify();
+        }
+    }
+
+    /// Returns the current binding spec derived from the active chart selection.
+    ///
+    /// When a manual selection is set, the binding is derived from it. When
+    /// auto-detection is in effect, the binding uses the detected columns.
+    /// Returns a default `BindingSpec` when no result is available.
+    pub fn active_bindings(&self) -> BindingSpec {
+        if let Some(manual) = &self.chart_manual_selection {
+            BindingSpec {
+                x: manual.x_col,
+                y: manual.y_cols.clone(),
+                group_by: None,
+                filter: None,
+                aggregation: dbflux_components::chart::AggKind::None,
+            }
+        } else if let Some(ChartDetection::Ok {
+            time_col,
+            numeric_cols,
+        }) = &self.chart_detection
+        {
+            BindingSpec {
+                x: *time_col,
+                y: numeric_cols.clone(),
+                group_by: None,
+                filter: None,
+                aggregation: dbflux_components::chart::AggKind::None,
+            }
+        } else {
+            BindingSpec::default()
+        }
     }
 
     /// Reset the degraded-picker column selections for a new result.

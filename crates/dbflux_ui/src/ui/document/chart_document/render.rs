@@ -17,7 +17,7 @@ use super::ChartDocument;
 use crate::ui::components::toast::flush_pending_toast;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{Heights, Spacing};
-use dbflux_components::chart::ChartDetection;
+use dbflux_components::chart::{AxisPill, ChartDetection, axis_bar_element};
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::{Icon, Text};
 use gpui::prelude::*;
@@ -213,6 +213,79 @@ impl Render for ChartDocument {
                     })),
             );
 
+        // -- AxisBar row: shown when result is available --
+        let (bindings, open_pill, columns) = {
+            let shell = self.chart_shell.read(cx);
+            (
+                shell.active_bindings(),
+                shell.axis_open_pill,
+                self.last_result
+                    .as_ref()
+                    .map(|r| r.columns.clone())
+                    .unwrap_or_default(),
+            )
+        };
+
+        let chart_shell_for_pill = self.chart_shell.clone();
+        let chart_shell_for_x = self.chart_shell.clone();
+        let chart_shell_for_y = self.chart_shell.clone();
+        let chart_shell_for_group = self.chart_shell.clone();
+        let chart_shell_for_agg = self.chart_shell.clone();
+
+        let axis_bar = axis_bar_element(
+            &bindings,
+            &columns,
+            open_pill,
+            move |pill, _window, cx| {
+                chart_shell_for_pill.update(cx, |s, cx| s.toggle_axis_pill(pill, cx));
+            },
+            move |col_idx, _window, cx| {
+                chart_shell_for_x.update(cx, |s, cx| {
+                    let mut b = s.active_bindings();
+                    b.x = col_idx;
+                    s.apply_bindings(b, cx);
+                });
+            },
+            move |col_idx, checked, _window, cx| {
+                chart_shell_for_y.update(cx, |s, cx| {
+                    let mut b = s.active_bindings();
+                    if checked {
+                        if !b.y.contains(&col_idx) {
+                            b.y.push(col_idx);
+                        }
+                    } else {
+                        b.y.retain(|&i| i != col_idx);
+                    }
+                    s.apply_bindings(b, cx);
+                });
+            },
+            move |group_col, _window, cx| {
+                chart_shell_for_group.update(cx, |s, cx| {
+                    let mut b = s.active_bindings();
+                    b.group_by = group_col;
+                    s.apply_bindings(b, cx);
+                });
+            },
+            move |agg, _window, cx| {
+                chart_shell_for_agg.update(cx, |s, cx| {
+                    let mut b = s.active_bindings();
+                    b.aggregation = agg;
+                    s.apply_bindings(b, cx);
+                });
+            },
+        );
+
+        let axis_row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(px(28.0))
+            .px(Spacing::SM)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.secondary)
+            .child(axis_bar);
+
         // -- Root container --
         div()
             .flex()
@@ -221,6 +294,7 @@ impl Render for ChartDocument {
             .track_focus(&focus_handle)
             .child(header)
             .child(drawer)
+            .child(axis_row)
             .child(div().flex_grow().min_h_0().child(chart_area))
             .when_some(name_prompt_element, |el, modal| el.child(modal))
     }

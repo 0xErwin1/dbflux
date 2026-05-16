@@ -14,6 +14,7 @@
 //!    the canvas.
 
 pub mod axis;
+pub mod axis_bar;
 pub mod decimate;
 pub mod detect;
 pub mod engine;
@@ -21,6 +22,7 @@ pub mod legend;
 pub mod spec;
 pub mod stats;
 
+pub use axis_bar::{AxisPill, axis_bar_element};
 pub use detect::{ChartDetection, detect_chart_columns};
 pub use engine::{
     CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, CHART_PALETTE, ChartBuildError, ChartView,

@@ -141,6 +141,70 @@ pub struct ManualChartSelection {
 // ---------------------------------------------------------------------------
 
 impl ChartSpec {
+    /// Build a `ChartSpec` from an explicit `BindingSpec` and column metadata.
+    ///
+    /// Returns `None` when `bindings.x` is out of bounds or when all `bindings.y`
+    /// indices are out of bounds (producing an empty series list).
+    ///
+    /// The `bindings` value is preserved verbatim in the returned `ChartSpec`
+    /// so that the AxisBar can round-trip it without loss.
+    ///
+    /// # Axis kind inference
+    ///
+    /// The X axis kind is inferred from the column's `ColumnKind`:
+    /// - `Timestamp` → `AxisKind::Time`
+    /// - anything else → `AxisKind::Numeric`
+    pub fn from_bindings(
+        bindings: &BindingSpec,
+        columns: &[dbflux_core::ColumnMeta],
+        decimation_threshold: usize,
+    ) -> Option<Self> {
+        let x_col_meta = columns.get(bindings.x)?;
+
+        let axis_kind = if x_col_meta.kind == dbflux_core::ColumnKind::Timestamp {
+            AxisKind::Time
+        } else {
+            AxisKind::Numeric
+        };
+
+        let x_axis = AxisSpec {
+            column_index: bindings.x,
+            label: x_col_meta.name.clone(),
+            kind: axis_kind,
+            unit: None,
+        };
+
+        let series: Vec<SeriesSpec> = bindings
+            .y
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(slot, col_idx)| {
+                let meta = columns.get(col_idx)?;
+                Some(SeriesSpec {
+                    column_index: col_idx,
+                    label: meta.name.clone(),
+                    color_slot: slot as u8,
+                })
+            })
+            .collect();
+
+        if series.is_empty() {
+            return None;
+        }
+
+        let legend_visible = series.len() > 1;
+
+        Some(ChartSpec {
+            kind: ChartKind::Line,
+            x_axis,
+            series,
+            legend_visible,
+            decimation_threshold,
+            binding: bindings.clone(),
+        })
+    }
+
     /// Build a `ChartSpec` from successful auto-detection.
     ///
     /// The caller must ensure that `detection` is `ChartDetection::Ok`; passing
@@ -326,5 +390,161 @@ mod tests {
         assert_ne!(ChartKind::Bar, ChartKind::Line);
         assert_ne!(ChartKind::Scatter, ChartKind::Line);
         assert_ne!(ChartKind::Bar, ChartKind::Scatter);
+    }
+
+    // ---------------------------------------------------------------------------
+    // T-CE-E01: ChartSpec::from_bindings tests (RED → GREEN)
+    // ---------------------------------------------------------------------------
+
+    fn make_col_meta(name: &str, kind: dbflux_core::ColumnKind) -> dbflux_core::ColumnMeta {
+        dbflux_core::ColumnMeta {
+            name: name.to_owned(),
+            type_name: String::new(),
+            kind,
+            nullable: true,
+            is_primary_key: false,
+        }
+    }
+
+    fn three_col_meta() -> Vec<dbflux_core::ColumnMeta> {
+        vec![
+            make_col_meta("ts", dbflux_core::ColumnKind::Timestamp),
+            make_col_meta("cpu", dbflux_core::ColumnKind::Float),
+            make_col_meta("mem", dbflux_core::ColumnKind::Float),
+        ]
+    }
+
+    #[test]
+    fn from_bindings_basic_produces_correct_x_axis_and_series() {
+        let cols = three_col_meta();
+        let bindings = BindingSpec {
+            x: 0,
+            y: vec![1, 2],
+            group_by: None,
+            filter: None,
+            aggregation: AggKind::None,
+        };
+
+        let spec = ChartSpec::from_bindings(&bindings, &cols, 10_000)
+            .expect("from_bindings should succeed");
+
+        assert_eq!(spec.x_axis.column_index, 0);
+        assert_eq!(spec.x_axis.label, "ts");
+        assert_eq!(spec.x_axis.kind, AxisKind::Time);
+        assert_eq!(spec.series.len(), 2);
+        assert_eq!(spec.series[0].column_index, 1);
+        assert_eq!(spec.series[0].label, "cpu");
+        assert_eq!(spec.series[1].column_index, 2);
+        assert_eq!(spec.series[1].label, "mem");
+        assert_eq!(spec.decimation_threshold, 10_000);
+        assert!(spec.legend_visible, "two series → legend visible");
+    }
+
+    #[test]
+    fn from_bindings_single_y_legend_hidden() {
+        let cols = three_col_meta();
+        let bindings = BindingSpec {
+            x: 0,
+            y: vec![1],
+            group_by: None,
+            filter: None,
+            aggregation: AggKind::None,
+        };
+
+        let spec = ChartSpec::from_bindings(&bindings, &cols, 10_000)
+            .expect("from_bindings should succeed");
+
+        assert_eq!(spec.series.len(), 1);
+        assert!(!spec.legend_visible, "one series → legend hidden");
+    }
+
+    #[test]
+    fn from_bindings_empty_y_returns_none() {
+        let cols = three_col_meta();
+        let bindings = BindingSpec {
+            x: 0,
+            y: vec![],
+            group_by: None,
+            filter: None,
+            aggregation: AggKind::None,
+        };
+
+        let result = ChartSpec::from_bindings(&bindings, &cols, 10_000);
+        assert!(result.is_none(), "empty y cols must return None");
+    }
+
+    #[test]
+    fn from_bindings_x_out_of_bounds_returns_none() {
+        let cols = three_col_meta();
+        let bindings = BindingSpec {
+            x: 99,
+            y: vec![1],
+            group_by: None,
+            filter: None,
+            aggregation: AggKind::None,
+        };
+
+        let result = ChartSpec::from_bindings(&bindings, &cols, 10_000);
+        assert!(result.is_none(), "out-of-bounds x must return None");
+    }
+
+    #[test]
+    fn from_bindings_numeric_x_uses_numeric_axis_kind() {
+        let cols = vec![
+            make_col_meta("seq", dbflux_core::ColumnKind::Integer),
+            make_col_meta("val", dbflux_core::ColumnKind::Float),
+        ];
+        let bindings = BindingSpec {
+            x: 0,
+            y: vec![1],
+            group_by: None,
+            filter: None,
+            aggregation: AggKind::None,
+        };
+
+        let spec = ChartSpec::from_bindings(&bindings, &cols, 10_000)
+            .expect("from_bindings should succeed");
+
+        assert_eq!(spec.x_axis.kind, AxisKind::Numeric);
+    }
+
+    #[test]
+    fn from_bindings_binding_field_mirrors_input() {
+        let cols = three_col_meta();
+        let bindings = BindingSpec {
+            x: 0,
+            y: vec![1, 2],
+            group_by: Some(2),
+            filter: Some("cpu > 0".to_string()),
+            aggregation: AggKind::Avg,
+        };
+
+        let spec = ChartSpec::from_bindings(&bindings, &cols, 10_000)
+            .expect("from_bindings should succeed");
+
+        assert_eq!(spec.binding.x, 0);
+        assert_eq!(spec.binding.y, vec![1, 2]);
+        assert_eq!(spec.binding.group_by, Some(2));
+        assert_eq!(spec.binding.filter, Some("cpu > 0".to_string()));
+        assert_eq!(spec.binding.aggregation, AggKind::Avg);
+    }
+
+    #[test]
+    fn from_bindings_out_of_bounds_y_columns_are_skipped() {
+        let cols = three_col_meta();
+        let bindings = BindingSpec {
+            x: 0,
+            y: vec![1, 99],
+            group_by: None,
+            filter: None,
+            aggregation: AggKind::None,
+        };
+
+        let spec = ChartSpec::from_bindings(&bindings, &cols, 10_000)
+            .expect("valid y entries produce a spec");
+
+        // Column index 99 is out of bounds; only column 1 is valid.
+        assert_eq!(spec.series.len(), 1);
+        assert_eq!(spec.series[0].column_index, 1);
     }
 }

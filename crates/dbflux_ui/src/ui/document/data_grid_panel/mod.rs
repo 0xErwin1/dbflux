@@ -897,6 +897,9 @@ impl DataGridPanel {
     ///
     /// Called when the rail is toggled open so the controls reflect what is
     /// currently rendered (either auto-detected or manual).
+    ///
+    /// Only invoked from the (now-dead) Configure rail tab.
+    #[allow(dead_code)]
     pub(super) fn prime_chart_rail_picker_from_spec(&mut self, cx: &mut Context<Self>) {
         let result = self.result.clone();
         if let Some(shell) = &self.chart_shell {
@@ -907,6 +910,8 @@ impl DataGridPanel {
     /// Apply the current rail Configure picker state as a `ManualChartSelection`.
     ///
     /// Clears the existing `chart_view` so the next render triggers a rebuild.
+    /// Only invoked from the (now-dead) Configure rail tab.
+    #[allow(dead_code)]
     pub(super) fn apply_chart_rail_selection(&mut self, cx: &mut Context<Self>) {
         let result = self.result.clone();
         if let Some(shell) = &self.chart_shell {
@@ -917,6 +922,8 @@ impl DataGridPanel {
     /// Reset chart selection to auto-detection, clearing any manual override.
     ///
     /// Disabled (no-op) when detection did not produce an `Ok` result.
+    /// Only invoked from the (now-dead) Configure rail tab.
+    #[allow(dead_code)]
     pub(super) fn reset_chart_rail_to_auto(&mut self, cx: &mut Context<Self>) {
         let result = self.result.clone();
         if let Some(shell) = &self.chart_shell {
