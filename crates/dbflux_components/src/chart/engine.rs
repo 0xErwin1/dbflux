@@ -1349,6 +1349,7 @@ mod tests {
     }
 
     fn simple_spec(x_col: usize, y_cols: &[usize]) -> ChartSpec {
+        use crate::chart::spec::{AggKind, BindingSpec};
         ChartSpec {
             kind: crate::chart::spec::ChartKind::Line,
             x_axis: AxisSpec {
@@ -1368,6 +1369,13 @@ mod tests {
                 .collect(),
             legend_visible: false,
             decimation_threshold: 10_000,
+            binding: BindingSpec {
+                x: x_col,
+                y: y_cols.to_vec(),
+                group_by: None,
+                filter: None,
+                aggregation: AggKind::None,
+            },
         }
     }
 

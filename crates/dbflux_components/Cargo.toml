@@ -16,6 +16,8 @@ gpui-component.workspace = true
 dbflux_core.workspace = true
 thiserror.workspace = true
 log.workspace = true
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+serde_json.workspace = true
