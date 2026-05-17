@@ -633,11 +633,17 @@ impl DataTableState {
 
             dropdown.update(cx, |dd, cx| dd.open(cx));
 
+            // Capture `coord` by value so the selection handler doesn't depend
+            // on `editing_cell` being set at event-delivery time. Selecting an
+            // item auto-closes the dropdown, which emits `DropdownDismissed`;
+            // GPUI may deliver dismissal before selection, and `cancel_enum_edit`
+            // would otherwise clear `editing_cell` and cause the selection to
+            // be silently discarded.
             cx.subscribe(
                 &dropdown,
-                |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                move |this, _dropdown, event: &DropdownSelectionChanged, cx| {
                     let value = event.item.value.to_string();
-                    this.apply_enum_selection(&value, cx);
+                    this.apply_enum_selection_at(coord, &value, cx);
                 },
             )
             .detach();
@@ -692,14 +698,22 @@ impl DataTableState {
         self.enum_dropdown.as_ref()
     }
 
-    fn apply_enum_selection(&mut self, value: &str, cx: &mut Context<Self>) {
+    /// Commit an enum selection without depending on `editing_cell` being set.
+    ///
+    /// The caller passes `coord` directly because the `DropdownDismissed`
+    /// event may have already cleared `editing_cell` via `cancel_enum_edit`
+    /// by the time `DropdownSelectionChanged` is delivered (auto-close race).
+    fn apply_enum_selection_at(
+        &mut self,
+        coord: CellCoord,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) {
         use super::model::VisualRowSource;
 
-        let coord = match self.editing_cell.take() {
-            Some(c) => c,
-            None => return,
-        };
-
+        // Clear editing state first so a subsequent `cancel_enum_edit` from
+        // the dropdown's auto-close becomes a harmless no-op.
+        self.editing_cell = None;
         self.enum_dropdown = None;
 
         let visual_order = self.edit_buffer.compute_visual_order();
