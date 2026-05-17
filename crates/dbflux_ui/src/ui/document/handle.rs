@@ -172,12 +172,7 @@ impl DocumentHandle {
     {
         match self {
             Self::Audit { entity, .. } => {
-                use super::audit::AuditDocumentEvent;
-                cx.subscribe(entity, move |_entity, event, cx| {
-                    if matches!(event, AuditDocumentEvent::RequestFocus) {
-                        callback(&DocumentEvent::RequestFocus, cx);
-                    }
-                })
+                cx.subscribe(entity, move |_, ev: &DocumentEvent, cx| callback(ev, cx))
             }
         }
     }

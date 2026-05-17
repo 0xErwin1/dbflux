@@ -2,9 +2,11 @@
 
 mod filters;
 mod source_adapter;
+pub mod view;
 
 pub use filters::{AuditFilters, TimeRange, TimestampDisplayMode};
 pub use source_adapter::AuditSourceAdapter;
+pub use view::LogStreamView;
 
 use std::collections::{HashMap, HashSet};
 
@@ -40,6 +42,7 @@ use serde_json::{Value as JsonValue, json};
 use uuid::Uuid;
 
 use super::chrome::{compact_top_bar, workspace_footer_bar};
+use super::handle::DocumentEvent;
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
 
 // ── Context menu ─────────────────────────────────────────────────────────────
@@ -92,14 +95,6 @@ impl AuditMenuItem {
     fn is_separator(self) -> bool {
         self.action.is_none()
     }
-}
-
-/// Events emitted by AuditDocument.
-#[derive(Clone, Debug)]
-pub enum AuditDocumentEvent {
-    Refresh,
-    /// The document was interacted with and wants workspace focus.
-    RequestFocus,
 }
 
 const DEFAULT_PAGE_SIZE: u32 = 100;
@@ -2756,7 +2751,7 @@ impl AuditDocument {
                         cx.listener(move |this, _, window, cx| {
                             // Signal the workspace to update focus_target → Document so that
                             // Ctrl+H and other panel-navigation bindings work correctly.
-                            cx.emit(AuditDocumentEvent::RequestFocus);
+                            cx.emit(DocumentEvent::RequestFocus);
                             this.select_row(row_index, cx);
                             this.toggle_event_expanded(event_id, cx);
                             this.focus_handle.focus(window);
@@ -3313,7 +3308,7 @@ impl Focusable for AuditDocument {
     }
 }
 
-impl EventEmitter<AuditDocumentEvent> for AuditDocument {}
+impl EventEmitter<DocumentEvent> for AuditDocument {}
 
 impl Render for AuditDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
