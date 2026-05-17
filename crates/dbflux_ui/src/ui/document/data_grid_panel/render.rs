@@ -480,11 +480,20 @@ pub(super) fn render_filter_bar_as_segment(
     // segment is constrained to that height, its internal `flex_wrap` rows
     // overflow the box and get clipped — narrow widths lose the WHERE / LIMIT
     // / Refresh row entirely.
+    //
+    // `flex_1` + `min_w_0` are REQUIRED so the segment shrinks to the chrome
+    // row's available width instead of taking its intrinsic ~880px content
+    // width. Without this, the segment overflows the chrome row horizontally
+    // and the trailing Refresh control is pushed off-screen — `flex_wrap`
+    // never triggers because from the segment's perspective its children
+    // "fit" inside its own oversized box.
     div()
         .flex()
         .flex_wrap()
         .items_center()
         .gap(Spacing::SM)
+        .flex_1()
+        .min_w(px(0.0))
         .child(
             div()
                 .flex()
@@ -510,10 +519,16 @@ pub(super) fn render_filter_bar_as_segment(
                             .flex()
                             .items_center()
                             .w(px(420.0))
+                            .h(Heights::CONTROL)
                             .rounded(Radii::SM)
-                            .when(
-                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
-                                move |d| d.border_1().border_color(theme_inner.ring),
+                            .bg(theme_inner.background)
+                            .border_1()
+                            .border_color(
+                                if show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter {
+                                    theme_inner.ring
+                                } else {
+                                    theme_inner.input
+                                },
                             )
                             .on_mouse_down(MouseButton::Left, {
                                 let grid = grid_for_filter_event.clone();
@@ -572,11 +587,20 @@ pub(super) fn render_filter_bar_as_segment(
                 .child(Text::caption("LIMIT").primary())
                 .child(
                     div()
+                        .flex()
+                        .items_center()
                         .w(px(60.0))
+                        .h(Heights::CONTROL)
+                        .px(Spacing::XS)
                         .rounded(Radii::SM)
-                        .when(
-                            show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
-                            move |d| d.border_1().border_color(theme_limit.ring),
+                        .bg(theme_limit.background)
+                        .border_1()
+                        .border_color(
+                            if show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit {
+                                theme_limit.ring
+                            } else {
+                                theme_limit.input
+                            },
                         )
                         .on_mouse_down(MouseButton::Left, {
                             let grid = grid_for_limit.clone();
@@ -596,7 +620,7 @@ pub(super) fn render_filter_bar_as_segment(
         .child(
             div()
                 .id("refresh-action-btn")
-                .h(Heights::BUTTON)
+                .h(Heights::CONTROL)
                 .flex()
                 .items_center()
                 .gap_0()
