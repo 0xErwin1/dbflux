@@ -10,11 +10,18 @@ use gpui_component::IconName;
 
 impl Workspace {
     /// Renders the active document from TabManager (v0.3).
-    fn render_active_document(&self, cx: &App) -> Option<AnyElement> {
+    ///
+    /// Routes through `TabManager::render_active` so that both `Legacy` and
+    /// `Pane` tabs produce output. The old `active_document().map(render)` path
+    /// returned `None` for `Pane` tabs, leaving `ChartDocument` with an empty
+    /// canvas.
+    fn render_active_document(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         self.tab_manager
-            .read(cx)
-            .active_document()
-            .map(|doc| doc.render())
+            .update(cx, |mgr, cx| mgr.render_active(window, cx))
     }
 }
 
@@ -75,7 +82,7 @@ impl Render for Workspace {
 
         let tab_bar = self.tab_bar.clone();
         let has_tabs = !self.tab_manager.read(cx).is_empty();
-        let active_doc_element = self.render_active_document(cx);
+        let active_doc_element = self.render_active_document(window, cx);
         let inspector_open = self.workspace_inspector.read(cx).is_open();
         let inspector_resizing = self.workspace_inspector.read(cx).is_resizing();
         let inspector_entity = self.workspace_inspector.clone();
@@ -408,15 +415,15 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &keymap::FocusEditor, window, cx| {
                 this.set_focus(FocusTarget::Document, window, cx);
-                if let Some(doc) = this.tab_manager.read(cx).active_document() {
-                    doc.dispatch_command(Command::FocusUp, window, cx);
-                }
+                this.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::FocusUp, window, cx);
+                });
             }))
             .on_action(cx.listener(|this, _: &keymap::FocusResults, window, cx| {
                 this.set_focus(FocusTarget::Document, window, cx);
-                if let Some(doc) = this.tab_manager.read(cx).active_document() {
-                    doc.dispatch_command(Command::FocusDown, window, cx);
-                }
+                this.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::FocusDown, window, cx);
+                });
             }))
             .on_action(
                 cx.listener(|this, _: &keymap::FocusBackgroundTasks, window, cx| {
@@ -448,9 +455,9 @@ impl Render for Workspace {
                 this.dispatch(Command::FocusDown, window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::RunQuery, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document() {
-                    doc.dispatch_command(Command::RunQuery, window, cx);
-                }
+                this.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::RunQuery, window, cx);
+                });
             }))
             .on_action(cx.listener(|this, _: &keymap::Cancel, window, cx| {
                 if !this.dispatch(Command::Cancel, window, cx) {
@@ -458,9 +465,9 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &keymap::ExportResults, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document() {
-                    doc.dispatch_command(Command::ExportResults, window, cx);
-                }
+                this.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::ExportResults, window, cx);
+                });
             }))
             .on_action(
                 cx.listener(|this, _: &keymap::OpenConnectionManager, _window, cx| {
@@ -474,14 +481,14 @@ impl Render for Workspace {
                 this.refresh_schema(window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleEditor, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document() {
-                    doc.dispatch_command(Command::ToggleEditor, window, cx);
-                }
+                this.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::ToggleEditor, window, cx);
+                });
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleResults, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document() {
-                    doc.dispatch_command(Command::ToggleResults, window, cx);
-                }
+                this.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::ToggleResults, window, cx);
+                });
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleTasks, _window, cx| {
                 this.toggle_tasks_panel(cx);
@@ -493,9 +500,9 @@ impl Render for Workspace {
                 this.open_script_file(window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::SaveFileAs, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document() {
-                    doc.dispatch_command(Command::SaveFileAs, window, cx);
-                }
+                this.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::SaveFileAs, window, cx);
+                });
             }))
             // List navigation actions - propagate if not handled so editor can receive keys
             .on_action(cx.listener(|this, _: &keymap::SelectNext, window, cx| {

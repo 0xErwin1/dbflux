@@ -543,6 +543,38 @@ impl TabManager {
         self.active_tab()?.as_legacy().cloned()
     }
 
+    /// Renders the active tab, regardless of whether it is `Legacy` or `Pane`.
+    ///
+    /// Returns `None` when no tab is active. This is the render-path replacement
+    /// for `active_document().map(|doc| doc.render())`, which silently produced
+    /// no output for `Pane` tabs because `active_document()` returned `None`.
+    pub fn render_active(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        Some(self.active_tab()?.render(window, cx))
+    }
+
+    /// Dispatches a command to the active tab, regardless of variant.
+    ///
+    /// Returns `true` when the command was handled, `false` when there is no
+    /// active tab or the tab declined the command. This replaces the pattern
+    /// `if let Some(doc) = active_document() { doc.dispatch_command(...) }`,
+    /// which silently no-oped for `Pane` tabs.
+    pub fn dispatch_active(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
+        match self.active_tab() {
+            Some(tab) => tab.dispatch_command(cmd, window, cx),
+            None => false,
+        }
+    }
+
+    /// Focuses the active tab, regardless of variant.
+    ///
+    /// No-ops when no tab is active. Replaces the pattern
+    /// `if let Some(doc) = active_document() { doc.focus(...) }`.
+    pub fn focus_active(&self, window: &mut Window, cx: &mut App) {
+        if let Some(tab) = self.active_tab() {
+            tab.focus(window, cx);
+        }
+    }
+
     /// Returns the active document ID.
     pub fn active_id(&self) -> Option<DocumentId> {
         self.active_tab().map(|d| d.id())

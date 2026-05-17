@@ -1251,9 +1251,9 @@ impl Workspace {
 
         // When focused on document area, delegate context to the active document
         if self.focus_target == FocusTarget::Document
-            && let Some(doc) = self.tab_manager.read(cx).active_document()
+            && let Some(tab) = self.tab_manager.read(cx).active_tab()
         {
-            return doc.active_context(cx);
+            return tab.active_context(cx);
         }
 
         self.focus_target.to_context()
@@ -1277,10 +1277,9 @@ impl Workspace {
             self.focus_handle.focus(window);
         }
 
-        if target == FocusTarget::Document
-            && let Some(doc) = self.tab_manager.read(cx).active_document()
-        {
-            doc.focus(window, cx);
+        if target == FocusTarget::Document {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.focus_active(window, cx));
         }
 
         cx.notify();
