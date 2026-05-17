@@ -638,16 +638,27 @@ impl ResultPanel {
         let mut last_pos: Option<SegmentPosition> = None;
 
         for entry in entries {
-            if last_pos.is_some_and(|prev| prev != entry.position) {
+            // Insert a flex spacer only when transitioning OUT of Left.
+            // Center and Right must cluster on the right edge (e.g. the
+            // filter bar's Refresh button must sit adjacent to the refresh
+            // dropdown), so no spacer is inserted between Center and Right
+            // or between consecutive Right segments.
+            if let Some(prev) = last_pos
+                && prev == SegmentPosition::Left
+                && entry.position != SegmentPosition::Left
+            {
                 children.push(div().flex_1().into_any());
             }
             last_pos = Some(entry.position);
             children.push(entry.element);
         }
 
-        // Refresh dropdown (Right/1000) — always last.
+        // Refresh dropdown (Right/1000) — always last in the row.
         if let Some(dd) = self.refresh_dropdown.clone() {
-            if last_pos.is_none_or(|p| p != SegmentPosition::Right) {
+            // Only push it to the right when nothing else has already
+            // claimed the post-Left space. If a Center or Right segment is
+            // already in place, the dropdown sits flush against it.
+            if last_pos.is_none_or(|p| p == SegmentPosition::Left) {
                 children.push(div().flex_1().into_any());
             }
             children.push(div().w(px(28.0)).h_full().child(dd).into_any());
