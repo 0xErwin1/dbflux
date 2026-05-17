@@ -1001,14 +1001,13 @@ impl DataGridPanel {
 
     /// Modes available for the current result shape and connection category.
     ///
-    /// Returns an empty slice when the result has not yet loaded or when only
-    /// one mode is possible (no mode bar is needed). The caller is responsible
-    /// for computing `is_time_series_source` from the app state.
+    /// Returns an empty slice for non-QueryResult sources (table/collection
+    /// browses have no alternative views). For QueryResult sources, returns
+    /// the modes available for the shape, plus Chart when chart detection
+    /// succeeded. Independent of the currently active mode — switching to
+    /// Chart and back must not change which modes are offered.
     pub fn available_result_view_modes(&self, cx: &App) -> Vec<ResultViewMode> {
-        let uses_result_view = matches!(self.source, DataSource::QueryResult { .. })
-            && !self.result_view_mode.is_table();
-
-        if !uses_result_view {
+        if !matches!(self.source, DataSource::QueryResult { .. }) {
             return vec![];
         }
 
