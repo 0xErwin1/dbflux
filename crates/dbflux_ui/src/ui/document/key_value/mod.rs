@@ -4,6 +4,7 @@ mod copy_command;
 mod document_view;
 mod mutations;
 mod pagination;
+mod pane;
 pub(super) mod parsing;
 mod render;
 pub(super) mod view;

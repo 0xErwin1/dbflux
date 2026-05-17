@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use super::audit::AuditDocument;
-use super::key_value::KeyValueDocument;
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
@@ -11,17 +10,12 @@ use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
 /// Wrapper that allows storing different document types in a homogeneous collection.
 /// The `id` is stored inline for quick access without needing `cx`.
 ///
-/// Each variant stores the DocumentId inline plus the Entity<T> for the actual document.
-///
-/// Note: `Code` documents are no longer stored here. `CodeDocument` is now wrapped
-/// in `PaneHandle` via `CodeDocument::into_pane` (Arc 3). This enum is kept for
-/// the remaining legacy document types (KeyValue, Audit) until Arc 6 cleanup.
+/// Note: `Code` and `KeyValue` documents are no longer stored here — they are wrapped
+/// in `PaneHandle` via their respective `into_pane` constructors (Arc 3 and Arc 4).
+/// This enum is kept only for the remaining legacy document type (`Audit`) until
+/// Arc 6 cleanup.
 #[derive(Clone)]
 pub enum DocumentHandle {
-    KeyValue {
-        id: DocumentId,
-        entity: Entity<KeyValueDocument>,
-    },
     /// Audit event viewer document.
     Audit {
         id: DocumentId,
@@ -30,11 +24,6 @@ pub enum DocumentHandle {
 }
 
 impl DocumentHandle {
-    pub fn key_value(entity: Entity<KeyValueDocument>, cx: &App) -> Self {
-        let id = entity.read(cx).id();
-        Self::KeyValue { id, entity }
-    }
-
     /// Creates a new Audit document handle.
     pub fn audit(entity: Entity<AuditDocument>, cx: &App) -> Self {
         let id = entity.read(cx).id();
@@ -44,7 +33,6 @@ impl DocumentHandle {
     /// Document ID (no cx required).
     pub fn id(&self) -> DocumentId {
         match self {
-            Self::KeyValue { id, .. } => *id,
             Self::Audit { id, .. } => *id,
         }
     }
@@ -52,33 +40,33 @@ impl DocumentHandle {
     /// Document kind (no cx required).
     pub fn kind(&self) -> DocumentKind {
         match self {
-            Self::KeyValue { .. } => DocumentKind::RedisKeyBrowser,
             Self::Audit { .. } => DocumentKind::Audit,
         }
     }
 
     /// Checks if this document is backed by the given file path.
     ///
-    /// Always returns `false` since Code documents (the only file-backed type)
-    /// are no longer stored in `DocumentHandle`.
+    /// Always returns `false` — no remaining legacy type is file-backed.
     pub fn is_file(&self, _path: &std::path::Path, _cx: &App) -> bool {
         false
     }
 
-    pub fn is_key_value_database(&self, profile_id: uuid::Uuid, database: &str, cx: &App) -> bool {
-        match self {
-            Self::KeyValue { entity, .. } => {
-                let doc = entity.read(cx);
-                doc.connection_id() == Some(profile_id) && doc.database_name() == database
-            }
-            _ => false,
-        }
+    /// Returns `false` for all remaining legacy types.
+    ///
+    /// KeyValue documents are now `Tab::Pane`; the `Tab::is_key_value_database`
+    /// bridge method handles dedup via `matches_dedup_key`.
+    pub fn is_key_value_database(
+        &self,
+        _profile_id: uuid::Uuid,
+        _database: &str,
+        _cx: &App,
+    ) -> bool {
+        false
     }
 
-    /// Returns the connection (profile) ID for key-value documents.
-    pub fn connection_id(&self, cx: &App) -> Option<uuid::Uuid> {
+    /// Returns the connection (profile) ID for this document.
+    pub fn connection_id(&self, _cx: &App) -> Option<uuid::Uuid> {
         match self {
-            Self::KeyValue { entity, .. } => entity.read(cx).connection_id(),
             Self::Audit { .. } => None,
         }
     }
@@ -86,18 +74,6 @@ impl DocumentHandle {
     /// Gets metadata snapshot (requires cx to read entity).
     pub fn meta_snapshot(&self, cx: &App) -> DocumentMetaSnapshot {
         match self {
-            Self::KeyValue { id, entity } => {
-                let doc = entity.read(cx);
-                DocumentMetaSnapshot {
-                    id: *id,
-                    kind: DocumentKind::RedisKeyBrowser,
-                    title: doc.title(),
-                    icon: DocumentIcon::Redis,
-                    state: doc.state(),
-                    closable: true,
-                    connection_id: doc.connection_id(),
-                }
-            }
             Self::Audit { id, entity } => {
                 let doc = entity.read(cx);
                 DocumentMetaSnapshot {
@@ -119,40 +95,32 @@ impl DocumentHandle {
     }
 
     /// Can this document be closed? (checks unsaved changes)
-    pub fn can_close(&self, cx: &App) -> bool {
+    pub fn can_close(&self, _cx: &App) -> bool {
         match self {
-            Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
             Self::Audit { .. } => true,
         }
     }
 
     pub fn flush_auto_save(&self, _cx: &App) {
-        // No legacy document type has auto-save; Code documents are migrated.
+        // No remaining legacy document type has auto-save.
     }
 
-    pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
+    pub fn refresh_policy(&self, _cx: &App) -> RefreshPolicy {
         match self {
-            Self::KeyValue { entity, .. } => entity.read(cx).refresh_policy(),
             Self::Audit { .. } => RefreshPolicy::default(),
         }
     }
 
-    pub fn set_active_tab(&self, active: bool, cx: &mut App) {
+    pub fn set_active_tab(&self, _active: bool, _cx: &mut App) {
         match self {
-            Self::KeyValue { entity, .. } => {
-                entity.update(cx, |doc, _cx| doc.set_active_tab(active));
-            }
             Self::Audit { .. } => {
                 // AuditDocument doesn't need tab state
             }
         }
     }
 
-    pub fn set_refresh_policy(&self, policy: RefreshPolicy, cx: &mut App) {
+    pub fn set_refresh_policy(&self, _policy: RefreshPolicy, _cx: &mut App) {
         match self {
-            Self::KeyValue { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
-            }
             Self::Audit { .. } => {
                 // AuditDocument doesn't use refresh policy
             }
@@ -162,7 +130,6 @@ impl DocumentHandle {
     /// Renders the document.
     pub fn render(&self) -> AnyElement {
         match self {
-            Self::KeyValue { entity, .. } => entity.clone().into_any_element(),
             Self::Audit { entity, .. } => entity.clone().into_any_element(),
         }
     }
@@ -170,9 +137,6 @@ impl DocumentHandle {
     /// Dispatch commands to the active document.
     pub fn dispatch_command(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
         match self {
-            Self::KeyValue { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
-            }
             Self::Audit { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
@@ -182,9 +146,6 @@ impl DocumentHandle {
     /// Gives focus to the document.
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         match self {
-            Self::KeyValue { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.focus(window, cx));
-            }
             Self::Audit { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
@@ -194,7 +155,6 @@ impl DocumentHandle {
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
         match self {
-            Self::KeyValue { entity, .. } => entity.read(cx).active_context(cx),
             Self::Audit { entity, .. } => entity.read(cx).active_context(),
         }
     }
@@ -211,9 +171,6 @@ impl DocumentHandle {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         match self {
-            Self::KeyValue { entity, .. } => {
-                cx.subscribe(entity, move |_, ev: &DocumentEvent, cx| callback(ev, cx))
-            }
             Self::Audit { entity, .. } => {
                 use super::audit::AuditDocumentEvent;
                 cx.subscribe(entity, move |_entity, event, cx| {

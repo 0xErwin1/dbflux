@@ -722,11 +722,8 @@ fn legacy_matches(handle: &DocumentHandle, key: &DocumentKey, cx: &App) -> bool 
         } => handle.is_key_value_database(*profile_id, database, cx),
         DocumentKey::Audit => matches!(handle, DocumentHandle::Audit { .. }),
         DocumentKey::EventStream { profile_id, target } => {
-            if let DocumentHandle::Audit { entity, .. } = handle {
-                entity.read(cx).matches_event_stream(*profile_id, target)
-            } else {
-                false
-            }
+            let DocumentHandle::Audit { entity, .. } = handle;
+            entity.read(cx).matches_event_stream(*profile_id, target)
         }
     }
 }

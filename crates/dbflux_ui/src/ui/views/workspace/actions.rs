@@ -244,11 +244,10 @@ impl Workspace {
             .read(cx)
             .documents()
             .iter()
-            .find_map(|tab| match tab.as_legacy()? {
-                crate::ui::document::DocumentHandle::Audit { id, entity } => {
-                    Some((*id, entity.clone()))
-                }
-                _ => None,
+            .find_map(|tab| {
+                let handle = tab.as_legacy()?;
+                let crate::ui::document::DocumentHandle::Audit { id, entity } = handle;
+                Some((*id, entity.clone()))
             });
 
         self.active_governance_panel = None;
@@ -686,10 +685,10 @@ impl Workspace {
                 cx,
             )
         });
-        let handle = DocumentHandle::key_value(doc, cx);
+        let pane = crate::ui::document::KeyValueDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Legacy(handle), cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
