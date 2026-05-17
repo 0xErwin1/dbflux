@@ -775,16 +775,7 @@ impl Workspace {
             .tab_manager
             .read(cx)
             .document(doc_id)
-            .and_then(|tab| tab.as_legacy())
-            .and_then(|handle| {
-                if let crate::ui::document::DocumentHandle::Code { entity, .. } = handle {
-                    let doc = entity.read(cx);
-                    if doc.is_file_backed() && doc.is_content_empty(cx) {
-                        return doc.path().cloned();
-                    }
-                }
-                None
-            });
+            .and_then(|tab| tab.is_file_backed_empty(cx));
 
         if let Some(path) = empty_script_path {
             self.app_state.update(cx, |state, cx| {
@@ -1046,10 +1037,10 @@ impl Workspace {
             doc
         });
 
-        let handle = DocumentHandle::code(doc, cx);
+        let pane = CodeDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Legacy(handle), cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1094,10 +1085,10 @@ impl Workspace {
             doc.read(cx).initial_auto_save(cx);
         }
 
-        let handle = DocumentHandle::code(doc, cx);
+        let pane = CodeDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Legacy(handle), cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1155,10 +1146,10 @@ impl Workspace {
             }
         }
 
-        let handle = DocumentHandle::code(doc, cx);
+        let pane = CodeDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Legacy(handle), cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1174,35 +1165,21 @@ impl Workspace {
         let manager = self.tab_manager.read(cx);
         let mut tabs = Vec::new();
 
-        for doc_handle in manager.documents() {
-            let Some(DocumentHandle::Code { entity, .. }) = doc_handle.as_legacy() else {
+        for doc_tab in manager.documents() {
+            let Some(snap) = doc_tab.session_tab_snapshot(cx) else {
                 continue;
             };
-
-            let doc = entity.read(cx);
-
-            let kind_str = if let Some(_path) = doc.path() {
-                "FileBacked".to_string()
-            } else if doc.scratch_path().is_some() {
-                "Scratch".to_string()
-            } else {
-                continue;
-            };
-
-            let scratch_path_str: Option<std::path::PathBuf> = doc.scratch_path().cloned();
-            let shadow_path_str: Option<std::path::PathBuf> = doc.shadow_path().cloned();
-            let file_path_str: Option<std::path::PathBuf> = doc.path().cloned();
 
             tabs.push(
                 dbflux_storage::repositories::state::sessions::WorkspaceTab {
-                    id: doc.id().0.to_string(),
-                    tab_kind: kind_str,
-                    language: SessionTab::language_key(doc.query_language()),
-                    exec_ctx: doc.exec_ctx().clone(),
-                    scratch_path: scratch_path_str,
-                    shadow_path: shadow_path_str,
-                    file_path: file_path_str,
-                    title: doc.title(),
+                    id: snap.id.0.to_string(),
+                    tab_kind: snap.kind.to_string(),
+                    language: SessionTab::language_key(snap.language),
+                    exec_ctx: snap.exec_ctx,
+                    scratch_path: snap.scratch_path,
+                    shadow_path: snap.shadow_path,
+                    file_path: snap.file_path,
+                    title: snap.title,
                     position: tabs.len(),
                     is_pinned: false,
                 },
@@ -1375,10 +1352,10 @@ impl Workspace {
                 doc
             });
 
-            let handle = DocumentHandle::code(doc, cx);
+            let pane = CodeDocument::into_pane(doc, cx);
 
             self.tab_manager.update(cx, |mgr, cx| {
-                mgr.open(Tab::Legacy(handle), cx);
+                mgr.open(Tab::Pane(Box::new(pane)), cx);
             });
         }
 

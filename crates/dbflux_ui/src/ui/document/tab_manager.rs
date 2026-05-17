@@ -261,6 +261,29 @@ impl Tab {
             ),
         }
     }
+
+    /// Returns the path of the backing file if this tab is a file-backed script
+    /// that is currently empty — used by the empty-script cleanup path on close.
+    ///
+    /// Returns `None` for non-script tabs and non-empty or non-file-backed scripts.
+    pub fn is_file_backed_empty(&self, cx: &App) -> Option<std::path::PathBuf> {
+        match self {
+            // No remaining Legacy document type is file-backed; Code was migrated.
+            Tab::Legacy(_) => None,
+            Tab::Pane(p) => p.is_file_backed_empty.as_ref().and_then(|f| f(cx)),
+        }
+    }
+
+    /// Returns a session snapshot for this tab if it is a code document with
+    /// a persistent backing (file-backed or scratch). Returns `None` for all
+    /// other document types and for ephemeral tabs with no backing path.
+    pub fn session_tab_snapshot(&self, cx: &App) -> Option<super::pane::CodeSessionTabSnapshot> {
+        match self {
+            // No remaining Legacy document type carries session snapshot data.
+            Tab::Legacy(_) => None,
+            Tab::Pane(p) => p.session_tab_snapshot.as_ref().and_then(|f| f(cx)),
+        }
+    }
 }
 
 /// Manages open documents (tabs) in the workspace.

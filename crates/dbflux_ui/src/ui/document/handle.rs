@@ -1,25 +1,23 @@
 #![allow(dead_code)]
 
 use super::audit::AuditDocument;
-use super::code::CodeDocument;
 use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
 use dbflux_core::RefreshPolicy;
-use gpui::{AnyElement, App, Entity, Focusable, IntoElement, Subscription, Window};
+use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
 
 /// Wrapper that allows storing different document types in a homogeneous collection.
 /// The `id` is stored inline for quick access without needing `cx`.
 ///
 /// Each variant stores the DocumentId inline plus the Entity<T> for the actual document.
+///
+/// Note: `Code` documents are no longer stored here. `CodeDocument` is now wrapped
+/// in `PaneHandle` via `CodeDocument::into_pane` (Arc 3). This enum is kept for
+/// the remaining legacy document types (KeyValue, Audit) until Arc 6 cleanup.
 #[derive(Clone)]
 pub enum DocumentHandle {
-    /// SQL script with editor + embedded results.
-    Code {
-        id: DocumentId,
-        entity: Entity<CodeDocument>,
-    },
     KeyValue {
         id: DocumentId,
         entity: Entity<KeyValueDocument>,
@@ -32,12 +30,6 @@ pub enum DocumentHandle {
 }
 
 impl DocumentHandle {
-    /// Creates a new code document handle.
-    pub fn code(entity: Entity<CodeDocument>, cx: &App) -> Self {
-        let id = entity.read(cx).id();
-        Self::Code { id, entity }
-    }
-
     pub fn key_value(entity: Entity<KeyValueDocument>, cx: &App) -> Self {
         let id = entity.read(cx).id();
         Self::KeyValue { id, entity }
@@ -52,7 +44,6 @@ impl DocumentHandle {
     /// Document ID (no cx required).
     pub fn id(&self) -> DocumentId {
         match self {
-            Self::Code { id, .. } => *id,
             Self::KeyValue { id, .. } => *id,
             Self::Audit { id, .. } => *id,
         }
@@ -61,18 +52,17 @@ impl DocumentHandle {
     /// Document kind (no cx required).
     pub fn kind(&self) -> DocumentKind {
         match self {
-            Self::Code { .. } => DocumentKind::Script,
             Self::KeyValue { .. } => DocumentKind::RedisKeyBrowser,
             Self::Audit { .. } => DocumentKind::Audit,
         }
     }
 
     /// Checks if this document is backed by the given file path.
-    pub fn is_file(&self, path: &std::path::Path, cx: &App) -> bool {
-        match self {
-            Self::Code { entity, .. } => entity.read(cx).path().map(|p| p.as_path()) == Some(path),
-            _ => false,
-        }
+    ///
+    /// Always returns `false` since Code documents (the only file-backed type)
+    /// are no longer stored in `DocumentHandle`.
+    pub fn is_file(&self, _path: &std::path::Path, _cx: &App) -> bool {
+        false
     }
 
     pub fn is_key_value_database(&self, profile_id: uuid::Uuid, database: &str, cx: &App) -> bool {
@@ -85,10 +75,9 @@ impl DocumentHandle {
         }
     }
 
-    /// Returns the connection (profile) ID for code and key-value documents.
+    /// Returns the connection (profile) ID for key-value documents.
     pub fn connection_id(&self, cx: &App) -> Option<uuid::Uuid> {
         match self {
-            Self::Code { entity, .. } => entity.read(cx).connection_id(),
             Self::KeyValue { entity, .. } => entity.read(cx).connection_id(),
             Self::Audit { .. } => None,
         }
@@ -97,23 +86,6 @@ impl DocumentHandle {
     /// Gets metadata snapshot (requires cx to read entity).
     pub fn meta_snapshot(&self, cx: &App) -> DocumentMetaSnapshot {
         match self {
-            Self::Code { id, entity } => {
-                let doc = entity.read(cx);
-                let icon = if doc.is_file_backed() {
-                    DocumentIcon::Script
-                } else {
-                    DocumentIcon::Sql
-                };
-                DocumentMetaSnapshot {
-                    id: *id,
-                    kind: DocumentKind::Script,
-                    title: doc.title(),
-                    icon,
-                    state: doc.state(),
-                    closable: true,
-                    connection_id: doc.connection_id(),
-                }
-            }
             Self::KeyValue { id, entity } => {
                 let doc = entity.read(cx);
                 DocumentMetaSnapshot {
@@ -149,21 +121,17 @@ impl DocumentHandle {
     /// Can this document be closed? (checks unsaved changes)
     pub fn can_close(&self, cx: &App) -> bool {
         match self {
-            Self::Code { entity, .. } => entity.read(cx).can_close(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
             Self::Audit { .. } => true,
         }
     }
 
-    pub fn flush_auto_save(&self, cx: &App) {
-        if let Self::Code { entity, .. } = self {
-            entity.read(cx).flush_auto_save(cx);
-        }
+    pub fn flush_auto_save(&self, _cx: &App) {
+        // No legacy document type has auto-save; Code documents are migrated.
     }
 
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
         match self {
-            Self::Code { entity, .. } => entity.read(cx).refresh_policy(),
             Self::KeyValue { entity, .. } => entity.read(cx).refresh_policy(),
             Self::Audit { .. } => RefreshPolicy::default(),
         }
@@ -171,9 +139,6 @@ impl DocumentHandle {
 
     pub fn set_active_tab(&self, active: bool, cx: &mut App) {
         match self {
-            Self::Code { entity, .. } => {
-                entity.update(cx, |doc, _cx| doc.set_active_tab(active));
-            }
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, _cx| doc.set_active_tab(active));
             }
@@ -185,9 +150,6 @@ impl DocumentHandle {
 
     pub fn set_refresh_policy(&self, policy: RefreshPolicy, cx: &mut App) {
         match self {
-            Self::Code { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
-            }
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
             }
@@ -200,7 +162,6 @@ impl DocumentHandle {
     /// Renders the document.
     pub fn render(&self) -> AnyElement {
         match self {
-            Self::Code { entity, .. } => entity.clone().into_any_element(),
             Self::KeyValue { entity, .. } => entity.clone().into_any_element(),
             Self::Audit { entity, .. } => entity.clone().into_any_element(),
         }
@@ -209,9 +170,6 @@ impl DocumentHandle {
     /// Dispatch commands to the active document.
     pub fn dispatch_command(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
         match self {
-            Self::Code { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
-            }
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
@@ -224,9 +182,6 @@ impl DocumentHandle {
     /// Gives focus to the document.
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         match self {
-            Self::Code { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.focus(window, cx));
-            }
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
@@ -239,18 +194,15 @@ impl DocumentHandle {
     /// Returns the active context for keyboard handling.
     pub fn active_context(&self, cx: &App) -> ContextId {
         match self {
-            Self::Code { entity, .. } => entity.read(cx).active_context(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).active_context(cx),
             Self::Audit { entity, .. } => entity.read(cx).active_context(),
         }
     }
 
     /// Short summary of pending changes for the dirty-dot tooltip.
-    pub fn change_summary(&self, cx: &App) -> Option<String> {
-        match self {
-            Self::Code { entity, .. } => entity.read(cx).change_summary(cx),
-            Self::KeyValue { .. } | Self::Audit { .. } => None,
-        }
+    pub fn change_summary(&self, _cx: &App) -> Option<String> {
+        // No remaining legacy document type carries unsaved changes.
+        None
     }
 
     /// Subscribe to document events (returns Subscription).
@@ -259,9 +211,6 @@ impl DocumentHandle {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         match self {
-            Self::Code { entity, .. } => {
-                cx.subscribe(entity, move |_entity, event, cx| callback(event, cx))
-            }
             Self::KeyValue { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
                 if matches!(event, KeyValueDocumentEvent::RequestFocus) {
                     callback(&DocumentEvent::RequestFocus, cx);
