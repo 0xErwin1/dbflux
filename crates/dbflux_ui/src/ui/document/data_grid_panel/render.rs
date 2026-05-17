@@ -521,14 +521,9 @@ pub(super) fn render_filter_bar_as_segment(
                             .w(px(420.0))
                             .h(Heights::CONTROL)
                             .rounded(Radii::SM)
-                            .bg(theme_inner.background)
-                            .border_1()
-                            .border_color(
-                                if show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter {
-                                    theme_inner.ring
-                                } else {
-                                    theme_inner.input
-                                },
+                            .when(
+                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
+                                move |d| d.border_1().border_color(theme_inner.ring),
                             )
                             .on_mouse_down(MouseButton::Left, {
                                 let grid = grid_for_filter_event.clone();
@@ -591,16 +586,10 @@ pub(super) fn render_filter_bar_as_segment(
                         .items_center()
                         .w(px(60.0))
                         .h(Heights::CONTROL)
-                        .px(Spacing::XS)
                         .rounded(Radii::SM)
-                        .bg(theme_limit.background)
-                        .border_1()
-                        .border_color(
-                            if show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit {
-                                theme_limit.ring
-                            } else {
-                                theme_limit.input
-                            },
+                        .when(
+                            show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
+                            move |d| d.border_1().border_color(theme_limit.ring),
                         )
                         .on_mouse_down(MouseButton::Left, {
                             let grid = grid_for_limit.clone();

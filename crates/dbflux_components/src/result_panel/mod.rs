@@ -441,13 +441,23 @@ impl Render for ResultPanel {
             )
         };
 
+        // The view content is wrapped in `flex_1 + min_h(0)` so it claims the
+        // REMAINING space after the chrome row, not 100% of the panel. With
+        // `size_full()` (height: 100%) the view fights the chrome row for
+        // space and chrome's wrap rows render behind the view content.
         div()
             .track_focus(&focus_handle)
             .flex()
             .flex_col()
             .size_full()
             .when_some(chrome_row, |d, row| d.child(row))
-            .child(view_element)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_hidden()
+                    .child(view_element),
+            )
     }
 }
 
