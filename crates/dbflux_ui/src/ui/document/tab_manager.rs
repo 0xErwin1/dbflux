@@ -201,8 +201,9 @@ impl Tab {
     }
 
     pub fn is_table(&self, table: &dbflux_core::TableRef, cx: &App) -> bool {
+        // Data documents are now always Pane tabs; Legacy arm always returns false.
         match self {
-            Tab::Legacy(h) => h.is_table(table, cx),
+            Tab::Legacy(_) => false,
             Tab::Pane(p) => p.matches_dedup_key(
                 &DocumentKey::Table {
                     profile_id: uuid::Uuid::nil(),
@@ -220,8 +221,9 @@ impl Tab {
         database: Option<&str>,
         cx: &App,
     ) -> bool {
+        // Data documents are now always Pane tabs; Legacy arm always returns false.
         match self {
-            Tab::Legacy(h) => h.is_table_with_database(table, database, cx),
+            Tab::Legacy(_) => false,
             Tab::Pane(p) => p.matches_dedup_key(
                 &DocumentKey::Table {
                     profile_id: uuid::Uuid::nil(),
@@ -234,8 +236,9 @@ impl Tab {
     }
 
     pub fn is_collection(&self, collection: &dbflux_core::CollectionRef, cx: &App) -> bool {
+        // Data documents are now always Pane tabs; Legacy arm always returns false.
         match self {
-            Tab::Legacy(h) => h.is_collection(collection, cx),
+            Tab::Legacy(_) => false,
             Tab::Pane(p) => p.matches_dedup_key(
                 &DocumentKey::Collection {
                     profile_id: uuid::Uuid::nil(),
@@ -680,19 +683,16 @@ impl EventEmitter<TabManagerEvent> for TabManager {}
 /// Maps a `DocumentKey` to the appropriate `is_*` predicate on a legacy
 /// `DocumentHandle`. Used by `Tab::Legacy` arm of `Tab::matches_dedup_key`.
 ///
-/// Removed in Arc 6 when the `Legacy` variant is deleted.
+/// Data documents are now always `Pane` tabs, so `Table` and `Collection` keys
+/// always return `false` here. Removed in Arc 6 when the `Legacy` variant is deleted.
 fn legacy_matches(handle: &DocumentHandle, key: &DocumentKey, cx: &App) -> bool {
     match key {
-        // Chart documents are now always Pane tabs; no Legacy Chart tabs exist.
-        DocumentKey::Chart { .. } => {
+        // Chart and Data documents are now always Pane tabs; no Legacy tabs exist.
+        DocumentKey::Chart { .. } | DocumentKey::Table { .. } | DocumentKey::Collection { .. } => {
             let _ = handle;
             false
         }
         DocumentKey::File { path } => handle.is_file(path, cx),
-        DocumentKey::Table {
-            table, database, ..
-        } => handle.is_table_with_database(table, database.as_deref(), cx),
-        DocumentKey::Collection { collection, .. } => handle.is_collection(collection, cx),
         DocumentKey::KeyValueDb {
             profile_id,
             database,

@@ -398,15 +398,14 @@ impl Workspace {
             .contains_key(&profile_id);
 
         let existing_id = if has_connection {
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find(|doc| {
-                    doc.is_table_with_database(&table, database.as_deref(), cx)
-                        && doc.connection_id(cx) == Some(profile_id)
-                })
-                .map(|doc| doc.id())
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::Table {
+                    profile_id,
+                    database: database.clone(),
+                    table: table.clone(),
+                },
+                cx,
+            )
         } else {
             None
         };
@@ -444,10 +443,10 @@ impl Workspace {
                 cx,
             )
         });
-        let handle = DocumentHandle::data(doc, cx);
+        let pane = DataDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Legacy(handle), cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         log::info!("Opened table document: {:?}.{:?}", table.schema, table.name);
@@ -477,27 +476,33 @@ impl Workspace {
             .unwrap_or(CollectionDocumentPresentation::DataGrid);
 
         let existing_id = if has_connection {
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find(|doc| match presentation {
-                    CollectionDocumentPresentation::DataGrid => {
-                        doc.is_collection(&collection, cx)
-                            && doc.connection_id(cx) == Some(profile_id)
-                    }
-                    CollectionDocumentPresentation::AuditLike => {
-                        matches!(doc.as_legacy(), Some(DocumentHandle::Audit { entity, .. })
-                        if entity.read(cx).matches_event_stream(
-                            profile_id,
-                            &dbflux_core::EventStreamTarget {
-                                collection: collection.clone(),
-                                child_id: None,
-                            },
-                        ))
-                    }
-                })
-                .map(|doc| doc.id())
+            match presentation {
+                CollectionDocumentPresentation::DataGrid => self.tab_manager.read(cx).find_by_key(
+                    &crate::ui::document::DocumentKey::Collection {
+                        profile_id,
+                        collection: collection.clone(),
+                    },
+                    cx,
+                ),
+                CollectionDocumentPresentation::AuditLike => {
+                    let event_stream_target = dbflux_core::EventStreamTarget {
+                        collection: collection.clone(),
+                        child_id: None,
+                    };
+                    self.tab_manager
+                        .read(cx)
+                        .documents()
+                        .iter()
+                        .find(|doc| {
+                            matches!(doc.as_legacy(), Some(DocumentHandle::Audit { entity, .. })
+                            if entity.read(cx).matches_event_stream(
+                                profile_id,
+                                &event_stream_target,
+                            ))
+                        })
+                        .map(|doc| doc.id())
+                }
+            }
         } else {
             None
         };
@@ -524,7 +529,7 @@ impl Workspace {
             OpenDocumentDecision::OpenNew => {}
         }
 
-        let handle = match presentation {
+        match presentation {
             CollectionDocumentPresentation::DataGrid => {
                 let doc = cx.new(|cx| {
                     DataDocument::new_for_collection(
@@ -535,7 +540,10 @@ impl Workspace {
                         cx,
                     )
                 });
-                DocumentHandle::data(doc, cx)
+                let pane = DataDocument::into_pane(doc, cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
+                });
             }
             CollectionDocumentPresentation::AuditLike => {
                 let doc = cx.new(|cx| {
@@ -551,13 +559,12 @@ impl Workspace {
                         cx,
                     )
                 });
-                DocumentHandle::audit(doc, cx)
+                let handle = DocumentHandle::audit(doc, cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.open(Tab::Legacy(handle), cx);
+                });
             }
-        };
-
-        self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Legacy(handle), cx);
-        });
+        }
 
         log::info!(
             "Opened collection document: {}.{}",

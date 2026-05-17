@@ -2,9 +2,8 @@
 
 use super::audit::AuditDocument;
 use super::code::CodeDocument;
-use super::data_document::{DataDocument, DataDocumentEvent};
 use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
-use super::types::{DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
+use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
 use dbflux_core::RefreshPolicy;
@@ -20,11 +19,6 @@ pub enum DocumentHandle {
     Code {
         id: DocumentId,
         entity: Entity<CodeDocument>,
-    },
-    /// Data grid document (table browser or promoted result).
-    Data {
-        id: DocumentId,
-        entity: Entity<DataDocument>,
     },
     KeyValue {
         id: DocumentId,
@@ -44,12 +38,6 @@ impl DocumentHandle {
         Self::Code { id, entity }
     }
 
-    /// Creates a new Data document handle.
-    pub fn data(entity: Entity<DataDocument>, cx: &App) -> Self {
-        let id = entity.read(cx).id();
-        Self::Data { id, entity }
-    }
-
     pub fn key_value(entity: Entity<KeyValueDocument>, cx: &App) -> Self {
         let id = entity.read(cx).id();
         Self::KeyValue { id, entity }
@@ -65,7 +53,6 @@ impl DocumentHandle {
     pub fn id(&self) -> DocumentId {
         match self {
             Self::Code { id, .. } => *id,
-            Self::Data { id, .. } => *id,
             Self::KeyValue { id, .. } => *id,
             Self::Audit { id, .. } => *id,
         }
@@ -75,7 +62,6 @@ impl DocumentHandle {
     pub fn kind(&self) -> DocumentKind {
         match self {
             Self::Code { .. } => DocumentKind::Script,
-            Self::Data { .. } => DocumentKind::Data,
             Self::KeyValue { .. } => DocumentKind::RedisKeyBrowser,
             Self::Audit { .. } => DocumentKind::Audit,
         }
@@ -85,41 +71,6 @@ impl DocumentHandle {
     pub fn is_file(&self, path: &std::path::Path, cx: &App) -> bool {
         match self {
             Self::Code { entity, .. } => entity.read(cx).path().map(|p| p.as_path()) == Some(path),
-            _ => false,
-        }
-    }
-
-    /// Checks if this is a table document matching the given table.
-    pub fn is_table(&self, table: &dbflux_core::TableRef, cx: &App) -> bool {
-        match self {
-            Self::Data { entity, .. } => entity.read(cx).table_ref(cx).as_ref() == Some(table),
-            _ => false,
-        }
-    }
-
-    /// Checks if this is a table document matching the given table AND database.
-    /// Unlike `is_table`, this also compares the database field, which is necessary
-    /// when the same profile can browse tables across multiple databases.
-    pub fn is_table_with_database(
-        &self,
-        table: &dbflux_core::TableRef,
-        database: Option<&str>,
-        cx: &App,
-    ) -> bool {
-        match self {
-            Self::Data { entity, .. } => {
-                let doc = entity.read(cx);
-                doc.table_ref(cx).as_ref() == Some(table) && doc.database(cx).as_deref() == database
-            }
-            _ => false,
-        }
-    }
-
-    pub fn is_collection(&self, collection: &dbflux_core::CollectionRef, cx: &App) -> bool {
-        match self {
-            Self::Data { entity, .. } => {
-                entity.read(cx).collection_ref(cx).as_ref() == Some(collection)
-            }
             _ => false,
         }
     }
@@ -134,11 +85,10 @@ impl DocumentHandle {
         }
     }
 
-    /// Returns the connection (profile) ID for code, data, and key-value documents.
+    /// Returns the connection (profile) ID for code and key-value documents.
     pub fn connection_id(&self, cx: &App) -> Option<uuid::Uuid> {
         match self {
             Self::Code { entity, .. } => entity.read(cx).connection_id(),
-            Self::Data { entity, .. } => entity.read(cx).connection_id(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).connection_id(),
             Self::Audit { .. } => None,
         }
@@ -162,23 +112,6 @@ impl DocumentHandle {
                     state: doc.state(),
                     closable: true,
                     connection_id: doc.connection_id(),
-                }
-            }
-            Self::Data { id, entity } => {
-                let doc = entity.read(cx);
-                let icon = match doc.source_kind() {
-                    DataSourceKind::Table => DocumentIcon::Table,
-                    DataSourceKind::Collection => DocumentIcon::Collection,
-                    DataSourceKind::QueryResult => DocumentIcon::Table,
-                };
-                DocumentMetaSnapshot {
-                    id: *id,
-                    kind: DocumentKind::Data,
-                    title: doc.title(),
-                    icon,
-                    state: doc.state(),
-                    closable: true,
-                    connection_id: doc.connection_id(cx),
                 }
             }
             Self::KeyValue { id, entity } => {
@@ -217,7 +150,6 @@ impl DocumentHandle {
     pub fn can_close(&self, cx: &App) -> bool {
         match self {
             Self::Code { entity, .. } => entity.read(cx).can_close(cx),
-            Self::Data { entity, .. } => entity.read(cx).can_close(),
             Self::KeyValue { entity, .. } => entity.read(cx).can_close(),
             Self::Audit { .. } => true,
         }
@@ -232,7 +164,6 @@ impl DocumentHandle {
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
         match self {
             Self::Code { entity, .. } => entity.read(cx).refresh_policy(),
-            Self::Data { entity, .. } => entity.read(cx).refresh_policy(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).refresh_policy(),
             Self::Audit { .. } => RefreshPolicy::default(),
         }
@@ -242,9 +173,6 @@ impl DocumentHandle {
         match self {
             Self::Code { entity, .. } => {
                 entity.update(cx, |doc, _cx| doc.set_active_tab(active));
-            }
-            Self::Data { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.set_active_tab(active, cx));
             }
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, _cx| doc.set_active_tab(active));
@@ -260,9 +188,6 @@ impl DocumentHandle {
             Self::Code { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
             }
-            Self::Data { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
-            }
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.set_refresh_policy(policy, cx));
             }
@@ -276,7 +201,6 @@ impl DocumentHandle {
     pub fn render(&self) -> AnyElement {
         match self {
             Self::Code { entity, .. } => entity.clone().into_any_element(),
-            Self::Data { entity, .. } => entity.clone().into_any_element(),
             Self::KeyValue { entity, .. } => entity.clone().into_any_element(),
             Self::Audit { entity, .. } => entity.clone().into_any_element(),
         }
@@ -286,9 +210,6 @@ impl DocumentHandle {
     pub fn dispatch_command(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
         match self {
             Self::Code { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
-            }
-            Self::Data { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
             }
             Self::KeyValue { entity, .. } => {
@@ -306,9 +227,6 @@ impl DocumentHandle {
             Self::Code { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
-            Self::Data { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.focus(window, cx));
-            }
             Self::KeyValue { entity, .. } => {
                 entity.update(cx, |doc, cx| doc.focus(window, cx));
             }
@@ -319,29 +237,23 @@ impl DocumentHandle {
     }
 
     /// Returns the active context for keyboard handling.
-    /// Documents determine their context based on internal focus state.
     pub fn active_context(&self, cx: &App) -> ContextId {
         match self {
             Self::Code { entity, .. } => entity.read(cx).active_context(cx),
-            Self::Data { entity, .. } => entity.read(cx).active_context(cx),
             Self::KeyValue { entity, .. } => entity.read(cx).active_context(cx),
             Self::Audit { entity, .. } => entity.read(cx).active_context(),
         }
     }
 
     /// Short summary of pending changes for the dirty-dot tooltip.
-    ///
-    /// Returns `None` when the document has no pending edits or does not track them.
     pub fn change_summary(&self, cx: &App) -> Option<String> {
         match self {
             Self::Code { entity, .. } => entity.read(cx).change_summary(cx),
-            Self::Data { entity, .. } => entity.read(cx).change_summary(cx),
             Self::KeyValue { .. } | Self::Audit { .. } => None,
         }
     }
 
     /// Subscribe to document events (returns Subscription).
-    /// Note: For Data documents, events are converted to DocumentEvent.
     pub fn subscribe<F>(&self, cx: &mut App, callback: F) -> Subscription
     where
         F: Fn(&DocumentEvent, &mut App) + 'static,
@@ -350,33 +262,6 @@ impl DocumentHandle {
             Self::Code { entity, .. } => {
                 cx.subscribe(entity, move |_entity, event, cx| callback(event, cx))
             }
-            Self::Data { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
-                let doc_event = match event {
-                    DataDocumentEvent::MetaChanged => DocumentEvent::MetaChanged,
-                    DataDocumentEvent::RequestFocus => DocumentEvent::RequestFocus,
-                    DataDocumentEvent::RequestSqlPreview {
-                        context,
-                        generation_type,
-                    } => DocumentEvent::RequestSqlPreview {
-                        context: context.clone(),
-                        generation_type: *generation_type,
-                    },
-                    DataDocumentEvent::OpenInspector { title, content } => {
-                        DocumentEvent::OpenInspector {
-                            title: title.clone(),
-                            content: content.clone(),
-                        }
-                    }
-                    DataDocumentEvent::ChartThisQuery {
-                        query,
-                        connection_id,
-                    } => DocumentEvent::ChartThisQuery {
-                        query: query.clone(),
-                        connection_id: *connection_id,
-                    },
-                };
-                callback(&doc_event, cx);
-            }),
             Self::KeyValue { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
                 if matches!(event, KeyValueDocumentEvent::RequestFocus) {
                     callback(&DocumentEvent::RequestFocus, cx);

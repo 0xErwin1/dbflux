@@ -1,8 +1,10 @@
+mod pane;
+
 use super::data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
+use super::handle::DocumentEvent;
 use super::types::{DataSourceKind, DocumentId, DocumentState};
 use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
-use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
 use dbflux_core::{CollectionRef, QueryResult, RefreshPolicy, TableRef};
 use gpui::*;
 use std::sync::Arc;
@@ -19,30 +21,6 @@ pub struct DataDocument {
     _subscription: Subscription,
 }
 
-/// Events emitted by DataDocument.
-#[derive(Clone, Debug)]
-pub enum DataDocumentEvent {
-    #[allow(dead_code)]
-    MetaChanged,
-    /// The document area was clicked and wants focus.
-    RequestFocus,
-    /// Request to show SQL preview modal.
-    RequestSqlPreview {
-        context: Box<SqlPreviewContext>,
-        generation_type: crate::ui::overlays::sql_preview_modal::SqlGenerationType,
-    },
-    /// Request to mount content into the workspace-level inspector rail.
-    OpenInspector {
-        title: SharedString,
-        content: AnyView,
-    },
-    /// User requested "Chart this query" from the context menu.
-    ChartThisQuery {
-        query: String,
-        connection_id: Option<Uuid>,
-    },
-}
-
 impl DataDocument {
     pub fn new_for_table(
         profile_id: Uuid,
@@ -57,40 +35,7 @@ impl DataDocument {
             DataGridPanel::new_for_table(profile_id, table, database, app_state, window, cx)
         });
 
-        let subscription =
-            cx.subscribe(
-                &data_grid,
-                |_this, _grid, event: &DataGridEvent, cx| match event {
-                    DataGridEvent::Focused => {
-                        cx.emit(DataDocumentEvent::RequestFocus);
-                    }
-                    DataGridEvent::RequestSqlPreview {
-                        context,
-                        generation_type,
-                    } => {
-                        cx.emit(DataDocumentEvent::RequestSqlPreview {
-                            context: context.clone(),
-                            generation_type: *generation_type,
-                        });
-                    }
-                    DataGridEvent::OpenInspector { title, content } => {
-                        cx.emit(DataDocumentEvent::OpenInspector {
-                            title: title.clone(),
-                            content: content.clone(),
-                        });
-                    }
-                    DataGridEvent::ChartThisQuery {
-                        query,
-                        connection_id,
-                    } => {
-                        cx.emit(DataDocumentEvent::ChartThisQuery {
-                            query: query.clone(),
-                            connection_id: *connection_id,
-                        });
-                    }
-                    _ => {}
-                },
-            );
+        let subscription = cx.subscribe(&data_grid, Self::on_grid_event);
 
         Self {
             id: DocumentId::new(),
@@ -114,40 +59,7 @@ impl DataDocument {
             DataGridPanel::new_for_collection(profile_id, collection, app_state, window, cx)
         });
 
-        let subscription =
-            cx.subscribe(
-                &data_grid,
-                |_this, _grid, event: &DataGridEvent, cx| match event {
-                    DataGridEvent::Focused => {
-                        cx.emit(DataDocumentEvent::RequestFocus);
-                    }
-                    DataGridEvent::RequestSqlPreview {
-                        context,
-                        generation_type,
-                    } => {
-                        cx.emit(DataDocumentEvent::RequestSqlPreview {
-                            context: context.clone(),
-                            generation_type: *generation_type,
-                        });
-                    }
-                    DataGridEvent::OpenInspector { title, content } => {
-                        cx.emit(DataDocumentEvent::OpenInspector {
-                            title: title.clone(),
-                            content: content.clone(),
-                        });
-                    }
-                    DataGridEvent::ChartThisQuery {
-                        query,
-                        connection_id,
-                    } => {
-                        cx.emit(DataDocumentEvent::ChartThisQuery {
-                            query: query.clone(),
-                            connection_id: *connection_id,
-                        });
-                    }
-                    _ => {}
-                },
-            );
+        let subscription = cx.subscribe(&data_grid, Self::on_grid_event);
 
         Self {
             id: DocumentId::new(),
@@ -171,40 +83,7 @@ impl DataDocument {
         let data_grid =
             cx.new(|cx| DataGridPanel::new_for_result(result, query, None, app_state, window, cx));
 
-        let subscription =
-            cx.subscribe(
-                &data_grid,
-                |_this, _grid, event: &DataGridEvent, cx| match event {
-                    DataGridEvent::Focused => {
-                        cx.emit(DataDocumentEvent::RequestFocus);
-                    }
-                    DataGridEvent::RequestSqlPreview {
-                        context,
-                        generation_type,
-                    } => {
-                        cx.emit(DataDocumentEvent::RequestSqlPreview {
-                            context: context.clone(),
-                            generation_type: *generation_type,
-                        });
-                    }
-                    DataGridEvent::OpenInspector { title, content } => {
-                        cx.emit(DataDocumentEvent::OpenInspector {
-                            title: title.clone(),
-                            content: content.clone(),
-                        });
-                    }
-                    DataGridEvent::ChartThisQuery {
-                        query,
-                        connection_id,
-                    } => {
-                        cx.emit(DataDocumentEvent::ChartThisQuery {
-                            query: query.clone(),
-                            connection_id: *connection_id,
-                        });
-                    }
-                    _ => {}
-                },
-            );
+        let subscription = cx.subscribe(&data_grid, Self::on_grid_event);
 
         Self {
             id: DocumentId::new(),
@@ -213,6 +92,45 @@ impl DataDocument {
             data_grid,
             focus_handle: cx.focus_handle(),
             _subscription: subscription,
+        }
+    }
+
+    /// Forwards `DataGridEvent` emissions to `DocumentEvent`.
+    fn on_grid_event(
+        _this: &mut Self,
+        _grid: Entity<DataGridPanel>,
+        event: &DataGridEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            DataGridEvent::Focused => {
+                cx.emit(DocumentEvent::RequestFocus);
+            }
+            DataGridEvent::RequestSqlPreview {
+                context,
+                generation_type,
+            } => {
+                cx.emit(DocumentEvent::RequestSqlPreview {
+                    context: context.clone(),
+                    generation_type: *generation_type,
+                });
+            }
+            DataGridEvent::OpenInspector { title, content } => {
+                cx.emit(DocumentEvent::OpenInspector {
+                    title: title.clone(),
+                    content: content.clone(),
+                });
+            }
+            DataGridEvent::ChartThisQuery {
+                query,
+                connection_id,
+            } => {
+                cx.emit(DocumentEvent::ChartThisQuery {
+                    query: query.clone(),
+                    connection_id: *connection_id,
+                });
+            }
+            _ => {}
         }
     }
 
@@ -274,9 +192,6 @@ impl DataDocument {
     /// For `QueryResult` sources the original query string is returned. For `Table`
     /// and `Collection` sources the grid builds the query internally and does not
     /// expose it as a user-readable string — `None` is returned in those cases.
-    ///
-    /// Callers such as `ChartHost::current_query` use this to decide whether
-    /// "Chart this query" is available. A `None` result silently disables that action.
     pub fn synthesized_query(&self, cx: &App) -> Option<String> {
         match self.data_grid.read(cx).source() {
             DataSource::QueryResult { original_query, .. } => {
@@ -326,7 +241,7 @@ impl DataDocument {
     }
 }
 
-impl EventEmitter<DataDocumentEvent> for DataDocument {}
+impl EventEmitter<DocumentEvent> for DataDocument {}
 
 impl Render for DataDocument {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
