@@ -1145,6 +1145,10 @@ impl CodeDocument {
                     // original_query, so can_chart_from_context_menu is always false for them.
                     // This arm exists only for exhaustiveness.
                 }
+                DataGridEvent::RefreshPolicyReset(_) => {
+                    // CodeDocument result tabs do not own a ResultPanel, so there
+                    // is no dropdown to sync. Ignored.
+                }
             },
         );
 

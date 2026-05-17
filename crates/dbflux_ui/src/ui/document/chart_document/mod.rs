@@ -560,8 +560,8 @@ impl ChartHost for ChartDocument {
         self.time_range_panel.clone()
     }
 
-    fn refresh_dropdown(&self, _cx: &App) -> Entity<Dropdown> {
-        self.refresh_dropdown.clone()
+    fn refresh_dropdown(&self, _cx: &App) -> Option<Entity<Dropdown>> {
+        Some(self.refresh_dropdown.clone())
     }
 
     fn current_result(&self, _cx: &App) -> Option<Arc<QueryResult>> {

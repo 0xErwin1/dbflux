@@ -208,7 +208,7 @@ impl Render for ChartDocument {
             let ctx = ChartToolbarContext {
                 theme: &theme,
                 chart_shell: self.chart_shell.clone(),
-                refresh_dropdown: self.refresh_dropdown.clone(),
+                refresh_dropdown: Some(self.refresh_dropdown.clone()),
                 time_range_panel: self.time_range_panel.clone(),
                 row_count,
                 resolved_window,

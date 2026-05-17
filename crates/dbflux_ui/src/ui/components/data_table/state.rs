@@ -703,12 +703,7 @@ impl DataTableState {
     /// The caller passes `coord` directly because the `DropdownDismissed`
     /// event may have already cleared `editing_cell` via `cancel_enum_edit`
     /// by the time `DropdownSelectionChanged` is delivered (auto-close race).
-    fn apply_enum_selection_at(
-        &mut self,
-        coord: CellCoord,
-        value: &str,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_enum_selection_at(&mut self, coord: CellCoord, value: &str, cx: &mut Context<Self>) {
         use super::model::VisualRowSource;
 
         // Clear editing state first so a subsequent `cancel_enum_edit` from

@@ -17,9 +17,7 @@ use dbflux_components::chart::{
 use dbflux_components::chart::{SourceRowRef, point_inspector_element};
 use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
-use dbflux_core::{
-    ColumnKind, DatabaseCategory, Pagination, QueryResultShape, SortDirection, Value,
-};
+use dbflux_core::{ColumnKind, Pagination, QueryResultShape, SortDirection, Value};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -161,14 +159,8 @@ impl Render for DataGridPanel {
         let shows_table_content = matches!(content_mode, DataGridContentMode::Table);
         let shows_content_controls = has_data || shows_table_content;
 
-        // Show result-tabs strip (Table | Chart) when the result shape is Table
-        // and chart auto-detection succeeded or the driver is TimeSeries.
-        let is_time_series_source =
-            DataGridPanel::connection_category(&self.source, &self.app_state, cx)
-                == Some(DatabaseCategory::TimeSeries);
-        let show_chart_tabs_strip = self.result.shape == QueryResultShape::Table
-            && (self.chart_available(cx) || is_time_series_source)
-            && (shows_table_content || uses_result_view);
+        // The result-tabs strip (Table | Chart) has been extracted to ResultPanel
+        // which wraps DataDocument. DataGridPanel no longer renders the strip.
 
         // Get edit state from table
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
@@ -321,7 +313,6 @@ impl Render for DataGridPanel {
             // Grid, Document, or Result View
             .child({
                 let result_view_mode = self.result_view_mode;
-                let row_count_for_strip = row_count;
 
                 div()
                     .flex_1()
@@ -336,11 +327,7 @@ impl Render for DataGridPanel {
                             }
                         }),
                     )
-                    // Result-tabs strip (Table | Chart) at the top of the content area.
-                    .when(show_chart_tabs_strip, |d| {
-                        d.child(self.render_result_tabs_strip(row_count_for_strip, &theme, cx))
-                    })
-                    // Content body — fills remaining space below the strip.
+                    // Content body — fills remaining space.
                     .child({
                         let content = div().flex_1().overflow_hidden();
 
@@ -546,8 +533,12 @@ impl DataGridPanel {
                     ),
             )
             .child(
+                // The refresh dropdown widget is rendered by the surrounding
+                // `ResultPanel`'s mode bar. Only the action button (Run / Cancel)
+                // lives inside the grid toolbar so it can trigger `refresh` /
+                // `cancel_primary` directly.
                 div()
-                    .id("refresh-control")
+                    .id("refresh-action-btn")
                     .h(Heights::BUTTON)
                     .flex()
                     .items_center()
@@ -593,13 +584,6 @@ impl DataGridPanel {
                                 .color(theme.foreground),
                             )
                             .child(Text::body(refresh_label)),
-                    )
-                    .child(div().w(px(1.0)).h_full().bg(theme.input))
-                    .child(
-                        div()
-                            .w(px(28.0))
-                            .h_full()
-                            .child(self.refresh_dropdown.clone()),
                     ),
             )
             .when(self.can_toggle_view(), |d| {
@@ -1188,86 +1172,6 @@ impl DataGridPanel {
     }
 
     // -- Result View Renderers --
-
-    /// Render the Table / Chart tab strip that appears above the result content
-    /// area when the result is Table-shaped and chart detection succeeded (or the
-    /// driver is TimeSeries).
-    ///
-    /// Each tab switches `result_view_mode` on click. The active tab is underlined
-    /// with the theme accent and shown in full foreground weight.
-    pub(super) fn render_result_tabs_strip(
-        &self,
-        row_count: usize,
-        theme: &gpui_component::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let current_mode = self.result_view_mode;
-
-        let tabs: &[(ResultViewMode, &str)] = &[
-            (ResultViewMode::Table, "Data"),
-            (ResultViewMode::Chart, "Chart"),
-        ];
-
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(px(30.0))
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .children(tabs.iter().map(|(mode, label)| {
-                let mode = *mode;
-                let is_active = mode == current_mode;
-                let label_text: SharedString = (*label).into();
-
-                div()
-                    .id(ElementId::Name(
-                        format!("result-tab-{}", label.to_lowercase()).into(),
-                    ))
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .h_full()
-                    .px(Spacing::SM)
-                    .cursor_pointer()
-                    .border_b_2()
-                    .border_color(if is_active {
-                        theme.accent
-                    } else {
-                        gpui::transparent_black()
-                    })
-                    .text_color(if is_active {
-                        theme.foreground
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.set_result_view_mode(mode, cx);
-                        }),
-                    )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .when(is_active, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
-                            .child(label_text),
-                    )
-                    // Row-count badge on the Data tab only.
-                    .when(mode == ResultViewMode::Table, |d| {
-                        d.child(
-                            div()
-                                .text_size(px(10.0))
-                                .text_color(theme.muted_foreground)
-                                .font(font("JetBrains Mono"))
-                                .child(SharedString::from(format!("{}", row_count))),
-                        )
-                    })
-            }))
-    }
 
     pub(super) fn render_result_view(
         &mut self,

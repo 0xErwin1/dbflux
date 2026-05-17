@@ -4,6 +4,8 @@
 //! only on `gpui` and `gpui_component`. It has zero domain dependencies.
 
 #![allow(clippy::type_complexity)]
+// Required by the `#[gpui::test]` attribute macro expansion in test modules.
+#![recursion_limit = "512"]
 
 pub mod actions;
 pub mod density;
@@ -18,6 +20,7 @@ pub mod composites;
 pub mod controls;
 pub mod primitives;
 pub mod result_panel;
+pub mod result_view;
 pub mod saved_chart;
 
 pub use saved_chart::{
