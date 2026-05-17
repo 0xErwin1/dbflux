@@ -21,7 +21,7 @@ use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
-    CodeDocument, DataDocument, DocumentHandle, Tab, TabBar, TabBarEvent, TabManager,
+    CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager,
 };
 
 #[cfg(feature = "mcp")]

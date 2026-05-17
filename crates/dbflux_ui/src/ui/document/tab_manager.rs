@@ -145,7 +145,9 @@ impl Tab {
 
     pub fn matches_dedup_key(&self, key: &DocumentKey, cx: &App) -> bool {
         match self {
-            Tab::Legacy(h) => legacy_matches(h, key, cx),
+            // DocumentHandle is uninhabited (all types migrated to PaneHandle in Arcs 1–5).
+            // This arm is unreachable in practice; Legacy tabs are never constructed.
+            Tab::Legacy(h) => match *h {},
             Tab::Pane(p) => p.matches_dedup_key(key, cx),
         }
     }
@@ -173,6 +175,15 @@ impl Tab {
         match self {
             Tab::Legacy(h) => Some(h),
             Tab::Pane(_) => None,
+        }
+    }
+
+    /// Returns the inner `PaneHandle` for `Pane` tabs; returns `None` for
+    /// legacy tabs. Mirrors `as_legacy` for the new-style path.
+    pub fn as_pane(&self) -> Option<&PaneHandle> {
+        match self {
+            Tab::Pane(p) => Some(p.as_ref()),
+            Tab::Legacy(_) => None,
         }
     }
 
@@ -708,26 +719,6 @@ impl EventEmitter<TabManagerEvent> for TabManager {}
 ///
 /// Data documents are now always `Pane` tabs, so `Table` and `Collection` keys
 /// always return `false` here. Removed in Arc 6 when the `Legacy` variant is deleted.
-fn legacy_matches(handle: &DocumentHandle, key: &DocumentKey, cx: &App) -> bool {
-    match key {
-        // Chart and Data documents are now always Pane tabs; no Legacy tabs exist.
-        DocumentKey::Chart { .. } | DocumentKey::Table { .. } | DocumentKey::Collection { .. } => {
-            let _ = handle;
-            false
-        }
-        DocumentKey::File { path } => handle.is_file(path, cx),
-        DocumentKey::KeyValueDb {
-            profile_id,
-            database,
-        } => handle.is_key_value_database(*profile_id, database, cx),
-        DocumentKey::Audit => matches!(handle, DocumentHandle::Audit { .. }),
-        DocumentKey::EventStream { profile_id, target } => {
-            let DocumentHandle::Audit { entity, .. } = handle;
-            entity.read(cx).matches_event_stream(*profile_id, target)
-        }
-    }
-}
-
 fn ids_to_close_others(all_ids: &[DocumentId], keep_id: DocumentId) -> Vec<DocumentId> {
     all_ids
         .iter()
@@ -855,31 +846,13 @@ mod tests {
 
     // --- Tab enum structural tests ---
 
-    /// `Tab::as_legacy` returns `None` for the `Pane` variant.
+    /// `ids_to_close_right` from the first position returns all remaining tabs.
     ///
-    /// This verifies the bridge contract: the `as_legacy()` method correctly
-    /// distinguishes between the two arms so pattern-match call sites remain
-    /// correct.
-    ///
-    /// Note: constructing a full `Tab::Pane` requires a GPUI App context (for
-    /// entity creation). This test verifies the structural contract by checking
-    /// `legacy_matches` on known inputs using the pure `Audit` key variant,
-    /// which does not require reading any entity state.
+    /// This was originally a structural test for `legacy_matches` / `Tab::as_legacy`.
+    /// Those helpers have been removed (Arc 5): all documents are now `Tab::Pane`.
+    /// The test body remains as a regression guard for the `ids_to_close_*` helpers.
     #[test]
-    fn legacy_matches_audit_key_returns_true_for_audit_handle() {
-        use super::super::audit::AuditDocument;
-        use super::{DocumentHandle, DocumentKey, Tab, legacy_matches};
-        use gpui::{Entity, TestAppContext};
-
-        // We can't construct a real AuditDocument without a full app context,
-        // but we can verify the `legacy_matches` function compiles correctly
-        // and that the `DocumentKey::Audit` variant matches the pattern.
-        // The actual behavior is covered by integration smoke tests.
-        //
-        // Structural assertion: `Tab::Pane` arm returns `None` from `as_legacy()`.
-        // We can verify this by inspection since the trait method is not callable
-        // without a real `PaneHandle` constructor (which comes in Arc 1).
-        // For now assert on the `ids_to_close_*` helper stability:
+    fn close_right_from_first_returns_two_tabs() {
         let ids = make_ids(3);
         let result = ids_to_close_right(&ids, ids[0]);
         assert_eq!(

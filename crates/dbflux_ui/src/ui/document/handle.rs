@@ -1,180 +1,101 @@
 #![allow(dead_code)]
 
-use super::audit::AuditDocument;
-use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
 use dbflux_core::RefreshPolicy;
-use gpui::{AnyElement, App, Entity, IntoElement, Subscription, Window};
+use gpui::{AnyElement, App, Subscription, Window};
+
+use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 
 /// Wrapper that allows storing different document types in a homogeneous collection.
-/// The `id` is stored inline for quick access without needing `cx`.
 ///
-/// Note: `Code` and `KeyValue` documents are no longer stored here — they are wrapped
-/// in `PaneHandle` via their respective `into_pane` constructors (Arc 3 and Arc 4).
-/// This enum is kept only for the remaining legacy document type (`Audit`) until
-/// Arc 6 cleanup.
+/// All document types have been migrated to `PaneHandle` via their respective
+/// `into_pane` constructors (Arcs 1–5). This enum is now empty and will be deleted
+/// in Arc 6 cleanup (T-6-1). The match arms in `tab_manager.rs` are unreachable
+/// in practice (no Legacy tabs are constructed), but they still compile because
+/// a match on an uninhabited enum is exhaustive.
 #[derive(Clone)]
-pub enum DocumentHandle {
-    /// Audit event viewer document.
-    Audit {
-        id: DocumentId,
-        entity: Entity<AuditDocument>,
-    },
-}
+pub enum DocumentHandle {}
 
 impl DocumentHandle {
-    /// Creates a new Audit document handle.
-    pub fn audit(entity: Entity<AuditDocument>, cx: &App) -> Self {
-        let id = entity.read(cx).id();
-        Self::Audit { id, entity }
-    }
-
-    /// Document ID (no cx required).
     pub fn id(&self) -> DocumentId {
-        match self {
-            Self::Audit { id, .. } => *id,
-        }
+        match *self {}
     }
 
-    /// Document kind (no cx required).
     pub fn kind(&self) -> DocumentKind {
-        match self {
-            Self::Audit { .. } => DocumentKind::Audit,
-        }
+        match *self {}
     }
 
-    /// Checks if this document is backed by the given file path.
-    ///
-    /// Always returns `false` — no remaining legacy type is file-backed.
     pub fn is_file(&self, _path: &std::path::Path, _cx: &App) -> bool {
-        false
+        match *self {}
     }
 
-    /// Returns `false` for all remaining legacy types.
-    ///
-    /// KeyValue documents are now `Tab::Pane`; the `Tab::is_key_value_database`
-    /// bridge method handles dedup via `matches_dedup_key`.
     pub fn is_key_value_database(
         &self,
         _profile_id: uuid::Uuid,
         _database: &str,
         _cx: &App,
     ) -> bool {
-        false
+        match *self {}
     }
 
-    /// Returns the connection (profile) ID for this document.
     pub fn connection_id(&self, _cx: &App) -> Option<uuid::Uuid> {
-        match self {
-            Self::Audit { .. } => None,
-        }
+        match *self {}
     }
 
-    /// Gets metadata snapshot (requires cx to read entity).
-    pub fn meta_snapshot(&self, cx: &App) -> DocumentMetaSnapshot {
-        match self {
-            Self::Audit { id, entity } => {
-                let doc = entity.read(cx);
-                DocumentMetaSnapshot {
-                    id: *id,
-                    kind: DocumentKind::Audit,
-                    title: doc.title().to_string(),
-                    icon: DocumentIcon::Audit,
-                    state: doc.state(),
-                    closable: true,
-                    connection_id: None,
-                }
-            }
-        }
+    pub fn meta_snapshot(&self, _cx: &App) -> DocumentMetaSnapshot {
+        match *self {}
     }
 
-    /// Title for display in the tab bar.
-    pub fn tab_title(&self, cx: &App) -> String {
-        self.meta_snapshot(cx).title
+    pub fn tab_title(&self, _cx: &App) -> String {
+        match *self {}
     }
 
-    /// Can this document be closed? (checks unsaved changes)
     pub fn can_close(&self, _cx: &App) -> bool {
-        match self {
-            Self::Audit { .. } => true,
-        }
+        match *self {}
     }
 
     pub fn flush_auto_save(&self, _cx: &App) {
-        // No remaining legacy document type has auto-save.
+        match *self {}
     }
 
     pub fn refresh_policy(&self, _cx: &App) -> RefreshPolicy {
-        match self {
-            Self::Audit { .. } => RefreshPolicy::default(),
-        }
+        match *self {}
     }
 
     pub fn set_active_tab(&self, _active: bool, _cx: &mut App) {
-        match self {
-            Self::Audit { .. } => {
-                // AuditDocument doesn't need tab state
-            }
-        }
+        match *self {}
     }
 
     pub fn set_refresh_policy(&self, _policy: RefreshPolicy, _cx: &mut App) {
-        match self {
-            Self::Audit { .. } => {
-                // AuditDocument doesn't use refresh policy
-            }
-        }
+        match *self {}
     }
 
-    /// Renders the document.
     pub fn render(&self) -> AnyElement {
-        match self {
-            Self::Audit { entity, .. } => entity.clone().into_any_element(),
-        }
+        match *self {}
     }
 
-    /// Dispatch commands to the active document.
-    pub fn dispatch_command(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
-        match self {
-            Self::Audit { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.dispatch_command(cmd, window, cx))
-            }
-        }
+    pub fn dispatch_command(&self, _cmd: Command, _window: &mut Window, _cx: &mut App) -> bool {
+        match *self {}
     }
 
-    /// Gives focus to the document.
-    pub fn focus(&self, window: &mut Window, cx: &mut App) {
-        match self {
-            Self::Audit { entity, .. } => {
-                entity.update(cx, |doc, cx| doc.focus(window, cx));
-            }
-        }
+    pub fn focus(&self, _window: &mut Window, _cx: &mut App) {
+        match *self {}
     }
 
-    /// Returns the active context for keyboard handling.
-    pub fn active_context(&self, cx: &App) -> ContextId {
-        match self {
-            Self::Audit { entity, .. } => entity.read(cx).active_context(),
-        }
+    pub fn active_context(&self, _cx: &App) -> ContextId {
+        match *self {}
     }
 
-    /// Short summary of pending changes for the dirty-dot tooltip.
     pub fn change_summary(&self, _cx: &App) -> Option<String> {
-        // No remaining legacy document type carries unsaved changes.
-        None
+        match *self {}
     }
 
-    /// Subscribe to document events (returns Subscription).
-    pub fn subscribe<F>(&self, cx: &mut App, callback: F) -> Subscription
+    pub fn subscribe<F>(&self, _cx: &mut App, _callback: F) -> Subscription
     where
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
-        match self {
-            Self::Audit { entity, .. } => {
-                cx.subscribe(entity, move |_, ev: &DocumentEvent, cx| callback(ev, cx))
-            }
-        }
+        match *self {}
     }
 }
 

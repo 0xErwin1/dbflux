@@ -53,8 +53,9 @@ fn audit_workspace_actions_retarget_existing_document_and_close_governance_overl
     assert!(audit_document.contains("pub fn set_category_filter"));
     assert!(audit_document.contains("doc.pending_initial_load = false;"));
 
-    // Unified audit viewer clears MCP filter when opened generically
-    assert!(workspace_actions.contains("doc.set_category_filter(None, cx);"));
+    // Unified audit viewer clears MCP filter when opened generically.
+    // After Arc 5 migration, the reset goes through the pane's set_category_filter closure.
+    assert!(workspace_actions.contains("pane.set_category_filter"));
     assert!(workspace_actions.contains("self.active_governance_panel = None;"));
 }
 

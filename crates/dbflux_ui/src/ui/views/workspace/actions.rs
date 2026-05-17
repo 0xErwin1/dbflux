@@ -237,28 +237,29 @@ impl Workspace {
     /// Opens the global audit viewer as a document tab.
     pub(super) fn open_audit_viewer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::document::AuditDocument;
-
-        // Check if an audit document is already open.
-        let existing_audit = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .find_map(|tab| {
-                let handle = tab.as_legacy()?;
-                let crate::ui::document::DocumentHandle::Audit { id, entity } = handle;
-                Some((*id, entity.clone()))
-            });
+        use crate::ui::document::DocumentKey;
 
         self.active_governance_panel = None;
 
-        if let Some((id, entity)) = existing_audit {
-            entity.update(cx, |doc, cx| {
-                doc.set_category_filter(None, cx);
-            });
+        // Check if an audit document is already open.
+        let existing_id = self
+            .tab_manager
+            .read(cx)
+            .find_by_key(&DocumentKey::Audit, cx);
 
-            // Focus the existing audit tab
+        if let Some(id) = existing_id {
+            // Reset the category filter and focus the existing audit tab.
+            // Both operations are done in a single update to avoid multiple borrows.
             self.tab_manager.update(cx, |mgr, cx| {
+                if let Some(pane) = mgr
+                    .documents()
+                    .iter()
+                    .find(|t| t.id() == id)
+                    .and_then(|t| t.as_pane())
+                    && let Some(f) = &pane.set_category_filter
+                {
+                    f(None, cx);
+                }
                 mgr.activate(id, cx);
             });
 
@@ -269,12 +270,12 @@ impl Workspace {
             return;
         }
 
-        // Create a new audit document
+        // Create a new audit document.
         let doc = cx.new(|cx| AuditDocument::new(self.app_state.clone(), window, cx));
-        let handle = crate::ui::document::DocumentHandle::audit(doc, cx);
+        let pane = AuditDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Legacy(handle), cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
@@ -484,22 +485,14 @@ impl Workspace {
                     cx,
                 ),
                 CollectionDocumentPresentation::AuditLike => {
-                    let event_stream_target = dbflux_core::EventStreamTarget {
+                    use crate::ui::document::DocumentKey;
+                    let target = dbflux_core::EventStreamTarget {
                         collection: collection.clone(),
                         child_id: None,
                     };
                     self.tab_manager
                         .read(cx)
-                        .documents()
-                        .iter()
-                        .find(|doc| {
-                            matches!(doc.as_legacy(), Some(DocumentHandle::Audit { entity, .. })
-                            if entity.read(cx).matches_event_stream(
-                                profile_id,
-                                &event_stream_target,
-                            ))
-                        })
-                        .map(|doc| doc.id())
+                        .find_by_key(&DocumentKey::EventStream { profile_id, target }, cx)
                 }
             }
         } else {
@@ -558,9 +551,9 @@ impl Workspace {
                         cx,
                     )
                 });
-                let handle = DocumentHandle::audit(doc, cx);
+                let pane = crate::ui::document::AuditDocument::into_pane(doc, cx);
                 self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.open(Tab::Legacy(handle), cx);
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
                 });
             }
         }
@@ -587,15 +580,14 @@ impl Workspace {
             .contains_key(&profile_id);
 
         let existing_id = if has_connection {
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find(|doc| {
-                    matches!(doc.as_legacy(), Some(DocumentHandle::Audit { entity, .. })
-                        if entity.read(cx).matches_event_stream(profile_id, &target))
-                })
-                .map(|doc| doc.id())
+            use crate::ui::document::DocumentKey;
+            self.tab_manager.read(cx).find_by_key(
+                &DocumentKey::EventStream {
+                    profile_id,
+                    target: target.clone(),
+                },
+                cx,
+            )
         } else {
             None
         };
@@ -628,8 +620,9 @@ impl Workspace {
             )
         });
 
+        let pane = crate::ui::document::AuditDocument::into_pane(doc, cx);
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Legacy(DocumentHandle::audit(doc, cx)), cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
     }
 

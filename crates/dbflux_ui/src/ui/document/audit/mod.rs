@@ -2,6 +2,7 @@
 
 mod commands;
 mod filters;
+pub mod pane;
 mod render;
 mod source_adapter;
 pub mod view;
@@ -551,6 +552,13 @@ impl AuditDocument {
 
     fn is_external_event_stream(&self) -> bool {
         matches!(self.source, AuditDocumentSource::ExternalEventStream { .. })
+    }
+
+    /// Returns `true` when this document is backed by the built-in audit
+    /// store (as opposed to an external event stream). Used for deduplication:
+    /// only one internal audit viewer may be open at a time.
+    pub fn is_internal(&self) -> bool {
+        matches!(self.source, AuditDocumentSource::Internal { .. })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1383,6 +1391,16 @@ impl AuditDocument {
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.load_events(cx);
+    }
+
+    /// Returns the current auto-refresh policy.
+    pub fn current_refresh_policy(&self) -> RefreshPolicy {
+        self.refresh_policy
+    }
+
+    /// Applies a new refresh policy; no-op if the policy is unchanged.
+    pub fn apply_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
+        self.set_refresh_policy(policy, cx);
     }
 
     // ── Focus ─────────────────────────────────────────────────────────────
