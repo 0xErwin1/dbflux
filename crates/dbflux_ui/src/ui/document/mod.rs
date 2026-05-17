@@ -9,6 +9,7 @@ mod code;
 mod data_document;
 mod data_grid_panel;
 mod data_view;
+pub mod data_view_trait;
 pub mod dedup;
 
 #[cfg(feature = "mcp")]
@@ -30,6 +31,7 @@ pub use code::CodeDocument;
 pub use data_document::DataDocument;
 pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 pub use data_view::{DataViewConfig, DataViewMode};
+pub use data_view_trait::DataView;
 
 #[cfg(feature = "mcp")]
 pub use governance::McpApprovalsView;
