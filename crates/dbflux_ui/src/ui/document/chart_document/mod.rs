@@ -137,12 +137,15 @@ impl ChartDocument {
         });
 
         let refresh_dropdown = cx.new(|_cx| {
-            Dropdown::new("chart-doc-refresh").items(vec![
-                DropdownItem::new("Off"),
-                DropdownItem::new("30s"),
-                DropdownItem::new("1m"),
-                DropdownItem::new("5m"),
-            ])
+            let items = RefreshPolicy::ALL
+                .iter()
+                .map(|policy| DropdownItem::new(policy.label()))
+                .collect();
+
+            Dropdown::new("chart-doc-refresh")
+                .items(items)
+                .selected_index(Some(RefreshPolicy::default().index()))
+                .compact_trigger(true)
         });
 
         let mut runner = DocumentTaskRunner::new(app_state.clone());
