@@ -238,18 +238,18 @@ impl Workspace {
     pub(super) fn open_audit_viewer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::document::AuditDocument;
 
-        // Check if an audit document is already open
-        let existing_audit =
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find_map(|doc| match doc {
-                    crate::ui::document::DocumentHandle::Audit { id, entity } => {
-                        Some((*id, entity.clone()))
-                    }
-                    _ => None,
-                });
+        // Check if an audit document is already open.
+        let existing_audit = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .find_map(|tab| match tab.as_legacy()? {
+                crate::ui::document::DocumentHandle::Audit { id, entity } => {
+                    Some((*id, entity.clone()))
+                }
+                _ => None,
+            });
 
         self.active_governance_panel = None;
 
@@ -275,7 +275,7 @@ impl Workspace {
         let handle = crate::ui::document::DocumentHandle::audit(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Legacy(handle), cx);
         });
 
         self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
@@ -447,7 +447,7 @@ impl Workspace {
         let handle = DocumentHandle::data(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Legacy(handle), cx);
         });
 
         log::info!("Opened table document: {:?}.{:?}", table.schema, table.name);
@@ -487,7 +487,7 @@ impl Workspace {
                             && doc.connection_id(cx) == Some(profile_id)
                     }
                     CollectionDocumentPresentation::AuditLike => {
-                        matches!(doc, DocumentHandle::Audit { entity, .. }
+                        matches!(doc.as_legacy(), Some(DocumentHandle::Audit { entity, .. })
                         if entity.read(cx).matches_event_stream(
                             profile_id,
                             &dbflux_core::EventStreamTarget {
@@ -556,7 +556,7 @@ impl Workspace {
         };
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Legacy(handle), cx);
         });
 
         log::info!(
@@ -586,7 +586,7 @@ impl Workspace {
                 .documents()
                 .iter()
                 .find(|doc| {
-                    matches!(doc, DocumentHandle::Audit { entity, .. }
+                    matches!(doc.as_legacy(), Some(DocumentHandle::Audit { entity, .. })
                         if entity.read(cx).matches_event_stream(profile_id, &target))
                 })
                 .map(|doc| doc.id())
@@ -623,7 +623,7 @@ impl Workspace {
         });
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(DocumentHandle::audit(doc, cx), cx);
+            mgr.open(Tab::Legacy(DocumentHandle::audit(doc, cx)), cx);
         });
     }
 
@@ -682,7 +682,7 @@ impl Workspace {
         let handle = DocumentHandle::key_value(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Legacy(handle), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -693,7 +693,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
         selector: impl FnOnce(
-            &[crate::ui::document::DocumentHandle],
+            &[crate::ui::document::Tab],
             crate::ui::document::DocumentId,
         ) -> Vec<crate::ui::document::DocumentId>,
         reference_id: crate::ui::document::DocumentId,
@@ -768,6 +768,7 @@ impl Workspace {
             .tab_manager
             .read(cx)
             .document(doc_id)
+            .and_then(|tab| tab.as_legacy())
             .and_then(|handle| {
                 if let crate::ui::document::DocumentHandle::Code { entity, .. } = handle {
                     let doc = entity.read(cx);
@@ -1041,7 +1042,7 @@ impl Workspace {
         let handle = DocumentHandle::code(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Legacy(handle), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1089,7 +1090,7 @@ impl Workspace {
         let handle = DocumentHandle::code(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Legacy(handle), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1150,7 +1151,7 @@ impl Workspace {
         let handle = DocumentHandle::code(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Legacy(handle), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1167,7 +1168,7 @@ impl Workspace {
         let mut tabs = Vec::new();
 
         for doc_handle in manager.documents() {
-            let DocumentHandle::Code { entity, .. } = doc_handle else {
+            let Some(DocumentHandle::Code { entity, .. }) = doc_handle.as_legacy() else {
                 continue;
             };
 
@@ -1370,7 +1371,7 @@ impl Workspace {
             let handle = DocumentHandle::code(doc, cx);
 
             self.tab_manager.update(cx, |mgr, cx| {
-                mgr.open(handle, cx);
+                mgr.open(Tab::Legacy(handle), cx);
             });
         }
 
@@ -1413,7 +1414,7 @@ impl Workspace {
         let handle = DocumentHandle::chart(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Legacy(handle), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1534,7 +1535,7 @@ impl Workspace {
 
                 let handle = DocumentHandle::chart(doc, cx);
                 self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.open(handle, cx);
+                    mgr.open(Tab::Legacy(handle), cx);
                 });
                 self.set_focus(FocusTarget::Document, window, cx);
             }

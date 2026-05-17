@@ -408,13 +408,13 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &keymap::FocusEditor, window, cx| {
                 this.set_focus(FocusTarget::Document, window, cx);
-                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = this.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::FocusUp, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &keymap::FocusResults, window, cx| {
                 this.set_focus(FocusTarget::Document, window, cx);
-                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = this.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::FocusDown, window, cx);
                 }
             }))
@@ -448,7 +448,7 @@ impl Render for Workspace {
                 this.dispatch(Command::FocusDown, window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::RunQuery, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = this.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::RunQuery, window, cx);
                 }
             }))
@@ -458,7 +458,7 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &keymap::ExportResults, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = this.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::ExportResults, window, cx);
                 }
             }))
@@ -474,12 +474,12 @@ impl Render for Workspace {
                 this.refresh_schema(window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleEditor, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = this.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::ToggleEditor, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &keymap::ToggleResults, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = this.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::ToggleResults, window, cx);
                 }
             }))
@@ -493,7 +493,7 @@ impl Render for Workspace {
                 this.open_script_file(window, cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::SaveFileAs, window, cx| {
-                if let Some(doc) = this.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = this.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::SaveFileAs, window, cx);
                 }
             }))

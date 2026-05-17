@@ -107,19 +107,19 @@ impl CommandDispatcher for Workspace {
                 true
             }
             Command::RunQuery => {
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::RunQuery, window, cx);
                 }
                 true
             }
             Command::RunQueryInNewTab => {
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::RunQueryInNewTab, window, cx);
                 }
                 true
             }
             Command::ExportResults => {
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::ExportResults, window, cx);
                 }
                 true
@@ -160,14 +160,14 @@ impl CommandDispatcher for Workspace {
             }
             Command::ToggleEditor => {
                 // Route to active document for layout toggle
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::ToggleEditor, window, cx);
                 }
                 true
             }
             Command::ToggleResults => {
                 // Route to active document for layout toggle
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::ToggleResults, window, cx);
                 }
                 true
@@ -189,14 +189,14 @@ impl CommandDispatcher for Workspace {
             }
             Command::FocusEditor => {
                 self.set_focus(FocusTarget::Document, window, cx);
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::FocusUp, window, cx);
                 }
                 true
             }
             Command::FocusResults => {
                 self.set_focus(FocusTarget::Document, window, cx);
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::FocusDown, window, cx);
                 }
                 true
@@ -217,7 +217,7 @@ impl CommandDispatcher for Workspace {
                     mgr.next_visual_tab(cx);
                 });
                 // Focus the newly active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.focus(window, cx);
                 }
                 true
@@ -227,7 +227,7 @@ impl CommandDispatcher for Workspace {
                     mgr.prev_visual_tab(cx);
                 });
                 // Focus the newly active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.focus(window, cx);
                 }
                 true
@@ -237,7 +237,7 @@ impl CommandDispatcher for Workspace {
                     mgr.switch_to_tab(n, cx);
                 });
                 // Focus the newly active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.focus(window, cx);
                 }
                 true
@@ -245,7 +245,7 @@ impl CommandDispatcher for Workspace {
             Command::CloseCurrentTab => {
                 self.close_active_tab(window, cx);
                 // Focus the newly active document if any
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.focus(window, cx);
                 }
                 true
@@ -281,7 +281,7 @@ impl CommandDispatcher for Workspace {
                 }
 
                 // Route Cancel to active document (handles modals, edit modes, etc.).
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                if let Some(doc) = self.tab_manager.read(cx).active_document()
                     && doc.dispatch_command(Command::Cancel, window, cx)
                 {
                     return true;
@@ -303,7 +303,7 @@ impl CommandDispatcher for Workspace {
 
             Command::CancelQuery => {
                 // Route to active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::CancelQuery, window, cx);
                 }
                 true
@@ -320,7 +320,7 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Document => {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::SelectNext, window, cx);
                     }
                     true
@@ -339,7 +339,7 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Document => {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::SelectPrev, window, cx);
                     }
                     true
@@ -358,7 +358,7 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Document => {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::SelectFirst, window, cx);
                     }
                     true
@@ -377,7 +377,7 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Document => {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::SelectLast, window, cx);
                     }
                     true
@@ -395,7 +395,7 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Document => {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::Execute, window, cx);
                     }
                     true
@@ -425,7 +425,7 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Document => {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::ColumnLeft, window, cx);
                     }
                     true
@@ -443,7 +443,7 @@ impl CommandDispatcher for Workspace {
                     true
                 }
                 FocusTarget::Document => {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::ColumnRight, window, cx);
                     }
                     true
@@ -453,7 +453,7 @@ impl CommandDispatcher for Workspace {
 
             Command::TogglePanel => match self.focus_target {
                 FocusTarget::Document => {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::TogglePanel, window, cx);
                     }
                     true
@@ -468,7 +468,7 @@ impl CommandDispatcher for Workspace {
 
             Command::FocusToolbar => {
                 // Route to active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::FocusToolbar, window, cx);
                 }
                 true
@@ -482,7 +482,7 @@ impl CommandDispatcher for Workspace {
             Command::FocusLeft => {
                 // Only try document dispatch when in context bar mode,
                 // otherwise FocusLeft would be swallowed by DataGridPanel column navigation.
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                if let Some(doc) = self.tab_manager.read(cx).active_document()
                     && doc.active_context(cx) == ContextId::ContextBar
                     && doc.dispatch_command(Command::FocusLeft, window, cx)
                 {
@@ -525,7 +525,7 @@ impl CommandDispatcher for Workspace {
             Command::FocusRight => {
                 // Only try document dispatch when in context bar mode,
                 // otherwise FocusRight would be swallowed by DataGridPanel column navigation.
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                if let Some(doc) = self.tab_manager.read(cx).active_document()
                     && doc.active_context(cx) == ContextId::ContextBar
                     && doc.dispatch_command(Command::FocusRight, window, cx)
                 {
@@ -543,7 +543,7 @@ impl CommandDispatcher for Workspace {
 
             Command::FocusDown => {
                 // First try the active document (for internal editor->results navigation)
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                if let Some(doc) = self.tab_manager.read(cx).active_document()
                     && doc.dispatch_command(Command::FocusDown, window, cx)
                 {
                     return true;
@@ -560,7 +560,7 @@ impl CommandDispatcher for Workspace {
 
             Command::FocusUp => {
                 // First try the active document (for internal results->editor navigation)
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+                if let Some(doc) = self.tab_manager.read(cx).active_document()
                     && doc.dispatch_command(Command::FocusUp, window, cx)
                 {
                     return true;
@@ -577,7 +577,7 @@ impl CommandDispatcher for Workspace {
 
             Command::ToggleHistoryDropdown => {
                 // Route to active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::ToggleHistoryDropdown, window, cx);
                 }
                 true
@@ -585,7 +585,7 @@ impl CommandDispatcher for Workspace {
 
             Command::OpenSavedQueries => {
                 // Route to active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::OpenSavedQueries, window, cx);
                 }
                 true
@@ -593,14 +593,14 @@ impl CommandDispatcher for Workspace {
 
             Command::SaveQuery => {
                 // Route to active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::SaveQuery, window, cx);
                 }
                 true
             }
 
             Command::SaveFileAs => {
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::SaveFileAs, window, cx);
                 }
                 true
@@ -622,7 +622,7 @@ impl CommandDispatcher for Workspace {
                         .update(cx, |s, cx| s.start_rename_selected(window, cx));
                     true
                 } else if self.focus_target == FocusTarget::Document {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::Rename, window, cx);
                     }
                     true
@@ -637,7 +637,7 @@ impl CommandDispatcher for Workspace {
                         .update(cx, |s, cx| s.request_delete_selected(cx));
                     true
                 } else if self.focus_target == FocusTarget::Document {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::Delete, window, cx);
                     }
                     true
@@ -678,7 +678,7 @@ impl CommandDispatcher for Workspace {
                     });
                     true
                 } else if self.focus_target == FocusTarget::Document {
-                    if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                    if let Some(doc) = self.tab_manager.read(cx).active_document() {
                         doc.dispatch_command(Command::FocusSearch, window, cx);
                     }
                     true
@@ -700,7 +700,7 @@ impl CommandDispatcher for Workspace {
 
             Command::ResultsNextPage => {
                 // Route to active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::ResultsNextPage, window, cx);
                 }
                 true
@@ -708,7 +708,7 @@ impl CommandDispatcher for Workspace {
 
             Command::ResultsPrevPage => {
                 // Route to active document
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(Command::ResultsPrevPage, window, cx);
                 }
                 true
@@ -768,7 +768,7 @@ impl CommandDispatcher for Workspace {
             }
 
             Command::ResultsAddRow | Command::ResultsCopyRow | Command::ResultsCopyCell => {
-                if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(cmd, window, cx);
                 }
                 true
@@ -822,7 +822,7 @@ impl CommandDispatcher for Workspace {
                         Command::MenuBack => tb.close_context_menu(cx),
                         _ => {}
                     });
-                } else if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
+                } else if let Some(doc) = self.tab_manager.read(cx).active_document() {
                     doc.dispatch_command(cmd, window, cx);
                 }
                 true

@@ -40,7 +40,7 @@ pub use key_value::{KeyValueDocument, KeyValueDocumentEvent};
 pub use pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
 pub use result_view::ResultViewMode;
 pub use tab_bar::{TabBar, TabBarEvent};
-pub use tab_manager::{TabManager, TabManagerEvent};
+pub use tab_manager::{Tab, TabManager, TabManagerEvent};
 pub use task_runner::DocumentTaskRunner;
 pub use types::{
     DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,

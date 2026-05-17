@@ -21,7 +21,7 @@ use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{
-    CodeDocument, DataDocument, DocumentHandle, TabBar, TabBarEvent, TabManager,
+    CodeDocument, DataDocument, DocumentHandle, Tab, TabBar, TabBarEvent, TabManager,
 };
 
 #[cfg(feature = "mcp")]
@@ -449,7 +449,7 @@ impl Workspace {
                     UnsavedChangesOutcome::SaveSelected(ids) => {
                         let ids = ids.clone();
                         for id in &ids {
-                            if let Some(doc) = this.tab_manager.read(cx).document(*id).cloned() {
+                            if let Some(doc) = this.tab_manager.read(cx).document_legacy(*id) {
                                 doc.dispatch_command(
                                     crate::keymap::Command::SaveFileAs,
                                     window,
@@ -892,16 +892,18 @@ impl Workspace {
                         });
                     }
                     TabManagerEvent::Activated(new_id) => {
-                        let docs: Vec<_> = this
+                        let doc_ids: Vec<_> = this
                             .tab_manager
                             .read(cx)
                             .documents()
                             .iter()
-                            .map(|d| (d.clone(), d.id() == *new_id))
+                            .map(|d| (d.id(), d.id() == *new_id))
                             .collect();
 
-                        for (doc, is_active) in docs {
-                            doc.set_active_tab(is_active, cx);
+                        for (id, is_active) in doc_ids {
+                            if let Some(handle) = this.tab_manager.read(cx).document_legacy(id) {
+                                handle.set_active_tab(is_active, cx);
+                            }
                         }
 
                         this.write_session_manifest(cx);
@@ -1276,7 +1278,7 @@ impl Workspace {
         }
 
         if target == FocusTarget::Document
-            && let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
+            && let Some(doc) = self.tab_manager.read(cx).active_document()
         {
             doc.focus(window, cx);
         }
