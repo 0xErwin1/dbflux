@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use super::audit::AuditDocument;
-use super::key_value::{KeyValueDocument, KeyValueDocumentEvent};
+use super::key_value::KeyValueDocument;
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
@@ -211,11 +211,9 @@ impl DocumentHandle {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         match self {
-            Self::KeyValue { entity, .. } => cx.subscribe(entity, move |_entity, event, cx| {
-                if matches!(event, KeyValueDocumentEvent::RequestFocus) {
-                    callback(&DocumentEvent::RequestFocus, cx);
-                }
-            }),
+            Self::KeyValue { entity, .. } => {
+                cx.subscribe(entity, move |_, ev: &DocumentEvent, cx| callback(ev, cx))
+            }
             Self::Audit { entity, .. } => {
                 use super::audit::AuditDocumentEvent;
                 cx.subscribe(entity, move |_entity, event, cx| {

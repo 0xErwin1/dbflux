@@ -6,9 +6,11 @@ mod mutations;
 mod pagination;
 pub(super) mod parsing;
 mod render;
+pub(super) mod view;
 
 // Re-export sibling `document/` modules so submodules can use `super::*_modal`.
 use super::add_member_modal;
+use super::handle::DocumentEvent;
 use super::new_key_modal;
 
 use super::add_member_modal::{AddMemberEvent, AddMemberModal};
@@ -150,12 +152,7 @@ pub(super) struct PendingMemberDelete {
     pub member_display: String,
 }
 
-#[derive(Clone, Debug)]
-pub enum KeyValueDocumentEvent {
-    RequestFocus,
-}
-
-impl EventEmitter<KeyValueDocumentEvent> for KeyValueDocument {}
+impl EventEmitter<DocumentEvent> for KeyValueDocument {}
 
 // ---------------------------------------------------------------------------
 // Lifecycle, public API, and navigation helpers

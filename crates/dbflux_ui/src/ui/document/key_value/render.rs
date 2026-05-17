@@ -1,6 +1,7 @@
 use super::context_menu::{KvContextMenu, KvMenuAction, KvMenuTarget};
 use super::parsing::{key_type_icon, key_type_label, render_value_preview};
-use super::{KeyValueDocumentEvent, KeyValueFocusMode, KvValueViewMode, TtlState};
+use super::{KeyValueFocusMode, KvValueViewMode, TtlState};
+use crate::ui::document::handle::DocumentEvent;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::Input;
@@ -312,7 +313,7 @@ impl Render for super::KeyValueDocument {
                                 cx.stop_propagation();
                                 this.focus_mode = KeyValueFocusMode::ValuePanel;
                                 this.selected_member_index = Some(idx);
-                                cx.emit(KeyValueDocumentEvent::RequestFocus);
+                                cx.emit(DocumentEvent::RequestFocus);
                                 this.open_context_menu(
                                     KvMenuTarget::Value,
                                     event.position,
@@ -424,7 +425,7 @@ impl Render for super::KeyValueDocument {
                             cx.listener(|this, event: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
                                 this.focus_mode = KeyValueFocusMode::ValuePanel;
-                                cx.emit(KeyValueDocumentEvent::RequestFocus);
+                                cx.emit(DocumentEvent::RequestFocus);
                                 this.open_context_menu(
                                     KvMenuTarget::Value,
                                     event.position,
@@ -724,7 +725,7 @@ impl Render for super::KeyValueDocument {
                                 cx.stop_propagation();
                                 this.focus_mode = KeyValueFocusMode::List;
                                 this.select_index(index, cx);
-                                cx.emit(KeyValueDocumentEvent::RequestFocus);
+                                cx.emit(DocumentEvent::RequestFocus);
                                 this.open_context_menu(
                                     KvMenuTarget::Key,
                                     event.position,
@@ -772,7 +773,7 @@ impl Render for super::KeyValueDocument {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     this.focus_mode = KeyValueFocusMode::List;
-                    cx.emit(KeyValueDocumentEvent::RequestFocus);
+                    cx.emit(DocumentEvent::RequestFocus);
                     cx.notify();
                 }),
             )
