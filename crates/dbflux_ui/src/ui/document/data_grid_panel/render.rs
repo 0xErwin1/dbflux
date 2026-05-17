@@ -115,10 +115,13 @@ impl Render for DataGridPanel {
         let exec_time = format!("{}ms", self.result.execution_time.as_millis());
 
         let is_table_view = self.source.is_table();
-        let show_data_toolbar = matches!(
-            self.source,
-            DataSource::Table { .. } | DataSource::Collection { .. }
-        );
+        // Suppress the toolbar row when it has been moved into the hosting
+        // ResultPanel's chrome row (via ViewHandle::toolbar_segments).
+        let show_data_toolbar = !self.toolbar_in_chrome_row
+            && matches!(
+                self.source,
+                DataSource::Table { .. } | DataSource::Collection { .. }
+            );
         let is_paginated = self.source.is_paginated();
         let source_name = match &self.source {
             DataSource::Table { table, .. } => table.qualified_name(),
@@ -405,6 +408,239 @@ impl Render for DataGridPanel {
                 d.child(self.document_preview_modal.clone())
             })
     }
+}
+
+/// Build the filter-bar element for use as a `ToolbarSegment` builder closure.
+///
+/// Unlike `DataGridPanel::render_toolbar`, this function captures
+/// `Entity<DataGridPanel>` instead of `&self`, making it suitable for use in
+/// a `Box<dyn Fn(&mut Window, &mut App) -> AnyElement>` closure. Event handlers
+/// call `grid.update(cx, ...)` instead of `cx.listener`.
+///
+/// Only rendered for Table and Collection sources. Returns an empty element for
+/// QueryResult sources that do not show a filter bar.
+pub(super) fn render_filter_bar_as_segment(
+    grid: &Entity<DataGridPanel>,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let g = grid.read(cx);
+
+    let is_table_or_collection = matches!(
+        g.source,
+        DataSource::Table { .. } | DataSource::Collection { .. }
+    );
+
+    if !is_table_or_collection {
+        return div().into_any();
+    }
+
+    let (source_query_prefix, filter_keyword) =
+        DataGridPanel::filter_labels_for_source(&g.source, &g.app_state, cx);
+
+    let source_name = match &g.source {
+        DataSource::Table { table, .. } => table.qualified_name(),
+        DataSource::Collection { collection, .. } => collection.qualified_name(),
+        DataSource::QueryResult { .. } => String::new(),
+    };
+
+    let filter_input = g.filter_input.clone();
+    let filter_has_value = !g.filter_input.read(cx).value().is_empty();
+    let limit_input = g.limit_input.clone();
+    let focus_mode = g.focus_mode;
+    let toolbar_focus = g.toolbar_focus;
+    let edit_state = g.edit_state;
+    let refresh_policy = g.refresh_policy;
+    let is_runner_active = g.runner.is_primary_active();
+
+    let show_toolbar_focus =
+        focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
+
+    let theme = cx.theme().clone();
+
+    let refresh_label = if refresh_policy.is_auto() {
+        refresh_policy.label()
+    } else {
+        "Refresh"
+    };
+
+    let grid_for_filter = grid.clone();
+    let grid_for_limit = grid.clone();
+    let grid_for_clear = grid.clone();
+    let grid_for_refresh = grid.clone();
+
+    // Pre-clone theme for each section that needs it in a closure.
+    let theme_filter = theme.clone();
+    let theme_limit = theme.clone();
+    let theme_refresh = theme.clone();
+
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(Spacing::SM)
+        .h_full()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::XS)
+                .child(Text::caption(source_query_prefix).primary())
+                .child(Text::label(source_name)),
+        )
+        // Filter input: hidden for drivers that don't support collection filtering.
+        .when(!filter_keyword.is_empty(), move |d| {
+            let grid_for_filter_event = grid_for_filter.clone();
+            let grid_for_clear_event = grid_for_clear.clone();
+            let theme_inner = theme_filter.clone();
+            let theme_clear = theme_filter.clone();
+            d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(Text::caption(filter_keyword).primary())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .w(px(420.0))
+                            .rounded(Radii::SM)
+                            .when(
+                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
+                                move |d| d.border_1().border_color(theme_inner.ring),
+                            )
+                            .on_mouse_down(MouseButton::Left, {
+                                let grid = grid_for_filter_event.clone();
+                                move |_, _, cx| {
+                                    grid.update(cx, |this, cx| {
+                                        this.switching_input = true;
+                                        this.focus_mode = GridFocusMode::Toolbar;
+                                        this.toolbar_focus = ToolbarFocus::Filter;
+                                        this.edit_state = EditState::Editing;
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .child(div().flex_1().child(Input::new(&filter_input).small()))
+                            .when(filter_has_value, move |d| {
+                                let grid = grid_for_clear_event.clone();
+                                let theme_hover = theme_clear.clone();
+                                d.child(
+                                    div()
+                                        .id("clear-filter")
+                                        .w(px(20.0))
+                                        .h(px(20.0))
+                                        .mr(Spacing::XS)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(Radii::SM)
+                                        .text_size(FontSizes::SM)
+                                        .text_color(theme_clear.muted_foreground)
+                                        .cursor_pointer()
+                                        .hover(move |d| {
+                                            d.bg(theme_hover.secondary)
+                                                .text_color(theme_hover.foreground)
+                                        })
+                                        .on_click(move |_, window, cx| {
+                                            let filter_input_clone =
+                                                grid.read(cx).filter_input.clone();
+                                            filter_input_clone.update(cx, |input, cx| {
+                                                input.set_value("", window, cx);
+                                            });
+                                            grid.update(cx, |this, cx| {
+                                                this.refresh(window, cx);
+                                            });
+                                        })
+                                        .child("\u{00d7}"),
+                                )
+                            }),
+                    ),
+            )
+        })
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::XS)
+                .child(Text::caption("LIMIT").primary())
+                .child(
+                    div()
+                        .w(px(60.0))
+                        .rounded(Radii::SM)
+                        .when(
+                            show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
+                            move |d| d.border_1().border_color(theme_limit.ring),
+                        )
+                        .on_mouse_down(MouseButton::Left, {
+                            let grid = grid_for_limit.clone();
+                            move |_, _, cx| {
+                                grid.update(cx, |this, cx| {
+                                    this.switching_input = true;
+                                    this.focus_mode = GridFocusMode::Toolbar;
+                                    this.toolbar_focus = ToolbarFocus::Limit;
+                                    this.edit_state = EditState::Editing;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .child(Input::new(&limit_input).small()),
+                ),
+        )
+        .child(
+            div()
+                .id("refresh-action-btn")
+                .h(Heights::BUTTON)
+                .flex()
+                .items_center()
+                .gap_0()
+                .rounded(Radii::SM)
+                .bg(theme_refresh.background)
+                .border_1()
+                .border_color(
+                    if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
+                        theme_refresh.ring
+                    } else {
+                        theme_refresh.input
+                    },
+                )
+                .child(
+                    div()
+                        .id("refresh-action")
+                        .h_full()
+                        .px(Spacing::SM)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .cursor_pointer()
+                        .hover(move |d| d.bg(theme_refresh.accent.opacity(0.08)))
+                        .on_click(move |_, window, cx| {
+                            grid_for_refresh.update(cx, |this, cx| {
+                                if this.runner.is_primary_active() {
+                                    this.runner.cancel_primary(cx);
+                                    cx.notify();
+                                } else {
+                                    this.refresh(window, cx);
+                                    this.focus_table(window, cx);
+                                }
+                            });
+                        })
+                        .child(
+                            Icon::new(if is_runner_active {
+                                AppIcon::Loader
+                            } else if refresh_policy.is_auto() {
+                                AppIcon::Clock
+                            } else {
+                                AppIcon::RefreshCcw
+                            })
+                            .small()
+                            .color(theme.foreground),
+                        )
+                        .child(Text::body(refresh_label)),
+                ),
+        )
+        .into_any()
 }
 
 impl DataGridPanel {

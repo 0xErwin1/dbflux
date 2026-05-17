@@ -19,7 +19,7 @@ pub struct DataDocument {
     source_kind: DataSourceKind,
     data_grid: Entity<DataGridPanel>,
     /// Chrome host: owns the mode bar and delegates content rendering to
-    /// the inner `data_grid` entity.
+    /// the inner `data_grid` entity via `ViewHandle`.
     result_panel: Entity<ResultPanel>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
@@ -72,8 +72,8 @@ impl DataDocument {
         Self::new_with_grid(title, DataSourceKind::QueryResult, data_grid, window, cx)
     }
 
-    /// Shared construction logic: wraps a `DataGridPanel` in a `ResultPanel`
-    /// and wires up all subscriptions.
+    /// Shared construction logic: builds a `ViewHandle` from the grid, wraps it
+    /// in `ResultPanel`, and wires subscriptions.
     fn new_with_grid(
         title: String,
         source_kind: DataSourceKind,
@@ -81,25 +81,17 @@ impl DataDocument {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Auto-refresh is only available for Table and Collection sources.
-        let supports_auto = matches!(
-            source_kind,
-            DataSourceKind::Table | DataSourceKind::Collection
-        );
+        // Build a ViewHandle from the DataGridPanel entity. This also sets
+        // `toolbar_in_chrome_row = true` on the grid, suppressing its own
+        // toolbar row so the filter bar appears in the chrome row instead.
+        let view_handle = DataGridPanel::into_view_handle(data_grid.clone(), cx);
 
-        // Read the default refresh policy the grid already resolved from settings
-        // so ResultPanel's dropdown shows the correct initial selection.
-        let default_policy = data_grid.read(cx).refresh_policy();
+        // ResultPanel::new uses ViewHandle::supports_refresh and
+        // ViewHandle::refresh_policy to decide whether to create a dropdown.
+        let result_panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
 
-        // Create ResultPanel with a refresh dropdown. The dropdown entity will be
-        // passed back to the grid so the chart toolbar can render it.
-        let grid_view = AnyView::from(data_grid.clone());
-        let result_panel = cx.new(|cx| {
-            ResultPanel::new_with_refresh(grid_view, vec![], default_policy, supports_auto, cx)
-        });
-
-        // Wire the ResultPanel's dropdown into the grid so it appears in the
-        // chart toolbar and the grid can reset it when set_query_result fires.
+        // Wire the ResultPanel's dropdown back into the grid so the chart
+        // toolbar can render it and reset it when a new query result arrives.
         {
             let dropdown_entity = result_panel.read(cx).refresh_dropdown_entity().cloned();
             if let Some(dd) = dropdown_entity {
@@ -109,31 +101,17 @@ impl DataDocument {
             }
         }
 
+        // Forward DataGridEvent to DocumentEvent and keep ResultPanel in sync
+        // for mode changes driven by the grid (e.g. auto chart selection).
         let grid_sub = cx.subscribe(&data_grid, Self::on_grid_event);
 
-        // Forward ResultPanel events to the underlying DataGridPanel.
+        // ResultPanel calls view.set_mode / view.set_refresh_policy directly
+        // via ViewHandle closures. We still subscribe to ResultPanelEvent for
+        // legacy compatibility (in case any other listener needs these events).
         let panel_sub = cx.subscribe(&result_panel, {
-            let data_grid = data_grid.clone();
-            move |this: &mut DataDocument, _panel, event: &ResultPanelEvent, cx| match event {
-                ResultPanelEvent::ModeChanged(mode) => {
-                    data_grid.update(cx, |grid, cx| {
-                        grid.set_result_view_mode(*mode, cx);
-                    });
-                }
-                ResultPanelEvent::RefreshPolicyChanged(policy) => {
-                    if policy.is_auto() && !data_grid.read(cx).supports_auto_refresh() {
-                        // Reject auto-refresh for QueryResult sources and reset
-                        // the dropdown back to Manual without triggering another
-                        // event (use sync so no round-trip).
-                        this.result_panel.update(cx, |panel, cx| {
-                            panel.sync_refresh_policy(RefreshPolicy::Manual, cx);
-                        });
-                    } else {
-                        data_grid.update(cx, |grid, cx| {
-                            grid.set_refresh_policy(*policy, cx);
-                        });
-                    }
-                }
+            move |_this: &mut DataDocument, _panel, _event: &ResultPanelEvent, _cx| {
+                // ViewHandle closures handle the actual mode/policy changes.
+                // No additional forwarding is required here.
             }
         });
 
@@ -148,24 +126,17 @@ impl DataDocument {
         }
     }
 
-    /// Forwards `DataGridEvent` emissions to `DocumentEvent` and syncs
-    /// `ResultPanel`'s available modes after any grid state change.
+    /// Forwards `DataGridEvent` emissions to `DocumentEvent`.
+    ///
+    /// Mode sync is no longer needed here — the grid's `ViewHandle::available_modes`
+    /// and `ViewHandle::current_mode` closures are called by `ResultPanel` on every
+    /// render frame, so the chrome row always reflects the current state.
     fn on_grid_event(
         this: &mut Self,
-        grid: Entity<DataGridPanel>,
+        _grid: Entity<DataGridPanel>,
         event: &DataGridEvent,
         cx: &mut Context<Self>,
     ) {
-        // Sync result-view modes into the ResultPanel so the mode bar
-        // reflects the current result shape.
-        let modes = grid.read(cx).available_result_view_modes(cx);
-        let current = grid.read(cx).current_result_view_mode();
-
-        this.result_panel.update(cx, |panel, cx| {
-            panel.set_available_modes(modes, cx);
-            panel.set_current_mode(current, cx);
-        });
-
         match event {
             DataGridEvent::Focused => {
                 cx.emit(DocumentEvent::RequestFocus);
@@ -195,8 +166,8 @@ impl DataDocument {
                 });
             }
             DataGridEvent::RefreshPolicyReset(policy) => {
-                // Sync ResultPanel's mode bar dropdown when the grid resets
-                // its policy (e.g. when a new QueryResult arrives).
+                // Sync ResultPanel's refresh dropdown when the grid resets
+                // its policy internally (e.g. when a new QueryResult arrives).
                 this.result_panel.update(cx, |panel, cx| {
                     panel.sync_refresh_policy(*policy, cx);
                 });
@@ -259,10 +230,6 @@ impl DataDocument {
     }
 
     /// Returns the synthesized query text that produced the current result, if available.
-    ///
-    /// For `QueryResult` sources the original query string is returned. For `Table`
-    /// and `Collection` sources the grid builds the query internally and does not
-    /// expose it as a user-readable string — `None` is returned in those cases.
     pub fn synthesized_query(&self, cx: &App) -> Option<String> {
         match self.data_grid.read(cx).source() {
             DataSource::QueryResult { original_query, .. } => {
@@ -316,8 +283,9 @@ impl EventEmitter<DocumentEvent> for DataDocument {}
 
 impl Render for DataDocument {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        // Render through the ResultPanel, which provides the mode bar chrome
-        // and hosts the DataGridPanel as its inner child view.
+        // Render through the ResultPanel, which provides the chrome row
+        // (mode bar + filter bar segment + refresh dropdown) and hosts the
+        // DataGridPanel as its inner child view via ViewHandle.
         div()
             .size_full()
             .track_focus(&self.focus_handle)
@@ -333,10 +301,6 @@ mod tests {
 
     /// Compile-time structural assertion: `DataDocument` owns a `result_panel`
     /// field of the correct type.
-    ///
-    /// This function is never called — it exists only to verify that the field
-    /// types compile. Runtime behavior tests require a live GPUI TestAppContext
-    /// and a running driver connection, which are not available in unit tests.
     #[allow(dead_code)]
     fn _assert_result_panel_field_type(doc: &DataDocument) -> &Entity<ResultPanel> {
         &doc.result_panel

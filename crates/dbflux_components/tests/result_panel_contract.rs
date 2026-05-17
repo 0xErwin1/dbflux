@@ -1,206 +1,176 @@
 //! TDD contract tests for `ResultPanel` state management.
 //!
-//! Placed in the integration test directory (compiled as a separate crate) to
-//! avoid the rustc SIGSEGV caused by `#[gpui::test]` proc-macro recursion
-//! overflow when the lib test binary already contains many such macro
-//! expansions from other modules.
+//! Updated for the slot-based `ResultPanel` API (Sprint A). Tests cover the
+//! state invariants accessible without a render pipeline:
 //!
-//! Covers:
-//! 1. `new(view, modes, cx)` — first mode becomes `current_mode`;
-//!    `available_modes()` returns the supplied list; empty → defaults to Table.
-//! 2. `set_current_mode(mode)` — changes the active mode; no-op on same value.
-//! 3. `set_refresh_policy(policy)` — updates the stored policy.
-//! 4. `available_modes()` — returns the configured list unchanged.
+//! 1. Panel constructs successfully with a `ViewHandle`.
+//! 2. `has_mode_bar_segment_cx` reflects `available_modes.len() >= 2`.
+//! 3. `has_refresh_segment` reflects `view.supports_refresh`.
+//! 4. `sync_refresh_policy` updates the dropdown without panicking.
 //!
-//! Render-pipeline behaviour (mode bar DOM, focus, event emission) requires a
-//! full frame paint and is verified by manual smoke tests.
+//! Render-pipeline behavior (chrome row DOM, focus, event emission) is verified
+//! by manual smoke tests.
+//!
+//! Uses `TestAppContext::single()` + plain `#[test]` — NOT `#[gpui::test]`.
 
-use dbflux_components::result_panel::ResultPanel;
+use dbflux_components::result_panel::{ResultPanel, ViewHandle};
 use dbflux_components::result_view::ResultViewMode;
 use dbflux_core::RefreshPolicy;
 use gpui::prelude::*;
-use gpui::{AnyView, Context, TestAppContext, Window, div};
+use gpui::{App, Context, TestAppContext, Window, div};
 
-/// Minimal stub view used as the inner child for ResultPanel in tests.
-struct StubView;
-
-impl Render for StubView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-    }
+/// Build a minimal `ViewHandle` for tests.
+fn stub_handle(cx: &mut App) -> ViewHandle {
+    let focus = cx.focus_handle();
+    ViewHandle::builder()
+        .render(|_w, _cx| div().into_any())
+        .focus({
+            let focus = focus.clone();
+            move |w, _cx| {
+                focus.focus(w);
+            }
+        })
+        .focus_handle(move |_cx| focus.clone())
+        .toolbar_segments(|_cx| vec![])
+        .available_modes(|_cx| vec![])
+        .current_mode(|_cx| ResultViewMode::Table)
+        .set_mode(|_mode, _cx| {})
+        .supports_refresh(|_cx| false)
+        .refresh_policy(|_cx| RefreshPolicy::Manual)
+        .set_refresh_policy(|_policy, _cx| {})
+        .build()
 }
 
-fn stub_view(cx: &mut gpui::App) -> AnyView {
-    AnyView::from(cx.new(|_cx| StubView))
+/// Build a `ViewHandle` with two modes (mode bar will appear).
+fn stub_handle_two_modes(cx: &mut App) -> ViewHandle {
+    let focus = cx.focus_handle();
+    ViewHandle::builder()
+        .render(|_w, _cx| div().into_any())
+        .focus({
+            let focus = focus.clone();
+            move |w, _cx| {
+                focus.focus(w);
+            }
+        })
+        .focus_handle(move |_cx| focus.clone())
+        .toolbar_segments(|_cx| vec![])
+        .available_modes(|_cx| vec![ResultViewMode::Table, ResultViewMode::Chart])
+        .current_mode(|_cx| ResultViewMode::Table)
+        .set_mode(|_mode, _cx| {})
+        .supports_refresh(|_cx| false)
+        .refresh_policy(|_cx| RefreshPolicy::Manual)
+        .set_refresh_policy(|_policy, _cx| {})
+        .build()
 }
 
-/// New panel: first available mode is selected as `current_mode`.
+/// Build a `ViewHandle` with refresh support.
+fn stub_handle_with_refresh(cx: &mut App, policy: RefreshPolicy) -> ViewHandle {
+    let focus = cx.focus_handle();
+    let stored_policy = std::sync::Arc::new(std::sync::Mutex::new(policy));
+    let stored_for_get = stored_policy.clone();
+    ViewHandle::builder()
+        .render(|_w, _cx| div().into_any())
+        .focus({
+            let focus = focus.clone();
+            move |w, _cx| {
+                focus.focus(w);
+            }
+        })
+        .focus_handle(move |_cx| focus.clone())
+        .toolbar_segments(|_cx| vec![])
+        .available_modes(|_cx| vec![])
+        .current_mode(|_cx| ResultViewMode::Table)
+        .set_mode(|_mode, _cx| {})
+        .supports_refresh(|_cx| true)
+        .refresh_policy(move |_cx| *stored_for_get.lock().unwrap())
+        .set_refresh_policy(move |p, _cx| {
+            *stored_policy.lock().unwrap() = p;
+        })
+        .build()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+/// Panel constructs without panicking.
 #[test]
-fn new_selects_first_available_mode() {
+fn panel_constructs() {
     let cx = TestAppContext::single();
-
     cx.update(|cx| {
-        let modes = vec![
-            ResultViewMode::Table,
-            ResultViewMode::Chart,
-            ResultViewMode::Json,
-        ];
-        let panel = cx.new(|cx| ResultPanel::new(stub_view(cx), modes.clone(), cx));
-
-        assert_eq!(panel.read(cx).current_mode(), ResultViewMode::Table);
-        assert_eq!(panel.read(cx).available_modes(), modes.as_slice());
+        let _panel = cx.new(|cx| ResultPanel::new(stub_handle(cx), cx));
     });
 }
 
-/// New panel with empty mode list: `current_mode` falls back to Table.
+/// Mode bar absent when fewer than two modes.
 #[test]
-fn new_with_empty_modes_defaults_to_table() {
+fn mode_bar_absent_when_zero_modes() {
     let cx = TestAppContext::single();
-
     cx.update(|cx| {
-        let panel = cx.new(|cx| ResultPanel::new(stub_view(cx), vec![], cx));
-        assert_eq!(panel.read(cx).current_mode(), ResultViewMode::Table);
+        let panel = cx.new(|cx| ResultPanel::new(stub_handle(cx), cx));
+        assert!(!panel.read(cx).has_mode_bar_segment_cx(cx));
     });
 }
 
-/// `set_current_mode` changes the active mode.
+/// Mode bar present when two or more modes.
 #[test]
-fn set_current_mode_changes_mode() {
+fn mode_bar_present_when_two_modes() {
     let cx = TestAppContext::single();
-
     cx.update(|cx| {
-        let modes = vec![ResultViewMode::Table, ResultViewMode::Json];
-        let panel = cx.new(|cx| ResultPanel::new(stub_view(cx), modes, cx));
-
-        panel.update(cx, |p, cx| p.set_current_mode(ResultViewMode::Json, cx));
-        assert_eq!(panel.read(cx).current_mode(), ResultViewMode::Json);
+        let panel = cx.new(|cx| ResultPanel::new(stub_handle_two_modes(cx), cx));
+        assert!(panel.read(cx).has_mode_bar_segment_cx(cx));
     });
 }
 
-/// `set_current_mode` with the same value is a no-op (mode is unchanged).
+/// Refresh segment absent when `supports_refresh` is false.
 #[test]
-fn set_current_mode_noop_on_same_value() {
+fn refresh_absent_when_not_supported() {
     let cx = TestAppContext::single();
-
     cx.update(|cx| {
-        let modes = vec![ResultViewMode::Table, ResultViewMode::Json];
-        let panel = cx.new(|cx| ResultPanel::new(stub_view(cx), modes, cx));
-
-        // move to Json first
-        panel.update(cx, |p, cx| p.set_current_mode(ResultViewMode::Json, cx));
-        // call again with same value
-        panel.update(cx, |p, cx| p.set_current_mode(ResultViewMode::Json, cx));
-        assert_eq!(panel.read(cx).current_mode(), ResultViewMode::Json);
+        let panel = cx.new(|cx| ResultPanel::new(stub_handle(cx), cx));
+        assert!(!panel.read(cx).has_refresh_segment());
     });
 }
 
-/// `set_refresh_policy` updates the stored policy.
+/// Refresh segment present when `supports_refresh` is true.
 #[test]
-fn set_refresh_policy_updates_policy() {
+fn refresh_present_when_supported() {
     let cx = TestAppContext::single();
-
     cx.update(|cx| {
-        let panel = cx.new(|cx| ResultPanel::new(stub_view(cx), vec![], cx));
-        assert_eq!(panel.read(cx).refresh_policy(), RefreshPolicy::Manual);
-
-        panel.update(cx, |p, cx| {
-            p.set_refresh_policy(RefreshPolicy::Interval { every_secs: 5 }, cx);
-        });
-        assert!(matches!(
-            panel.read(cx).refresh_policy(),
-            RefreshPolicy::Interval { every_secs: 5 }
-        ));
-    });
-}
-
-/// `available_modes` returns the list originally passed to `new`.
-#[test]
-fn available_modes_returns_configured_list() {
-    let cx = TestAppContext::single();
-
-    cx.update(|cx| {
-        let modes = vec![ResultViewMode::Table, ResultViewMode::Json];
-        let panel = cx.new(|cx| ResultPanel::new(stub_view(cx), modes.clone(), cx));
-        assert_eq!(panel.read(cx).available_modes(), modes.as_slice());
-    });
-}
-
-/// `new_with_refresh` stores the default policy and creates a dropdown entity.
-#[test]
-fn new_with_refresh_stores_policy_and_creates_dropdown() {
-    let cx = TestAppContext::single();
-
-    cx.update(|cx| {
-        let default = RefreshPolicy::Interval { every_secs: 5 };
         let panel =
-            cx.new(|cx| ResultPanel::new_with_refresh(stub_view(cx), vec![], default, true, cx));
+            cx.new(|cx| ResultPanel::new(stub_handle_with_refresh(cx, RefreshPolicy::Manual), cx));
+        assert!(panel.read(cx).has_refresh_segment());
+    });
+}
 
-        assert!(matches!(
-            panel.read(cx).refresh_policy(),
-            RefreshPolicy::Interval { every_secs: 5 }
-        ));
-
-        assert!(
+/// `refresh_dropdown_entity` matches `has_refresh_segment`.
+#[test]
+fn refresh_dropdown_entity_matches_has_refresh_segment() {
+    let cx = TestAppContext::single();
+    cx.update(|cx| {
+        let panel = cx.new(|cx| ResultPanel::new(stub_handle(cx), cx));
+        assert_eq!(
+            panel.read(cx).has_refresh_segment(),
             panel.read(cx).refresh_dropdown_entity().is_some(),
-            "dropdown entity should be present after new_with_refresh"
+        );
+
+        let panel2 =
+            cx.new(|cx| ResultPanel::new(stub_handle_with_refresh(cx, RefreshPolicy::Manual), cx));
+        assert_eq!(
+            panel2.read(cx).has_refresh_segment(),
+            panel2.read(cx).refresh_dropdown_entity().is_some(),
         );
     });
 }
 
-/// `new` (without refresh) has no dropdown entity.
+/// `sync_refresh_policy` does not panic.
 #[test]
-fn new_without_refresh_has_no_dropdown_entity() {
+fn sync_refresh_policy_does_not_panic() {
     let cx = TestAppContext::single();
-
     cx.update(|cx| {
-        let panel = cx.new(|cx| ResultPanel::new(stub_view(cx), vec![], cx));
-        assert!(
-            panel.read(cx).refresh_dropdown_entity().is_none(),
-            "no dropdown entity expected for plain new()"
-        );
-    });
-}
-
-/// `sync_refresh_policy` updates the stored policy without emitting an event.
-#[test]
-fn sync_refresh_policy_updates_policy() {
-    let cx = TestAppContext::single();
-
-    cx.update(|cx| {
-        let panel = cx.new(|cx| {
-            ResultPanel::new_with_refresh(stub_view(cx), vec![], RefreshPolicy::Manual, true, cx)
-        });
+        let panel =
+            cx.new(|cx| ResultPanel::new(stub_handle_with_refresh(cx, RefreshPolicy::Manual), cx));
 
         panel.update(cx, |p, cx| {
             p.sync_refresh_policy(RefreshPolicy::Interval { every_secs: 10 }, cx);
         });
-
-        assert!(matches!(
-            panel.read(cx).refresh_policy(),
-            RefreshPolicy::Interval { every_secs: 10 }
-        ));
-    });
-}
-
-/// `set_refresh_policy` updates policy state (inherited from existing tests;
-/// included here to verify the method remains accessible after the refresh
-/// constructor was added).
-#[test]
-fn set_refresh_policy_updates_policy_with_refresh_ctor() {
-    let cx = TestAppContext::single();
-
-    cx.update(|cx| {
-        let panel = cx.new(|cx| {
-            ResultPanel::new_with_refresh(stub_view(cx), vec![], RefreshPolicy::Manual, true, cx)
-        });
-
-        panel.update(cx, |p, cx| {
-            p.set_refresh_policy(RefreshPolicy::Interval { every_secs: 30 }, cx);
-        });
-
-        assert!(matches!(
-            panel.read(cx).refresh_policy(),
-            RefreshPolicy::Interval { every_secs: 30 }
-        ));
     });
 }

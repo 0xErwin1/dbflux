@@ -396,6 +396,14 @@ pub struct DataGridPanel {
 
     export_menu_open: bool,
 
+    /// When `true`, the filter/limit/refresh-button toolbar row is suppressed
+    /// from `DataGridPanel::render` because it has been moved into the hosting
+    /// `ResultPanel`'s chrome row as a `Center` toolbar segment via `ViewHandle`.
+    ///
+    /// Set by `DataGridPanel::into_view_handle` after the `ViewHandle` is
+    /// built. Defaults to `false` (grid renders its own toolbar).
+    toolbar_in_chrome_row: bool,
+
     // Chart subsystem
     /// Lazily-created chart shell entity. Created the first time the result
     /// passes chart detection (or when the user is already in chart mode).
@@ -779,6 +787,7 @@ impl DataGridPanel {
             pending_document_preview: None,
             row_inspector_content: None,
             export_menu_open: false,
+            toolbar_in_chrome_row: false,
             chart_shell: None,
             chart_source_time_range_panel: None,
             pending_collection_chart_save: None,
@@ -1953,6 +1962,86 @@ impl DataGridPanel {
         if let Some(table_state) = &self.table_state {
             table_state.read(cx).scroll_to_row(row_idx);
         }
+    }
+
+    /// Build a `ViewHandle` that erases the concrete `DataGridPanel` type for
+    /// use inside a `ResultPanel`.
+    ///
+    /// After calling this method, `self.toolbar_in_chrome_row` is set to `true`
+    /// on the entity, which suppresses `DataGridPanel::render`'s own toolbar row.
+    /// The filter bar is instead exposed as a `Center/0` toolbar segment in the
+    /// returned `ViewHandle::toolbar_segments` closure.
+    ///
+    /// The returned `ViewHandle` captures a clone of `entity`. The entity must
+    /// already exist (this is called from `DataDocument::new_with_grid` after
+    /// `cx.new(|cx| DataGridPanel::new_for_table(...))`).
+    pub fn into_view_handle(
+        entity: Entity<Self>,
+        cx: &mut App,
+    ) -> dbflux_components::result_panel::ViewHandle {
+        use dbflux_components::result_panel::{SegmentPosition, ToolbarSegment, ViewHandle};
+        use render::render_filter_bar_as_segment;
+
+        // Suppress the grid's own toolbar — it moves to the chrome row.
+        entity.update(cx, |this, _| {
+            this.toolbar_in_chrome_row = true;
+        });
+
+        let e_render = entity.clone();
+        let e_focus_get = entity.clone();
+        let e_focus_do = entity.clone();
+        let e_segs = entity.clone();
+        let e_modes = entity.clone();
+        let e_current = entity.clone();
+        let e_set_mode = entity.clone();
+        let e_supports = entity.clone();
+        let e_policy = entity.clone();
+        let e_set_policy = entity.clone();
+
+        ViewHandle::builder()
+            .render(move |_window, _cx| {
+                // Render via the GPUI AnyView path: entity.clone().into_any()
+                // produces an AnyElement that delegates to DataGridPanel::render.
+                AnyView::from(e_render.clone()).into_any()
+            })
+            .focus({
+                move |window, cx| {
+                    e_focus_do.update(cx, |grid, cx| {
+                        grid.focus_table(window, cx);
+                    });
+                }
+            })
+            .focus_handle(move |cx| e_focus_get.read(cx).focus_handle.clone())
+            .toolbar_segments(move |cx| {
+                let is_table_or_collection = matches!(
+                    e_segs.read(cx).source,
+                    DataSource::Table { .. } | DataSource::Collection { .. }
+                );
+
+                if !is_table_or_collection {
+                    return vec![];
+                }
+
+                let grid = e_segs.clone();
+                vec![ToolbarSegment {
+                    position: SegmentPosition::Center,
+                    index: 0,
+                    builder: Box::new(move |window, cx| {
+                        render_filter_bar_as_segment(&grid, window, cx)
+                    }),
+                }]
+            })
+            .available_modes(move |cx| e_modes.read(cx).available_result_view_modes(cx))
+            .current_mode(move |cx| e_current.read(cx).current_result_view_mode())
+            .set_mode(move |mode, cx| {
+                e_set_mode.update(cx, |grid, cx| grid.set_result_view_mode(mode, cx));
+            })
+            .supports_refresh(move |cx| e_supports.read(cx).supports_auto_refresh())
+            .refresh_policy(move |cx| e_policy.read(cx).refresh_policy())
+            .set_refresh_policy(move |policy, cx| {
+                e_set_policy.update(cx, |grid, cx| grid.set_refresh_policy(policy, cx));
+            })
+            .build()
     }
 }
 
