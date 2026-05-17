@@ -1146,16 +1146,22 @@ impl CodeDocument {
                     // This arm exists only for exhaustiveness.
                 }
                 DataGridEvent::RefreshPolicyReset(_) => {
-                    // CodeDocument result tabs do not own a ResultPanel, so there
-                    // is no dropdown to sync. Ignored.
+                    // ResultPanel for result tabs has no refresh dropdown
+                    // (query-result grids emit this only when auto-refresh is
+                    // reset; the outer CodeDocument toolbar owns the refresh
+                    // controls). Ignored.
                 }
             },
         );
+
+        let view_handle = DataGridPanel::into_view_handle(grid.clone(), cx);
+        let result_panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
 
         let tab = ResultTab {
             id: tab_id,
             title,
             grid,
+            result_panel,
             _subscription: subscription,
         };
 
@@ -1284,6 +1290,16 @@ impl CodeDocument {
         self.active_result_index
             .and_then(|i| self.result_tabs.get(i))
             .map(|tab| tab.grid.clone())
+    }
+
+    /// Returns the `ResultPanel` wrapping the active result tab's grid.
+    ///
+    /// Used by `render_results` to render through `ResultPanel` rather than
+    /// directly rendering the bare `DataGridPanel` entity.
+    pub(super) fn active_result_panel(&self) -> Option<Entity<ResultPanel>> {
+        self.active_result_index
+            .and_then(|i| self.result_tabs.get(i))
+            .map(|tab| tab.result_panel.clone())
     }
 
     fn run_script(&mut self, _window: &mut Window, cx: &mut Context<Self>) {

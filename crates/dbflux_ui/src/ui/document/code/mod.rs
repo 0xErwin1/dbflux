@@ -18,6 +18,7 @@ use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{
     Button, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
 };
+use dbflux_components::result_panel::ResultPanel;
 use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
     AuditAction, AuditContext, EventActorType, EventCategory, EventOrigin, EventOutcome,
@@ -58,16 +59,23 @@ mod execution;
 mod file_ops;
 mod focus;
 mod live_output;
+pub mod pane;
 mod render;
 
 use completion::QueryCompletionProvider;
 use live_output::LiveOutputState;
 
 /// A single result tab within the CodeDocument.
+///
+/// Each tab wraps the `DataGridPanel` in a `ResultPanel` shell so the mode
+/// bar and chrome row are rendered consistently with `DataDocument` tabs.
+/// The `grid` field is kept for direct access by focus/dispatch/execution
+/// callers that need to call grid-specific methods.
 struct ResultTab {
     id: Uuid,
     title: String,
     grid: Entity<DataGridPanel>,
+    result_panel: Entity<ResultPanel>,
     _subscription: Subscription,
 }
 

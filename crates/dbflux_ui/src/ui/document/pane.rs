@@ -21,10 +21,19 @@ use gpui::{AnyElement, App, Subscription, Window};
 pub type BoxedDocEventCallback = Box<dyn Fn(&DocumentEvent, &mut App) + 'static>;
 
 /// A snapshot of a code document's session state, used to reconstruct tabs
-/// on next launch.
+/// on next launch and to write the session manifest.
+///
+/// Fields carry all data that `write_session_manifest` previously read directly
+/// from `DocumentHandle::Code { entity, .. }`. The `kind` field maps to the
+/// `tab_kind` column in `WorkspaceTab` (values: `"FileBacked"`, `"Scratch"`).
 #[derive(Clone)]
 pub struct CodeSessionTabSnapshot {
+    /// `"FileBacked"` or `"Scratch"` — maps to `WorkspaceTab::tab_kind`.
     pub kind: &'static str,
+    pub id: super::types::DocumentId,
+    pub title: String,
+    pub language: dbflux_core::QueryLanguage,
+    pub exec_ctx: dbflux_core::ExecutionContext,
     pub file_path: Option<std::path::PathBuf>,
     pub scratch_path: Option<std::path::PathBuf>,
     pub shadow_path: Option<std::path::PathBuf>,
@@ -249,8 +258,14 @@ mod tests {
     /// compile without issue.
     #[test]
     fn code_session_tab_snapshot_constructs_and_clones() {
+        use dbflux_core::{ExecutionContext, QueryLanguage};
+
         let snap = CodeSessionTabSnapshot {
             kind: "Scratch",
+            id: super::super::types::DocumentId::new(),
+            title: "Query 1".to_string(),
+            language: QueryLanguage::Sql,
+            exec_ctx: ExecutionContext::default(),
             file_path: None,
             scratch_path: Some(std::path::PathBuf::from("/tmp/scratch.sql")),
             shadow_path: None,
