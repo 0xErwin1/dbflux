@@ -182,7 +182,8 @@ impl Tab {
 
     pub fn is_chart(&self, saved_chart_id: uuid::Uuid, cx: &App) -> bool {
         match self {
-            Tab::Legacy(h) => h.is_chart(saved_chart_id, cx),
+            // Chart documents are always Pane tabs; no Legacy Chart tabs exist.
+            Tab::Legacy(_) => false,
             Tab::Pane(p) => p.matches_dedup_key(&DocumentKey::Chart { saved_chart_id }, cx),
         }
     }
@@ -650,7 +651,11 @@ impl EventEmitter<TabManagerEvent> for TabManager {}
 /// Removed in Arc 6 when the `Legacy` variant is deleted.
 fn legacy_matches(handle: &DocumentHandle, key: &DocumentKey, cx: &App) -> bool {
     match key {
-        DocumentKey::Chart { saved_chart_id } => handle.is_chart(*saved_chart_id, cx),
+        // Chart documents are now always Pane tabs; no Legacy Chart tabs exist.
+        DocumentKey::Chart { .. } => {
+            let _ = handle;
+            false
+        }
         DocumentKey::File { path } => handle.is_file(path, cx),
         DocumentKey::Table {
             table, database, ..

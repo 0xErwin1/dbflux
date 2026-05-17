@@ -1411,10 +1411,10 @@ impl Workspace {
                 cx,
             )
         });
-        let handle = DocumentHandle::chart(doc, cx);
+        let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(Tab::Legacy(handle), cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1472,13 +1472,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // Focus existing tab if the chart is already open.
-        let existing_id = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .find(|doc| doc.is_chart(chart_id, cx))
-            .map(|doc| doc.id());
+        let existing_id = self.tab_manager.read(cx).find_by_key(
+            &crate::ui::document::DocumentKey::Chart {
+                saved_chart_id: chart_id,
+            },
+            cx,
+        );
 
         if let Some(id) = existing_id {
             self.tab_manager.update(cx, |mgr, cx| {
@@ -1533,9 +1532,9 @@ impl Workspace {
                         .expect("Query source validated before entity creation")
                 });
 
-                let handle = DocumentHandle::chart(doc, cx);
+                let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);
                 self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.open(Tab::Legacy(handle), cx);
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
                 });
                 self.set_focus(FocusTarget::Document, window, cx);
             }

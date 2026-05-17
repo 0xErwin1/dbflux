@@ -91,6 +91,56 @@ pub struct PaneHandle {
 }
 
 impl PaneHandle {
+    /// Constructs a `PaneHandle` for documents that have no optional helpers.
+    ///
+    /// Called by per-document `into_pane` constructors for simple documents
+    /// (Chart, KeyValue) that do not need `set_category_filter`,
+    /// `matches_event_stream`, `is_file_backed_empty`, or `session_tab_snapshot`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_chart(
+        id: DocumentId,
+        kind: DocumentKind,
+        render: Box<dyn Fn(&mut Window, &mut App) -> AnyElement>,
+        focus: Box<dyn Fn(&mut Window, &mut App)>,
+        dispatch_command: Box<dyn Fn(Command, &mut Window, &mut App) -> bool>,
+        meta_snapshot: Box<dyn Fn(&App) -> DocumentMetaSnapshot>,
+        tab_title: Box<dyn Fn(&App) -> String>,
+        can_close: Box<dyn Fn(&App) -> bool>,
+        connection_id: Box<dyn Fn(&App) -> Option<uuid::Uuid>>,
+        active_context: Box<dyn Fn(&App) -> ContextId>,
+        change_summary: Box<dyn Fn(&App) -> Option<String>>,
+        refresh_policy: Box<dyn Fn(&App) -> RefreshPolicy>,
+        flush_auto_save: Box<dyn Fn(&App)>,
+        set_active_tab: Box<dyn Fn(bool, &mut App)>,
+        set_refresh_policy: Box<dyn Fn(RefreshPolicy, &mut App)>,
+        matches_dedup_key: Box<dyn Fn(&DocumentKey, &App) -> bool>,
+        subscribe: Box<dyn Fn(&mut App, BoxedDocEventCallback) -> Subscription>,
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            render,
+            focus,
+            dispatch_command,
+            meta_snapshot,
+            tab_title,
+            can_close,
+            connection_id,
+            active_context,
+            change_summary,
+            refresh_policy,
+            flush_auto_save,
+            set_active_tab,
+            set_refresh_policy,
+            matches_dedup_key,
+            subscribe,
+            set_category_filter: None,
+            matches_event_stream: None,
+            is_file_backed_empty: None,
+            session_tab_snapshot: None,
+        }
+    }
+
     /// Document ID — does not require `cx`.
     pub fn id(&self) -> DocumentId {
         self.id

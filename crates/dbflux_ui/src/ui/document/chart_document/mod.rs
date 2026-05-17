@@ -6,9 +6,11 @@
 //! Created exclusively by promoting a query result (e.g. "Chart this query"
 //! from a data grid); the query is fixed for the document's lifetime.
 
+pub mod pane;
 mod render;
 
 use super::chart::{ChartHost, ChartShell, HostAdapter};
+use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppStateEntity;
@@ -25,15 +27,6 @@ use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Task, Window};
 use std::sync::Arc;
 use uuid::Uuid;
-
-/// Events emitted by `ChartDocument`.
-#[derive(Clone, Debug)]
-pub enum ChartDocumentEvent {
-    /// Title or state changed; tab bar should repaint.
-    MetaChanged,
-    /// The document area was clicked and wants to receive keyboard focus.
-    RequestFocus,
-}
 
 /// Active focus target within the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -548,7 +541,7 @@ impl ChartDocument {
     }
 }
 
-impl EventEmitter<ChartDocumentEvent> for ChartDocument {}
+impl EventEmitter<DocumentEvent> for ChartDocument {}
 
 impl ChartHost for ChartDocument {
     fn current_query(&self, _cx: &App) -> Option<String> {
