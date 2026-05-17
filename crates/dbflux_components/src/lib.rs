@@ -17,6 +17,7 @@ pub mod chart;
 pub mod composites;
 pub mod controls;
 pub mod primitives;
+pub mod result_panel;
 pub mod saved_chart;
 
 pub use saved_chart::{
