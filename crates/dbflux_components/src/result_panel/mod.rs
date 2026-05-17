@@ -31,7 +31,7 @@
 
 use crate::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::result_view::ResultViewMode;
-use crate::tokens::{FontSizes, Spacing};
+use crate::tokens::{FontSizes, Heights, Spacing};
 use dbflux_core::RefreshPolicy;
 use gpui::prelude::*;
 use gpui::*;
@@ -547,8 +547,9 @@ impl Render for ResultPanel {
                     div()
                         .flex()
                         .flex_row()
+                        .flex_wrap()
                         .items_center()
-                        .h(px(34.0))
+                        .min_h(Heights::TOOLBAR)
                         .px(Spacing::SM)
                         .gap(Spacing::XS)
                         .border_b_1()
