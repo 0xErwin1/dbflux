@@ -422,6 +422,14 @@ impl Render for ResultPanel {
                         .flex()
                         .flex_wrap()
                         .items_center()
+                        // w_full is REQUIRED. In a flex-col parent the chrome
+                        // row defaults to its intrinsic content width, so a
+                        // wide segment makes the row wider than the viewport,
+                        // pushing trailing widgets (e.g. Refresh) off-screen,
+                        // and flex_wrap never triggers because the row "fits"
+                        // its own oversized box. w_full forces the row to the
+                        // parent's width so flex_wrap can do its job.
+                        .w_full()
                         .min_h(Heights::TOOLBAR)
                         .px(Spacing::SM)
                         .gap(Spacing::SM)
