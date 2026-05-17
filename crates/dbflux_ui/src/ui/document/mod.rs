@@ -9,6 +9,7 @@ mod code;
 mod data_document;
 mod data_grid_panel;
 mod data_view;
+pub mod dedup;
 
 #[cfg(feature = "mcp")]
 mod governance;
@@ -32,6 +33,7 @@ pub use data_view::{DataViewConfig, DataViewMode};
 #[cfg(feature = "mcp")]
 pub use governance::McpApprovalsView;
 
+pub use dedup::DocumentKey;
 pub use handle::{DocumentEvent, DocumentHandle};
 pub use key_value::{KeyValueDocument, KeyValueDocumentEvent};
 pub use result_view::ResultViewMode;
