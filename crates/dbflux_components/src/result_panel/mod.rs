@@ -29,7 +29,7 @@
 //! the event is emitted for any remaining listeners.
 
 use crate::result_view::ResultViewMode;
-use crate::tokens::{FontSizes, Spacing};
+use crate::tokens::{FontSizes, Heights, Spacing};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -422,7 +422,7 @@ impl Render for ResultPanel {
                         .flex()
                         .flex_wrap()
                         .items_center()
-                        .min_h(px(34.0))
+                        .min_h(Heights::TOOLBAR)
                         .px(Spacing::SM)
                         .gap(Spacing::SM)
                         .border_b_1()

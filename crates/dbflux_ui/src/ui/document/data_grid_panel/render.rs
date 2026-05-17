@@ -475,12 +475,16 @@ pub(super) fn render_filter_bar_as_segment(
     let theme_limit = theme.clone();
     let theme_refresh = theme.clone();
 
+    // NOTE: do not use `.h_full()` here. The segment is hosted inside
+    // `ResultPanel`'s chrome row which has `min_h(Heights::TOOLBAR)`. If the
+    // segment is constrained to that height, its internal `flex_wrap` rows
+    // overflow the box and get clipped — narrow widths lose the WHERE / LIMIT
+    // / Refresh row entirely.
     div()
         .flex()
         .flex_wrap()
         .items_center()
         .gap(Spacing::SM)
-        .h_full()
         .child(
             div()
                 .flex()
