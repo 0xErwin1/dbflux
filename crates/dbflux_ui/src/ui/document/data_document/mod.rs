@@ -86,20 +86,7 @@ impl DataDocument {
         // toolbar row so the filter bar appears in the chrome row instead.
         let view_handle = DataGridPanel::into_view_handle(data_grid.clone(), cx);
 
-        // ResultPanel::new uses ViewHandle::supports_refresh and
-        // ViewHandle::refresh_policy to decide whether to create a dropdown.
         let result_panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
-
-        // Wire the ResultPanel's dropdown back into the grid so the chart
-        // toolbar can render it and reset it when a new query result arrives.
-        {
-            let dropdown_entity = result_panel.read(cx).refresh_dropdown_entity().cloned();
-            if let Some(dd) = dropdown_entity {
-                data_grid.update(cx, |grid, cx| {
-                    grid.set_refresh_dropdown(dd, cx);
-                });
-            }
-        }
 
         // Forward DataGridEvent to DocumentEvent and keep ResultPanel in sync
         // for mode changes driven by the grid (e.g. auto chart selection).
@@ -132,7 +119,7 @@ impl DataDocument {
     /// and `ViewHandle::current_mode` closures are called by `ResultPanel` on every
     /// render frame, so the chrome row always reflects the current state.
     fn on_grid_event(
-        this: &mut Self,
+        _this: &mut Self,
         _grid: Entity<DataGridPanel>,
         event: &DataGridEvent,
         cx: &mut Context<Self>,
@@ -165,12 +152,9 @@ impl DataDocument {
                     connection_id: *connection_id,
                 });
             }
-            DataGridEvent::RefreshPolicyReset(policy) => {
-                // Sync ResultPanel's refresh dropdown when the grid resets
-                // its policy internally (e.g. when a new QueryResult arrives).
-                this.result_panel.update(cx, |panel, cx| {
-                    panel.sync_refresh_policy(*policy, cx);
-                });
+            DataGridEvent::RefreshPolicyReset(_policy) => {
+                // The refresh dropdown is owned by DataGridPanel itself and
+                // reset internally — no forwarding to ResultPanel needed.
             }
             _ => {}
         }

@@ -17,7 +17,7 @@ use crate::ui::components::data_table::{
     TableModel,
 };
 use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, DocumentTreeState};
-use crate::ui::components::dropdown::Dropdown;
+use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::PendingToast;
 use crate::ui::overlays::cell_editor_modal::{
     CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
@@ -333,12 +333,12 @@ pub struct DataGridPanel {
     // Async state
     runner: DocumentTaskRunner,
     refresh_policy: RefreshPolicy,
-    /// External refresh-policy dropdown owned by the surrounding `ResultPanel`.
-    /// `None` until the container document calls `set_refresh_dropdown` after
-    /// construction. The grid renders this in its chart toolbar and updates it
-    /// when the policy resets internally; the dropdown's change events are
-    /// handled by `ResultPanel` (not by the grid).
-    refresh_dropdown: Option<Entity<Dropdown>>,
+    /// Refresh-policy dropdown, created at construction time.
+    ///
+    /// Rendered in the filter bar segment (as the chevron half of the split
+    /// button) and also in the chart toolbar. The dropdown's change events are
+    /// handled internally via a subscription set up in `new_internal`.
+    refresh_dropdown: Entity<Dropdown>,
     _refresh_timer: Option<Task<()>>,
     _refresh_subscriptions: Vec<Subscription>,
     state: GridState,
@@ -721,6 +721,46 @@ impl DataGridPanel {
             .effective_settings_for_connection(connection_id)
             .resolve_refresh_policy();
 
+        let supports_auto_refresh = matches!(
+            source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        );
+
+        let refresh_dropdown = cx.new(|_cx| {
+            let items: Vec<DropdownItem> = RefreshPolicy::ALL
+                .iter()
+                .map(|policy| DropdownItem::new(policy.label()))
+                .collect();
+
+            Dropdown::new("data-grid-auto-refresh")
+                .items(items)
+                .selected_index(Some(default_refresh.index()))
+                .disabled(!supports_auto_refresh)
+                .compact_trigger(true)
+        });
+
+        let refresh_policy_sub = cx.subscribe_in(
+            &refresh_dropdown,
+            window,
+            |this, _, event: &DropdownSelectionChanged, _window, cx| {
+                let policy = RefreshPolicy::from_index(event.index);
+
+                if policy.is_auto() && !this.supports_auto_refresh() {
+                    this.refresh_dropdown.update(cx, |dd, cx| {
+                        dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
+                    });
+                    crate::ui::components::toast::Toast::warning(
+                        "Auto-refresh not available for query results",
+                    )
+                    .meta_right(crate::ui::components::toast::now_hms())
+                    .push(cx);
+                    return;
+                }
+
+                this.set_refresh_policy(policy, cx);
+            },
+        );
+
         let runner = {
             let mut r = DocumentTaskRunner::new(app_state.clone());
 
@@ -751,9 +791,9 @@ impl DataGridPanel {
             pk_columns,
             runner,
             refresh_policy: default_refresh,
-            refresh_dropdown: None,
+            refresh_dropdown,
             _refresh_timer: None,
-            _refresh_subscriptions: vec![],
+            _refresh_subscriptions: vec![refresh_policy_sub],
             state: GridState::Ready,
             pending_requery: None,
             pending_total_count: None,
@@ -1042,11 +1082,9 @@ impl DataGridPanel {
         self.chart_source_time_range_panel = panel;
 
         let enabled = self.supports_auto_refresh();
-        if let Some(dd) = &self.refresh_dropdown {
-            dd.update(cx, |dd, cx| {
-                dd.set_disabled(!enabled, cx);
-            });
-        }
+        self.refresh_dropdown.update(cx, |dd, cx| {
+            dd.set_disabled(!enabled, cx);
+        });
 
         cx.notify();
     }
@@ -1179,22 +1217,6 @@ impl DataGridPanel {
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
         self.refresh_policy
-    }
-
-    /// Wire up the external refresh-policy dropdown owned by `ResultPanel`.
-    ///
-    /// Call this once after constructing the grid and the surrounding
-    /// `ResultPanel`. The grid stores the entity so it can reset the selection
-    /// when a new query result arrives; it does NOT subscribe to the dropdown
-    /// (that subscription lives in `ResultPanel`).
-    pub fn set_refresh_dropdown(&mut self, dropdown: Entity<Dropdown>, cx: &mut Context<Self>) {
-        // Sync the current policy so the dropdown shows the right item.
-        dropdown.update(cx, |dd, cx| {
-            dd.set_selected_index(Some(self.refresh_policy.index()), cx);
-            dd.set_disabled(!self.supports_auto_refresh(), cx);
-        });
-
-        self.refresh_dropdown = Some(dropdown);
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
@@ -1339,11 +1361,9 @@ impl DataGridPanel {
         self.refresh_policy = RefreshPolicy::Manual;
         self._refresh_timer = None;
 
-        if let Some(dd) = &self.refresh_dropdown {
-            dd.update(cx, |dd, cx| {
-                dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
-            });
-        }
+        self.refresh_dropdown.update(cx, |dd, cx| {
+            dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
+        });
 
         cx.emit(DataGridEvent::RefreshPolicyReset(RefreshPolicy::Manual));
 
@@ -1889,13 +1909,13 @@ impl DataGridPanel {
         self.chart_source_time_range_panel.clone()
     }
 
-    /// Returns the refresh-policy dropdown entity, if one has been wired up.
+    /// Returns the refresh-policy dropdown entity.
     ///
-    /// The dropdown is owned by the surrounding `ResultPanel` and passed in via
-    /// `set_refresh_dropdown`. The chart toolbar renders it so the user can
-    /// change the policy while viewing a chart.
+    /// The dropdown is created at construction time and lives here for the
+    /// panel's lifetime. The chart toolbar uses it so the user can change the
+    /// policy while viewing a chart.
     pub(crate) fn chart_host_refresh_dropdown(&self, _cx: &App) -> Option<Entity<Dropdown>> {
-        self.refresh_dropdown.clone()
+        Some(self.refresh_dropdown.clone())
     }
 
     /// Returns the current result as a shared `Arc<QueryResult>`.
@@ -1994,9 +2014,6 @@ impl DataGridPanel {
         let e_modes = entity.clone();
         let e_current = entity.clone();
         let e_set_mode = entity.clone();
-        let e_supports = entity.clone();
-        let e_policy = entity.clone();
-        let e_set_policy = entity.clone();
 
         ViewHandle::builder()
             .render(move |_window, _cx| {
@@ -2035,11 +2052,6 @@ impl DataGridPanel {
             .current_mode(move |cx| e_current.read(cx).current_result_view_mode())
             .set_mode(move |mode, cx| {
                 e_set_mode.update(cx, |grid, cx| grid.set_result_view_mode(mode, cx));
-            })
-            .supports_refresh(move |cx| e_supports.read(cx).supports_auto_refresh())
-            .refresh_policy(move |cx| e_policy.read(cx).refresh_policy())
-            .set_refresh_policy(move |policy, cx| {
-                e_set_policy.update(cx, |grid, cx| grid.set_refresh_policy(policy, cx));
             })
             .build()
     }

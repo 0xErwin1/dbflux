@@ -452,6 +452,7 @@ pub(super) fn render_filter_bar_as_segment(
     let edit_state = g.edit_state;
     let refresh_policy = g.refresh_policy;
     let is_runner_active = g.runner.is_primary_active();
+    let refresh_dropdown = g.refresh_dropdown.clone();
 
     let show_toolbar_focus =
         focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
@@ -638,7 +639,9 @@ pub(super) fn render_filter_bar_as_segment(
                             .color(theme.foreground),
                         )
                         .child(Text::body(refresh_label)),
-                ),
+                )
+                .child(div().w(px(1.0)).h_full().bg(theme.input))
+                .child(div().w(px(28.0)).h_full().child(refresh_dropdown)),
         )
         .into_any()
 }
@@ -769,10 +772,6 @@ impl DataGridPanel {
                     ),
             )
             .child(
-                // The refresh dropdown widget is rendered by the surrounding
-                // `ResultPanel`'s mode bar. Only the action button (Run / Cancel)
-                // lives inside the grid toolbar so it can trigger `refresh` /
-                // `cancel_primary` directly.
                 div()
                     .id("refresh-action-btn")
                     .h(Heights::BUTTON)
@@ -820,6 +819,13 @@ impl DataGridPanel {
                                 .color(theme.foreground),
                             )
                             .child(Text::body(refresh_label)),
+                    )
+                    .child(div().w(px(1.0)).h_full().bg(theme.input))
+                    .child(
+                        div()
+                            .w(px(28.0))
+                            .h_full()
+                            .child(self.refresh_dropdown.clone()),
                     ),
             )
             .when(self.can_toggle_view(), |d| {
@@ -1257,7 +1263,7 @@ impl DataGridPanel {
         let ctx = ChartToolbarContext {
             theme,
             chart_shell,
-            refresh_dropdown: self.refresh_dropdown.clone(),
+            refresh_dropdown: Some(self.refresh_dropdown.clone()),
             time_range_panel: self.chart_source_time_range_panel.clone(),
             row_count: self.result.row_count(),
             resolved_window,

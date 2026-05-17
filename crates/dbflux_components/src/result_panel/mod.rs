@@ -5,14 +5,14 @@
 //!
 //! - **Built-in segments** owned by `ResultPanel` itself:
 //!   - Mode bar (`Left`, index 0): displayed when `view.available_modes().len() >= 2`.
-//!   - Refresh dropdown (`Right`, index 1000): displayed when `view.supports_refresh()`.
 //!
 //! - **View segments** provided by the hosted `ViewHandle` via its
-//!   `toolbar_segments` closure (e.g. DataGridPanel's filter bar as `Center`/0).
+//!   `toolbar_segments` closure (e.g. DataGridPanel's filter bar as `Center`/0,
+//!   which includes the full refresh compound: action button + divider + chevron).
 //!
 //! All segments are collected, sorted by `(position, index)`, and rendered in a
-//! single flex row. Position groups: `Left` → `Center` → `Right`, separated by
-//! flex spacers.
+//! single `flex_wrap` row with `gap(Spacing::SM)`. No positional spacers are
+//! inserted — spacers are incompatible with `flex_wrap`.
 //!
 //! ## ViewHandle
 //!
@@ -25,14 +25,11 @@
 //!
 //! `ResultPanel` emits `ResultPanelEvent` for backward-compatibility with
 //! container documents not yet migrated to `ViewHandle`. In the `ViewHandle`
-//! flow, mode and policy changes are forwarded directly to `view.set_mode` and
-//! `view.set_refresh_policy` closures first, then the event is emitted for any
-//! remaining listeners.
+//! flow, mode changes are forwarded directly to `view.set_mode` first, then
+//! the event is emitted for any remaining listeners.
 
-use crate::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::result_view::ResultViewMode;
-use crate::tokens::{FontSizes, Heights, Spacing};
-use dbflux_core::RefreshPolicy;
+use crate::tokens::{FontSizes, Spacing};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -105,18 +102,6 @@ pub struct ViewHandle {
     /// Called directly by `ResultPanel` when the user clicks a mode tab. No
     /// `Window` parameter — mode switching is a pure data update.
     pub set_mode: Box<dyn Fn(ResultViewMode, &mut App) + 'static>,
-
-    /// Whether the underlying view supports auto-refresh.
-    pub supports_refresh: Box<dyn Fn(&App) -> bool + 'static>,
-
-    /// The current refresh policy.
-    pub refresh_policy: Box<dyn Fn(&App) -> RefreshPolicy + 'static>,
-
-    /// Set the refresh policy on the underlying view entity.
-    ///
-    /// Called directly by `ResultPanel` when the user changes the dropdown. No
-    /// `Window` parameter — policy changes are pure data updates.
-    pub set_refresh_policy: Box<dyn Fn(RefreshPolicy, &mut App) + 'static>,
 }
 
 impl ViewHandle {
@@ -140,9 +125,6 @@ pub struct ViewHandleBuilder {
     available_modes: Option<Box<dyn Fn(&App) -> Vec<ResultViewMode> + 'static>>,
     current_mode: Option<Box<dyn Fn(&App) -> ResultViewMode + 'static>>,
     set_mode: Option<Box<dyn Fn(ResultViewMode, &mut App) + 'static>>,
-    supports_refresh: Option<Box<dyn Fn(&App) -> bool + 'static>>,
-    refresh_policy: Option<Box<dyn Fn(&App) -> RefreshPolicy + 'static>>,
-    set_refresh_policy: Option<Box<dyn Fn(RefreshPolicy, &mut App) + 'static>>,
 }
 
 impl ViewHandleBuilder {
@@ -155,9 +137,6 @@ impl ViewHandleBuilder {
             available_modes: None,
             current_mode: None,
             set_mode: None,
-            supports_refresh: None,
-            refresh_policy: None,
-            set_refresh_policy: None,
         }
     }
 
@@ -196,21 +175,6 @@ impl ViewHandleBuilder {
         self
     }
 
-    pub fn supports_refresh(mut self, f: impl Fn(&App) -> bool + 'static) -> Self {
-        self.supports_refresh = Some(Box::new(f));
-        self
-    }
-
-    pub fn refresh_policy(mut self, f: impl Fn(&App) -> RefreshPolicy + 'static) -> Self {
-        self.refresh_policy = Some(Box::new(f));
-        self
-    }
-
-    pub fn set_refresh_policy(mut self, f: impl Fn(RefreshPolicy, &mut App) + 'static) -> Self {
-        self.set_refresh_policy = Some(Box::new(f));
-        self
-    }
-
     /// Consume the builder and produce a `ViewHandle`.
     ///
     /// # Panics
@@ -233,15 +197,6 @@ impl ViewHandleBuilder {
                 .current_mode
                 .expect("ViewHandle::current_mode is required"),
             set_mode: self.set_mode.expect("ViewHandle::set_mode is required"),
-            supports_refresh: self
-                .supports_refresh
-                .expect("ViewHandle::supports_refresh is required"),
-            refresh_policy: self
-                .refresh_policy
-                .expect("ViewHandle::refresh_policy is required"),
-            set_refresh_policy: self
-                .set_refresh_policy
-                .expect("ViewHandle::set_refresh_policy is required"),
         }
     }
 }
@@ -251,14 +206,12 @@ impl ViewHandleBuilder {
 /// Events emitted by `ResultPanel`.
 ///
 /// Retained for backward-compatibility with documents not yet migrated to the
-/// `ViewHandle` pattern. In the `ViewHandle` flow, changes are forwarded
-/// directly to `view.set_mode` / `view.set_refresh_policy` first.
+/// `ViewHandle` pattern. In the `ViewHandle` flow, mode changes are forwarded
+/// directly to `view.set_mode` first.
 #[derive(Clone, Debug)]
 pub enum ResultPanelEvent {
     /// The user clicked a mode tab in the mode bar.
     ModeChanged(ResultViewMode),
-    /// The user changed the refresh policy via the dropdown.
-    RefreshPolicyChanged(RefreshPolicy),
 }
 
 // ── ResultPanel ────────────────────────────────────────────────────────────────
@@ -271,23 +224,19 @@ pub enum ResultPanelEvent {
 /// 1. Built-in Left/0 mode bar (when `view.available_modes(cx).len() >= 2`)
 /// 2. View's own segments (from `view.toolbar_segments(cx)`)
 /// 3. Host-injected segments (from `with_segments(...)` or `add_segment(...)`)
-/// 4. Built-in Right/1000 refresh dropdown (when `view.supports_refresh(cx)`)
 ///
-/// All segments except the refresh dropdown are sorted by `(SegmentPosition,
-/// index)` before rendering. The refresh dropdown is always last-right.
+/// All segments are sorted by `(SegmentPosition, index)` and rendered in a
+/// single `flex_wrap` + `gap` row. No positional spacers are inserted —
+/// spacers are incompatible with `flex_wrap`.
+///
+/// The refresh compound (action button + divider + chevron dropdown) lives
+/// inside the view's own filter-bar segment, not here.
 pub struct ResultPanel {
     /// The hosted view (closure-erasing shell).
     view: ViewHandle,
 
     /// Host-injected segments that augment the view's own segments.
     host_segments: Vec<ToolbarSegment>,
-
-    /// The refresh-policy dropdown entity. Created at construction time when
-    /// `view.supports_refresh(cx)` is true; `None` otherwise.
-    refresh_dropdown: Option<Entity<Dropdown>>,
-
-    /// Subscription to the refresh dropdown selection changes.
-    _refresh_sub: Option<Subscription>,
 
     /// Focus root for the panel.
     focus_handle: FocusHandle,
@@ -296,13 +245,9 @@ pub struct ResultPanel {
 impl ResultPanel {
     /// Create a `ResultPanel` wrapping the given `ViewHandle`.
     pub fn new(view: ViewHandle, cx: &mut Context<Self>) -> Self {
-        let (refresh_dropdown, refresh_sub) = Self::build_refresh_dropdown(&view, cx);
-
         Self {
             view,
             host_segments: Vec::new(),
-            refresh_dropdown,
-            _refresh_sub: refresh_sub,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -318,30 +263,6 @@ impl ResultPanel {
     /// Add a single host-injected segment.
     pub fn add_segment(&mut self, segment: ToolbarSegment) {
         self.host_segments.push(segment);
-    }
-
-    // ── Refresh sync ──────────────────────────────────────────────────────────
-
-    /// Sync the refresh dropdown's selected item to match the given policy.
-    ///
-    /// Called by the container document when the underlying view resets its
-    /// own policy internally (e.g. when a new query result arrives). Does not
-    /// emit `ResultPanelEvent::RefreshPolicyChanged`.
-    pub fn sync_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
-        if let Some(dd) = &self.refresh_dropdown {
-            dd.update(cx, |dd, cx| {
-                dd.set_selected_index(Some(policy.index()), cx);
-            });
-        }
-        cx.notify();
-    }
-
-    /// Return the refresh dropdown entity owned by this panel, if any.
-    ///
-    /// Container documents call this once after construction to wire the same
-    /// dropdown entity into the underlying data grid for chart toolbar rendering.
-    pub fn refresh_dropdown_entity(&self) -> Option<&Entity<Dropdown>> {
-        self.refresh_dropdown.as_ref()
     }
 
     // ── Focus ─────────────────────────────────────────────────────────────────
@@ -376,11 +297,6 @@ impl ResultPanel {
         false
     }
 
-    /// Whether the built-in refresh dropdown segment is present.
-    pub fn has_refresh_segment(&self) -> bool {
-        self.refresh_dropdown.is_some()
-    }
-
     /// Return `(position, index)` pairs for host-injected segments, sorted.
     ///
     /// Used by tests to verify segment ordering without invoking render.
@@ -397,7 +313,6 @@ impl ResultPanel {
     /// Return all `(position, index)` pairs including built-ins, sorted.
     ///
     /// Built-in mode bar: `Left/0` (when `available_modes.len() >= 2`).
-    /// Built-in refresh: `Right/1000` (when view supports refresh).
     pub fn all_sorted_segment_positions(&self, cx: &App) -> Vec<(SegmentPosition, u16)> {
         let mut pairs: Vec<(SegmentPosition, u16)> = Vec::new();
 
@@ -413,49 +328,8 @@ impl ResultPanel {
             pairs.push((s.position, s.index));
         }
 
-        if self.refresh_dropdown.is_some() {
-            pairs.push((SegmentPosition::Right, 1000));
-        }
-
         pairs.sort_by_key(|&(pos, idx)| (pos, idx));
         pairs
-    }
-
-    // ── Private helpers ───────────────────────────────────────────────────────
-
-    fn build_refresh_dropdown(
-        view: &ViewHandle,
-        cx: &mut Context<Self>,
-    ) -> (Option<Entity<Dropdown>>, Option<Subscription>) {
-        if !(view.supports_refresh)(cx) {
-            return (None, None);
-        }
-
-        let current_policy = (view.refresh_policy)(cx);
-
-        let items: Vec<DropdownItem> = RefreshPolicy::ALL
-            .iter()
-            .map(|p| DropdownItem::new(p.label()))
-            .collect();
-
-        let dropdown = cx.new(|_cx| {
-            Dropdown::new("result-panel-refresh")
-                .items(items)
-                .selected_index(Some(current_policy.index()))
-                .compact_trigger(true)
-        });
-
-        let sub = cx.subscribe(
-            &dropdown,
-            |this, _, event: &DropdownSelectionChanged, cx| {
-                let policy = RefreshPolicy::from_index(event.index);
-                (this.view.set_refresh_policy)(policy, cx);
-                cx.emit(ResultPanelEvent::RefreshPolicyChanged(policy));
-                cx.notify();
-            },
-        );
-
-        (Some(dropdown), Some(sub))
     }
 
     /// Build the mode tab strip element.
@@ -546,12 +420,11 @@ impl Render for ResultPanel {
                 chrome_children.into_iter().fold(
                     div()
                         .flex()
-                        .flex_row()
                         .flex_wrap()
                         .items_center()
-                        .min_h(Heights::TOOLBAR)
+                        .min_h(px(34.0))
                         .px(Spacing::SM)
-                        .gap(Spacing::XS)
+                        .gap(Spacing::SM)
                         .border_b_1()
                         .border_color(theme.border)
                         .bg(theme.tab_bar),
@@ -571,8 +444,12 @@ impl Render for ResultPanel {
 }
 
 impl ResultPanel {
-    /// Collect all chrome-row children as `AnyElement`, with spacers between
-    /// position groups. Returns empty vec when no segments exist.
+    /// Collect all chrome-row children as `AnyElement`. Returns empty vec when
+    /// no segments exist.
+    ///
+    /// Segments from all sources (mode bar, view, host-injected) are merged and
+    /// sorted by `(position, index)`. No flex spacers are inserted — the chrome
+    /// row uses `flex_wrap` + `gap`, which is incompatible with spacers.
     ///
     /// Separated from `render` to avoid simultaneous borrow of `self` and `cx`
     /// when also calling `(self.view.render)(window, cx)`.
@@ -584,12 +461,11 @@ impl ResultPanel {
         let available_modes = (self.view.available_modes)(cx);
         let current_mode = (self.view.current_mode)(cx);
         let has_mode_bar = available_modes.len() >= 2;
-        let has_refresh = self.refresh_dropdown.is_some();
 
         // Collect view segments.
         let view_segs: Vec<ToolbarSegment> = (self.view.toolbar_segments)(cx);
 
-        if !has_mode_bar && !has_refresh && view_segs.is_empty() && self.host_segments.is_empty() {
+        if !has_mode_bar && view_segs.is_empty() && self.host_segments.is_empty() {
             return vec![];
         }
 
@@ -635,37 +511,7 @@ impl ResultPanel {
 
         entries.sort_by_key(|e| (e.position, e.index));
 
-        let mut children: Vec<AnyElement> = Vec::new();
-        let mut last_pos: Option<SegmentPosition> = None;
-
-        for entry in entries {
-            // Insert a flex spacer only when transitioning OUT of Left.
-            // Center and Right must cluster on the right edge (e.g. the
-            // filter bar's Refresh button must sit adjacent to the refresh
-            // dropdown), so no spacer is inserted between Center and Right
-            // or between consecutive Right segments.
-            if let Some(prev) = last_pos
-                && prev == SegmentPosition::Left
-                && entry.position != SegmentPosition::Left
-            {
-                children.push(div().flex_1().into_any());
-            }
-            last_pos = Some(entry.position);
-            children.push(entry.element);
-        }
-
-        // Refresh dropdown (Right/1000) — always last in the row.
-        if let Some(dd) = self.refresh_dropdown.clone() {
-            // Only push it to the right when nothing else has already
-            // claimed the post-Left space. If a Center or Right segment is
-            // already in place, the dropdown sits flush against it.
-            if last_pos.is_none_or(|p| p == SegmentPosition::Left) {
-                children.push(div().flex_1().into_any());
-            }
-            children.push(div().w(px(28.0)).h_full().child(dd).into_any());
-        }
-
-        children
+        entries.into_iter().map(|e| e.element).collect()
     }
 }
 
