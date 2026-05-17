@@ -519,7 +519,7 @@ pub(super) fn render_filter_bar_as_segment(
                             .flex()
                             .items_center()
                             .w(px(420.0))
-                            .h(Heights::CONTROL)
+                            .h(Heights::ROW_COMPACT)
                             .rounded(Radii::SM)
                             .when(
                                 show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
@@ -585,7 +585,7 @@ pub(super) fn render_filter_bar_as_segment(
                         .flex()
                         .items_center()
                         .w(px(60.0))
-                        .h(Heights::CONTROL)
+                        .h(Heights::ROW_COMPACT)
                         .rounded(Radii::SM)
                         .when(
                             show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
@@ -609,7 +609,7 @@ pub(super) fn render_filter_bar_as_segment(
         .child(
             div()
                 .id("refresh-action-btn")
-                .h(Heights::CONTROL)
+                .h(Heights::ROW_COMPACT)
                 .flex()
                 .items_center()
                 .gap_0()
@@ -791,7 +791,7 @@ impl DataGridPanel {
             .child(
                 div()
                     .id("refresh-action-btn")
-                    .h(Heights::BUTTON)
+                    .h(Heights::ROW_COMPACT)
                     .flex()
                     .items_center()
                     .gap_0()
