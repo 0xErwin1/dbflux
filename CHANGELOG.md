@@ -4,6 +4,32 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+* **Workspace document architecture refactor** — the closed
+  `DocumentHandle` enum that previously gated every document type was
+  replaced with a `PaneHandle` closure-erasing shell. Adding a new
+  document type now requires only a new `<name>/pane.rs` and one
+  `open_<name>` function in `workspace/actions.rs`; no changes to
+  `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
+  Introduces `DocumentKey` for tab deduplication (replaces the six
+  `is_*` methods), a unified `DocumentEvent` (replaces four per-document
+  event enums), and a universal `ResultPanel` + `ViewHandle` chrome host
+  with a `ToolbarSegment` slot system (`Left | Center | Right` +
+  `index`, `flex_wrap` row) for filter bars, axis bars, range chips,
+  and similar view-provided controls. `handle.rs` reduced from 486 to
+  29 LOC; `audit/mod.rs` reduced from 3454 to 1628 LOC. No new
+  dependencies, no functional regressions, 2169 tests pass.
+
+### Fixed
+
+* **Result mode bar appears in CodeDocument query results** —
+  `DataGridPanel::available_result_view_modes` no longer gates on the
+  currently active mode, so the Data | Chart | JSON bar now renders the
+  moment a `QueryResult` arrives (instead of only after the user
+  manually switched away from Table). Regression introduced earlier in
+  the workspace-view refactor.
+
 ## [0.6.0-dev.2] - 2026-05-14
 
 ### Fixed
