@@ -1,9 +1,7 @@
-#![allow(dead_code)]
-#![allow(unreachable_code)]
 #![allow(clippy::type_complexity)]
 
 use super::dedup::DocumentKey;
-use super::handle::{DocumentEvent, DocumentHandle};
+use super::handle::DocumentEvent;
 use super::pane::PaneHandle;
 use super::types::{DocumentId, DocumentKind, DocumentMetaSnapshot};
 use crate::keymap::{Command, ContextId};
@@ -11,19 +9,16 @@ use dbflux_core::RefreshPolicy;
 use gpui::{AnyElement, App, Context, EventEmitter, Subscription, Window};
 use std::collections::HashMap;
 
-/// Coexistence wrapper used while migrating documents from `DocumentHandle`
-/// (enum) to `PaneHandle` (closure-erased struct).
-///
-/// During Arc 0 all tabs are `Legacy`. As each document type is migrated in
-/// Arcs 1–5, its constructor wraps the result in `Tab::Pane` instead.
-/// `Tab::Legacy` is removed in the cleanup slice (Arc 6).
+/// Wrapper around a `PaneHandle` representing one open workspace tab.
 ///
 /// `PaneHandle` is large (many `Box<dyn Fn>` closure fields), so it is
-/// heap-allocated via `Box` to keep the `Tab` enum size small.
+/// heap-allocated via `Box` to keep the `Tab` size small.
+///
+/// The enum form is kept for forward-compatibility: additional variants such
+/// as a detachable pane could be added here without touching all call sites.
+#[non_exhaustive]
 pub enum Tab {
-    /// Pre-migration document: backed by the old `DocumentHandle` enum.
-    Legacy(DocumentHandle),
-    /// Post-migration document: backed by the new `PaneHandle` shell.
+    /// A document managed via the closure-erased `PaneHandle` shell.
     Pane(Box<PaneHandle>),
 }
 
@@ -32,14 +27,12 @@ impl Tab {
 
     pub fn id(&self) -> DocumentId {
         match self {
-            Tab::Legacy(h) => h.id(),
             Tab::Pane(p) => p.id(),
         }
     }
 
     pub fn kind(&self) -> DocumentKind {
         match self {
-            Tab::Legacy(h) => h.kind(),
             Tab::Pane(p) => p.kind(),
         }
     }
@@ -48,21 +41,18 @@ impl Tab {
 
     pub fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement {
         match self {
-            Tab::Legacy(h) => h.render(),
             Tab::Pane(p) => p.render(window, cx),
         }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         match self {
-            Tab::Legacy(h) => h.focus(window, cx),
             Tab::Pane(p) => p.focus(window, cx),
         }
     }
 
     pub fn dispatch_command(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
         match self {
-            Tab::Legacy(h) => h.dispatch_command(cmd, window, cx),
             Tab::Pane(p) => p.dispatch_command(cmd, window, cx),
         }
     }
@@ -71,56 +61,48 @@ impl Tab {
 
     pub fn meta_snapshot(&self, cx: &App) -> DocumentMetaSnapshot {
         match self {
-            Tab::Legacy(h) => h.meta_snapshot(cx),
             Tab::Pane(p) => p.meta_snapshot(cx),
         }
     }
 
     pub fn tab_title(&self, cx: &App) -> String {
         match self {
-            Tab::Legacy(h) => h.tab_title(cx),
             Tab::Pane(p) => p.tab_title(cx),
         }
     }
 
     pub fn can_close(&self, cx: &App) -> bool {
         match self {
-            Tab::Legacy(h) => h.can_close(cx),
             Tab::Pane(p) => p.can_close(cx),
         }
     }
 
     pub fn connection_id(&self, cx: &App) -> Option<uuid::Uuid> {
         match self {
-            Tab::Legacy(h) => h.connection_id(cx),
             Tab::Pane(p) => p.connection_id(cx),
         }
     }
 
     pub fn active_context(&self, cx: &App) -> ContextId {
         match self {
-            Tab::Legacy(h) => h.active_context(cx),
             Tab::Pane(p) => p.active_context(cx),
         }
     }
 
     pub fn change_summary(&self, cx: &App) -> Option<String> {
         match self {
-            Tab::Legacy(h) => h.change_summary(cx),
             Tab::Pane(p) => p.change_summary(cx),
         }
     }
 
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
         match self {
-            Tab::Legacy(h) => h.refresh_policy(cx),
             Tab::Pane(p) => p.refresh_policy(cx),
         }
     }
 
     pub fn flush_auto_save(&self, cx: &App) {
         match self {
-            Tab::Legacy(h) => h.flush_auto_save(cx),
             Tab::Pane(p) => p.flush_auto_save(cx),
         }
     }
@@ -129,14 +111,12 @@ impl Tab {
 
     pub fn set_active_tab(&self, active: bool, cx: &mut App) {
         match self {
-            Tab::Legacy(h) => h.set_active_tab(active, cx),
             Tab::Pane(p) => p.set_active_tab(active, cx),
         }
     }
 
     pub fn set_refresh_policy(&self, policy: RefreshPolicy, cx: &mut App) {
         match self {
-            Tab::Legacy(h) => h.set_refresh_policy(policy, cx),
             Tab::Pane(p) => p.set_refresh_policy(policy, cx),
         }
     }
@@ -145,9 +125,6 @@ impl Tab {
 
     pub fn matches_dedup_key(&self, key: &DocumentKey, cx: &App) -> bool {
         match self {
-            // DocumentHandle is uninhabited (all types migrated to PaneHandle in Arcs 1–5).
-            // This arm is unreachable in practice; Legacy tabs are never constructed.
-            Tab::Legacy(h) => match *h {},
             Tab::Pane(p) => p.matches_dedup_key(key, cx),
         }
     }
@@ -159,117 +136,16 @@ impl Tab {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         match self {
-            Tab::Legacy(h) => h.subscribe(cx, callback),
             Tab::Pane(p) => p.subscribe(cx, callback),
         }
     }
 
-    // --- Legacy compatibility helpers ---
+    // --- PaneHandle accessors ---
 
-    /// Returns the legacy `DocumentHandle` for callers that pattern-match
-    /// on concrete document variants. Returns `None` for `Pane` tabs.
-    ///
-    /// This method is removed in the cleanup slice (Arc 6). During migration
-    /// it bridges call sites that still inspect the concrete type.
-    pub fn as_legacy(&self) -> Option<&DocumentHandle> {
+    /// Returns the inner `PaneHandle`.
+    pub fn as_pane(&self) -> &PaneHandle {
         match self {
-            Tab::Legacy(h) => Some(h),
-            Tab::Pane(_) => None,
-        }
-    }
-
-    /// Returns the inner `PaneHandle` for `Pane` tabs; returns `None` for
-    /// legacy tabs. Mirrors `as_legacy` for the new-style path.
-    pub fn as_pane(&self) -> Option<&PaneHandle> {
-        match self {
-            Tab::Pane(p) => Some(p.as_ref()),
-            Tab::Legacy(_) => None,
-        }
-    }
-
-    // --- Forwarded DocumentHandle dedup helpers ---
-    // These mirror the is_* methods on DocumentHandle so that call sites in
-    // actions.rs that iterate documents() can keep the same predicate shape.
-
-    pub fn is_chart(&self, saved_chart_id: uuid::Uuid, cx: &App) -> bool {
-        match self {
-            // Chart documents are always Pane tabs; no Legacy Chart tabs exist.
-            Tab::Legacy(_) => false,
-            Tab::Pane(p) => p.matches_dedup_key(&DocumentKey::Chart { saved_chart_id }, cx),
-        }
-    }
-
-    pub fn is_file(&self, path: &std::path::Path, cx: &App) -> bool {
-        match self {
-            Tab::Legacy(h) => h.is_file(path, cx),
-            Tab::Pane(p) => p.matches_dedup_key(
-                &DocumentKey::File {
-                    path: path.to_owned(),
-                },
-                cx,
-            ),
-        }
-    }
-
-    pub fn is_table(&self, table: &dbflux_core::TableRef, cx: &App) -> bool {
-        // Data documents are now always Pane tabs; Legacy arm always returns false.
-        match self {
-            Tab::Legacy(_) => false,
-            Tab::Pane(p) => p.matches_dedup_key(
-                &DocumentKey::Table {
-                    profile_id: uuid::Uuid::nil(),
-                    database: None,
-                    table: table.clone(),
-                },
-                cx,
-            ),
-        }
-    }
-
-    pub fn is_table_with_database(
-        &self,
-        table: &dbflux_core::TableRef,
-        database: Option<&str>,
-        cx: &App,
-    ) -> bool {
-        // Data documents are now always Pane tabs; Legacy arm always returns false.
-        match self {
-            Tab::Legacy(_) => false,
-            Tab::Pane(p) => p.matches_dedup_key(
-                &DocumentKey::Table {
-                    profile_id: uuid::Uuid::nil(),
-                    database: database.map(str::to_owned),
-                    table: table.clone(),
-                },
-                cx,
-            ),
-        }
-    }
-
-    pub fn is_collection(&self, collection: &dbflux_core::CollectionRef, cx: &App) -> bool {
-        // Data documents are now always Pane tabs; Legacy arm always returns false.
-        match self {
-            Tab::Legacy(_) => false,
-            Tab::Pane(p) => p.matches_dedup_key(
-                &DocumentKey::Collection {
-                    profile_id: uuid::Uuid::nil(),
-                    collection: collection.clone(),
-                },
-                cx,
-            ),
-        }
-    }
-
-    pub fn is_key_value_database(&self, profile_id: uuid::Uuid, database: &str, cx: &App) -> bool {
-        match self {
-            Tab::Legacy(h) => h.is_key_value_database(profile_id, database, cx),
-            Tab::Pane(p) => p.matches_dedup_key(
-                &DocumentKey::KeyValueDb {
-                    profile_id,
-                    database: database.to_owned(),
-                },
-                cx,
-            ),
+            Tab::Pane(p) => p.as_ref(),
         }
     }
 
@@ -279,8 +155,6 @@ impl Tab {
     /// Returns `None` for non-script tabs and non-empty or non-file-backed scripts.
     pub fn is_file_backed_empty(&self, cx: &App) -> Option<std::path::PathBuf> {
         match self {
-            // No remaining Legacy document type is file-backed; Code was migrated.
-            Tab::Legacy(_) => None,
             Tab::Pane(p) => p.is_file_backed_empty.as_ref().and_then(|f| f(cx)),
         }
     }
@@ -290,8 +164,6 @@ impl Tab {
     /// other document types and for ephemeral tabs with no backing path.
     pub fn session_tab_snapshot(&self, cx: &App) -> Option<super::pane::CodeSessionTabSnapshot> {
         match self {
-            // No remaining Legacy document type carries session snapshot data.
-            Tab::Legacy(_) => None,
             Tab::Pane(p) => p.session_tab_snapshot.as_ref().and_then(|f| f(cx)),
         }
     }
@@ -571,30 +443,17 @@ impl TabManager {
         self.active_index.and_then(|i| self.documents.get(i))
     }
 
-    /// Returns the active document as a legacy `DocumentHandle`.
+    /// Renders the active tab.
     ///
-    /// Call sites that pattern-match on document variants (e.g. `dispatch.rs`)
-    /// use this bridge during the migration period. Returns `None` once all
-    /// document types have been migrated to `PaneHandle` (Arc 6).
-    pub fn active_document(&self) -> Option<DocumentHandle> {
-        self.active_tab()?.as_legacy().cloned()
-    }
-
-    /// Renders the active tab, regardless of whether it is `Legacy` or `Pane`.
-    ///
-    /// Returns `None` when no tab is active. This is the render-path replacement
-    /// for `active_document().map(|doc| doc.render())`, which silently produced
-    /// no output for `Pane` tabs because `active_document()` returned `None`.
+    /// Returns `None` when no tab is active.
     pub fn render_active(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         Some(self.active_tab()?.render(window, cx))
     }
 
-    /// Dispatches a command to the active tab, regardless of variant.
+    /// Dispatches a command to the active tab.
     ///
     /// Returns `true` when the command was handled, `false` when there is no
-    /// active tab or the tab declined the command. This replaces the pattern
-    /// `if let Some(doc) = active_document() { doc.dispatch_command(...) }`,
-    /// which silently no-oped for `Pane` tabs.
+    /// active tab or the tab declined the command.
     pub fn dispatch_active(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
         match self.active_tab() {
             Some(tab) => tab.dispatch_command(cmd, window, cx),
@@ -602,10 +461,7 @@ impl TabManager {
         }
     }
 
-    /// Focuses the active tab, regardless of variant.
-    ///
-    /// No-ops when no tab is active. Replaces the pattern
-    /// `if let Some(doc) = active_document() { doc.focus(...) }`.
+    /// Focuses the active tab. No-ops when no tab is active.
     pub fn focus_active(&self, window: &mut Window, cx: &mut App) {
         if let Some(tab) = self.active_tab() {
             tab.focus(window, cx);
@@ -633,26 +489,13 @@ impl TabManager {
     }
 
     /// Opens a pane-style document and activates it.
-    ///
-    /// Convenience wrapper around `open` for migrated document types.
     pub fn open_pane(&mut self, pane: PaneHandle, cx: &mut Context<Self>) {
         self.open(Tab::Pane(Box::new(pane)), cx);
     }
 
-    /// Returns a cloned `DocumentHandle` for a given ID.
-    ///
-    /// Bridge for call sites that need to dispatch commands through a cloned
-    /// handle after releasing the `&TabManager` borrow. Returns `None` when
-    /// the tab is a `Pane` (migrated) or the ID is not found.
-    ///
-    /// Removed in Arc 6.
-    pub fn document_legacy(&self, id: DocumentId) -> Option<DocumentHandle> {
-        self.document(id)?.as_legacy().cloned()
-    }
-
     /// Returns the first tab whose identity matches `key`.
     ///
-    /// Used by migrated `actions.rs` paths that no longer call `is_*` directly.
+    /// Used by `actions.rs` paths for deduplication instead of `is_*` methods.
     pub fn find_by_key(&self, key: &DocumentKey, cx: &App) -> Option<DocumentId> {
         self.documents
             .iter()
@@ -714,11 +557,7 @@ impl Default for TabManager {
 
 impl EventEmitter<TabManagerEvent> for TabManager {}
 
-/// Maps a `DocumentKey` to the appropriate `is_*` predicate on a legacy
-/// `DocumentHandle`. Used by `Tab::Legacy` arm of `Tab::matches_dedup_key`.
-///
-/// Data documents are now always `Pane` tabs, so `Table` and `Collection` keys
-/// always return `false` here. Removed in Arc 6 when the `Legacy` variant is deleted.
+#[cfg(test)]
 fn ids_to_close_others(all_ids: &[DocumentId], keep_id: DocumentId) -> Vec<DocumentId> {
     all_ids
         .iter()
@@ -727,6 +566,7 @@ fn ids_to_close_others(all_ids: &[DocumentId], keep_id: DocumentId) -> Vec<Docum
         .collect()
 }
 
+#[cfg(test)]
 fn ids_to_close_left(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
     let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
         return Vec::new();
@@ -734,6 +574,7 @@ fn ids_to_close_left(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<Docum
     all_ids[..idx].to_vec()
 }
 
+#[cfg(test)]
 fn ids_to_close_right(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
     let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
         return Vec::new();
@@ -844,13 +685,7 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // --- Tab enum structural tests ---
-
-    /// `ids_to_close_right` from the first position returns all remaining tabs.
-    ///
-    /// This was originally a structural test for `legacy_matches` / `Tab::as_legacy`.
-    /// Those helpers have been removed (Arc 5): all documents are now `Tab::Pane`.
-    /// The test body remains as a regression guard for the `ids_to_close_*` helpers.
+    /// Regression guard for `ids_to_close_right` from the first position.
     #[test]
     fn close_right_from_first_returns_two_tabs() {
         let ids = make_ids(3);

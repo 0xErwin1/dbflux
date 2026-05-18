@@ -20,9 +20,7 @@ use crate::keymap::{
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
-use crate::ui::document::{
-    CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager,
-};
+use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager};
 
 #[cfg(feature = "mcp")]
 use crate::ui::document::McpApprovalsView;
@@ -449,13 +447,15 @@ impl Workspace {
                     UnsavedChangesOutcome::SaveSelected(ids) => {
                         let ids = ids.clone();
                         for id in &ids {
-                            if let Some(doc) = this.tab_manager.read(cx).document_legacy(*id) {
-                                doc.dispatch_command(
-                                    crate::keymap::Command::SaveFileAs,
-                                    window,
-                                    cx,
-                                );
-                            }
+                            this.tab_manager.update(cx, |mgr, cx| {
+                                if let Some(tab) = mgr.document(*id) {
+                                    tab.dispatch_command(
+                                        crate::keymap::Command::SaveFileAs,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            });
                         }
                     }
                     UnsavedChangesOutcome::Cancelled => {}
@@ -901,9 +901,11 @@ impl Workspace {
                             .collect();
 
                         for (id, is_active) in doc_ids {
-                            if let Some(handle) = this.tab_manager.read(cx).document_legacy(id) {
-                                handle.set_active_tab(is_active, cx);
-                            }
+                            this.tab_manager.update(cx, |mgr, cx| {
+                                if let Some(tab) = mgr.document(id) {
+                                    tab.set_active_tab(is_active, cx);
+                                }
+                            });
                         }
 
                         this.write_session_manifest(cx);

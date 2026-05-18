@@ -37,7 +37,7 @@ pub use data_view_trait::DataView;
 pub use governance::McpApprovalsView;
 
 pub use dedup::DocumentKey;
-pub use handle::{DocumentEvent, DocumentHandle};
+pub use handle::DocumentEvent;
 pub use key_value::KeyValueDocument;
 pub use pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
 pub use result_view::ResultViewMode;
