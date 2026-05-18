@@ -1479,7 +1479,6 @@ impl AuditDocument {
         })
         .detach();
     }
-
 }
 
 impl Focusable for AuditDocument {

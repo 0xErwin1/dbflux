@@ -6,12 +6,14 @@
 
 use std::collections::HashMap;
 
-use super::{AuditContextMenuAction, AuditDocument, AuditDocumentSource, ToolbarSlot};
 use super::filters::{TimeRange, format_timestamp_ms};
+use super::{AuditContextMenuAction, AuditDocument, AuditDocumentSource, ToolbarSlot};
 use crate::ui::document::handle::DocumentEvent;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::controls::{GpuiInput as Input, InputState, ReadonlyTextView, SelectableText};
+use dbflux_components::controls::{
+    GpuiInput as Input, InputState, ReadonlyTextView, SelectableText,
+};
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_components::tokens::BannerColors;
 use dbflux_storage::repositories::audit::AuditEventDto;
@@ -267,9 +269,11 @@ impl AuditDocument {
                 d.border_1().border_color(theme.ring)
             })
             .child(
-                div()
-                    .flex_1()
-                    .child(dbflux_components::controls::GpuiInput::new(&self.search_input).small().h(Heights::BUTTON)),
+                div().flex_1().child(
+                    dbflux_components::controls::GpuiInput::new(&self.search_input)
+                        .small()
+                        .h(Heights::BUTTON),
+                ),
             );
 
         // Dropdown wrappers — ring goes around the whole labeled control.
@@ -323,10 +327,12 @@ impl AuditDocument {
                         d.border_1().border_color(theme.ring)
                     })
                     .child(
-                        gpui_component::date_picker::DatePicker::new(&self.custom_date_range_picker)
-                            .small()
-                            .placeholder("Select date range")
-                            .number_of_months(2),
+                        gpui_component::date_picker::DatePicker::new(
+                            &self.custom_date_range_picker,
+                        )
+                        .small()
+                        .placeholder("Select date range")
+                        .number_of_months(2),
                     ),
             )
             .child(Text::caption("from"))
@@ -505,7 +511,6 @@ impl AuditDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-
         if self.events.is_empty() && self.is_loading {
             return div()
                 .flex_1()
@@ -1055,7 +1060,6 @@ impl AuditDocument {
     }
 
     pub(super) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-
         let theme = cx.theme().clone();
         let can_prev = self.can_go_prev();
         let can_next = self.can_go_next();

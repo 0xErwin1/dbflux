@@ -128,9 +128,7 @@ impl AuditDocument {
         pane.matches_event_stream = {
             let e = entity.clone();
             Some(Box::new(
-                move |profile_id: uuid::Uuid,
-                      target: &dbflux_core::EventStreamTarget,
-                      cx: &App| {
+                move |profile_id: uuid::Uuid, target: &dbflux_core::EventStreamTarget, cx: &App| {
                     e.read(cx).matches_event_stream(profile_id, target)
                 },
             ))
