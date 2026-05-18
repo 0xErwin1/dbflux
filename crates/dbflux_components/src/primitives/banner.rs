@@ -96,13 +96,21 @@ impl RenderOnce for BannerBlock {
         let mut pre_tint = fg;
         pre_tint.a = 0.08;
 
-        let mut content_col = div().flex().flex_col().gap(Spacing::XS).child(
-            div()
-                .text_size(FontSizes::SM)
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(fg)
-                .child(self.title),
-        );
+        // `flex_1 + min_w_0` lets the title/body text wrap to the
+        // banner's width instead of overflowing on long error messages.
+        let mut content_col = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(Spacing::XS)
+            .child(
+                div()
+                    .text_size(FontSizes::SM)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(fg)
+                    .child(self.title),
+            );
 
         if let Some(body) = self.body {
             content_col =
@@ -123,11 +131,16 @@ impl RenderOnce for BannerBlock {
             );
         }
 
+        // `min_w_0` on every flex item in the chain (row, icon-wrapper,
+        // outer) is required for `content_col` to actually have a
+        // constrained width — without it the chain reports content-size
+        // upward and `min_w_0` on content_col alone has no effect.
         let mut row = div()
             .flex()
             .items_start()
             .gap(Spacing::SM)
             .flex_1()
+            .min_w_0()
             .child(content_col);
 
         if let Some(icon) = self.icon {
@@ -136,12 +149,14 @@ impl RenderOnce for BannerBlock {
                 .items_start()
                 .gap(Spacing::SM)
                 .flex_1()
+                .min_w_0()
                 .child(icon)
                 .child(row);
         }
 
         let mut outer = div()
             .flex()
+            .w_full()
             .items_start()
             .justify_between()
             .gap(Spacing::SM)

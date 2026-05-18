@@ -99,6 +99,8 @@ impl Sidebar {
                 let has_open_documents = state.connections().contains_key(&profile_id);
 
                 // Store the pending delete so Confirm can execute it.
+                // The dedicated ModalDeleteConnection owns the UI, so flag
+                // this as delegated to suppress the generic inline popup.
                 self.delete_confirm_modal = Some(DeleteConfirmState {
                     item_id: item_id.to_string(),
                     item_name: connection_name.clone(),
@@ -106,8 +108,14 @@ impl Sidebar {
                     object_type: None,
                     is_ddl: false,
                     multi_item_ids: Vec::new(),
+                    delegated_to_modal: true,
                 });
 
+                log::debug!(
+                    "Profile delete requested for {} (profile_id={profile_id}, open_docs={has_open_documents}); \
+                     stored state, emitting RequestDeleteConnection",
+                    connection_name,
+                );
                 cx.emit(SidebarEvent::RequestDeleteConnection {
                     connection_name,
                     profile_id,
@@ -126,6 +134,7 @@ impl Sidebar {
                     object_type: None,
                     is_ddl: false,
                     multi_item_ids: Vec::new(),
+                    delegated_to_modal: false,
                 });
                 cx.notify();
             }
@@ -142,6 +151,7 @@ impl Sidebar {
                     object_type: None,
                     is_ddl: false,
                     multi_item_ids: Vec::new(),
+                    delegated_to_modal: false,
                 });
                 cx.notify();
             }
@@ -158,6 +168,7 @@ impl Sidebar {
                     object_type: None,
                     is_ddl: false,
                     multi_item_ids: Vec::new(),
+                    delegated_to_modal: false,
                 });
                 cx.notify();
             }
@@ -184,6 +195,7 @@ impl Sidebar {
             object_type: None,
             is_ddl: false,
             multi_item_ids: ids,
+            delegated_to_modal: false,
         });
         cx.notify();
     }
@@ -217,6 +229,8 @@ impl Sidebar {
                 let table_name = name.clone();
 
                 // Also store an inline state so `confirm_modal_delete` can execute the drop.
+                // ModalDropTable owns the UI, so flag this as delegated to
+                // suppress the generic inline popup.
                 self.delete_confirm_modal = Some(DeleteConfirmState {
                     item_id: item_id.to_string(),
                     item_name: table_name.clone(),
@@ -224,6 +238,7 @@ impl Sidebar {
                     object_type: Some(object_type.to_string()),
                     is_ddl: true,
                     multi_item_ids: Vec::new(),
+                    delegated_to_modal: true,
                 });
 
                 cx.emit(SidebarEvent::RequestDropTable {
@@ -246,6 +261,7 @@ impl Sidebar {
                     object_type: Some(object_type.to_string()),
                     is_ddl: true,
                     multi_item_ids: Vec::new(),
+                    delegated_to_modal: false,
                 });
                 cx.notify();
             }
@@ -256,8 +272,21 @@ impl Sidebar {
 
     pub fn confirm_modal_delete(&mut self, cx: &mut Context<Self>) {
         let Some(modal) = self.delete_confirm_modal.take() else {
+            log::warn!(
+                "confirm_modal_delete called but delete_confirm_modal was None — \
+                 state was cleared before the dedicated overlay confirmed",
+            );
             return;
         };
+
+        log::debug!(
+            "confirm_modal_delete: item_id={}, name={}, is_ddl={}, multi={}, delegated={}",
+            modal.item_id,
+            modal.item_name,
+            modal.is_ddl,
+            modal.multi_item_ids.len(),
+            modal.delegated_to_modal,
+        );
 
         if !modal.multi_item_ids.is_empty() {
             for id in &modal.multi_item_ids {
@@ -291,17 +320,23 @@ impl Sidebar {
             .map(|m| (m.item_name.as_str(), m.is_folder))
     }
 
-    /// Returns full delete modal state for DDL-aware rendering.
+    /// Returns full delete modal state for DDL-aware rendering of the
+    /// generic inline confirm popup. Returns `None` when a dedicated
+    /// overlay (ModalDeleteConnection, ModalDropTable) is taking over
+    /// the UI, so the renderer skips drawing a second confirm dialog
+    /// on top of it.
     pub fn delete_modal_state(&self) -> Option<DeleteModalState<'_>> {
-        self.delete_confirm_modal
-            .as_ref()
-            .map(|m| DeleteModalState {
-                item_name: &m.item_name,
-                is_folder: m.is_folder,
-                is_ddl: m.is_ddl,
-                object_type: m.object_type.as_deref(),
-                multi_count: (!m.multi_item_ids.is_empty()).then_some(m.multi_item_ids.len()),
-            })
+        let m = self.delete_confirm_modal.as_ref()?;
+        if m.delegated_to_modal {
+            return None;
+        }
+        Some(DeleteModalState {
+            item_name: &m.item_name,
+            is_folder: m.is_folder,
+            is_ddl: m.is_ddl,
+            object_type: m.object_type.as_deref(),
+            multi_count: (!m.multi_item_ids.is_empty()).then_some(m.multi_item_ids.len()),
+        })
     }
 
     pub(super) fn execute_delete(&mut self, item_id: &str, cx: &mut Context<Self>) {

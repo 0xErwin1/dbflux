@@ -389,6 +389,78 @@ pub static SQLITE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef
     }],
 });
 
+pub static SQLSERVER_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
+        FormTab {
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
+                FormSection {
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "sqlserver://user:pass@localhost:1433/db",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "1433"),
+                                "1433",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            field(
+                                "database",
+                                "Database",
+                                FormFieldKind::Text,
+                                "optional - leave empty for default",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            field(
+                                "instance",
+                                "Instance",
+                                FormFieldKind::Text,
+                                "optional - e.g. SQLEXPRESS",
+                            ),
+                            "use_uri",
+                        ),
+                    ],
+                },
+                FormSection {
+                    title: "Authentication".into(),
+                    fields: vec![
+                        when_unchecked(
+                            with_default(
+                                field_required("user", "User", FormFieldKind::Text, "sa"),
+                                "sa",
+                            ),
+                            "use_uri",
+                        ),
+                        field_password(),
+                    ],
+                },
+            ],
+        },
+        ssh_tab(),
+    ],
+});
+
 pub static MONGODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
     tabs: vec![
         FormTab {
