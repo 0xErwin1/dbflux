@@ -30,6 +30,33 @@ All notable changes to DBFlux will be documented in this file.
   manually switched away from Table). Regression introduced earlier in
   the workspace-view refactor.
 
+## [0.6.0-dev.3] - 2026-05-16
+
+### Added
+
+* **Chart engine** — first-class time-series charts across the
+  workspace. Results in the data grid gain a Chart mode with an axis
+  bindings bar (X / Y / Group By / Aggregate), a shared toolbar
+  (range, refresh, window, points, stats, PNG, save), LTTB
+  decimation, axis tick labels, a user-toggleable legend, and a
+  crosshair readout with nearest-sample lookup. Charts can be saved
+  and reopened from the command palette.
+* **`ChartDocument`** — standalone chart document opened via "Chart
+  this query" from a data grid context menu. Owns its own time-range
+  panel, refresh dropdown and execution loop; the query is fixed for
+  the document's lifetime.
+* **`ColumnKind` metadata** — every driver now reports per-column
+  semantic kind (Timestamp, Numeric, Tag, etc.) used by chart
+  detection. Wired across Postgres, MySQL, SQLite, MongoDB, Redis,
+  DynamoDB, CloudWatch, OpenSearch, Cypher, and InfluxDB.
+* **InfluxDB driver** — InfluxDB v1 (InfluxQL) and v2 (Flux) support
+  with full query, chart, and metadata integration.
+
+### Changed
+
+* **Branding** — adopted the new DBFlux mark from the design system
+  across the application chrome.
+
 ## [0.6.0-dev.2] - 2026-05-14
 
 ### Fixed
