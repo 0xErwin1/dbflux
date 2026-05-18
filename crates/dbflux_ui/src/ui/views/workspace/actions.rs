@@ -251,14 +251,11 @@ impl Workspace {
             // Reset the category filter and focus the existing audit tab.
             // Both operations are done in a single update to avoid multiple borrows.
             self.tab_manager.update(cx, |mgr, cx| {
-                if let Some(pane) = mgr
-                    .documents()
-                    .iter()
-                    .find(|t| t.id() == id)
-                    .and_then(|t| t.as_pane())
-                    && let Some(f) = &pane.set_category_filter
-                {
-                    f(None, cx);
+                if let Some(tab) = mgr.documents().iter().find(|t| t.id() == id) {
+                    let pane = tab.as_pane();
+                    if let Some(f) = &pane.set_category_filter {
+                        f(None, cx);
+                    }
                 }
                 mgr.activate(id, cx);
             });
@@ -640,12 +637,13 @@ impl Workspace {
             .contains_key(&profile_id);
 
         let existing_id = if has_connection {
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find(|doc| doc.is_key_value_database(profile_id, &database, cx))
-                .map(|doc| doc.id())
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::KeyValueDb {
+                    profile_id,
+                    database: database.clone(),
+                },
+                cx,
+            )
         } else {
             None
         };
@@ -802,12 +800,10 @@ impl Workspace {
 
             // Check if this file is already open
             let already_open = match cx.update(|cx| {
-                tab_manager
-                    .read(cx)
-                    .documents()
-                    .iter()
-                    .find(|doc| doc.is_file(&path, cx))
-                    .map(|doc| doc.id())
+                tab_manager.read(cx).find_by_key(
+                    &crate::ui::document::DocumentKey::File { path: path.clone() },
+                    cx,
+                )
             }) {
                 Ok(value) => value,
                 Err(error) => {
@@ -870,12 +866,10 @@ impl Workspace {
         let tab_manager = self.tab_manager.clone();
 
         // Check if already open
-        let already_open = tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .find(|doc| doc.is_file(&path, cx))
-            .map(|doc| doc.id());
+        let already_open = tab_manager.read(cx).find_by_key(
+            &crate::ui::document::DocumentKey::File { path: path.clone() },
+            cx,
+        );
 
         if let Some(id) = already_open {
             tab_manager.update(cx, |mgr, cx| {

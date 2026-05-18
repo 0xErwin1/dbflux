@@ -7,7 +7,6 @@
 //! `PaneHandle` is NOT `Clone`. Callers that previously cloned `DocumentHandle`
 //! should access documents through `TabManager::with_pane(id, |p| ...)` instead.
 
-#![allow(dead_code)]
 #![allow(clippy::type_complexity)]
 
 use super::dedup::DocumentKey;
