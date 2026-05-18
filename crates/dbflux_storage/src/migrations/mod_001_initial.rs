@@ -363,9 +363,6 @@ CREATE TABLE IF NOT EXISTS cfg_connection_driver_configs (
     -- External config
     external_kind TEXT,
     external_values_json TEXT,
-    -- SQL Server-specific
-    mssql_instance TEXT,
-    mssql_trust_server_certificate INTEGER NOT NULL DEFAULT 1,
     FOREIGN KEY (profile_id) REFERENCES cfg_connection_profiles(id) ON DELETE CASCADE
 );
 

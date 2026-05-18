@@ -413,6 +413,7 @@ mod tests {
             vec![ColumnMeta {
                 name: label.to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: true,
                 is_primary_key: false,
             }],

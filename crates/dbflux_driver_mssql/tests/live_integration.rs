@@ -60,6 +60,63 @@ fn connect_mssql(uri: String) -> Result<(Box<dyn Connection>, MssqlDriver), DbEr
     Ok((connection, driver))
 }
 
+/// Parse host and port from a `sqlserver://sa:pw@host:port/db` test URI.
+///
+/// The container helper hands us a URI; the form-mode and ssl-mode tests need
+/// the host and port as separate values to populate `DbConfig::SqlServer`.
+fn parse_host_port_from_uri(uri: &str) -> (String, u16) {
+    let after_at = uri.split_once('@').map(|(_, rest)| rest).unwrap_or(uri);
+    let host_port = after_at
+        .split_once('/')
+        .map(|(hp, _)| hp)
+        .unwrap_or(after_at);
+    match host_port.rsplit_once(':') {
+        Some((host, port)) => (host.to_string(), port.parse().expect("port should parse")),
+        None => (host_port.to_string(), 1433),
+    }
+}
+
+/// Connect using form mode (`use_uri: false`) with the given SSL mode override.
+///
+/// Used by tests that need to exercise specific `DbConfig::SqlServer` field
+/// combinations the URI-based `connect_mssql` cannot express directly. The
+/// password is delivered through `connect_with_secrets` since form mode does
+/// not parse credentials out of the URI.
+fn connect_form_mode(
+    uri: &str,
+    ssl_mode: &str,
+    trust_server_certificate: bool,
+) -> Result<Box<dyn Connection>, DbError> {
+    use dbflux_core::secrecy::SecretString;
+
+    let (host, port) = parse_host_port_from_uri(uri);
+    let driver = MssqlDriver::new();
+    let profile = ConnectionProfile::new(
+        "live-mssql-form",
+        DbConfig::SqlServer {
+            use_uri: false,
+            uri: None,
+            host,
+            port,
+            user: "sa".to_string(),
+            database: None,
+            instance: None,
+            ssl_mode: Some(ssl_mode.to_string()),
+            trust_server_certificate,
+            ssl_root_cert_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        },
+    );
+    let password: SecretString = containers::MSSQL_TEST_PASSWORD.to_string().into();
+
+    containers::retry_db_operation(Duration::from_secs(60), || -> Result<_, DbError> {
+        let connection = driver.connect_with_secrets(&profile, Some(&password), None)?;
+        connection.ping()?;
+        Ok(connection)
+    })
+}
+
 fn cleanup_test_tables(conn: &dyn Connection) {
     // Drop in FK order — children first.
     for table in [
@@ -517,3 +574,82 @@ fn mssql_document_ops_not_supported() -> Result<(), DbError> {
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// Form mode (use_uri = false) — exercises connect_direct + form-fed password
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_form_mode_connect_query_and_select_db() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let connection = connect_form_mode(&uri, "on", true)?;
+
+        connection.ping()?;
+
+        // Run a trivial query so we know the session is actually usable, not
+        // just that the TCP handshake succeeded.
+        let result = connection.execute(&QueryRequest::new("SELECT 1 AS form_mode_ok"))?;
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Int(1));
+
+        // The form-mode profile leaves `database` unset, so the session should
+        // land in `master`. `set_active_database` must work in this mode too.
+        connection.execute(&QueryRequest::new(
+            "IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = 'dbflux_form_test') \
+             CREATE DATABASE [dbflux_form_test]",
+        ))?;
+        connection.set_active_database(Some("dbflux_form_test"))?;
+        assert_eq!(
+            connection.active_database().as_deref(),
+            Some("dbflux_form_test")
+        );
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// SSL mode coverage — `off` and `on` (both with trust_server_certificate=true,
+// since the test container uses a self-signed cert)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ssl_mode_off_connects() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        // `ssl_mode = "off"` maps to `EncryptionLevel::Off`. The SQL Server
+        // test image accepts unencrypted connections by default.
+        let connection = connect_form_mode(&uri, "off", true)?;
+        connection.ping()?;
+        let result = connection.execute(&QueryRequest::new("SELECT 1"))?;
+        assert_eq!(result.rows.len(), 1);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ssl_mode_on_trusts_self_signed() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        // `ssl_mode = "on"` with `trust_server_certificate = true` is the
+        // "encrypt but accept self-signed" path tiberius takes when
+        // `EncryptionLevel::On` and `trust_cert()` are both set.
+        let connection = connect_form_mode(&uri, "on", true)?;
+        connection.ping()?;
+        let result = connection.execute(&QueryRequest::new("SELECT 1"))?;
+        assert_eq!(result.rows.len(), 1);
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Instance routing
+// ---------------------------------------------------------------------------
+//
+// The `mcr.microsoft.com/mssql/server` test image only ships the default
+// `MSSQLSERVER` instance and does not expose the SQL Browser UDP service, so
+// `instance_name` cannot be exercised end-to-end here. The unit tests in
+// `driver.rs::tests` cover instance-name plumbing through `parse_mssql_url`
+// and `build_uri` (round-trip + URI-vs-form precedence). A real live test
+// would need a custom image / sidecar SQL Browser.

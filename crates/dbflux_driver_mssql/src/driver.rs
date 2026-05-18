@@ -19,10 +19,10 @@ use dbflux_core::{
     RecordIdentity, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
     SQLSERVER_FORM, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
     SchemaIndexBuilder, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection,
-    SqlDialect, SqlMutationGenerator, SshTunnelConfig, SyntaxInfo, TableInfo,
-    TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, sanitize_uri,
+    SqlDialect, SqlMutationGenerator, SshTunnelConfig, SyntaxInfo, TableBrowseRequest,
+    TableCountRequest, TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
@@ -695,16 +695,20 @@ fn build_runtime() -> Result<Runtime, DbError> {
 
 /// Short, non-reversible fingerprint of a password for diagnostic logs.
 ///
-/// Uses `DefaultHasher` and a fixed seed string, so the same input always
-/// produces the same hex string. The point is to let users compare two
-/// values for equality (e.g. "did the password reaching tiberius differ
-/// from what I typed?") without ever exposing the password itself.
+/// Uses SHA-256 with a fixed seed string and returns the leading 16 hex chars
+/// of the digest. The point is to let users compare two values for equality
+/// (e.g. "did the password reaching tiberius differ from what I typed?")
+/// without ever exposing the password itself.
 fn password_fingerprint(password: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    "dbflux-mssql-password-fingerprint:v1".hash(&mut hasher);
-    password.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"dbflux-mssql-password-fingerprint:v1");
+    hasher.update(password.as_bytes());
+    let digest = hasher.finalize();
+    // SHA-256 always produces a 32-byte digest, so `get(..8)` is infallible —
+    // the `unwrap_or_default` is just to keep clippy's indexing_slicing lint
+    // happy without an `expect`.
+    hex::encode(digest.get(..8).unwrap_or_default())
 }
 
 async fn establish_tiberius(config: Config) -> Result<TiberiusClient, tiberius::error::Error> {
@@ -737,10 +741,7 @@ impl MssqlDriver {
         password: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = inject_password_into_mssql_uri(base_uri, password);
-        log::info!(
-            "Connecting to SQL Server via URI {}",
-            sanitize_uri(&uri)
-        );
+        log::info!("Connecting to SQL Server via URI {}", sanitize_uri(&uri));
         if let Some(pw) = password {
             log::debug!(
                 "URI auth payload — password_chars: {}, password_bytes: {}, password_fingerprint: {}",
@@ -757,8 +758,7 @@ impl MssqlDriver {
         // returns a Config with empty host/auth that then dials a
         // default `localhost:1433`. ADO/JDBC parsers stay available for
         // genuine `Server=…;` / `jdbc:sqlserver://…` connection strings.
-        let is_mssql_url =
-            uri.starts_with("sqlserver://") || uri.starts_with("mssql://");
+        let is_mssql_url = uri.starts_with("sqlserver://") || uri.starts_with("mssql://");
         let config = if is_mssql_url {
             parse_mssql_url(&uri).map_err(|e| format_mssql_uri_error(&e, base_uri))?
         } else {
@@ -832,37 +832,20 @@ impl MssqlDriver {
             trust_server_certificate: config.trust_server_certificate,
         });
 
-        let reconnect_config = tiberius_config.clone();
-        let runtime = build_runtime()?;
-        let host = config.host.clone();
-        let port = config.port;
-        let (client, spid) = runtime
-            .block_on(async move {
-                let mut client = establish_tiberius(tiberius_config).await?;
-                let spid = capture_spid(&mut client).await?;
-                Ok::<_, tiberius::error::Error>((client, spid))
-            })
-            .map_err(|e| format_mssql_connect_error(&e, &host, port))?;
+        let established = establish_mssql_session(tiberius_config, &config.host, config.port)?;
 
         log::info!(
             "Successfully connected to {}:{} (spid: {})",
-            host,
-            port,
-            spid
+            config.host,
+            config.port,
+            established.spid
         );
 
-        Ok(Box::new(MssqlConnection {
-            inner: Arc::new(Mutex::new(MssqlConnectionInner {
-                client: Some(client),
-                runtime,
-            })),
-            current_database: Mutex::new(config.database.clone()),
-            ssh_tunnel: None,
-            cancelled: Arc::new(AtomicBool::new(false)),
-            spid: Arc::new(AtomicI32::new(spid)),
-            reconnect_config: Arc::new(reconnect_config),
-            poisoned: Arc::new(AtomicBool::new(false)),
-        }))
+        Ok(Box::new(build_mssql_connection(
+            established,
+            config.database.clone(),
+            None,
+        )))
     }
 
     fn connect_via_ssh_tunnel(
@@ -910,39 +893,76 @@ impl MssqlDriver {
         // the SSH tunnel owns. As long as the `SshTunnel` value lives on
         // `MssqlConnection`, the tunnel stays open and a fresh connection
         // (for KILL or for reconnect) can reuse it.
-        let reconnect_config = tiberius_config.clone();
-        let runtime = build_runtime()?;
-        let host = config.host.clone();
-        let port = config.port;
-        let (client, spid) = runtime
-            .block_on(async move {
-                let mut client = establish_tiberius(tiberius_config).await?;
-                let spid = capture_spid(&mut client).await?;
-                Ok::<_, tiberius::error::Error>((client, spid))
-            })
-            .map_err(|e| format_mssql_connect_error(&e, &host, port))?;
+        let established = establish_mssql_session(tiberius_config, &config.host, config.port)?;
 
         log::info!(
             "[CONNECT] Total connection time: {:.2}ms ({}:{} via SSH {}, spid: {})",
             total_start.elapsed().as_secs_f64() * 1000.0,
-            host,
-            port,
+            config.host,
+            config.port,
             tunnel_config.host,
-            spid
+            established.spid
         );
 
-        Ok(Box::new(MssqlConnection {
-            inner: Arc::new(Mutex::new(MssqlConnectionInner {
-                client: Some(client),
-                runtime,
-            })),
-            current_database: Mutex::new(config.database.clone()),
-            ssh_tunnel: Some(tunnel),
-            cancelled: Arc::new(AtomicBool::new(false)),
-            spid: Arc::new(AtomicI32::new(spid)),
-            reconnect_config: Arc::new(reconnect_config),
-            poisoned: Arc::new(AtomicBool::new(false)),
-        }))
+        Ok(Box::new(build_mssql_connection(
+            established,
+            config.database.clone(),
+            Some(tunnel),
+        )))
+    }
+}
+
+/// Bundle of pieces produced by `establish_mssql_session`.
+struct EstablishedMssqlSession {
+    client: TiberiusClient,
+    runtime: Runtime,
+    spid: i32,
+    reconnect_config: tiberius::Config,
+}
+
+/// Build a tokio runtime, open the tiberius client, and capture `@@SPID`.
+///
+/// Shared by `connect_direct` and `connect_via_ssh_tunnel` so the
+/// runtime/client/spid plumbing lives in one place. `host`/`port` are only
+/// used to format a meaningful error if the dial fails.
+fn establish_mssql_session(
+    tiberius_config: Config,
+    host: &str,
+    port: u16,
+) -> Result<EstablishedMssqlSession, DbError> {
+    let reconnect_config = tiberius_config.clone();
+    let runtime = build_runtime()?;
+    let (client, spid) = runtime
+        .block_on(async move {
+            let mut client = establish_tiberius(tiberius_config).await?;
+            let spid = capture_spid(&mut client).await?;
+            Ok::<_, tiberius::error::Error>((client, spid))
+        })
+        .map_err(|e| format_mssql_connect_error(&e, host, port))?;
+    Ok(EstablishedMssqlSession {
+        client,
+        runtime,
+        spid,
+        reconnect_config,
+    })
+}
+
+fn build_mssql_connection(
+    session: EstablishedMssqlSession,
+    current_database: Option<String>,
+    ssh_tunnel: Option<SshTunnel>,
+) -> MssqlConnection {
+    MssqlConnection {
+        inner: Arc::new(Mutex::new(MssqlConnectionInner {
+            client: Some(session.client),
+            runtime: session.runtime,
+        })),
+        current_database: Mutex::new(current_database),
+        ssh_tunnel,
+        cancelled: Arc::new(AtomicBool::new(false)),
+        spid: Arc::new(AtomicI32::new(session.spid)),
+        reconnect_config: Arc::new(session.reconnect_config),
+        poisoned: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -1070,7 +1090,7 @@ impl MssqlConnection {
         // Pure preparation batches (`SET LOCK_TIMEOUT 5000`) produce no
         // result sets and surface as an empty primary, which is what
         // callers already expect.
-        let collected: Vec<(Vec<ColumnMeta>, Vec<Row>)> = self.with_client(|runtime, client| {
+        let collected = self.with_client(|runtime, client| {
             runtime.block_on(async move {
                 let stream = client
                     .simple_query(sql_owned)
@@ -1082,40 +1102,7 @@ impl MssqlConnection {
                     .await
                     .map_err(|e| format_mssql_query_error(&e))?;
 
-                let non_empty: Vec<(Vec<ColumnMeta>, Vec<Row>)> = result_sets
-                    .into_iter()
-                    .filter(|set| !set.is_empty())
-                    .map(|set| {
-                        let columns: Vec<ColumnMeta> = set
-                            .first()
-                            .map(|row| {
-                                row.columns()
-                                    .iter()
-                                    .map(|c| ColumnMeta {
-                                        name: c.name().to_string(),
-                                        type_name: format!("{:?}", c.column_type()),
-                                        kind: dbflux_core::ColumnKind::Unknown,
-                                        nullable: true,
-                                        is_primary_key: false,
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-
-                        let rows: Vec<Row> = set
-                            .iter()
-                            .map(|row| {
-                                (0..row.columns().len())
-                                    .map(|idx| tiberius_value_to_value(row, idx))
-                                    .collect::<Row>()
-                            })
-                            .collect();
-
-                        (columns, rows)
-                    })
-                    .collect();
-
-                Ok::<_, DbError>(non_empty)
+                Ok::<_, DbError>(convert_result_sets(result_sets))
             })
         })?;
 
@@ -1131,6 +1118,44 @@ impl MssqlConnection {
         );
 
         Ok(result)
+    }
+}
+
+/// Convert tiberius's raw result sets into `(columns, rows)` pairs, dropping
+/// any empty sets so the multi-set splitter sees only meaningful output.
+fn convert_result_sets(result_sets: Vec<Vec<tiberius::Row>>) -> Vec<(Vec<ColumnMeta>, Vec<Row>)> {
+    result_sets
+        .into_iter()
+        .filter(|set| !set.is_empty())
+        .map(convert_single_result_set)
+        .collect()
+}
+
+fn convert_single_result_set(set: Vec<tiberius::Row>) -> (Vec<ColumnMeta>, Vec<Row>) {
+    let columns = set
+        .first()
+        .map(|row| row.columns().iter().map(tiberius_column_to_meta).collect())
+        .unwrap_or_default();
+
+    let rows: Vec<Row> = set
+        .iter()
+        .map(|row| {
+            (0..row.columns().len())
+                .map(|idx| tiberius_value_to_value(row, idx))
+                .collect::<Row>()
+        })
+        .collect();
+
+    (columns, rows)
+}
+
+fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
+    ColumnMeta {
+        name: column.name().to_string(),
+        type_name: format!("{:?}", column.column_type()),
+        kind: tiberius_column_to_kind(column.column_type()),
+        nullable: true,
+        is_primary_key: false,
     }
 }
 
@@ -1216,6 +1241,54 @@ fn tiberius_value_to_value(row: &tiberius::Row, idx: usize) -> Value {
     }
 }
 
+/// Maps a tiberius `ColumnType` to the cross-driver `ColumnKind` the chart
+/// engine and other consumers rely on.
+///
+/// Variants whose semantic category isn't representable (`Guid`, `Xml`, `Udt`,
+/// `BigVarBin`/`BigBinary`/`Image`, `SSVariant`, `Null`) map to `Unknown` so
+/// chart auto-detect excludes them rather than treating them as text.
+fn tiberius_column_to_kind(column_type: tiberius::ColumnType) -> dbflux_core::ColumnKind {
+    use dbflux_core::ColumnKind;
+    use tiberius::ColumnType;
+
+    match column_type {
+        ColumnType::Bit | ColumnType::Bitn => ColumnKind::Integer,
+        ColumnType::Int1
+        | ColumnType::Int2
+        | ColumnType::Int4
+        | ColumnType::Int8
+        | ColumnType::Intn => ColumnKind::Integer,
+        ColumnType::Float4
+        | ColumnType::Float8
+        | ColumnType::Floatn
+        | ColumnType::Money
+        | ColumnType::Money4
+        | ColumnType::Decimaln
+        | ColumnType::Numericn => ColumnKind::Float,
+        ColumnType::Datetime
+        | ColumnType::Datetime4
+        | ColumnType::Datetimen
+        | ColumnType::Datetime2
+        | ColumnType::Daten
+        | ColumnType::Timen
+        | ColumnType::DatetimeOffsetn => ColumnKind::Timestamp,
+        ColumnType::BigVarChar
+        | ColumnType::BigChar
+        | ColumnType::NVarchar
+        | ColumnType::NChar
+        | ColumnType::Text
+        | ColumnType::NText => ColumnKind::Text,
+        ColumnType::Null
+        | ColumnType::Guid
+        | ColumnType::Xml
+        | ColumnType::Udt
+        | ColumnType::BigVarBin
+        | ColumnType::BigBinary
+        | ColumnType::Image
+        | ColumnType::SSVariant => ColumnKind::Unknown,
+    }
+}
+
 fn extract_temporal(row: &tiberius::Row, idx: usize, _column_type: tiberius::ColumnType) -> Value {
     // tiberius exposes typed accessors for chrono types; we try them in order
     // of decreasing precision and fall back to a string representation.
@@ -1264,7 +1337,14 @@ impl Connection for MssqlConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        self.cancelled.store(false, Ordering::SeqCst);
+        // Do not blanket-reset `cancelled` here — that would race with a
+        // `cancel()` that fires between two executions and silently drop the
+        // signal. Instead, recover the connection if a previous cancel left
+        // it poisoned (which is what `cleanup_after_cancel` is for) before
+        // dispatching the new query.
+        if self.poisoned.load(Ordering::SeqCst) {
+            self.cleanup_after_cancel()?;
+        }
 
         // Support explicit database override per query, mirroring postgres/mysql.
         if let Some(database) = req.database.as_deref() {
@@ -1654,6 +1734,92 @@ impl Connection for MssqlConnection {
 
     fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
         SchemaLoadingStrategy::LazyPerDatabase
+    }
+
+    /// SQL Server-specific browse implementation.
+    ///
+    /// Overridden because the default impl in `dbflux_core` (a) emits the
+    /// MySQL-style `LIMIT n OFFSET m` syntax, which SQL Server does not accept,
+    /// and (b) forwards the table's schema (e.g. `dbo`) as the *database* via
+    /// `with_database`, which would make the driver issue `USE [dbo]` — a 911
+    /// "database does not exist" error, since `dbo` is a schema. We embed the
+    /// schema in the `FROM` clause and leave the active database alone.
+    fn browse_table(&self, request: &TableBrowseRequest) -> Result<QueryResult, DbError> {
+        let table = request.table.quoted_with(&MSSQL_DIALECT);
+        let mut sql = format!("SELECT * FROM {}", table);
+
+        if let Some(filter) = request.semantic_filter.as_ref() {
+            let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
+            sql.push_str(" WHERE ");
+            sql.push_str(&where_clause);
+        } else if let Some(filter) = request.filter.as_ref() {
+            let trimmed = filter.trim();
+            if !trimmed.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(trimmed);
+            }
+        }
+
+        // `OFFSET ... FETCH NEXT` requires `ORDER BY`; fall back to `ORDER BY 1`
+        // when the caller didn't supply one so paginated browsing keeps working.
+        if request.order_by.is_empty() {
+            sql.push_str(" ORDER BY 1");
+        } else {
+            sql.push_str(" ORDER BY ");
+            let parts: Vec<String> = request
+                .order_by
+                .iter()
+                .map(|col| {
+                    let dir = match col.direction {
+                        SortDirection::Ascending => "ASC",
+                        SortDirection::Descending => "DESC",
+                    };
+                    format!("{} {}", col.column.quoted_with(&MSSQL_DIALECT), dir)
+                })
+                .collect();
+            sql.push_str(&parts.join(", "));
+        }
+
+        sql.push_str(&format!(
+            " OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
+            request.pagination.offset(),
+            request.pagination.limit()
+        ));
+
+        self.execute(&QueryRequest::new(sql))
+    }
+
+    /// SQL Server-specific count implementation.
+    ///
+    /// The default impl is mostly correct, but we override it for symmetry with
+    /// `browse_table` and to make explicit that the schema is part of the
+    /// `FROM` clause — never the active database.
+    fn count_table(&self, request: &TableCountRequest) -> Result<u64, DbError> {
+        let table = request.table.quoted_with(&MSSQL_DIALECT);
+        let mut sql = format!("SELECT COUNT(*) FROM {}", table);
+
+        if let Some(filter) = request.semantic_filter.as_ref() {
+            let where_clause = render_semantic_filter_sql(filter, &MSSQL_DIALECT)?;
+            sql.push_str(" WHERE ");
+            sql.push_str(&where_clause);
+        } else if let Some(filter) = request.filter.as_ref() {
+            let trimmed = filter.trim();
+            if !trimmed.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(trimmed);
+            }
+        }
+
+        let result = self.execute(&QueryRequest::new(sql))?;
+        Ok(result
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|v| match v {
+                Value::Int(n) => Some(*n as u64),
+                _ => None,
+            })
+            .unwrap_or(0))
     }
 
     fn fetch_row_by_pk(
@@ -2136,8 +2302,33 @@ impl MssqlConnection {
         let escaped_schema = schema.replace('\'', "''");
         let escaped_table = table.replace('\'', "''");
 
-        // CHECK constraints + the columns they reference.
-        let check_sql = format!(
+        let mut grouped: indexmap_for_indexes::IndexMap<String, ConstraintInfo> =
+            indexmap_for_indexes::IndexMap::new();
+
+        self.collect_check_constraints(
+            &qualified_db,
+            &escaped_schema,
+            &escaped_table,
+            &mut grouped,
+        )?;
+        self.collect_unique_constraints(
+            &qualified_db,
+            &escaped_schema,
+            &escaped_table,
+            &mut grouped,
+        )?;
+
+        Ok(grouped.into_iter().map(|(_, v)| v).collect())
+    }
+
+    fn collect_check_constraints(
+        &self,
+        qualified_db: &str,
+        escaped_schema: &str,
+        escaped_table: &str,
+        grouped: &mut indexmap_for_indexes::IndexMap<String, ConstraintInfo>,
+    ) -> Result<(), DbError> {
+        let sql = format!(
             "SELECT \
                 cc.name AS constraint_name, \
                 CAST(cc.definition AS NVARCHAR(MAX)) AS check_clause, \
@@ -2151,11 +2342,8 @@ impl MssqlConnection {
              ORDER BY cc.name"
         );
 
-        let check_rows = self.execute_simple(&check_sql)?;
-        let mut grouped: indexmap_for_indexes::IndexMap<String, ConstraintInfo> =
-            indexmap_for_indexes::IndexMap::new();
-
-        for row in check_rows.rows {
+        let rows = self.execute_simple(&sql)?;
+        for row in rows.rows {
             let mut iter = row.into_iter();
             let name = match iter.next() {
                 Some(Value::Text(s)) => s,
@@ -2184,11 +2372,20 @@ impl MssqlConnection {
                 entry.columns.push(column);
             }
         }
+        Ok(())
+    }
 
-        // UNIQUE constraints — surfaced as unique indexes that are not the
-        // table's primary key. `sys.indexes.is_unique_constraint` flags those
-        // backing an explicit UNIQUE constraint definition.
-        let unique_sql = format!(
+    /// UNIQUE constraints — surfaced as unique indexes that are not the
+    /// table's primary key. `sys.indexes.is_unique_constraint` flags those
+    /// backing an explicit UNIQUE constraint definition.
+    fn collect_unique_constraints(
+        &self,
+        qualified_db: &str,
+        escaped_schema: &str,
+        escaped_table: &str,
+        grouped: &mut indexmap_for_indexes::IndexMap<String, ConstraintInfo>,
+    ) -> Result<(), DbError> {
+        let sql = format!(
             "SELECT \
                 i.name AS index_name, \
                 c.name AS column_name, \
@@ -2205,8 +2402,8 @@ impl MssqlConnection {
              ORDER BY i.name, ic.key_ordinal"
         );
 
-        let unique_rows = self.execute_simple(&unique_sql)?;
-        for row in unique_rows.rows {
+        let rows = self.execute_simple(&sql)?;
+        for row in rows.rows {
             let mut iter = row.into_iter();
             let name = match iter.next() {
                 Some(Value::Text(s)) => s,
@@ -2228,8 +2425,7 @@ impl MssqlConnection {
                 });
             entry.columns.push(column);
         }
-
-        Ok(grouped.into_iter().map(|(_, v)| v).collect())
+        Ok(())
     }
 
     fn fetch_custom_types(
@@ -2570,16 +2766,12 @@ fn identity_where_clause(identity: &RecordIdentity) -> Result<String, DbError> {
 }
 
 fn result_first_row_to_crud(result: QueryResult) -> CrudResult {
-    let columns = result.columns;
-    let mut rows = result.rows.into_iter();
-    match rows.next() {
-        Some(row) => {
-            // Build an ordered HashMap of column-name → value the same way
-            // postgres does for its RETURNING path. We surface the row through
-            // CrudResult::success so the UI sees the post-mutation values.
-            let _ = columns;
-            CrudResult::success(row)
-        }
+    // The OUTPUT-clause result is parsed through `execute_simple`, which
+    // populates `ColumnMeta::kind` from the tiberius column type. The
+    // column metadata travels with the QueryResult; CrudResult itself
+    // only carries the row (matching postgres/mysql).
+    match result.rows.into_iter().next() {
+        Some(row) => CrudResult::success(row),
         None => CrudResult::empty(),
     }
 }
@@ -2638,7 +2830,22 @@ fn inject_password_into_mssql_uri(base_uri: &str, password: Option<&str>) -> Str
 }
 
 /// Parse a `sqlserver://user:pass@host:port/db?...` URI into a tiberius Config.
-fn parse_mssql_url(uri: &str) -> Result<Config, tiberius::error::Error> {
+struct ParsedMssqlUri<'a> {
+    credentials: &'a str,
+    host: &'a str,
+    instance_from_host: Option<String>,
+    explicit_port: Option<u16>,
+    database: &'a str,
+    params: &'a str,
+}
+
+struct UriQueryParams {
+    encryption: EncryptionLevel,
+    trust_cert_override: Option<bool>,
+    instance_from_query: Option<String>,
+}
+
+fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Error> {
     let stripped = uri
         .strip_prefix("sqlserver://")
         .or_else(|| uri.strip_prefix("mssql://"))
@@ -2646,36 +2853,34 @@ fn parse_mssql_url(uri: &str) -> Result<Config, tiberius::error::Error> {
             tiberius::error::Error::Conversion("unsupported SQL Server URI scheme".into())
         })?;
 
-    let (credentials, host_part) = if let Some(at_pos) = stripped.rfind('@') {
-        (&stripped[..at_pos], &stripped[at_pos + 1..])
-    } else {
-        ("", stripped)
+    let (credentials, host_part) = match stripped.rfind('@') {
+        Some(at_pos) => (&stripped[..at_pos], &stripped[at_pos + 1..]),
+        None => ("", stripped),
     };
 
-    let (host_port, query_part) = if let Some(slash) = host_part.find('/') {
-        (&host_part[..slash], &host_part[slash + 1..])
-    } else {
-        (host_part, "")
+    let (host_port, query_part) = match host_part.find('/') {
+        Some(slash) => (&host_part[..slash], &host_part[slash + 1..]),
+        None => (host_part, ""),
     };
 
-    let (database, params) = if let Some(qmark) = query_part.find('?') {
-        (&query_part[..qmark], &query_part[qmark + 1..])
-    } else {
-        (query_part, "")
+    let (database, params) = match query_part.find('?') {
+        Some(qmark) => (&query_part[..qmark], &query_part[qmark + 1..]),
+        None => (query_part, ""),
     };
 
-    let (host_and_instance, explicit_port) = if let Some(colon) = host_port.rfind(':') {
-        let port: u16 = host_port[colon + 1..].parse().map_err(|_| {
-            tiberius::error::Error::Conversion("invalid SQL Server URI port".into())
-        })?;
-        (&host_port[..colon], Some(port))
-    } else {
-        (host_port, None)
+    let (host_and_instance, explicit_port) = match host_port.rfind(':') {
+        Some(colon) => {
+            let port: u16 = host_port[colon + 1..].parse().map_err(|_| {
+                tiberius::error::Error::Conversion("invalid SQL Server URI port".into())
+            })?;
+            (&host_port[..colon], Some(port))
+        }
+        None => (host_port, None),
     };
 
     // SSMS-style `host\instance`. The trailing `?instance=…` may also set
-    // it and wins if both are supplied.
-    let (host, mut instance) = match host_and_instance.find('\\') {
+    // it and wins if both are supplied (resolved by the caller).
+    let (host, instance_from_host) = match host_and_instance.find('\\') {
         Some(bs) => (
             &host_and_instance[..bs],
             Some(host_and_instance[bs + 1..].to_string()),
@@ -2683,48 +2888,28 @@ fn parse_mssql_url(uri: &str) -> Result<Config, tiberius::error::Error> {
         None => (host_and_instance, None),
     };
 
-    let mut config = Config::new();
-    config.host(host);
-    // Defer the port decision until after the query-string loop so we can
-    // see whether `?instance=` is supplied. When an instance is present we
-    // intentionally leave the port unset so tiberius defaults to 1434 for
-    // the SQL Browser lookup.
+    Ok(ParsedMssqlUri {
+        credentials,
+        host,
+        instance_from_host,
+        explicit_port,
+        database,
+        params,
+    })
+}
 
-    if !database.is_empty() {
-        let decoded = urlencoding::decode(database)
-            .map(|cow| cow.into_owned())
-            .unwrap_or_else(|_| database.to_string());
-        config.database(decoded);
-    }
-
-    if !credentials.is_empty() {
-        if let Some(colon) = credentials.find(':') {
-            let user = urlencoding::decode(&credentials[..colon])
-                .map(|cow| cow.into_owned())
-                .unwrap_or_default();
-            let password = urlencoding::decode(&credentials[colon + 1..])
-                .map(|cow| cow.into_owned())
-                .unwrap_or_default();
-            config.authentication(AuthMethod::sql_server(user, password));
-        } else {
-            let user = urlencoding::decode(credentials)
-                .map(|cow| cow.into_owned())
-                .unwrap_or_default();
-            config.authentication(AuthMethod::sql_server(user, ""));
-        }
-    }
-
+fn parse_uri_query_params(params: &str) -> UriQueryParams {
     // SSL Mode is the single user-facing knob; trust_cert is derived from
     // it unless the caller explicitly overrides via `?trust=` in the URI.
     //
     //   encrypt=off       -> Off,      trust irrelevant
     //   encrypt=on        -> On,       trust=true  (accept self-signed)
     //   encrypt=required  -> Required, trust=false (validate cert)
-    //
-    // Mirrors the form-mode mapping in extract_form() so toggling between
-    // URI mode and form mode preserves intent.
-    let mut encryption = EncryptionLevel::On;
-    let mut trust_cert_override: Option<bool> = None;
+    let mut out = UriQueryParams {
+        encryption: EncryptionLevel::On,
+        trust_cert_override: None,
+        instance_from_query: None,
+    };
 
     for pair in params.split('&').filter(|p| !p.is_empty()) {
         let Some((key, value)) = pair.split_once('=') else {
@@ -2732,7 +2917,7 @@ fn parse_mssql_url(uri: &str) -> Result<Config, tiberius::error::Error> {
         };
         match key.to_ascii_lowercase().as_str() {
             "encrypt" => {
-                encryption = match value.to_ascii_lowercase().as_str() {
+                out.encryption = match value.to_ascii_lowercase().as_str() {
                     "true" | "yes" | "on" | "1" => EncryptionLevel::On,
                     "false" | "no" | "off" | "0" => EncryptionLevel::Off,
                     "strict" | "required" => EncryptionLevel::Required,
@@ -2740,23 +2925,64 @@ fn parse_mssql_url(uri: &str) -> Result<Config, tiberius::error::Error> {
                 };
             }
             "trustservercertificate" | "trust_server_certificate" | "trust" => {
-                trust_cert_override =
-                    Some(matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes"));
+                out.trust_cert_override = Some(matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "true" | "1" | "yes"
+                ));
             }
             "instance" | "instancename" | "instance_name" if !value.is_empty() => {
                 let decoded = urlencoding::decode(value)
                     .map(|cow| cow.into_owned())
                     .unwrap_or_else(|_| value.to_string());
-                instance = Some(decoded);
+                out.instance_from_query = Some(decoded);
             }
             _ => {}
         }
     }
 
-    let trust_cert = trust_cert_override
-        .unwrap_or(!matches!(encryption, EncryptionLevel::Required));
+    out
+}
 
-    match (instance.filter(|s| !s.is_empty()), explicit_port) {
+fn apply_uri_credentials(config: &mut Config, credentials: &str) {
+    if credentials.is_empty() {
+        return;
+    }
+    let (user_part, password_part) = match credentials.find(':') {
+        Some(colon) => (&credentials[..colon], &credentials[colon + 1..]),
+        None => (credentials, ""),
+    };
+    let user = urlencoding::decode(user_part)
+        .map(|cow| cow.into_owned())
+        .unwrap_or_default();
+    let password = urlencoding::decode(password_part)
+        .map(|cow| cow.into_owned())
+        .unwrap_or_default();
+    config.authentication(AuthMethod::sql_server(user, password));
+}
+
+fn parse_mssql_url(uri: &str) -> Result<Config, tiberius::error::Error> {
+    let parsed = split_mssql_uri(uri)?;
+    let query = parse_uri_query_params(parsed.params);
+
+    // `?instance=` wins over the SSMS-style `host\instance` form.
+    let instance = query
+        .instance_from_query
+        .or(parsed.instance_from_host)
+        .filter(|s| !s.is_empty());
+
+    let mut config = Config::new();
+    config.host(parsed.host);
+
+    if !parsed.database.is_empty() {
+        let decoded = urlencoding::decode(parsed.database)
+            .map(|cow| cow.into_owned())
+            .unwrap_or_else(|_| parsed.database.to_string());
+        config.database(decoded);
+    }
+
+    apply_uri_credentials(&mut config, parsed.credentials);
+
+    match (instance, parsed.explicit_port) {
         (Some(name), _) => {
             // Named instance: leave port unset so tiberius hits 1434 for
             // the Browser query and then dials whatever port Browser
@@ -2772,7 +2998,10 @@ fn parse_mssql_url(uri: &str) -> Result<Config, tiberius::error::Error> {
         }
     }
 
-    config.encryption(encryption);
+    config.encryption(query.encryption);
+    let trust_cert = query
+        .trust_cert_override
+        .unwrap_or(!matches!(query.encryption, EncryptionLevel::Required));
     if trust_cert {
         config.trust_cert();
     }
@@ -3303,15 +3532,11 @@ mod tests {
             .parse_uri("sqlserver://sa@localhost:1433/")
             .expect("parsed");
         assert_eq!(parsed.get("user").map(String::as_str), Some("sa"));
-        assert!(parsed.get("password").is_none());
+        assert!(!parsed.contains_key("password"));
     }
 
     fn build_form_values_for_ssl(ssl_mode: Option<&str>) -> FormValues {
-        let mut v = form_values(&[
-            ("host", "localhost"),
-            ("port", "1433"),
-            ("user", "sa"),
-        ]);
+        let mut v = form_values(&[("host", "localhost"), ("port", "1433"), ("user", "sa")]);
         if let Some(mode) = ssl_mode {
             v.insert("ssl_mode".to_string(), mode.to_string());
         }
