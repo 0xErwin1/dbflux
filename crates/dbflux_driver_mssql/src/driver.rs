@@ -1451,15 +1451,22 @@ impl Connection for MssqlConnection {
         }
 
         self.spid.store(new_spid, Ordering::SeqCst);
-        self.poisoned.store(false, Ordering::SeqCst);
-        self.cancelled.store(false, Ordering::SeqCst);
 
         // The new session starts in whatever the login defaults to. If the
-        // user was previously on a specific database, restore that selection.
+        // user was previously on a specific database, restore that selection
+        // before clearing the poisoned flag — otherwise a failing `USE [db]`
+        // would leave the connection alive on the login's default database
+        // while callers (with `poisoned == false`) assume recovery succeeded
+        // on the requested one. With the clear deferred, a USE failure leaves
+        // `poisoned == true`, so the next `execute()` triggers another
+        // recovery attempt instead of silently running on the wrong DB.
         if let Some(db) = active_database {
             let escaped = db.replace(']', "]]");
             self.execute_simple(&format!("USE [{}]", escaped))?;
         }
+
+        self.poisoned.store(false, Ordering::SeqCst);
+        self.cancelled.store(false, Ordering::SeqCst);
 
         log::info!("[CLEANUP] Reconnect complete, new SPID = {}", new_spid);
         Ok(())
