@@ -356,24 +356,23 @@ impl SqlDialect for MysqlDialect {
         &self,
         schema: Option<&str>,
         table: &str,
-        columns: &[String],
-        values: &[Value],
+        assignments: &[dbflux_core::ColumnAssignment],
         _conflict_columns: &[String],
-        update_assignments: &[(String, Value)],
+        update_assignments: &[dbflux_core::ColumnAssignment],
     ) -> Option<String> {
-        if columns.is_empty() || columns.len() != values.len() {
+        if assignments.is_empty() {
             return None;
         }
 
         let table = self.qualified_table(schema, table);
-        let columns = columns
+        let columns = assignments
             .iter()
-            .map(|column| self.quote_identifier(column))
+            .map(|a| self.quote_identifier(&a.name))
             .collect::<Vec<_>>()
             .join(", ");
-        let values = values
+        let values = assignments
             .iter()
-            .map(|value| self.value_to_literal(value))
+            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -386,11 +385,11 @@ impl SqlDialect for MysqlDialect {
 
         let update_clause = update_assignments
             .iter()
-            .map(|(column, value)| {
+            .map(|a| {
                 format!(
                     "{} = {}",
-                    self.quote_identifier(column),
-                    self.value_to_literal(value)
+                    self.quote_identifier(&a.name),
+                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
                 )
             })
             .collect::<Vec<_>>()
@@ -2147,9 +2146,9 @@ impl Connection for MysqlConnection {
 
         let select_sql = if last_id > 0 {
             let first_col = insert
-                .columns
+                .assignments
                 .first()
-                .map(|c| MYSQL_DIALECT.quote_identifier(c))
+                .map(|a| MYSQL_DIALECT.quote_identifier(&a.name))
                 .unwrap_or_else(|| "`id`".to_string());
             let table = MYSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
 
@@ -2158,7 +2157,7 @@ impl Connection for MysqlConnection {
                 table, first_col, last_id
             )
         } else {
-            let identity = RecordIdentity::composite(insert.columns.clone(), insert.values.clone());
+            let identity = RecordIdentity::composite(insert.column_names(), insert.values());
             builder
                 .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
                 .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?

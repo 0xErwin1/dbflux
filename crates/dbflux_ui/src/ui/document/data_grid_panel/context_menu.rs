@@ -3983,6 +3983,12 @@ impl DataGridPanel {
         let visual_order = buffer.compute_visual_order();
 
         let col_names: Vec<String> = self.result.columns.iter().map(|c| c.name.clone()).collect();
+        let col_types: Vec<String> = self
+            .result
+            .columns
+            .iter()
+            .map(|c| c.type_name.clone())
+            .collect();
 
         let row_values: Vec<Value> = match visual_order.get(visual_row).copied() {
             Some(VisualRowSource::Base(base_idx)) => {
@@ -4011,11 +4017,21 @@ impl DataGridPanel {
                     return None;
                 }
 
-                let insert = RowInsert::new(
+                let assignments: Vec<dbflux_core::ColumnAssignment> = col_names
+                    .iter()
+                    .zip(row_values.iter())
+                    .zip(col_types.iter())
+                    .map(|((name, value), type_name)| dbflux_core::ColumnAssignment {
+                        name: name.clone(),
+                        value: value.clone(),
+                        type_name: Some(type_name.clone()),
+                    })
+                    .collect();
+
+                let insert = RowInsert::with_typed_assignments(
                     table.name.clone(),
                     table.schema.clone(),
-                    col_names,
-                    row_values,
+                    assignments,
                 );
                 Some(MutationRequest::SqlInsert(insert))
             }
@@ -4048,16 +4064,27 @@ impl DataGridPanel {
 
                 let identity = RowIdentity::new(pk_columns, pk_values);
 
-                let changes: Vec<(String, Value)> = col_names
+                let changes: Vec<dbflux_core::ColumnAssignment> = col_names
                     .into_iter()
                     .zip(row_values)
+                    .zip(col_types)
                     .enumerate()
                     .filter(|(idx, _)| !pk_indices.contains(idx))
-                    .map(|(_, pair)| pair)
+                    .map(
+                        |(_, ((name, value), type_name))| dbflux_core::ColumnAssignment {
+                            name,
+                            value,
+                            type_name: Some(type_name),
+                        },
+                    )
                     .collect();
 
-                let patch =
-                    RowPatch::new(identity, table.name.clone(), table.schema.clone(), changes);
+                let patch = RowPatch::with_typed_changes(
+                    identity,
+                    table.name.clone(),
+                    table.schema.clone(),
+                    changes,
+                );
                 Some(MutationRequest::SqlUpdate(patch))
             }
 

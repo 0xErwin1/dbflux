@@ -1,7 +1,7 @@
 use crate::Value;
 use crate::data::crud::{
-    RecordIdentity, RowDelete, RowInsert, RowPatch, SqlDeleteRequest, SqlUpdateRequest,
-    SqlUpsertRequest,
+    ColumnAssignment, RecordIdentity, RowDelete, RowInsert, RowPatch, SqlDeleteRequest,
+    SqlUpdateRequest, SqlUpsertRequest,
 };
 use crate::render_semantic_filter_sql;
 use crate::sql::dialect::SqlDialect;
@@ -77,7 +77,7 @@ impl<'a> SqlQueryBuilder<'a> {
     /// Returns SQL like: `INSERT INTO "table" ("col1", "col2") VALUES (val1, val2)`
     /// If `with_returning` is true and dialect supports it, appends `RETURNING *`.
     pub fn build_insert(&self, insert: &RowInsert, with_returning: bool) -> Option<String> {
-        if insert.columns.is_empty() {
+        if insert.assignments.is_empty() {
             return None;
         }
 
@@ -85,19 +85,22 @@ impl<'a> SqlQueryBuilder<'a> {
             .dialect
             .qualified_table(insert.schema.as_deref(), &insert.table);
 
-        let columns: Vec<String> = insert
-            .columns
+        let columns_str = insert
+            .assignments
             .iter()
-            .map(|c| self.dialect.quote_identifier(c))
-            .collect();
-        let columns_str = columns.join(", ");
+            .map(|a| self.dialect.quote_identifier(&a.name))
+            .collect::<Vec<_>>()
+            .join(", ");
 
-        let values: Vec<String> = insert
-            .values
+        let values_str = insert
+            .assignments
             .iter()
-            .map(|v| self.dialect.value_to_literal(v))
-            .collect();
-        let values_str = values.join(", ");
+            .map(|a| {
+                self.dialect
+                    .value_to_literal_typed(&a.value, a.type_name.as_deref())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
 
         let mut sql = format!(
             "INSERT INTO {} ({}) VALUES ({})",
@@ -120,8 +123,7 @@ impl<'a> SqlQueryBuilder<'a> {
         self.dialect.build_upsert_statement(
             upsert.schema.as_deref(),
             &upsert.table,
-            &upsert.columns,
-            &upsert.values,
+            &upsert.assignments,
             &upsert.conflict_columns,
             &upsert.update_assignments,
         )
@@ -222,22 +224,24 @@ impl<'a> SqlQueryBuilder<'a> {
         }
     }
 
-    /// Build SET clause for UPDATE.
+    /// Build SET clause for UPDATE from typed assignments.
     ///
-    /// Returns `"col1" = val1, "col2" = val2`.
-    pub fn build_set_clause(&self, changes: &[(String, Value)]) -> String {
-        let assignments: Vec<String> = changes
+    /// Returns `"col1" = val1, "col2" = val2`. When an assignment carries a
+    /// `type_name`, the dialect is asked to format the literal with that hint
+    /// (e.g. PostgreSQL emits `ARRAY[...]::text[]` for array columns).
+    pub fn build_set_clause(&self, changes: &[ColumnAssignment]) -> String {
+        changes
             .iter()
-            .map(|(col, val)| {
+            .map(|a| {
                 format!(
                     "{} = {}",
-                    self.dialect.quote_identifier(col),
-                    self.dialect.value_to_literal(val)
+                    self.dialect.quote_identifier(&a.name),
+                    self.dialect
+                        .value_to_literal_typed(&a.value, a.type_name.as_deref())
                 )
             })
-            .collect();
-
-        assignments.join(", ")
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// Build column list for INSERT.
@@ -310,8 +314,8 @@ mod tests {
         let builder = SqlQueryBuilder::new(&dialect);
 
         let changes = vec![
-            ("name".to_string(), Value::Text("Alice".to_string())),
-            ("age".to_string(), Value::Int(30)),
+            ColumnAssignment::new("name", Value::Text("Alice".to_string())),
+            ColumnAssignment::new("age", Value::Int(30)),
         ];
 
         let set_clause = builder.build_set_clause(&changes);
