@@ -78,6 +78,10 @@
               rustToolchain
               pkgs.rust-analyzer
               opensslStatic.dev
+              # Faster, process-isolated test runner for the large workspace.
+              # Run with `cargo nextest run` (doctests still need `cargo test --doc`).
+              # mold is inherited from dbflux.nativeBuildInputs (see default.nix).
+              pkgs.cargo-nextest
             ];
 
             buildInputs = dbflux.buildInputs;
