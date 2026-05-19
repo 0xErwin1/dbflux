@@ -1147,6 +1147,15 @@ fn extract_f64(value: &Value, is_time: bool) -> Option<f64> {
                 None
             }
         }
+        // Decimal is stored as a string to preserve exact precision; for
+        // plotting we accept the f64 lossy parse and drop non-finite results.
+        // Drivers that classify NUMERIC/DECIMAL columns as ColumnKind::Float
+        // (e.g. Postgres NUMERIC, MSSQL DECIMAL) emit values through this arm.
+        Value::Decimal(s) => s.parse::<f64>().ok().filter(|f| f.is_finite()),
+        // BIT / BOOLEAN columns get classified as Integer by some drivers
+        // (e.g. MSSQL BIT). Map true → 1.0, false → 0.0 so the series is
+        // plottable instead of silently empty.
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
         Value::Text(s) if is_time => {
             // Try parsing as RFC 3339 timestamp.
             if let Ok(dt) = dbflux_core::chrono::DateTime::parse_from_rfc3339(s) {
@@ -1469,6 +1478,34 @@ mod tests {
     fn format_x_value_time_formats_unix_ms() {
         let s = format_x_value(0.0, true);
         assert!(s.starts_with("1970-01-01"), "got: {s}");
+    }
+
+    #[test]
+    fn extract_f64_parses_decimal_string() {
+        assert_eq!(
+            extract_f64(&Value::Decimal("123.45".into()), false),
+            Some(123.45)
+        );
+        assert_eq!(
+            extract_f64(&Value::Decimal("-0.001".into()), false),
+            Some(-0.001)
+        );
+    }
+
+    #[test]
+    fn extract_f64_rejects_non_finite_or_unparseable_decimal() {
+        assert_eq!(extract_f64(&Value::Decimal("NaN".into()), false), None);
+        assert_eq!(extract_f64(&Value::Decimal("inf".into()), false), None);
+        assert_eq!(
+            extract_f64(&Value::Decimal("not-a-number".into()), false),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_f64_maps_bool_to_zero_or_one() {
+        assert_eq!(extract_f64(&Value::Bool(true), false), Some(1.0));
+        assert_eq!(extract_f64(&Value::Bool(false), false), Some(0.0));
     }
 
     #[test]

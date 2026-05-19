@@ -4,6 +4,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Chart engine plots Decimal and Bool columns** — `extract_f64` only
+  handled `Value::Int`, `Value::Float`, and timestamp-typed `Value::Text`,
+  silently dropping `Value::Decimal` and `Value::Bool`. Columns whose
+  `ColumnKind` is numeric (e.g. PostgreSQL `NUMERIC`, MSSQL `DECIMAL`,
+  MSSQL `BIT`) now render correctly instead of producing an empty series
+  with no error.
+
 ## [0.6.0-dev.3] - 2026-05-16
 
 ### Added
