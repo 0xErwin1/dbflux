@@ -769,6 +769,109 @@ struct ExtractedMysqlConfig {
     ssh_tunnel: Option<SshTunnelConfig>,
 }
 
+/// Map a MySQL column to a canonical SQL type label (e.g. `VARCHAR`,
+/// `BIGINT UNSIGNED`, `DECIMAL(10,2)`, `DATETIME`, `ENUM`).
+///
+/// The raw MySQL protocol type enum (`MYSQL_TYPE_VAR_STRING`, …) is not a
+/// user-facing label; mapping it here keeps driver internals out of the UI.
+fn mysql_type_to_sql_label(col: &mysql::Column) -> String {
+    use mysql::consts::{ColumnFlags, ColumnType as CT};
+
+    let col_type = col.column_type();
+    let flags = col.flags();
+    let is_unsigned = flags.contains(ColumnFlags::UNSIGNED_FLAG);
+    let is_binary = flags.contains(ColumnFlags::BINARY_FLAG);
+    let is_enum = flags.contains(ColumnFlags::ENUM_FLAG);
+    let is_set = flags.contains(ColumnFlags::SET_FLAG);
+
+    let unsigned_suffix = if is_unsigned { " UNSIGNED" } else { "" };
+
+    match col_type {
+        CT::MYSQL_TYPE_TINY => {
+            // TINYINT(1) is MySQL's idiomatic boolean; preserve the display width
+            // so users can tell it apart from a regular TINYINT.
+            if col.column_length() == 1 && !is_unsigned {
+                "TINYINT(1)".to_string()
+            } else {
+                format!("TINYINT{}", unsigned_suffix)
+            }
+        }
+        CT::MYSQL_TYPE_SHORT => format!("SMALLINT{}", unsigned_suffix),
+        CT::MYSQL_TYPE_INT24 => format!("MEDIUMINT{}", unsigned_suffix),
+        CT::MYSQL_TYPE_LONG => format!("INT{}", unsigned_suffix),
+        CT::MYSQL_TYPE_LONGLONG => format!("BIGINT{}", unsigned_suffix),
+
+        CT::MYSQL_TYPE_FLOAT => "FLOAT".to_string(),
+        CT::MYSQL_TYPE_DOUBLE => "DOUBLE".to_string(),
+
+        CT::MYSQL_TYPE_DECIMAL | CT::MYSQL_TYPE_NEWDECIMAL => {
+            let scale = col.decimals() as u32;
+            // column_length encodes the textual width including the sign and the
+            // decimal point — subtract them to recover the actual precision.
+            let raw_len = col.column_length();
+            let overhead = if scale > 0 { 2 } else { 1 };
+            let precision = raw_len.saturating_sub(overhead);
+            if precision > 0 {
+                format!("DECIMAL({},{})", precision, scale)
+            } else {
+                "DECIMAL".to_string()
+            }
+        }
+
+        CT::MYSQL_TYPE_DATE => "DATE".to_string(),
+        CT::MYSQL_TYPE_TIME | CT::MYSQL_TYPE_TIME2 => "TIME".to_string(),
+        CT::MYSQL_TYPE_DATETIME | CT::MYSQL_TYPE_DATETIME2 => "DATETIME".to_string(),
+        CT::MYSQL_TYPE_TIMESTAMP | CT::MYSQL_TYPE_TIMESTAMP2 => "TIMESTAMP".to_string(),
+        CT::MYSQL_TYPE_YEAR => "YEAR".to_string(),
+
+        CT::MYSQL_TYPE_BIT => "BIT".to_string(),
+        CT::MYSQL_TYPE_JSON => "JSON".to_string(),
+        CT::MYSQL_TYPE_GEOMETRY => "GEOMETRY".to_string(),
+        CT::MYSQL_TYPE_NULL => "NULL".to_string(),
+        CT::MYSQL_TYPE_ENUM => "ENUM".to_string(),
+        CT::MYSQL_TYPE_SET => "SET".to_string(),
+
+        CT::MYSQL_TYPE_VARCHAR | CT::MYSQL_TYPE_VAR_STRING => {
+            if is_enum {
+                "ENUM".to_string()
+            } else if is_set {
+                "SET".to_string()
+            } else if is_binary {
+                "VARBINARY".to_string()
+            } else {
+                "VARCHAR".to_string()
+            }
+        }
+        CT::MYSQL_TYPE_STRING => {
+            if is_enum {
+                "ENUM".to_string()
+            } else if is_set {
+                "SET".to_string()
+            } else if is_binary {
+                "BINARY".to_string()
+            } else {
+                "CHAR".to_string()
+            }
+        }
+
+        // BLOB family: the protocol uses one enum per size class for both the
+        // binary BLOB types and their textual counterparts. The BINARY_FLAG bit
+        // disambiguates them.
+        CT::MYSQL_TYPE_TINY_BLOB => {
+            if is_binary { "TINYBLOB" } else { "TINYTEXT" }.to_string()
+        }
+        CT::MYSQL_TYPE_MEDIUM_BLOB => {
+            if is_binary { "MEDIUMBLOB" } else { "MEDIUMTEXT" }.to_string()
+        }
+        CT::MYSQL_TYPE_LONG_BLOB => {
+            if is_binary { "LONGBLOB" } else { "LONGTEXT" }.to_string()
+        }
+        CT::MYSQL_TYPE_BLOB => if is_binary { "BLOB" } else { "TEXT" }.to_string(),
+
+        _ => "UNKNOWN".to_string(),
+    }
+}
+
 /// Map a MySQL column type to a semantic `ColumnKind`.
 fn mysql_type_to_kind(col_type: mysql::consts::ColumnType) -> ColumnKind {
     use mysql::consts::ColumnType as CT;
@@ -1596,7 +1699,7 @@ impl Connection for MysqlConnection {
             .iter()
             .map(|col| ColumnMeta {
                 name: col.name_str().to_string(),
-                type_name: format!("{:?}", col.column_type()),
+                type_name: mysql_type_to_sql_label(col),
                 kind: mysql_type_to_kind(col.column_type()),
                 nullable: true,
                 is_primary_key: false,

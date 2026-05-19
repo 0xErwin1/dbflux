@@ -740,44 +740,65 @@ impl DataTable {
                             .flex_row()
                             .items_center()
                             .gap_1()
+                            .min_w_0()
+                            .flex_1()
                             .overflow_hidden()
-                            // PK badge — shown as a small "PK" label in accent color
+                            // PK / FK badges — secondary metadata, same dim styling
+                            // as the type label so they sit clearly below the name
+                            // in the visual hierarchy.
                             .when(is_pk, |d| {
                                 d.child(
-                                    Text::body("PK")
-                                        .font_size(FontSizes::XS)
-                                        .color(theme.accent),
+                                    div().flex_shrink_0().child(
+                                        Text::body("PK")
+                                            .font_size(FontSizes::XS)
+                                            .color(theme.muted_foreground.opacity(0.6)),
+                                    ),
                                 )
                             })
-                            // FK badge — shown as a small "FK" label in muted color
                             .when(is_fk, |d| {
                                 d.child(
-                                    Text::body("FK")
-                                        .font_size(FontSizes::XS)
-                                        .color(theme.muted_foreground),
+                                    div().flex_shrink_0().child(
+                                        Text::body("FK")
+                                            .font_size(FontSizes::XS)
+                                            .color(theme.muted_foreground.opacity(0.6)),
+                                    ),
                                 )
                             })
+                            // Column name — primary affordance, never shrinks.
+                            // It pushes the (secondary) type label out of the cell
+                            // before its own characters get truncated.
                             .child(
                                 div()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
+                                    .flex_shrink_0()
                                     .whitespace_nowrap()
                                     .child(Text::label_sm(col_spec.title.to_string()).color(
                                         if is_sorted {
                                             theme.primary
                                         } else {
-                                            theme.table_head_foreground
+                                            theme.foreground
                                         },
                                     )),
                             )
-                            // Type label — dimmed suffix showing the real SQL type.
+                            // Type label — dimmed metadata. Shrinks and truncates
+                            // first when the cell runs out of horizontal space.
                             .when_some(
                                 (!type_label.is_empty()).then_some(type_label),
                                 |d, label| {
                                     d.child(
-                                        Text::body(label)
-                                            .font_size(FontSizes::XS)
-                                            .color(theme.muted_foreground.opacity(0.6)),
+                                        div()
+                                            .flex()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .child(
+                                                Text::body(label)
+                                                    .font_size(FontSizes::XS)
+                                                    .color(
+                                                        theme.muted_foreground.opacity(0.6),
+                                                    ),
+                                            ),
                                     )
                                 },
                             ),
