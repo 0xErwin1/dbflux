@@ -857,15 +857,14 @@ fn mysql_type_to_sql_label(col: &mysql::Column) -> String {
         // BLOB family: the protocol uses one enum per size class for both the
         // binary BLOB types and their textual counterparts. The BINARY_FLAG bit
         // disambiguates them.
-        CT::MYSQL_TYPE_TINY_BLOB => {
-            if is_binary { "TINYBLOB" } else { "TINYTEXT" }.to_string()
+        CT::MYSQL_TYPE_TINY_BLOB => if is_binary { "TINYBLOB" } else { "TINYTEXT" }.to_string(),
+        CT::MYSQL_TYPE_MEDIUM_BLOB => if is_binary {
+            "MEDIUMBLOB"
+        } else {
+            "MEDIUMTEXT"
         }
-        CT::MYSQL_TYPE_MEDIUM_BLOB => {
-            if is_binary { "MEDIUMBLOB" } else { "MEDIUMTEXT" }.to_string()
-        }
-        CT::MYSQL_TYPE_LONG_BLOB => {
-            if is_binary { "LONGBLOB" } else { "LONGTEXT" }.to_string()
-        }
+        .to_string(),
+        CT::MYSQL_TYPE_LONG_BLOB => if is_binary { "LONGBLOB" } else { "LONGTEXT" }.to_string(),
         CT::MYSQL_TYPE_BLOB => if is_binary { "BLOB" } else { "TEXT" }.to_string(),
 
         _ => "UNKNOWN".to_string(),

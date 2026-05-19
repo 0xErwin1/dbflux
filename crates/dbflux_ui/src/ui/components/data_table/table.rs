@@ -767,18 +767,13 @@ impl DataTable {
                             // Column name — primary affordance, never shrinks.
                             // It pushes the (secondary) type label out of the cell
                             // before its own characters get truncated.
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .whitespace_nowrap()
-                                    .child(Text::label_sm(col_spec.title.to_string()).color(
-                                        if is_sorted {
-                                            theme.primary
-                                        } else {
-                                            theme.foreground
-                                        },
-                                    )),
-                            )
+                            .child(div().flex_shrink_0().whitespace_nowrap().child(
+                                Text::label_sm(col_spec.title.to_string()).color(if is_sorted {
+                                    theme.primary
+                                } else {
+                                    theme.foreground
+                                }),
+                            ))
                             // Type label — dimmed metadata. Shrinks and truncates
                             // first when the cell runs out of horizontal space.
                             .when_some(
@@ -795,9 +790,7 @@ impl DataTable {
                                             .child(
                                                 Text::body(label)
                                                     .font_size(FontSizes::XS)
-                                                    .color(
-                                                        theme.muted_foreground.opacity(0.6),
-                                                    ),
+                                                    .color(theme.muted_foreground.opacity(0.6)),
                                             ),
                                     )
                                 },
