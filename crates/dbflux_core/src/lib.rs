@@ -70,9 +70,9 @@ pub use core::{
 };
 
 pub use data::{
-    CrudResult, DataViewKind, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
-    HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
-    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    ColumnAssignment, CrudResult, DataViewKind, DocumentDelete, DocumentFilter, DocumentInsert,
+    DocumentUpdate, HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest,
+    KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
     KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationRequest,
     RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState, SetAddRequest,

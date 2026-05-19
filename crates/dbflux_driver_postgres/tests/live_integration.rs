@@ -7,9 +7,11 @@
 )]
 
 use dbflux_core::{
-    CollectionRef, ConnectionProfile, DbConfig, DbDriver, DbError, DescribeRequest, ExplainRequest,
-    OrderByColumn, Pagination, QueryRequest, RecordIdentity, RowDelete, RowInsert, RowPatch,
-    SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef, Value,
+    CollectionRef, ColumnAssignment, ConnectionProfile, DbConfig, DbDriver, DbError,
+    DescribeRequest, ExplainRequest, MutationRequest, OrderByColumn, Pagination, QueryRequest,
+    RecordIdentity, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy, SemanticFilter,
+    SemanticRequest, SqlUpdateRequest, SqlUpsertRequest, TableBrowseRequest, TableCountRequest,
+    TableRef, Value, WhereOperator,
 };
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
@@ -434,6 +436,308 @@ fn postgres_document_ops_not_supported() -> Result<(), DbError> {
         assert!(matches!(browse_result, Err(DbError::NotSupported(_))));
 
         assert!(connection.key_value_api().is_none());
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Typed array literal emission (#76)
+//
+// Regression: prior to typed dialect plumbing, inserting/updating a `text[]`
+// or `int4[]` column emitted `'<json>'::jsonb`, which Postgres rejected with
+// `column "..." is of type text[] but expression is of type jsonb`.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_array_columns_round_trip() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE array_round_trip (
+                id SERIAL PRIMARY KEY,
+                tags TEXT[] NOT NULL,
+                scores INTEGER[] NOT NULL,
+                meta JSONB NOT NULL
+            )",
+        ))?;
+
+        // 1. Insert with Value::Array — simulates "round-trip from PG read,
+        //    untouched by the user" (the original #76 repro path).
+        let insert_array_form = RowInsert::with_typed_assignments(
+            "array_round_trip".to_string(),
+            Some("public".to_string()),
+            vec![
+                ColumnAssignment::typed(
+                    "tags",
+                    Value::Array(vec![
+                        Value::Text("Espacio".to_string()),
+                        Value::Text("hola".to_string()),
+                    ]),
+                    "_text",
+                ),
+                ColumnAssignment::typed(
+                    "scores",
+                    Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+                    "_int4",
+                ),
+                ColumnAssignment::typed("meta", Value::Json(r#"{"k":"v"}"#.to_string()), "jsonb"),
+            ],
+        );
+        let inserted = connection.insert_row(&insert_array_form)?;
+        assert_eq!(inserted.affected_rows, 1);
+
+        // 2. Insert with Value::Json(json-array-string) — simulates "user
+        //    edited the cell as JSON text in the data grid".
+        let insert_json_form = RowInsert::with_typed_assignments(
+            "array_round_trip".to_string(),
+            Some("public".to_string()),
+            vec![
+                ColumnAssignment::typed(
+                    "tags",
+                    Value::Json(r#"["foo","bar"]"#.to_string()),
+                    "_text",
+                ),
+                ColumnAssignment::typed("scores", Value::Json("[10, 20]".to_string()), "_int4"),
+                ColumnAssignment::typed(
+                    "meta",
+                    Value::Json(r#"{"edited":true}"#.to_string()),
+                    "jsonb",
+                ),
+            ],
+        );
+        let inserted = connection.insert_row(&insert_json_form)?;
+        assert_eq!(inserted.affected_rows, 1);
+
+        let rows = connection
+            .execute(&QueryRequest::new(
+                "SELECT tags, scores FROM array_round_trip ORDER BY id",
+            ))?
+            .rows;
+        assert_eq!(rows.len(), 2);
+
+        match &rows[0][0] {
+            Value::Array(arr) => {
+                assert_eq!(
+                    arr,
+                    &vec![
+                        Value::Text("Espacio".to_string()),
+                        Value::Text("hola".to_string()),
+                    ]
+                );
+            }
+            other => panic!("expected text[] array, got {:?}", other),
+        }
+        match &rows[0][1] {
+            Value::Array(arr) => {
+                assert_eq!(arr, &vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+            }
+            other => panic!("expected int4[] array, got {:?}", other),
+        }
+        match &rows[1][0] {
+            Value::Array(arr) => {
+                assert_eq!(
+                    arr,
+                    &vec![
+                        Value::Text("foo".to_string()),
+                        Value::Text("bar".to_string()),
+                    ]
+                );
+            }
+            other => panic!("expected text[] array from JSON form, got {:?}", other),
+        }
+
+        // 3. UPDATE with a typed Array assignment — same dialect path.
+        let update_result = connection.update_row(&RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(1)]),
+            "array_round_trip".to_string(),
+            Some("public".to_string()),
+            vec![ColumnAssignment::typed(
+                "tags",
+                Value::Array(vec![Value::Text("updated".to_string())]),
+                "_text",
+            )],
+        ))?;
+        assert_eq!(update_result.affected_rows, 1);
+
+        let rows = connection
+            .execute(&QueryRequest::new(
+                "SELECT tags FROM array_round_trip WHERE id = 1",
+            ))?
+            .rows;
+        match &rows[0][0] {
+            Value::Array(arr) => {
+                assert_eq!(arr, &vec![Value::Text("updated".to_string())]);
+            }
+            other => panic!("expected updated text[] array, got {:?}", other),
+        }
+
+        // 4. Empty array round-trip.
+        let insert_empty = RowInsert::with_typed_assignments(
+            "array_round_trip".to_string(),
+            Some("public".to_string()),
+            vec![
+                ColumnAssignment::typed("tags", Value::Array(vec![]), "_text"),
+                ColumnAssignment::typed("scores", Value::Array(vec![]), "_int4"),
+                ColumnAssignment::typed("meta", Value::Json("{}".to_string()), "jsonb"),
+            ],
+        );
+        connection.insert_row(&insert_empty)?;
+
+        let rows = connection
+            .execute(&QueryRequest::new(
+                "SELECT tags, scores FROM array_round_trip ORDER BY id DESC LIMIT 1",
+            ))?
+            .rows;
+        assert!(matches!(&rows[0][0], Value::Array(arr) if arr.is_empty()));
+        assert!(matches!(&rows[0][1], Value::Array(arr) if arr.is_empty()));
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Typed array literal emission via semantic update/upsert (#76, MCP path)
+//
+// Exercises the SqlUpdateRequest / SqlUpsertRequest plumbing that the MCP
+// `update_records` and `upsert_record` tools go through, ensuring the typed
+// dialect path is reached and array columns succeed end-to-end.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_semantic_update_and_upsert_array_columns() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE semantic_array_test (
+                id INTEGER PRIMARY KEY,
+                tags TEXT[] NOT NULL,
+                meta JSONB NOT NULL
+            )",
+        ))?;
+
+        // Seed a row to update.
+        connection.insert_row(&RowInsert::with_typed_assignments(
+            "semantic_array_test".to_string(),
+            Some("public".to_string()),
+            vec![
+                ColumnAssignment::new("id", Value::Int(1)),
+                ColumnAssignment::typed(
+                    "tags",
+                    Value::Array(vec![Value::Text("a".to_string())]),
+                    "_text",
+                ),
+                ColumnAssignment::typed("meta", Value::Json("{}".to_string()), "jsonb"),
+            ],
+        ))?;
+
+        // Semantic UPDATE via SqlUpdateRequest::with_typed_changes — what the
+        // MCP `update_records` tool builds after resolve_column_types.
+        let filter = SemanticFilter::compare("id", WhereOperator::Eq, Value::Int(1));
+        let update = SqlUpdateRequest::with_typed_changes(
+            "semantic_array_test".to_string(),
+            Some("public".to_string()),
+            filter,
+            vec![ColumnAssignment::typed(
+                "tags",
+                Value::Array(vec![
+                    Value::Text("x".to_string()),
+                    Value::Text("y".to_string()),
+                ]),
+                "_text",
+            )],
+        );
+
+        connection.execute_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::sql_update_many(update),
+        ))?;
+
+        let rows = connection
+            .execute(&QueryRequest::new(
+                "SELECT tags FROM semantic_array_test WHERE id = 1",
+            ))?
+            .rows;
+        match &rows[0][0] {
+            Value::Array(arr) => {
+                assert_eq!(
+                    arr,
+                    &vec![Value::Text("x".to_string()), Value::Text("y".to_string())]
+                );
+            }
+            other => panic!("expected updated text[] array, got {:?}", other),
+        }
+
+        // Semantic UPSERT via SqlUpsertRequest::with_typed_assignments —
+        // exercises both insert-side and on-conflict-update typed literals.
+        let upsert = SqlUpsertRequest::with_typed_assignments(
+            "semantic_array_test".to_string(),
+            Some("public".to_string()),
+            vec![
+                ColumnAssignment::new("id", Value::Int(1)),
+                ColumnAssignment::typed(
+                    "tags",
+                    Value::Array(vec![Value::Text("upserted".to_string())]),
+                    "_text",
+                ),
+                ColumnAssignment::typed("meta", Value::Json(r#"{"v":2}"#.to_string()), "jsonb"),
+            ],
+            vec!["id".to_string()],
+            vec![ColumnAssignment::typed(
+                "tags",
+                Value::Array(vec![Value::Text("upserted".to_string())]),
+                "_text",
+            )],
+        );
+
+        connection.execute_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::sql_upsert(upsert),
+        ))?;
+
+        let rows = connection
+            .execute(&QueryRequest::new(
+                "SELECT tags FROM semantic_array_test WHERE id = 1",
+            ))?
+            .rows;
+        match &rows[0][0] {
+            Value::Array(arr) => {
+                assert_eq!(arr, &vec![Value::Text("upserted".to_string())]);
+            }
+            other => panic!("expected upserted text[] array, got {:?}", other),
+        }
+
+        // Also exercise an insert via upsert (new id, no conflict).
+        let upsert_new = SqlUpsertRequest::with_typed_assignments(
+            "semantic_array_test".to_string(),
+            Some("public".to_string()),
+            vec![
+                ColumnAssignment::new("id", Value::Int(2)),
+                ColumnAssignment::typed(
+                    "tags",
+                    Value::Array(vec![Value::Text("new".to_string())]),
+                    "_text",
+                ),
+                ColumnAssignment::typed("meta", Value::Json("{}".to_string()), "jsonb"),
+            ],
+            vec!["id".to_string()],
+            vec![],
+        );
+
+        connection.execute_semantic_request(&SemanticRequest::Mutation(
+            MutationRequest::sql_upsert(upsert_new),
+        ))?;
+
+        let rows = connection
+            .execute(&QueryRequest::new(
+                "SELECT tags FROM semantic_array_test WHERE id = 2",
+            ))?
+            .rows;
+        assert!(
+            matches!(&rows[0][0], Value::Array(arr) if arr == &vec![Value::Text("new".to_string())])
+        );
 
         Ok(())
     })

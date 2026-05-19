@@ -11,7 +11,7 @@ use super::clipboard;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, TableModel};
 use super::selection::{CellCoord, SelectionState};
-use super::theme::{DEFAULT_COLUMN_WIDTH, SCROLLBAR_WIDTH};
+use super::theme::{DEFAULT_COLUMN_WIDTH, MIN_COLUMN_WIDTH, SCROLLBAR_WIDTH};
 use crate::ui::components::dropdown::{
     Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged,
 };
@@ -85,7 +85,16 @@ impl DataTableState {
     pub fn new(model: Arc<TableModel>, cx: &mut Context<Self>) -> Self {
         let col_count = model.col_count();
         let row_count = model.row_count();
-        let column_widths = vec![DEFAULT_COLUMN_WIDTH; col_count];
+        let column_widths: Vec<f32> = (0..col_count)
+            .map(|ix| {
+                let name_len = model
+                    .columns
+                    .get(ix)
+                    .map(|c| c.title.chars().count())
+                    .unwrap_or(0);
+                Self::initial_column_width(name_len)
+            })
+            .collect();
         let column_offsets = Self::calculate_offsets(&column_widths);
 
         let mut edit_buffer = EditBuffer::new();
@@ -112,6 +121,18 @@ impl DataTableState {
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
         }
+    }
+
+    /// Compute the initial width for a column so the header name has room to render
+    /// without being truncated. The estimate uses ~7.5px per character for the
+    /// medium-weight 13px header font, plus padding for the cell, the sort indicator,
+    /// and a small buffer for the type chip / badges. Clamped to MIN_COLUMN_WIDTH.
+    fn initial_column_width(name_chars: usize) -> f32 {
+        const CHAR_WIDTH_PX: f32 = 7.5;
+        const HEADER_FIXED_OVERHEAD_PX: f32 = 56.0;
+
+        let name_width = name_chars as f32 * CHAR_WIDTH_PX + HEADER_FIXED_OVERHEAD_PX;
+        name_width.max(DEFAULT_COLUMN_WIDTH).max(MIN_COLUMN_WIDTH)
     }
 
     fn calculate_offsets(widths: &[f32]) -> Vec<f32> {
@@ -880,14 +901,15 @@ impl DataTableState {
     /// Emits a single SaveAllRequested event with all pending deletes, inserts, and dirty rows.
     pub fn request_save_all(&mut self, cx: &mut Context<Self>) {
         let pending_deletes = self.edit_buffer.pending_delete_rows();
-        let pending_inserts = self.edit_buffer.pending_insert_rows();
         let dirty_rows = self.edit_buffer.dirty_rows();
+        // Use array indices into `pending_inserts`, not virtual row indices.
+        // `commit_insert_*` looks up data via `get_pending_insert_by_idx`, which
+        // indexes the array directly; passing virtual indices silently misses.
+        let insert_indices: Vec<usize> = (0..self.edit_buffer.pending_inserts().len()).collect();
 
-        if pending_deletes.is_empty() && pending_inserts.is_empty() && dirty_rows.is_empty() {
+        if pending_deletes.is_empty() && insert_indices.is_empty() && dirty_rows.is_empty() {
             return;
         }
-
-        let insert_indices: Vec<usize> = pending_inserts.iter().map(|(idx, _)| *idx).collect();
 
         cx.emit(DataTableEvent::SaveAllRequested {
             pending_deletes,
