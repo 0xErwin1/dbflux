@@ -871,14 +871,15 @@ impl DataTableState {
     /// Emits a single SaveAllRequested event with all pending deletes, inserts, and dirty rows.
     pub fn request_save_all(&mut self, cx: &mut Context<Self>) {
         let pending_deletes = self.edit_buffer.pending_delete_rows();
-        let pending_inserts = self.edit_buffer.pending_insert_rows();
         let dirty_rows = self.edit_buffer.dirty_rows();
+        // Use array indices into `pending_inserts`, not virtual row indices.
+        // `commit_insert_*` looks up data via `get_pending_insert_by_idx`, which
+        // indexes the array directly; passing virtual indices silently misses.
+        let insert_indices: Vec<usize> = (0..self.edit_buffer.pending_inserts().len()).collect();
 
-        if pending_deletes.is_empty() && pending_inserts.is_empty() && dirty_rows.is_empty() {
+        if pending_deletes.is_empty() && insert_indices.is_empty() && dirty_rows.is_empty() {
             return;
         }
-
-        let insert_indices: Vec<usize> = pending_inserts.iter().map(|(idx, _)| *idx).collect();
 
         cx.emit(DataTableEvent::SaveAllRequested {
             pending_deletes,
