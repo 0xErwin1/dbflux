@@ -1351,10 +1351,12 @@ impl Connection for MssqlConnection {
             self.set_active_database(Some(database))?;
         }
 
-        let sql_preview = if req.sql.len() > 80 {
-            format!("{}...", &req.sql[..80])
-        } else {
-            req.sql.clone()
+        // Slice by char boundary, not byte index: SQL with multi-byte UTF-8
+        // (CJK identifiers, `N'…'` literals with non-ASCII, accented comments)
+        // would panic on `&req.sql[..80]` when 80 falls mid-codepoint.
+        let sql_preview = match req.sql.char_indices().nth(80) {
+            Some((idx, _)) => format!("{}...", &req.sql[..idx]),
+            None => req.sql.clone(),
         };
         log::debug!("[QUERY] Executing: {}", sql_preview.replace('\n', " "));
 
