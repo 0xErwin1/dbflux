@@ -4,8 +4,24 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-dev.4] - 2026-05-19
+
 ### Fixed
 
+* **Data grid column header prioritizes the column name** — the name,
+  PK/FK badges, and type chip were equal-weight siblings, so long type
+  labels (e.g. MySQL's raw `MYSQL_TYPE_VAR_STRING`) pushed the column
+  name out of view. The name is now the primary affordance rendered with
+  the standard foreground and never ellipsized, while the type label and
+  PK/FK badges share a single muted styling and shrink first. MySQL now
+  maps protocol types to canonical SQL labels (`VARCHAR`, `BIGINT
+  UNSIGNED`, `DECIMAL(p,s)`, …) and DynamoDB infers a label from the
+  first sampled item instead of showing the literal `"DynamoDB"`.
+* **Pending inserts are committed on save** — `request_save_all` emitted
+  virtual row indices for pending inserts while the commit path looked
+  them up by array index, so on any table with existing rows the save
+  aborted silently with no error. Inserts now persist regardless of the
+  base row count.
 * **Chart engine plots Decimal and Bool columns** — `extract_f64` only
   handled `Value::Int`, `Value::Float`, and timestamp-typed `Value::Text`,
   silently dropping `Value::Decimal` and `Value::Bool`. Columns whose
