@@ -189,24 +189,23 @@ impl SqlDialect for SqliteDialect {
         &self,
         schema: Option<&str>,
         table: &str,
-        columns: &[String],
-        values: &[Value],
+        assignments: &[dbflux_core::ColumnAssignment],
         conflict_columns: &[String],
-        update_assignments: &[(String, Value)],
+        update_assignments: &[dbflux_core::ColumnAssignment],
     ) -> Option<String> {
-        if columns.is_empty() || columns.len() != values.len() || conflict_columns.is_empty() {
+        if assignments.is_empty() || conflict_columns.is_empty() {
             return None;
         }
 
         let table = self.qualified_table(schema, table);
-        let columns = columns
+        let columns = assignments
             .iter()
-            .map(|column| self.quote_identifier(column))
+            .map(|a| self.quote_identifier(&a.name))
             .collect::<Vec<_>>()
             .join(", ");
-        let values = values
+        let values = assignments
             .iter()
-            .map(|value| self.value_to_literal(value))
+            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -224,11 +223,11 @@ impl SqlDialect for SqliteDialect {
 
         let update_clause = update_assignments
             .iter()
-            .map(|(column, value)| {
+            .map(|a| {
                 format!(
                     "{} = {}",
-                    self.quote_identifier(column),
-                    self.value_to_literal(value)
+                    self.quote_identifier(&a.name),
+                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
                 )
             })
             .collect::<Vec<_>>()

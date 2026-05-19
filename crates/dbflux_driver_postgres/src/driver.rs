@@ -214,6 +214,10 @@ impl SqlDialect for PostgresDialect {
         value_to_pg_literal(value)
     }
 
+    fn value_to_literal_typed(&self, value: &Value, col_type: Option<&str>) -> String {
+        value_to_pg_literal_typed(value, col_type)
+    }
+
     fn escape_string(&self, s: &str) -> String {
         pg_escape_string(s)
     }
@@ -246,24 +250,23 @@ impl SqlDialect for PostgresDialect {
         &self,
         schema: Option<&str>,
         table: &str,
-        columns: &[String],
-        values: &[Value],
+        assignments: &[dbflux_core::ColumnAssignment],
         conflict_columns: &[String],
-        update_assignments: &[(String, Value)],
+        update_assignments: &[dbflux_core::ColumnAssignment],
     ) -> Option<String> {
-        if columns.is_empty() || columns.len() != values.len() || conflict_columns.is_empty() {
+        if assignments.is_empty() || conflict_columns.is_empty() {
             return None;
         }
 
         let table = self.qualified_table(schema, table);
-        let columns = columns
+        let columns = assignments
             .iter()
-            .map(|column| self.quote_identifier(column))
+            .map(|a| self.quote_identifier(&a.name))
             .collect::<Vec<_>>()
             .join(", ");
-        let values = values
+        let values = assignments
             .iter()
-            .map(|value| self.value_to_literal(value))
+            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -281,11 +284,11 @@ impl SqlDialect for PostgresDialect {
 
         let update_clause = update_assignments
             .iter()
-            .map(|(column, value)| {
+            .map(|a| {
                 format!(
                     "{} = {}",
-                    self.quote_identifier(column),
-                    self.value_to_literal(value)
+                    self.quote_identifier(&a.name),
+                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
                 )
             })
             .collect::<Vec<_>>()
@@ -2760,6 +2763,121 @@ fn needs_postgres_text_comparison_cast(type_name: &str) -> bool {
     normalized == "uuid" || normalized == "tsvector" || normalized == "tsquery"
 }
 
+/// Convert a Value to a safe PostgreSQL literal string, guided by the target
+/// column's driver-reported type.
+///
+/// When the column is an array type, this emits a typed `ARRAY[...]::T[]`
+/// literal so that round-trip insert/update against `text[]`, `int4[]`, etc.
+/// works regardless of whether the cell value arrived as `Value::Array`
+/// (untouched from the driver) or `Value::Json(s)` (user edited the cell as
+/// a JSON array text). For non-array columns it falls back to the untyped
+/// formatter.
+fn value_to_pg_literal_typed(value: &Value, col_type: Option<&str>) -> String {
+    if let Some(ty) = col_type
+        && let Some(elem_type) = pg_array_element_type(ty)
+    {
+        return format_pg_array_literal(value, elem_type);
+    }
+
+    value_to_pg_literal(value)
+}
+
+/// Returns the canonical PostgreSQL element type for an array column type,
+/// or None if the type is not an array.
+///
+/// Accepts both the internal name (`_text`, `_int4`) returned by the
+/// `postgres` crate via `Type::name()` and the SQL-level name (`text[]`,
+/// `int4[]`) that may come from other paths like `information_schema`.
+fn pg_array_element_type(type_name: &str) -> Option<&'static str> {
+    let normalized = type_name.trim().to_ascii_lowercase();
+
+    let elem = if let Some(stripped) = normalized.strip_prefix('_') {
+        stripped
+    } else if let Some(stripped) = normalized.strip_suffix("[]") {
+        stripped.trim()
+    } else {
+        return None;
+    };
+
+    // Map driver-reported element names to a canonical PostgreSQL type name
+    // suitable for use in an `::T[]` cast. Unknown element types fall back
+    // to `text` — safer than failing the literal emission, and the server
+    // will reject the cast if it really doesn't fit.
+    Some(match elem {
+        "bool" | "boolean" => "boolean",
+        "int2" | "smallint" => "int2",
+        "int4" | "integer" | "int" => "int4",
+        "int8" | "bigint" => "int8",
+        "float4" | "real" => "float4",
+        "float8" | "double precision" => "float8",
+        "numeric" | "decimal" => "numeric",
+        "text" => "text",
+        "varchar" | "character varying" => "varchar",
+        "bpchar" | "character" => "bpchar",
+        "uuid" => "uuid",
+        "json" => "json",
+        "jsonb" => "jsonb",
+        "date" => "date",
+        "time" => "time",
+        "timestamp" => "timestamp",
+        "timestamptz" => "timestamptz",
+        "inet" => "inet",
+        "citext" => "citext",
+        "name" => "name",
+        _ => "text",
+    })
+}
+
+/// Build a typed `ARRAY[...]::elem[]` literal for the given value and
+/// element type.
+///
+/// Accepts:
+/// - `Value::Null` — emitted as `NULL::elem[]`.
+/// - `Value::Array(items)` — items formatted individually as untyped PG
+///   literals.
+/// - `Value::Json(s)` — `s` is parsed as a JSON array (so a user-edited cell
+///   containing `["a","b"]` round-trips). Falls back to a Json fallback if
+///   parsing fails.
+/// - Any other variant — passed through `value_to_pg_literal` and wrapped as
+///   `ARRAY[<lit>]::elem[]`.
+fn format_pg_array_literal(value: &Value, elem_type: &str) -> String {
+    match value {
+        Value::Null => format!("NULL::{}[]", elem_type),
+
+        Value::Array(items) => {
+            let lits: Vec<String> = items.iter().map(value_to_pg_literal).collect();
+            format!("ARRAY[{}]::{}[]", lits.join(", "), elem_type)
+        }
+
+        Value::Json(s) => match serde_json::from_str::<JsonValue>(s) {
+            Ok(JsonValue::Array(items)) => {
+                let lits: Vec<String> = items.iter().map(json_value_to_pg_literal).collect();
+                format!("ARRAY[{}]::{}[]", lits.join(", "), elem_type)
+            }
+            // Non-array JSON for an array column is a real type mismatch —
+            // surface it by letting the server reject the cast rather than
+            // silently mangling the data.
+            _ => format!("{}::{}[]", pg_quote_string(s), elem_type),
+        },
+
+        other => format!("ARRAY[{}]::{}[]", value_to_pg_literal(other), elem_type),
+    }
+}
+
+/// Convert a JSON scalar to a PostgreSQL literal suitable as an array element.
+fn json_value_to_pg_literal(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => "NULL".to_string(),
+        JsonValue::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        JsonValue::Number(n) => n.to_string(),
+        JsonValue::String(s) => pg_quote_string(s),
+        // Nested objects/arrays in a flat array column don't have a clean
+        // mapping; pass the raw JSON text through as a quoted string and let
+        // the server error if the destination element type can't take it.
+        JsonValue::Array(_) | JsonValue::Object(_) => pg_quote_string(&value.to_string()),
+    }
+}
+
 /// Convert a Value to a safe PostgreSQL literal string.
 ///
 /// Uses escaped single-quoted literals for readable generated SQL.
@@ -3890,6 +4008,123 @@ mod tests {
         };
 
         assert!(generator.generate_create_type(&request).is_none());
+    }
+
+    // ===== Array literal emission (#76) =====
+
+    use super::{format_pg_array_literal, pg_array_element_type, value_to_pg_literal_typed};
+
+    #[test]
+    fn pg_array_element_type_handles_internal_and_sql_names() {
+        assert_eq!(pg_array_element_type("_text"), Some("text"));
+        assert_eq!(pg_array_element_type("_int4"), Some("int4"));
+        assert_eq!(pg_array_element_type("text[]"), Some("text"));
+        assert_eq!(pg_array_element_type("integer[]"), Some("int4"));
+        assert_eq!(pg_array_element_type("BIGINT[]"), Some("int8"));
+        assert_eq!(pg_array_element_type("text"), None);
+        assert_eq!(pg_array_element_type("jsonb"), None);
+    }
+
+    #[test]
+    fn array_literal_from_value_array() {
+        let value = Value::Array(vec![
+            Value::Text("Espacio".into()),
+            Value::Text("hola".into()),
+        ]);
+        let sql = format_pg_array_literal(&value, "text");
+        assert_eq!(sql, "ARRAY['Espacio', 'hola']::text[]");
+    }
+
+    #[test]
+    fn array_literal_from_json_array_string() {
+        // Cell was edited as JSON text in the data grid.
+        let value = Value::Json(r#"["Espacio","hola"]"#.into());
+        let sql = format_pg_array_literal(&value, "text");
+        assert_eq!(sql, "ARRAY['Espacio', 'hola']::text[]");
+    }
+
+    #[test]
+    fn array_literal_int_elements() {
+        let value = Value::Json(r#"[1, 2, 3]"#.into());
+        let sql = format_pg_array_literal(&value, "int4");
+        assert_eq!(sql, "ARRAY[1, 2, 3]::int4[]");
+    }
+
+    #[test]
+    fn array_literal_null() {
+        let sql = format_pg_array_literal(&Value::Null, "text");
+        assert_eq!(sql, "NULL::text[]");
+    }
+
+    #[test]
+    fn array_literal_empty() {
+        let value = Value::Array(vec![]);
+        let sql = format_pg_array_literal(&value, "text");
+        assert_eq!(sql, "ARRAY[]::text[]");
+    }
+
+    #[test]
+    fn array_literal_escapes_single_quotes() {
+        let value = Value::Array(vec![Value::Text("it's".into())]);
+        let sql = format_pg_array_literal(&value, "text");
+        assert_eq!(sql, "ARRAY['it''s']::text[]");
+    }
+
+    #[test]
+    fn typed_literal_falls_back_to_jsonb_for_jsonb_column() {
+        let value = Value::Json(r#"{"k":1}"#.into());
+        let sql = value_to_pg_literal_typed(&value, Some("jsonb"));
+        assert_eq!(sql, "'{\"k\":1}'::jsonb");
+    }
+
+    #[test]
+    fn typed_literal_no_type_info_uses_default() {
+        let value = Value::Text("hi".into());
+        let sql = value_to_pg_literal_typed(&value, None);
+        assert_eq!(sql, "'hi'");
+    }
+
+    #[test]
+    fn typed_literal_routes_text_array_via_array_path() {
+        let value = Value::Array(vec![Value::Text("a".into())]);
+        let sql = value_to_pg_literal_typed(&value, Some("_text"));
+        assert_eq!(sql, "ARRAY['a']::text[]");
+    }
+
+    #[test]
+    fn typed_literal_null_for_array_column() {
+        // When the column type is known to be an array, emit `NULL::elem[]`
+        // explicitly. Bare `NULL` would also work in INSERT/UPDATE column
+        // position because the server infers from the destination, but an
+        // explicit cast is safer in expression contexts (e.g. COALESCE).
+        let sql = value_to_pg_literal_typed(&Value::Null, Some("_text"));
+        assert_eq!(sql, "NULL::text[]");
+    }
+
+    #[test]
+    fn typed_literal_null_no_type_info_stays_bare() {
+        let sql = value_to_pg_literal_typed(&Value::Null, None);
+        assert_eq!(sql, "NULL");
+    }
+
+    #[test]
+    fn pg_array_element_type_covers_common_string_aliases() {
+        assert_eq!(pg_array_element_type("_varchar"), Some("varchar"));
+        assert_eq!(pg_array_element_type("_bpchar"), Some("bpchar"));
+        assert_eq!(pg_array_element_type("varchar[]"), Some("varchar"));
+        assert_eq!(
+            pg_array_element_type("character varying[]"),
+            Some("varchar")
+        );
+    }
+
+    #[test]
+    fn array_literal_wraps_scalar_value_for_array_column() {
+        // Fallback path: caller passed a scalar where an array was expected.
+        // The dialect wraps it as a single-element ARRAY[...] literal and
+        // lets the server validate the element type.
+        let sql = format_pg_array_literal(&Value::Text("solo".into()), "text");
+        assert_eq!(sql, "ARRAY['solo']::text[]");
     }
 }
 

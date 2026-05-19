@@ -32,6 +32,18 @@ pub trait SqlDialect: Send + Sync {
     /// Convert a Value to a SQL literal string.
     fn value_to_literal(&self, value: &Value) -> String;
 
+    /// Convert a Value to a SQL literal string, optionally guided by the
+    /// target column's driver-reported type name.
+    ///
+    /// Default implementation ignores the type and delegates to
+    /// [`Self::value_to_literal`]. Dialects override this to handle cases
+    /// where the destination column type is needed to pick the right literal
+    /// syntax — e.g. PostgreSQL needs `ARRAY[...]::text[]` for `text[]`
+    /// columns instead of the generic `::jsonb` fallback.
+    fn value_to_literal_typed(&self, value: &Value, _col_type: Option<&str>) -> String {
+        self.value_to_literal(value)
+    }
+
     /// Escape a string for use inside a single-quoted literal.
     fn escape_string(&self, s: &str) -> String;
 
@@ -65,10 +77,9 @@ pub trait SqlDialect: Send + Sync {
         &self,
         _schema: Option<&str>,
         _table: &str,
-        _columns: &[String],
-        _values: &[Value],
+        _assignments: &[crate::data::crud::ColumnAssignment],
         _conflict_columns: &[String],
-        _update_assignments: &[(String, Value)],
+        _update_assignments: &[crate::data::crud::ColumnAssignment],
     ) -> Option<String> {
         None
     }
@@ -147,24 +158,23 @@ impl SqlDialect for DefaultSqlDialect {
         &self,
         schema: Option<&str>,
         table: &str,
-        columns: &[String],
-        values: &[Value],
+        assignments: &[crate::data::crud::ColumnAssignment],
         conflict_columns: &[String],
-        update_assignments: &[(String, Value)],
+        update_assignments: &[crate::data::crud::ColumnAssignment],
     ) -> Option<String> {
-        if columns.is_empty() || columns.len() != values.len() || conflict_columns.is_empty() {
+        if assignments.is_empty() || conflict_columns.is_empty() {
             return None;
         }
 
         let table = self.qualified_table(schema, table);
-        let columns = columns
+        let columns = assignments
             .iter()
-            .map(|column| self.quote_identifier(column))
+            .map(|a| self.quote_identifier(&a.name))
             .collect::<Vec<_>>()
             .join(", ");
-        let values = values
+        let values = assignments
             .iter()
-            .map(|value| self.value_to_literal(value))
+            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -182,11 +192,11 @@ impl SqlDialect for DefaultSqlDialect {
 
         let update_clause = update_assignments
             .iter()
-            .map(|(column, value)| {
+            .map(|a| {
                 format!(
                     "{} = {}",
-                    self.quote_identifier(column),
-                    self.value_to_literal(value)
+                    self.quote_identifier(&a.name),
+                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
                 )
             })
             .collect::<Vec<_>>()

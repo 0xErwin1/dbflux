@@ -12,6 +12,15 @@ All notable changes to DBFlux will be documented in this file.
   `ColumnKind` is numeric (e.g. PostgreSQL `NUMERIC`, MSSQL `DECIMAL`,
   MSSQL `BIT`) now render correctly instead of producing an empty series
   with no error.
+* **PostgreSQL array columns accept inserts and updates** — saving a row
+  into a `text[]` / `int4[]` / etc. column failed with `expression is of
+  type jsonb` because the dialect emitted `'<json>'::jsonb` regardless of
+  the destination type. Per-column type metadata now flows from the UI
+  data grid and MCP write tools through `RowInsert`/`RowPatch`/
+  `SqlUpdateRequest`/`SqlUpsertRequest` to the dialect, which emits
+  `ARRAY[...]::elem[]` for array columns and keeps `::jsonb` for JSON
+  columns. The IPC wire format stays backward compatible via serde
+  shims, so older driver peers keep working.
 
 ## [0.6.0-dev.3] - 2026-05-16
 
