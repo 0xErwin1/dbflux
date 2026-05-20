@@ -9,12 +9,11 @@ use dbflux_core::QueryGenerator;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     ColumnAssignment, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
-    ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities,
-    DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues,
-    FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
+    ConnectionProfile, ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo,
+    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
     MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
     QueryCapabilities, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     RecordIdentity, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
