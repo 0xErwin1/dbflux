@@ -4,8 +4,8 @@ use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::document_tree::NodeId;
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use dbflux_core::{
-    CollectionRef, DocumentFilter, DocumentUpdate, Pagination, QueryResult, RowDelete, RowIdentity,
-    RowInsert, RowPatch, RowState, TableRef, TaskKind, Value,
+    CollectionRef, ColumnAssignment, DocumentFilter, DocumentUpdate, Pagination, QueryResult,
+    RowDelete, RowIdentity, RowInsert, RowPatch, RowState, TableRef, TaskKind, Value,
 };
 use gpui::*;
 use std::collections::BTreeMap;
@@ -447,19 +447,20 @@ impl DataGridPanel {
 
         let identity = RowIdentity::new(pk_columns, pk_values);
 
-        let change_values: Vec<(String, Value)> = changes
+        let change_values: Vec<ColumnAssignment> = changes
             .iter()
             .filter_map(|&(col_idx, cell_value)| {
-                model
-                    .columns
-                    .get(col_idx)
-                    .map(|col| (col.title.to_string(), cell_value.to_value()))
+                model.columns.get(col_idx).map(|col| ColumnAssignment {
+                    name: col.title.to_string(),
+                    value: cell_value.to_value(),
+                    type_name: Some(col.type_name.to_string()),
+                })
             })
             .collect();
 
         if change_values
             .iter()
-            .any(|(_, value)| matches!(value, Value::Unsupported(_)))
+            .any(|a| matches!(a.value, Value::Unsupported(_)))
         {
             let message = "Cannot save row: unsupported values are read-only".to_string();
             log::error!("[SAVE] {}", message);
@@ -478,7 +479,7 @@ impl DataGridPanel {
             return;
         }
 
-        let patch = RowPatch::new(
+        let patch = RowPatch::with_typed_changes(
             identity,
             table_ref.name.clone(),
             table_ref.schema.clone(),
@@ -880,12 +881,11 @@ impl DataGridPanel {
             return;
         };
 
-        let (columns, values) = {
+        let assignments: Vec<ColumnAssignment> = {
             let state = table_state.read(cx);
             let model = state.model();
 
-            let mut columns = Vec::new();
-            let mut values = Vec::new();
+            let mut assignments = Vec::new();
 
             for (col_idx, cell) in cells.iter().enumerate() {
                 let value = cell.to_value();
@@ -895,15 +895,18 @@ impl DataGridPanel {
                 }
 
                 if let Some(col) = model.columns.get(col_idx) {
-                    columns.push(col.title.to_string());
-                    values.push(value);
+                    assignments.push(ColumnAssignment {
+                        name: col.title.to_string(),
+                        value,
+                        type_name: Some(col.type_name.to_string()),
+                    });
                 }
             }
 
-            (columns, values)
+            assignments
         };
 
-        if columns.is_empty() {
+        if assignments.is_empty() {
             self.pending_toast = Some(PendingToast {
                 message: "Cannot insert: no values provided".to_string(),
                 is_error: true,
@@ -912,11 +915,10 @@ impl DataGridPanel {
             return;
         }
 
-        let insert = RowInsert::new(
+        let insert = RowInsert::with_typed_assignments(
             table_ref.name.clone(),
             table_ref.schema.clone(),
-            columns,
-            values,
+            assignments,
         );
 
         let (task_id, _cancel_token) =
