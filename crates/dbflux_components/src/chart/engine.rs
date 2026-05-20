@@ -1077,6 +1077,19 @@ impl Render for ChartView {
                                             &data_to_screen_y,
                                         );
                                     }
+                                    ChartKind::Area => {
+                                        paint_area(
+                                            window,
+                                            &decimated_canvas,
+                                            &palette_canvas,
+                                            &hidden_canvas,
+                                            focused_idx,
+                                            y_min,
+                                            y_max,
+                                            &data_to_screen_x,
+                                            &data_to_screen_y,
+                                        );
+                                    }
                                 }
 
                                 // --- Crosshair (dashed, amber #FFB454 at 0.7 opacity) ---
@@ -1101,7 +1114,14 @@ impl Render for ChartView {
                                             + ((sx - plot_x0) as f64 / plot_w as f64) * x_range;
 
                                         for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                            if !matches!(kind_canvas, ChartKind::Line) {
+                                            // Hover dots are shown for Line and Area only.
+                                            // Bar and Scatter skip them — Bar uses the crosshair
+                                            // + readout overlay; Scatter paints discrete points
+                                            // that already act as their own indicators.
+                                            if !matches!(
+                                                kind_canvas,
+                                                ChartKind::Line | ChartKind::Area
+                                            ) {
                                                 break;
                                             }
                                             if hidden_canvas.contains(&s_idx) {
@@ -1409,6 +1429,174 @@ fn paint_scatter<FX, FY>(
             let sx = data_to_screen_x(x);
             let sy = data_to_screen_y(y);
             paint_filled_circle(window, sx, sy, radius, color);
+        }
+    }
+}
+
+/// Paint every visible series as a filled area chart.
+///
+/// Each series is drawn in two passes to achieve the stacked visual effect of
+/// fill behind a stroke line:
+///
+/// 1. **Fill pass**: a closed path from the first-point baseline, through all
+///    data points, back down to the last-point baseline, filled with the series
+///    colour at low alpha. Non-focused series use a lower alpha (~0.12) so they
+///    recede behind the focused series (~0.22).
+/// 2. **Stroke pass**: the data-point polyline only (no baseline edges), at
+///    1.6 px for non-focused and 2.2 px for the focused series.
+///
+/// The baseline follows the same rule as `paint_bars`: `y = 0.0` when zero
+/// falls inside `[y_min, y_max]`, otherwise `y = y_min`.
+///
+/// Single-point series are handled gracefully — the fill degenerates to a
+/// vertical line segment and the stroke paints a square marker, matching the
+/// Line arm's single-point fallback.
+#[allow(clippy::too_many_arguments)]
+fn paint_area<FX, FY>(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    y_min: f64,
+    y_max: f64,
+    data_to_screen_x: &FX,
+    data_to_screen_y: &FY,
+) where
+    FX: Fn(f64) -> f32,
+    FY: Fn(f64) -> f32,
+{
+    let baseline = if y_min <= 0.0 && y_max >= 0.0 {
+        0.0
+    } else {
+        y_min
+    };
+    let baseline_sy = data_to_screen_y(baseline);
+
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+    let num_visible = visible.len();
+
+    // Two passes: non-focused first so the focused series composites on top.
+    for pass in 0..2usize {
+        for &s_idx in &visible {
+            let is_focused = s_idx == focused_idx;
+            if pass == 0 && is_focused {
+                continue;
+            }
+            if pass == 1 && !is_focused {
+                continue;
+            }
+
+            let pts = &decimated[s_idx];
+            if pts.is_empty() {
+                continue;
+            }
+
+            let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+
+            // --- Fill pass ---
+            let fill_alpha = if num_visible > 1 && !is_focused {
+                0.12
+            } else {
+                0.22
+            };
+            let fill_color = gpui::hsla(base_color.h, base_color.s, base_color.l, fill_alpha);
+
+            if pts.len() == 1 {
+                // Single-point: fill a thin vertical rect from the data point to the baseline.
+                let sx = data_to_screen_x(pts[0].0);
+                let sy = data_to_screen_y(pts[0].1);
+                let (rect_top, rect_h) = if sy <= baseline_sy {
+                    (sy, baseline_sy - sy)
+                } else {
+                    (baseline_sy, sy - baseline_sy)
+                };
+                window.paint_quad(fill(
+                    gpui::Bounds {
+                        origin: point(gpui::px(sx - 1.0), gpui::px(rect_top)),
+                        size: gpui::Size {
+                            width: gpui::px(2.0),
+                            height: gpui::px(rect_h.max(1.0)),
+                        },
+                    },
+                    fill_color,
+                ));
+            } else {
+                // Build a closed filled path: baseline→first, data points, last→baseline.
+                let (x0, _) = pts[0];
+                let (xn, _) = pts[pts.len() - 1];
+
+                let mut builder = PathBuilder::fill();
+                builder.move_to(point(
+                    gpui::px(data_to_screen_x(x0)),
+                    gpui::px(baseline_sy),
+                ));
+                for &(x, y) in pts {
+                    builder.line_to(point(
+                        gpui::px(data_to_screen_x(x)),
+                        gpui::px(data_to_screen_y(y)),
+                    ));
+                }
+                builder.line_to(point(
+                    gpui::px(data_to_screen_x(xn)),
+                    gpui::px(baseline_sy),
+                ));
+                builder.close();
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, fill_color);
+                }
+            }
+
+            // --- Stroke pass (data-line only, no baseline edges) ---
+            let stroke_w = if num_visible > 1 && !is_focused {
+                1.6_f32
+            } else {
+                2.2_f32
+            };
+            let stroke_alpha = if num_visible > 1 && !is_focused {
+                0.6_f32
+            } else {
+                1.0_f32
+            };
+            let stroke_color =
+                gpui::hsla(base_color.h, base_color.s, base_color.l, stroke_alpha);
+
+            if pts.len() == 1 {
+                // Single-point fallback: a square marker, same as the Line arm.
+                let half = stroke_w * 1.5;
+                let sx = data_to_screen_x(pts[0].0);
+                let sy = data_to_screen_y(pts[0].1);
+                window.paint_quad(fill(
+                    gpui::Bounds {
+                        origin: point(gpui::px(sx - half), gpui::px(sy - half)),
+                        size: gpui::Size {
+                            width: gpui::px(half * 2.0),
+                            height: gpui::px(half * 2.0),
+                        },
+                    },
+                    stroke_color,
+                ));
+            } else {
+                let mut builder = PathBuilder::stroke(gpui::px(stroke_w));
+                let (x0, y0) = pts[0];
+                builder.move_to(point(
+                    gpui::px(data_to_screen_x(x0)),
+                    gpui::px(data_to_screen_y(y0)),
+                ));
+                for &(x, y) in pts.iter().skip(1) {
+                    builder.line_to(point(
+                        gpui::px(data_to_screen_x(x)),
+                        gpui::px(data_to_screen_y(y)),
+                    ));
+                }
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, stroke_color);
+                }
+            }
         }
     }
 }
@@ -2245,5 +2433,31 @@ mod tests {
         assert_eq!(s1.min, 10.0);
         assert_eq!(s1.max, 30.0);
         assert_eq!(s1.last, 30.0);
+    }
+
+    /// `ChartView::build` with `ChartKind::Area` must not panic.
+    ///
+    /// Area shares the same kind-agnostic `RenderModel` as Line; the Area-specific
+    /// geometry (filled paths + stroke) is produced later in `render`.
+    #[test]
+    fn build_with_area_kind_does_not_panic() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(1000), Value::Float(2.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.kind = crate::chart::spec::ChartKind::Area;
+
+        let view = ChartView::build(&result, spec).expect("build with Area kind must not fail");
+        assert_eq!(view.kind(), crate::chart::spec::ChartKind::Area);
     }
 }

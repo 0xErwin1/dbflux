@@ -239,10 +239,11 @@ pub fn render_chart_toolbar(
 
     // --- Chart kind chips (Line | Bar) ---
     let on_select_kind = handlers.on_select_chart_kind.clone();
-    let kind_options: [(ChartKind, &'static str); 3] = [
+    let kind_options: [(ChartKind, &'static str); 4] = [
         (ChartKind::Line, "Line"),
         (ChartKind::Bar, "Bar"),
         (ChartKind::Scatter, "Scatter"),
+        (ChartKind::Area, "Area"),
     ];
     let num_kinds = kind_options.len();
 
