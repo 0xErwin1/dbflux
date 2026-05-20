@@ -19,7 +19,7 @@
 use dbflux_components::result_panel::{ResultPanel, SegmentPosition, ToolbarSegment};
 use dbflux_components::result_view::ResultViewMode;
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, FocusHandle, TestAppContext, Window, div};
+use gpui::{App, FocusHandle, TestAppContext, div};
 use std::sync::{Arc, Mutex};
 
 // ── Stub ViewHandle builders ──────────────────────────────────────────────────

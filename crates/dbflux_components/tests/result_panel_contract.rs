@@ -15,7 +15,7 @@
 use dbflux_components::result_panel::{ResultPanel, ViewHandle};
 use dbflux_components::result_view::ResultViewMode;
 use gpui::prelude::*;
-use gpui::{App, Context, TestAppContext, Window, div};
+use gpui::{App, TestAppContext, div};
 
 /// Build a minimal `ViewHandle` for tests.
 fn stub_handle(cx: &mut App) -> ViewHandle {
