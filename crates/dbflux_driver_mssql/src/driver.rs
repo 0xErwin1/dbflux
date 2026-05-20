@@ -1951,6 +1951,22 @@ impl Connection for MssqlConnection {
         let escaped_schema = schema.replace('\'', "''");
         let escaped_table = request.table.name.replace('\'', "''");
 
+        // Qualify every `sys.*` lookup with the connection's tracked active
+        // database. MSSQL supports multi-DB-per-connection and the UI
+        // navigates across databases without reconnecting, so an unqualified
+        // `sys.columns` query would silently return metadata from whichever
+        // database happens to be active server-side — not the one the
+        // request points at. `fetch_columns` / `fetch_indexes` /
+        // `fetch_foreign_keys` already do this; describe_table should match.
+        let database = self
+            .current_database
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .unwrap_or_else(|| "master".to_string());
+        let escaped_db = database.replace(']', "]]");
+        let qualified_db = format!("[{}]", escaped_db);
+
         let sql = format!(
             "SELECT \
                 c.name AS column_name, \
@@ -1958,15 +1974,17 @@ impl Connection for MssqlConnection {
                 CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END AS is_nullable, \
                 CAST(dc.definition AS NVARCHAR(MAX)) AS column_default, \
                 c.max_length AS character_maximum_length \
-             FROM sys.columns c \
-             JOIN sys.tables tbl ON tbl.object_id = c.object_id \
-             JOIN sys.schemas s ON s.schema_id = tbl.schema_id \
-             JOIN sys.types t ON t.user_type_id = c.user_type_id \
-             LEFT JOIN sys.default_constraints dc \
+             FROM {qualified_db}.sys.columns c \
+             JOIN {qualified_db}.sys.tables tbl ON tbl.object_id = c.object_id \
+             JOIN {qualified_db}.sys.schemas s ON s.schema_id = tbl.schema_id \
+             JOIN {qualified_db}.sys.types t ON t.user_type_id = c.user_type_id \
+             LEFT JOIN {qualified_db}.sys.default_constraints dc \
                ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id \
-             WHERE s.name = '{}' AND tbl.name = '{}' \
+             WHERE s.name = '{escaped_schema}' AND tbl.name = '{escaped_table}' \
              ORDER BY c.column_id",
-            escaped_schema, escaped_table
+            qualified_db = qualified_db,
+            escaped_schema = escaped_schema,
+            escaped_table = escaped_table,
         );
 
         self.execute(&QueryRequest::new(sql))
