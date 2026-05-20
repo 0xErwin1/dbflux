@@ -563,6 +563,43 @@ impl ChartView {
         cx.notify();
     }
 
+    /// The padded Y ceiling used when rendering a `StackedBar` chart.
+    ///
+    /// `RenderModel.y_max` stores per-series maxima, which underestimate the top
+    /// of a stack. This recomputes the true ceiling by summing the visible
+    /// series at each shared point index and adding the same 8% headroom render
+    /// uses, so the render path and the hover hit-test agree on the Y scale. It
+    /// is recomputed from the current hidden set, so toggling series off keeps
+    /// the scale correct.
+    fn stacked_y_max(&self) -> f64 {
+        let model = &self.render_model;
+        let y_min = model.y_min;
+
+        let visible: Vec<usize> = (0..model.decimated.len())
+            .filter(|i| !self.hidden.contains(i))
+            .collect();
+
+        let max_points = model.decimated.iter().map(|s| s.len()).max().unwrap_or(0);
+
+        let stacked_max = (0..max_points)
+            .map(|pt_idx| {
+                visible
+                    .iter()
+                    .filter_map(|&s| model.decimated[s].get(pt_idx).map(|(_, y)| *y))
+                    .filter(|y| y.is_finite())
+                    .sum::<f64>()
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let stacked_max = if stacked_max.is_finite() {
+            stacked_max
+        } else {
+            model.y_max
+        };
+
+        stacked_max + (stacked_max - y_min).abs() * 0.08
+    }
+
     /// Re-evaluate which series the cursor hovers over and update
     /// `focused_series_idx` with a 2 px dead-band to dampen jitter.
     ///
@@ -685,7 +722,10 @@ impl ChartView {
             let cursor_sx = f32::from(hover_x);
             let cursor_sy = f32::from(hover_y);
 
-            let y_range_local = (self.render_model.y_max - y_min).max(1.0);
+            // Use the same stacked Y ceiling render uses, not the per-series
+            // RenderModel.y_max, so segment boundaries line up with the bars.
+            let stacked_y_max = self.stacked_y_max();
+            let y_range_local = (stacked_y_max - y_min).max(1.0);
             let data_to_screen_y = |dy: f64| -> f32 {
                 plot_y0 + plot_h
                     - ((dy - y_min) / y_range_local * plot_h as f64) as f32
@@ -704,7 +744,7 @@ impl ChartView {
 
                 // Cursor is inside this bar column. Find which series segment
                 // the cursor's Y lands in by checking stacked segment boundaries.
-                let baseline = if y_min <= 0.0 && self.render_model.y_max >= 0.0 {
+                let baseline = if y_min <= 0.0 && stacked_y_max >= 0.0 {
                     0.0_f64
                 } else {
                     y_min
@@ -936,33 +976,7 @@ impl Render for ChartView {
         // For StackedBar, compute the true y ceiling by summing visible series
         // at each shared point index. Baseline = 0 when in range, else y_min.
         let (y_max, y_range, stacked_y_ticks) = if matches!(kind, ChartKind::StackedBar) {
-            let visible: Vec<usize> = (0..model.decimated.len())
-                .filter(|i| !self.hidden.contains(i))
-                .collect();
-
-            let max_points = model
-                .decimated
-                .iter()
-                .map(|s| s.len())
-                .max()
-                .unwrap_or(0);
-
-            let stacked_max = (0..max_points)
-                .map(|pt_idx| {
-                    visible
-                        .iter()
-                        .filter_map(|&s| model.decimated[s].get(pt_idx).map(|(_, y)| *y))
-                        .filter(|y| y.is_finite())
-                        .sum::<f64>()
-                })
-                .fold(f64::NEG_INFINITY, f64::max);
-
-            let stacked_max = if stacked_max.is_finite() {
-                stacked_max
-            } else {
-                y_max
-            };
-            let padded_max = stacked_max + (stacked_max - y_min).abs() * 0.08;
+            let padded_max = self.stacked_y_max();
             let new_range = (padded_max - y_min).max(1.0);
             let ticks = ticks_numeric(y_min, padded_max, 5);
             (padded_max, new_range, Some(ticks))
