@@ -1925,6 +1925,128 @@ impl FormSection for AuthProfilesSection {
     }
 }
 
+impl SettingsSection for AuthProfilesSection {
+    fn section_id(&self) -> SettingsSectionId {
+        SettingsSectionId::AuthProfiles
+    }
+
+    fn handle_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        AuthProfilesSection::handle_key_event(self, event, window, cx);
+    }
+
+    fn focus_in(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.content_focused = true;
+        cx.notify();
+    }
+
+    fn focus_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.content_focused = false;
+        self.auth_editing_field = false;
+        cx.notify();
+    }
+
+    fn render_footer_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_section_footer_actions(cx))
+    }
+}
+
+impl Render for AuthProfilesSection {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.pending_sync_from_app_state {
+            self.pending_sync_from_app_state = false;
+            self.sync_from_app_state(window, cx);
+        }
+
+        // Consume a pending login URL and emit it as an event so the settings
+        // coordinator can route it to the login modal in the workspace window.
+        if let Some((provider_name, profile_name, url)) = self.pending_sso_url.take() {
+            cx.emit(AuthProfilesSectionEvent::OpenLoginModal {
+                provider_name,
+                profile_name,
+                url,
+            });
+        }
+
+        let profiles = self.app_state.read(cx).auth_profiles().to_vec();
+        let detected_profiles = self.detected_unimported_profiles(cx);
+        let show_delete_dialog = self.pending_delete_profile_id.is_some();
+
+        let (delete_name, affected_connections) = self
+            .pending_delete_profile_id
+            .and_then(|profile_id| {
+                profiles
+                    .iter()
+                    .find(|profile| profile.id == profile_id)
+                    .map(|profile| {
+                        (
+                            profile.name.clone(),
+                            self.profiles_using_auth(profile_id, cx),
+                        )
+                    })
+            })
+            .unwrap_or_else(|| (String::new(), 0));
+
+        layout::section_container(
+            layout::split_section_shell(
+                dbflux_components::composites::section_header(
+                    "Auth Profiles",
+                    "Manage reusable authentication profiles for connection access",
+                    cx,
+                )
+                .when(!detected_profiles.is_empty(), |root| {
+                    root.child(self.render_import_banner(&detected_profiles, cx))
+                })
+                ,
+                self.render_profile_list(&profiles, cx),
+                self.render_editor_panel(window, cx),
+            )
+                .when(show_delete_dialog, |element| {
+                let entity = cx.entity().clone();
+                let entity_cancel = entity.clone();
+
+                let body = if affected_connections > 0 {
+                    format!(
+                        "Are you sure you want to delete \"{}\"? {} connection{} using this auth profile will be updated.",
+                        delete_name,
+                        affected_connections,
+                        if affected_connections == 1 { "" } else { "s" }
+                    )
+                } else {
+                    format!("Are you sure you want to delete \"{}\"?", delete_name)
+                };
+
+                element.child(
+                    Dialog::new(window, cx)
+                        .title("Delete Auth Profile")
+                        .confirm()
+                        .on_ok(move |_, window, cx| {
+                            entity.update(cx, |section, cx| {
+                                section.confirm_delete_profile(window, cx);
+                            });
+                            true
+                        })
+                        .on_cancel(move |_, _, cx| {
+                            entity_cancel.update(cx, |section, cx| {
+                                section.cancel_delete_profile(cx);
+                            });
+                            true
+                        })
+                        .child(Text::body(body)),
+                )
+            }),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2036,7 +2158,7 @@ mod tests {
         // With no cached entry: needs_fetch must be true.
         let empty_cache: HashMap<(String, String, u64), CachedOptions> = HashMap::new();
         let cache_key = ("provider".to_string(), "field".to_string(), 0u64);
-        let needs_fetch_on_miss = empty_cache.get(&cache_key).is_none();
+        let needs_fetch_on_miss = !empty_cache.contains_key(&cache_key);
         assert!(
             needs_fetch_on_miss,
             "Manual trigger must fetch when no cached entry exists"
@@ -2051,7 +2173,7 @@ mod tests {
                 expires_at: Instant::now() + std::time::Duration::from_secs(300),
             },
         );
-        let needs_fetch_on_hit = cache_with_entry.get(&cache_key).is_none();
+        let needs_fetch_on_hit = !cache_with_entry.contains_key(&cache_key);
         assert!(
             !needs_fetch_on_hit,
             "Manual trigger must NOT refetch when a cached entry exists"
@@ -2073,10 +2195,7 @@ mod tests {
             "OnLoginComplete must NOT trigger without the login-complete signal"
         );
 
-        let fires_with_login = match trigger {
-            RefreshTrigger::OnLoginComplete => true,
-            _ => false,
-        };
+        let fires_with_login = matches!(trigger, RefreshTrigger::OnLoginComplete);
         assert!(
             fires_with_login,
             "OnLoginComplete must trigger when the login-complete signal is true"
@@ -2250,127 +2369,5 @@ mod tests {
             Instant::now() <= fresh.expires_at,
             "fresh entry must not be expired"
         );
-    }
-}
-
-impl SettingsSection for AuthProfilesSection {
-    fn section_id(&self) -> SettingsSectionId {
-        SettingsSectionId::AuthProfiles
-    }
-
-    fn handle_key_event(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        AuthProfilesSection::handle_key_event(self, event, window, cx);
-    }
-
-    fn focus_in(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.content_focused = true;
-        cx.notify();
-    }
-
-    fn focus_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.content_focused = false;
-        self.auth_editing_field = false;
-        cx.notify();
-    }
-
-    fn render_footer_actions(
-        &self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        Some(self.render_section_footer_actions(cx))
-    }
-}
-
-impl Render for AuthProfilesSection {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.pending_sync_from_app_state {
-            self.pending_sync_from_app_state = false;
-            self.sync_from_app_state(window, cx);
-        }
-
-        // Consume a pending login URL and emit it as an event so the settings
-        // coordinator can route it to the login modal in the workspace window.
-        if let Some((provider_name, profile_name, url)) = self.pending_sso_url.take() {
-            cx.emit(AuthProfilesSectionEvent::OpenLoginModal {
-                provider_name,
-                profile_name,
-                url,
-            });
-        }
-
-        let profiles = self.app_state.read(cx).auth_profiles().to_vec();
-        let detected_profiles = self.detected_unimported_profiles(cx);
-        let show_delete_dialog = self.pending_delete_profile_id.is_some();
-
-        let (delete_name, affected_connections) = self
-            .pending_delete_profile_id
-            .and_then(|profile_id| {
-                profiles
-                    .iter()
-                    .find(|profile| profile.id == profile_id)
-                    .map(|profile| {
-                        (
-                            profile.name.clone(),
-                            self.profiles_using_auth(profile_id, cx),
-                        )
-                    })
-            })
-            .unwrap_or_else(|| (String::new(), 0));
-
-        layout::section_container(
-            layout::split_section_shell(
-                dbflux_components::composites::section_header(
-                    "Auth Profiles",
-                    "Manage reusable authentication profiles for connection access",
-                    cx,
-                )
-                .when(!detected_profiles.is_empty(), |root| {
-                    root.child(self.render_import_banner(&detected_profiles, cx))
-                })
-                ,
-                self.render_profile_list(&profiles, cx),
-                self.render_editor_panel(window, cx),
-            )
-                .when(show_delete_dialog, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
-
-                let body = if affected_connections > 0 {
-                    format!(
-                        "Are you sure you want to delete \"{}\"? {} connection{} using this auth profile will be updated.",
-                        delete_name,
-                        affected_connections,
-                        if affected_connections == 1 { "" } else { "s" }
-                    )
-                } else {
-                    format!("Are you sure you want to delete \"{}\"?", delete_name)
-                };
-
-                element.child(
-                    Dialog::new(window, cx)
-                        .title("Delete Auth Profile")
-                        .confirm()
-                        .on_ok(move |_, window, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_profile(window, cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_profile(cx);
-                            });
-                            true
-                        })
-                        .child(Text::body(body)),
-                )
-            }),
-        )
     }
 }

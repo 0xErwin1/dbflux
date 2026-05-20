@@ -496,6 +496,7 @@ mod tests {
             "none".to_string(),
         );
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ProxyProfileRepository::new(Arc::new(conn));
         repo.insert(&dto, None).expect("should insert");
 
@@ -535,6 +536,7 @@ mod tests {
             password_secret_ref: Some("dbflux:secret:proxy:test".to_string()),
         };
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ProxyProfileRepository::new(Arc::new(conn));
         repo.insert(&dto, Some(&auth_dto)).expect("should insert");
 
@@ -580,6 +582,7 @@ mod tests {
             password_secret_ref: None,
         };
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ProxyProfileRepository::new(Arc::new(conn));
         repo.insert(&dto, Some(&auth_dto)).expect("should insert");
 

@@ -1294,6 +1294,8 @@ impl CodeDocument {
     }
 }
 
+impl EventEmitter<DocumentEvent> for CodeDocument {}
+
 #[cfg(test)]
 mod tests {
     use super::{diff_stats_from_pair, source_input_values_from_context};
@@ -1347,5 +1349,3 @@ mod tests {
         assert_eq!(values.1, "2024-01-01T01:00:00Z");
     }
 }
-
-impl EventEmitter<DocumentEvent> for CodeDocument {}

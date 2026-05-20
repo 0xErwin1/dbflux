@@ -1428,6 +1428,83 @@ impl Sidebar {
     }
 }
 
+fn build_collection_field_items(
+    profile_id: Uuid,
+    collection_name: &str,
+    fields: &[dbflux_core::FieldInfo],
+) -> Vec<TreeItem> {
+    fields
+        .iter()
+        .map(|field| {
+            let label = format_field_label(field);
+
+            let mut item = TreeItem::new(
+                SchemaNodeId::CollectionField {
+                    profile_id,
+                    collection: collection_name.to_string(),
+                    name: field.name.clone(),
+                }
+                .to_string(),
+                label,
+            );
+
+            if let Some(ref nested) = field.nested_fields
+                && !nested.is_empty()
+            {
+                let children = build_collection_field_items(profile_id, collection_name, nested);
+                item = item.expanded(false).children(children);
+            }
+
+            item
+        })
+        .collect()
+}
+
+fn format_field_label(field: &dbflux_core::FieldInfo) -> String {
+    let mut label = format!("{}: {}", field.name, field.common_type);
+
+    if let Some(rate) = field.occurrence_rate
+        && rate < 1.0
+    {
+        label.push_str(&format!(" ({:.0}%)", rate * 100.0));
+    }
+
+    label
+}
+
+fn format_collection_index_label(idx: &CollectionIndexInfo) -> String {
+    let keys_str = idx
+        .keys
+        .iter()
+        .map(|(field, dir)| {
+            let dir_label = match dir {
+                IndexDirection::Ascending => "ASC",
+                IndexDirection::Descending => "DESC",
+                IndexDirection::Text => "TEXT",
+                IndexDirection::Hashed => "HASHED",
+                IndexDirection::Geo2d => "2D",
+                IndexDirection::Geo2dSphere => "2DSPHERE",
+            };
+            format!("{} {}", field, dir_label)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut label = format!("{} ({})", idx.name, keys_str);
+
+    if idx.is_unique {
+        label.push_str(" UNIQUE");
+    }
+    if idx.is_sparse {
+        label.push_str(" SPARSE");
+    }
+    if let Some(ttl) = idx.expire_after_seconds {
+        label.push_str(&format!(" TTL:{}s", ttl));
+    }
+
+    label
+}
+
 #[cfg(test)]
 mod tests {
     use super::Sidebar;
@@ -1611,81 +1688,4 @@ mod tests {
         let result = Sidebar::build_time_series_db_content(profile_id, "empty_bucket", &schema);
         assert!(result.is_empty());
     }
-}
-
-fn build_collection_field_items(
-    profile_id: Uuid,
-    collection_name: &str,
-    fields: &[dbflux_core::FieldInfo],
-) -> Vec<TreeItem> {
-    fields
-        .iter()
-        .map(|field| {
-            let label = format_field_label(field);
-
-            let mut item = TreeItem::new(
-                SchemaNodeId::CollectionField {
-                    profile_id,
-                    collection: collection_name.to_string(),
-                    name: field.name.clone(),
-                }
-                .to_string(),
-                label,
-            );
-
-            if let Some(ref nested) = field.nested_fields
-                && !nested.is_empty()
-            {
-                let children = build_collection_field_items(profile_id, collection_name, nested);
-                item = item.expanded(false).children(children);
-            }
-
-            item
-        })
-        .collect()
-}
-
-fn format_field_label(field: &dbflux_core::FieldInfo) -> String {
-    let mut label = format!("{}: {}", field.name, field.common_type);
-
-    if let Some(rate) = field.occurrence_rate
-        && rate < 1.0
-    {
-        label.push_str(&format!(" ({:.0}%)", rate * 100.0));
-    }
-
-    label
-}
-
-fn format_collection_index_label(idx: &CollectionIndexInfo) -> String {
-    let keys_str = idx
-        .keys
-        .iter()
-        .map(|(field, dir)| {
-            let dir_label = match dir {
-                IndexDirection::Ascending => "ASC",
-                IndexDirection::Descending => "DESC",
-                IndexDirection::Text => "TEXT",
-                IndexDirection::Hashed => "HASHED",
-                IndexDirection::Geo2d => "2D",
-                IndexDirection::Geo2dSphere => "2DSPHERE",
-            };
-            format!("{} {}", field, dir_label)
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let mut label = format!("{} ({})", idx.name, keys_str);
-
-    if idx.is_unique {
-        label.push_str(" UNIQUE");
-    }
-    if idx.is_sparse {
-        label.push_str(" SPARSE");
-    }
-    if let Some(ttl) = idx.expire_after_seconds {
-        label.push_str(&format!(" TTL:{}s", ttl));
-    }
-
-    label
 }

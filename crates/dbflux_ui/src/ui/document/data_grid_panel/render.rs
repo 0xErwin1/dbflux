@@ -2972,33 +2972,6 @@ impl DataGridPanel {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::DataGridContentMode;
-    use crate::ui::document::data_view::DataViewMode;
-
-    #[test]
-    fn table_mode_with_columns_and_zero_rows_prefers_table_content() {
-        let mode = super::content_mode_for_result(false, DataViewMode::Table, true, false);
-
-        assert_eq!(mode, DataGridContentMode::Table);
-    }
-
-    #[test]
-    fn table_mode_without_columns_uses_empty_fallback() {
-        let mode = super::content_mode_for_result(false, DataViewMode::Table, false, false);
-
-        assert_eq!(mode, DataGridContentMode::EmptyFallback);
-    }
-
-    #[test]
-    fn document_mode_with_columns_and_zero_rows_keeps_empty_fallback() {
-        let mode = super::content_mode_for_result(false, DataViewMode::Document, true, false);
-
-        assert_eq!(mode, DataGridContentMode::EmptyFallback);
-    }
-}
-
 fn format_hex_dump(data: &[u8]) -> String {
     const BYTES_PER_LINE: usize = 16;
 
@@ -3049,5 +3022,32 @@ fn format_hex_dump(data: &[u8]) -> String {
         "(empty)".to_string()
     } else {
         lines.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DataGridContentMode;
+    use crate::ui::document::data_view::DataViewMode;
+
+    #[test]
+    fn table_mode_with_columns_and_zero_rows_prefers_table_content() {
+        let mode = super::content_mode_for_result(false, DataViewMode::Table, true, false);
+
+        assert_eq!(mode, DataGridContentMode::Table);
+    }
+
+    #[test]
+    fn table_mode_without_columns_uses_empty_fallback() {
+        let mode = super::content_mode_for_result(false, DataViewMode::Table, false, false);
+
+        assert_eq!(mode, DataGridContentMode::EmptyFallback);
+    }
+
+    #[test]
+    fn document_mode_with_columns_and_zero_rows_keeps_empty_fallback() {
+        let mode = super::content_mode_for_result(false, DataViewMode::Document, true, false);
+
+        assert_eq!(mode, DataGridContentMode::EmptyFallback);
     }
 }

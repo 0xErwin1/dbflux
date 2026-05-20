@@ -946,6 +946,14 @@ fn next_sort_state(current: Option<SortState>, col_ix: usize) -> Option<SortStat
     }
 }
 
+impl EventEmitter<DataTableEvent> for DataTableState {}
+
+impl Focusable for DataTableState {
+    fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::next_sort_state;
@@ -970,13 +978,5 @@ mod tests {
         let current = Some(SortState::descending(1));
         let next = next_sort_state(current, 5);
         assert_eq!(next, Some(SortState::ascending(5)));
-    }
-}
-
-impl EventEmitter<DataTableEvent> for DataTableState {}
-
-impl Focusable for DataTableState {
-    fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
-        self.focus_handle.clone()
     }
 }

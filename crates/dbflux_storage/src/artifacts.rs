@@ -208,7 +208,7 @@ mod tests {
         store.write_content(&kept, "keep").expect("write");
         store.write_content(&orphan, "remove").expect("write");
 
-        store.cleanup_orphans(&[kept.clone()]);
+        store.cleanup_orphans(std::slice::from_ref(&kept));
 
         assert!(kept.exists());
         assert!(!orphan.exists());

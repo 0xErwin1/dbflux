@@ -60,67 +60,6 @@ pub(super) struct TreeRenderParams {
     pub hovered_item_id: Option<SharedString>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::sidebar_tree_label;
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::AppFonts;
-    use dbflux_core::SchemaNodeKind;
-    use gpui::FontWeight;
-    use gpui::SharedString;
-
-    #[test]
-    fn sidebar_tree_items_keep_mono_family_and_hierarchy_weights() {
-        let leaf = sidebar_tree_label(
-            SharedString::from("users"),
-            SchemaNodeKind::Table,
-            false,
-            false,
-            gpui::blue(),
-        )
-        .inspect();
-
-        let folder = sidebar_tree_label(
-            SharedString::from("Tables"),
-            SchemaNodeKind::TablesFolder,
-            false,
-            false,
-            gpui::yellow(),
-        )
-        .inspect();
-
-        let active_profile = sidebar_tree_label(
-            SharedString::from("prod-postgres"),
-            SchemaNodeKind::Profile,
-            true,
-            false,
-            gpui::red(),
-        )
-        .inspect();
-
-        let active_database = sidebar_tree_label(
-            SharedString::from("analytics"),
-            SchemaNodeKind::Database,
-            false,
-            true,
-            gpui::green(),
-        )
-        .inspect();
-
-        for inspection in [leaf, folder, active_profile, active_database] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::BASE));
-            assert!(inspection.has_custom_color_override);
-        }
-
-        assert_eq!(leaf.weight_override, Some(FontWeight::NORMAL));
-        assert_eq!(folder.weight_override, Some(FontWeight::MEDIUM));
-        assert_eq!(active_profile.weight_override, Some(FontWeight::SEMIBOLD));
-        assert_eq!(active_database.weight_override, Some(FontWeight::SEMIBOLD));
-    }
-}
-
 pub(super) fn render_tree_item(
     params: &TreeRenderParams,
     ix: usize,
@@ -1155,5 +1094,66 @@ fn resolve_label_color(
         SchemaNodeKind::DependentsFolder => params.color_gray,
         SchemaNodeKind::DependentItem => theme.muted_foreground,
         _ => theme.muted_foreground,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidebar_tree_label;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use dbflux_core::SchemaNodeKind;
+    use gpui::FontWeight;
+    use gpui::SharedString;
+
+    #[test]
+    fn sidebar_tree_items_keep_mono_family_and_hierarchy_weights() {
+        let leaf = sidebar_tree_label(
+            SharedString::from("users"),
+            SchemaNodeKind::Table,
+            false,
+            false,
+            gpui::blue(),
+        )
+        .inspect();
+
+        let folder = sidebar_tree_label(
+            SharedString::from("Tables"),
+            SchemaNodeKind::TablesFolder,
+            false,
+            false,
+            gpui::yellow(),
+        )
+        .inspect();
+
+        let active_profile = sidebar_tree_label(
+            SharedString::from("prod-postgres"),
+            SchemaNodeKind::Profile,
+            true,
+            false,
+            gpui::red(),
+        )
+        .inspect();
+
+        let active_database = sidebar_tree_label(
+            SharedString::from("analytics"),
+            SchemaNodeKind::Database,
+            false,
+            true,
+            gpui::green(),
+        )
+        .inspect();
+
+        for inspection in [leaf, folder, active_profile, active_database] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::BASE));
+            assert!(inspection.has_custom_color_override);
+        }
+
+        assert_eq!(leaf.weight_override, Some(FontWeight::NORMAL));
+        assert_eq!(folder.weight_override, Some(FontWeight::MEDIUM));
+        assert_eq!(active_profile.weight_override, Some(FontWeight::SEMIBOLD));
+        assert_eq!(active_database.weight_override, Some(FontWeight::SEMIBOLD));
     }
 }

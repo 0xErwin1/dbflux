@@ -322,13 +322,11 @@ mod tests {
     fn inspector_does_not_panic_with_mixed_value_types() {
         // Verify that row values containing unusual strings (empty, unicode, long) are
         // handled without panic. Pure data path — no GPUI context required.
-        let row_values = vec![
-            ("timestamp".to_string(), "2024-01-01T00:00:00Z".to_string()),
+        let row_values = [("timestamp".to_string(), "2024-01-01T00:00:00Z".to_string()),
             ("value".to_string(), "42.0".to_string()),
             ("tag".to_string(), String::new()),
             ("unicode".to_string(), "日本語テスト".to_string()),
-            ("long_value".to_string(), "a".repeat(500)),
-        ];
+            ("long_value".to_string(), "a".repeat(500))];
         let source = SourceRowRef { row_idx: 3 };
         assert_eq!(source.row_idx, 3);
         assert_eq!(row_values.len(), 5);
