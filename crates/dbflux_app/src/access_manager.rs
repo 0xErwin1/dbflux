@@ -52,6 +52,139 @@ impl AppAccessManager {
     }
 }
 
+#[async_trait::async_trait]
+impl AccessManager for AppAccessManager {
+    async fn open(
+        &self,
+        access_kind: &AccessKind,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Result<AccessHandle, DbError> {
+        match access_kind {
+            AccessKind::Direct => Ok(AccessHandle::direct()),
+
+            AccessKind::Ssh {
+                ssh_tunnel_profile_id,
+            } => self.open_ssh(ssh_tunnel_profile_id, remote_host, remote_port),
+
+            AccessKind::Proxy { proxy_profile_id } => {
+                self.open_proxy(proxy_profile_id, remote_host, remote_port)
+            }
+
+            AccessKind::Managed { provider, params } => {
+                self.open_managed(provider, params, remote_host).await
+            }
+        }
+    }
+}
+
+impl AppAccessManager {
+    #[allow(clippy::result_large_err)]
+    fn open_ssh(
+        &self,
+        ssh_tunnel_profile_id: &Uuid,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Result<AccessHandle, DbError> {
+        let resolved = self.ssh_tunnels.get(ssh_tunnel_profile_id).ok_or_else(|| {
+            DbError::connection_failed(format!(
+                "SSH tunnel profile '{}' was not found",
+                ssh_tunnel_profile_id
+            ))
+        })?;
+
+        let session = dbflux_ssh::establish_session(
+            &resolved.config,
+            resolved
+                .secret
+                .as_ref()
+                .map(|secret| secret.expose_secret()),
+        )?;
+
+        let tunnel = dbflux_ssh::SshTunnel::start(session, remote_host.to_string(), remote_port)?;
+        let local_port = tunnel.local_port();
+
+        Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn open_proxy(
+        &self,
+        proxy_profile_id: &Uuid,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Result<AccessHandle, DbError> {
+        let resolved = self.proxy_tunnels.get(proxy_profile_id).ok_or_else(|| {
+            DbError::connection_failed(format!(
+                "Proxy profile '{}' was not found",
+                proxy_profile_id
+            ))
+        })?;
+
+        if !resolved.profile.enabled {
+            log::warn!(
+                "Proxy profile '{}' is disabled, connecting directly",
+                resolved.profile.name
+            );
+            return Ok(AccessHandle::direct());
+        }
+
+        if let Some(patterns) = &resolved.profile.no_proxy
+            && dbflux_core::host_matches_no_proxy(remote_host, patterns)
+        {
+            log::info!("Bypassing proxy for '{}' (no_proxy match)", remote_host);
+            return Ok(AccessHandle::direct());
+        }
+
+        let config = dbflux_proxy::ProxyTunnelConfig::from_profile(
+            &resolved.profile,
+            resolved.secret.as_ref().map(|s| s.expose_secret()),
+        );
+
+        let tunnel =
+            dbflux_proxy::ProxyTunnel::start(config, remote_host.to_string(), remote_port)?;
+        let local_port = tunnel.local_port();
+
+        Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
+    }
+
+    async fn open_managed(
+        &self,
+        provider: &str,
+        _params: &std::collections::HashMap<String, String>,
+        _remote_host: &str,
+    ) -> Result<AccessHandle, DbError> {
+        match provider {
+            #[cfg(feature = "aws")]
+            "aws-ssm" => {
+                let instance_id = _params.get("instance_id").map(String::as_str).unwrap_or("");
+                let region = _params
+                    .get("region")
+                    .map(String::as_str)
+                    .unwrap_or("us-east-1");
+                let remote_port: u16 = _params
+                    .get("remote_port")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+
+                let factory = self.ssm_factory.as_ref().ok_or_else(|| {
+                    DbError::connection_failed("SSM tunnel factory not available")
+                })?;
+
+                let tunnel = factory.start(instance_id, region, _remote_host, remote_port)?;
+                let local_port = tunnel.local_port();
+
+                Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
+            }
+
+            other => Err(DbError::connection_failed(format!(
+                "Unknown managed access provider: '{}'. No handler registered.",
+                other
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -327,138 +460,5 @@ mod tests {
             error.message,
             "Unknown managed access provider: 'custom-provider'. No handler registered."
         );
-    }
-}
-
-#[async_trait::async_trait]
-impl AccessManager for AppAccessManager {
-    async fn open(
-        &self,
-        access_kind: &AccessKind,
-        remote_host: &str,
-        remote_port: u16,
-    ) -> Result<AccessHandle, DbError> {
-        match access_kind {
-            AccessKind::Direct => Ok(AccessHandle::direct()),
-
-            AccessKind::Ssh {
-                ssh_tunnel_profile_id,
-            } => self.open_ssh(ssh_tunnel_profile_id, remote_host, remote_port),
-
-            AccessKind::Proxy { proxy_profile_id } => {
-                self.open_proxy(proxy_profile_id, remote_host, remote_port)
-            }
-
-            AccessKind::Managed { provider, params } => {
-                self.open_managed(provider, params, remote_host).await
-            }
-        }
-    }
-}
-
-impl AppAccessManager {
-    #[allow(clippy::result_large_err)]
-    fn open_ssh(
-        &self,
-        ssh_tunnel_profile_id: &Uuid,
-        remote_host: &str,
-        remote_port: u16,
-    ) -> Result<AccessHandle, DbError> {
-        let resolved = self.ssh_tunnels.get(ssh_tunnel_profile_id).ok_or_else(|| {
-            DbError::connection_failed(format!(
-                "SSH tunnel profile '{}' was not found",
-                ssh_tunnel_profile_id
-            ))
-        })?;
-
-        let session = dbflux_ssh::establish_session(
-            &resolved.config,
-            resolved
-                .secret
-                .as_ref()
-                .map(|secret| secret.expose_secret()),
-        )?;
-
-        let tunnel = dbflux_ssh::SshTunnel::start(session, remote_host.to_string(), remote_port)?;
-        let local_port = tunnel.local_port();
-
-        Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
-    }
-
-    #[allow(clippy::result_large_err)]
-    fn open_proxy(
-        &self,
-        proxy_profile_id: &Uuid,
-        remote_host: &str,
-        remote_port: u16,
-    ) -> Result<AccessHandle, DbError> {
-        let resolved = self.proxy_tunnels.get(proxy_profile_id).ok_or_else(|| {
-            DbError::connection_failed(format!(
-                "Proxy profile '{}' was not found",
-                proxy_profile_id
-            ))
-        })?;
-
-        if !resolved.profile.enabled {
-            log::warn!(
-                "Proxy profile '{}' is disabled, connecting directly",
-                resolved.profile.name
-            );
-            return Ok(AccessHandle::direct());
-        }
-
-        if let Some(patterns) = &resolved.profile.no_proxy
-            && dbflux_core::host_matches_no_proxy(remote_host, patterns)
-        {
-            log::info!("Bypassing proxy for '{}' (no_proxy match)", remote_host);
-            return Ok(AccessHandle::direct());
-        }
-
-        let config = dbflux_proxy::ProxyTunnelConfig::from_profile(
-            &resolved.profile,
-            resolved.secret.as_ref().map(|s| s.expose_secret()),
-        );
-
-        let tunnel =
-            dbflux_proxy::ProxyTunnel::start(config, remote_host.to_string(), remote_port)?;
-        let local_port = tunnel.local_port();
-
-        Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
-    }
-
-    async fn open_managed(
-        &self,
-        provider: &str,
-        _params: &std::collections::HashMap<String, String>,
-        _remote_host: &str,
-    ) -> Result<AccessHandle, DbError> {
-        match provider {
-            #[cfg(feature = "aws")]
-            "aws-ssm" => {
-                let instance_id = _params.get("instance_id").map(String::as_str).unwrap_or("");
-                let region = _params
-                    .get("region")
-                    .map(String::as_str)
-                    .unwrap_or("us-east-1");
-                let remote_port: u16 = _params
-                    .get("remote_port")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-
-                let factory = self.ssm_factory.as_ref().ok_or_else(|| {
-                    DbError::connection_failed("SSM tunnel factory not available")
-                })?;
-
-                let tunnel = factory.start(instance_id, region, _remote_host, remote_port)?;
-                let local_port = tunnel.local_port();
-
-                Ok(AccessHandle::tunnel(local_port, Box::new(tunnel)))
-            }
-
-            other => Err(DbError::connection_failed(format!(
-                "Unknown managed access provider: '{}'. No handler registered.",
-                other
-            ))),
-        }
     }
 }

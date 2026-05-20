@@ -4,6 +4,36 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Microsoft SQL Server driver** — first-class SQL Server support
+  built on `tiberius`, with TLS modes (`off`, `on`, `required` +
+  `trust_server_certificate`), SSH tunnel and SQL Browser named-
+  instance routing, full multi-schema introspection (`hr`, `sales`,
+  `dbo`, …), CRUD via `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`,
+  `OFFSET ... FETCH NEXT` paging, and cooperative query cancellation
+  via side-channel `KILL <spid>` with automatic session restore and
+  active-database recovery. `ColumnKind` is wired across every
+  `tiberius::ColumnType` so MSSQL results integrate with chart
+  auto-detection.
+
+### Fixed
+
+* **Long text wraps in toasts, banners, and the delete-confirmation
+  modal** — long error strings and titles previously overflowed past
+  the card edge instead of wrapping. The flex chain inside the card
+  is now configured so titles and subtitles wrap within the
+  container's `max_w`.
+* **Delete-confirmation popup no longer duplicates the dedicated
+  delete modals** — when `ModalDeleteConnection` or
+  `ModalDropTable` is open, the generic confirmation popup is now
+  suppressed so users don't see two overlapping delete dialogs.
+* **Connection profile add / remove / update now persist on disk** —
+  removing a profile failed to delete its row because `save_profiles`
+  was upsert-only, and add / update relied on an MCP-side persist
+  hook so changes were lost on builds without MCP. `app_state` now
+  calls the storage repository directly on every mutation.
+
 ## [0.6.0-dev.4] - 2026-05-19
 
 ### Fixed

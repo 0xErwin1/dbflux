@@ -55,6 +55,9 @@ pub struct ConnectionDriverConfigDto {
     // External
     pub external_kind: Option<String>,
     pub external_values_json: Option<String>,
+    // SQL Server-specific
+    pub mssql_instance: Option<String>,
+    pub mssql_trust_server_certificate: bool,
 }
 
 impl ConnectionDriverConfigDto {
@@ -94,6 +97,8 @@ impl ConnectionDriverConfigDto {
             dynamo_table: None,
             external_kind: None,
             external_values_json: None,
+            mssql_instance: None,
+            mssql_trust_server_certificate: true,
         }
     }
 
@@ -271,6 +276,34 @@ impl ConnectionDriverConfigDto {
                 });
                 dto.external_values_json = Some(values.to_string());
             }
+            DbConfig::SqlServer {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database,
+                instance,
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ssh_tunnel,
+                ..
+            } => {
+                dto.use_uri = *use_uri;
+                dto.uri = uri.clone();
+                dto.host = Some(host.clone());
+                dto.port = Some(*port as i32);
+                dto.user = Some(user.clone());
+                dto.database_name = database.clone();
+                dto.mssql_instance = instance.clone();
+                dto.ssl_mode = ssl_mode.clone().unwrap_or_default();
+                dto.mssql_trust_server_certificate = *trust_server_certificate;
+                dto.ssl_ca = ssl_root_cert_path.clone();
+                if let Some(tunnel) = ssh_tunnel {
+                    fill_ssh_tunnel_fields(&mut dto, tunnel);
+                }
+            }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
                 dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
@@ -427,6 +460,34 @@ impl ConnectionDriverConfigDto {
                         .and_then(|v| v.as_u64()),
                 })
             }
+            DbKind::SqlServer => {
+                let ssh_tunnel = build_ssh_tunnel(self);
+
+                Some(DbConfig::SqlServer {
+                    use_uri: self.use_uri,
+                    uri: self.uri.clone(),
+                    host: self.host.clone().unwrap_or_default(),
+                    port: self.port.unwrap_or(1433) as u16,
+                    user: self.user.clone().unwrap_or_default(),
+                    database: self
+                        .database_name
+                        .clone()
+                        .filter(|database| !database.is_empty()),
+                    instance: self
+                        .mssql_instance
+                        .clone()
+                        .filter(|instance| !instance.is_empty()),
+                    ssl_mode: if self.ssl_mode.is_empty() {
+                        Some("on".to_string())
+                    } else {
+                        Some(self.ssl_mode.clone())
+                    },
+                    trust_server_certificate: self.mssql_trust_server_certificate,
+                    ssl_root_cert_path: self.ssl_ca.clone(),
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id: None,
+                })
+            }
         }
     }
 }
@@ -446,6 +507,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::DynamoDB => "DynamoDB",
         DbKind::CloudWatchLogs => "CloudWatchLogs",
         DbKind::InfluxDB => "InfluxDB",
+        DbKind::SqlServer => "SqlServer",
     }
     .to_string()
 }
@@ -461,6 +523,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "DynamoDB" => Some(DbKind::DynamoDB),
         "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
         "InfluxDB" => Some(DbKind::InfluxDB),
+        "SqlServer" => Some(DbKind::SqlServer),
         _ => None,
     }
 }
@@ -579,7 +642,8 @@ impl ConnectionDriverConfigsRepository {
                     mongo_auth_database,
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
-                    external_kind, external_values_json
+                    external_kind, external_values_json,
+                    mssql_instance, mssql_trust_server_certificate
                 FROM cfg_connection_driver_configs
                 WHERE profile_id = ?1
                 "#,
@@ -624,6 +688,8 @@ impl ConnectionDriverConfigsRepository {
                 dynamo_table: row.get(30)?,
                 external_kind: row.get(31)?,
                 external_values_json: row.get(32)?,
+                mssql_instance: row.get(33)?,
+                mssql_trust_server_certificate: row.get::<_, i32>(34)? != 0,
             })
         });
 
@@ -652,7 +718,8 @@ impl ConnectionDriverConfigsRepository {
                     mongo_auth_database,
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
-                    external_kind, external_values_json
+                    external_kind, external_values_json,
+                    mssql_instance, mssql_trust_server_certificate
                 ) VALUES (
                     ?1, ?2, ?3,
                     ?4, ?5, ?6, ?7, ?8, ?9,
@@ -663,7 +730,8 @@ impl ConnectionDriverConfigsRepository {
                     ?25,
                     ?26, ?27,
                     ?28, ?29, ?30, ?31,
-                    ?32, ?33
+                    ?32, ?33,
+                    ?34, ?35
                 )
                 "#,
                 params![
@@ -700,6 +768,8 @@ impl ConnectionDriverConfigsRepository {
                     config.dynamo_table,
                     config.external_kind,
                     config.external_values_json,
+                    config.mssql_instance,
+                    config.mssql_trust_server_certificate as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -725,7 +795,8 @@ impl ConnectionDriverConfigsRepository {
                     mongo_auth_database,
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
-                    external_kind, external_values_json
+                    external_kind, external_values_json,
+                    mssql_instance, mssql_trust_server_certificate
                 ) VALUES (
                     ?1, ?2, ?3,
                     ?4, ?5, ?6, ?7, ?8, ?9,
@@ -736,7 +807,8 @@ impl ConnectionDriverConfigsRepository {
                     ?25,
                     ?26, ?27,
                     ?28, ?29, ?30, ?31,
-                    ?32, ?33
+                    ?32, ?33,
+                    ?34, ?35
                 )
                 ON CONFLICT(profile_id) DO UPDATE SET
                     config_key = excluded.config_key,
@@ -769,7 +841,9 @@ impl ConnectionDriverConfigsRepository {
                     dynamo_endpoint = excluded.dynamo_endpoint,
                     dynamo_table = excluded.dynamo_table,
                     external_kind = excluded.external_kind,
-                    external_values_json = excluded.external_values_json
+                    external_values_json = excluded.external_values_json,
+                    mssql_instance = excluded.mssql_instance,
+                    mssql_trust_server_certificate = excluded.mssql_trust_server_certificate
                 "#,
                 params![
                     config.id,
@@ -805,6 +879,8 @@ impl ConnectionDriverConfigsRepository {
                     config.dynamo_table,
                     config.external_kind,
                     config.external_values_json,
+                    config.mssql_instance,
+                    config.mssql_trust_server_certificate as i32,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {

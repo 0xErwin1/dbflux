@@ -74,6 +74,43 @@ where
     run(url)
 }
 
+/// Password used when launching the SQL Server test container.
+///
+/// SQL Server requires a "strong" SA password: at least 8 characters with
+/// uppercase, lowercase, digit, and special-character classes represented.
+/// The same constant is reused inside test URIs.
+pub const MSSQL_TEST_PASSWORD: &str = "Strong!Passw0rd";
+
+pub fn with_mssql_url<T, E, F>(run: F) -> Result<T, E>
+where
+    F: FnOnce(String) -> Result<T, E>,
+{
+    // The official `mcr.microsoft.com/mssql/server` image takes the EULA via
+    // `ACCEPT_EULA=Y` and the SA password via `MSSQL_SA_PASSWORD`. The image
+    // is amd64-only; on arm64 hosts, run via emulation or substitute the
+    // Azure SQL Edge image manually.
+    let docker = Cli::default();
+    let image = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_TEST_PASSWORD)
+        .with_env_var("MSSQL_PID", "Developer")
+        .with_exposed_port(1433)
+        .with_wait_for(WaitFor::message_on_stdout(
+            "SQL Server is now ready for client connections",
+        ));
+
+    let container = docker.run(image);
+    let port = container.get_host_port_ipv4(1433);
+    // Connect to `master` by default; tests that need a clean database
+    // create `dbflux_test` themselves and `USE` it.
+    let url = format!(
+        "sqlserver://sa:{password}@127.0.0.1:{port}/master",
+        password = MSSQL_TEST_PASSWORD
+    );
+
+    run(url)
+}
+
 pub fn with_dynamodb_endpoint<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,

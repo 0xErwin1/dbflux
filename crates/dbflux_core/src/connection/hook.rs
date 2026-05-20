@@ -493,6 +493,12 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
             default_bucket,
             ..
         } => (Some(url.clone()), None, default_bucket.clone()),
+        DbConfig::SqlServer {
+            host,
+            port,
+            database,
+            ..
+        } => (Some(host.clone()), Some(*port), database.clone()),
         DbConfig::External { values, .. } => {
             let host = values.get("host").cloned();
             let port = values

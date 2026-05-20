@@ -517,7 +517,7 @@ mod tests {
         let values = driver.extract_values(&config);
         assert_eq!(values.get("use_v2").map(|s| s.as_str()), Some("true"));
         assert!(
-            values.get("bucket").is_none(),
+            !values.contains_key("bucket"),
             "bucket key must be absent when default_bucket is None"
         );
     }

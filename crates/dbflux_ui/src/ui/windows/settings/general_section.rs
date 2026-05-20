@@ -338,6 +338,12 @@ impl SettingsSection for GeneralSection {
     }
 }
 
+impl Render for GeneralSection {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_general_section(cx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::GeneralSection;
@@ -384,11 +390,5 @@ mod tests {
         assert_eq!(GeneralSection::style_for_index(1), AppStyle::Compact);
         // Out-of-range falls back to Default
         assert_eq!(GeneralSection::style_for_index(99), AppStyle::Default);
-    }
-}
-
-impl Render for GeneralSection {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_general_section(cx)
     }
 }

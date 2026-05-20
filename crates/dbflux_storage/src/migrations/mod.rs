@@ -139,6 +139,7 @@ impl MigrationRegistry {
         registry.register(mod_006_rpc_service_api_contract::MigrationImpl);
         registry.register(mod_007_session_exec_ctx_json::MigrationImpl);
         registry.register(mod_008_general_settings_style::MigrationImpl);
+        registry.register(mod_009_mssql_instance::MigrationImpl);
         registry
     }
 
@@ -285,6 +286,7 @@ mod mod_005_rpc_service_kind;
 mod mod_006_rpc_service_api_contract;
 mod mod_007_session_exec_ctx_json;
 mod mod_008_general_settings_style;
+mod mod_009_mssql_instance;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;

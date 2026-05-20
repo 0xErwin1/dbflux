@@ -2139,6 +2139,21 @@ impl ConnectionManagerWindow {
         self.syncing_uri = true;
 
         for (field_id, value) in &parsed {
+            // `password` lives on its own InputState outside the
+            // driver_inputs map (so it can flow through the secret
+            // pipeline), so route it explicitly. Without this branch the
+            // password silently disappeared when toggling URI → form,
+            // leaving users to save an empty/stale value.
+            if field_id == "password" {
+                let current = self.input_password.read(cx).value().to_string();
+                if current != *value {
+                    self.input_password.update(cx, |state, cx| {
+                        state.set_value(value, window, cx);
+                    });
+                }
+                continue;
+            }
+
             if let Some(input) = self.driver_inputs.get(field_id.as_str()) {
                 let current = input.read(cx).value().to_string();
                 if current != *value {

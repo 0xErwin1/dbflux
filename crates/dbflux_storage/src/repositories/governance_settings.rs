@@ -725,6 +725,7 @@ mod tests {
             .run_all(&conn)
             .expect("migration should run");
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = GovernanceSettingsRepository::new(Arc::new(conn));
 
         let dto = GovernanceSettingsDto {
