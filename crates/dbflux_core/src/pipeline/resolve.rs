@@ -201,6 +201,24 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             _ => {}
         },
 
+        DbConfig::SqlServer {
+            host,
+            port,
+            user,
+            database,
+            ..
+        } => match field {
+            "host" => *host = val.to_string(),
+            "port" => {
+                if let Ok(p) = val.parse() {
+                    *port = p;
+                }
+            }
+            "user" => *user = val.to_string(),
+            "database" => *database = Some(val.to_string()),
+            _ => {}
+        },
+
         DbConfig::External { values, .. } => {
             values.insert(field.to_string(), val.to_string());
         }

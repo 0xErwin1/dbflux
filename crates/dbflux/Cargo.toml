@@ -72,6 +72,10 @@ optional = true
 workspace = true
 optional = true
 
+[dependencies.dbflux_driver_mssql]
+workspace = true
+optional = true
+
 [dependencies.dbflux_aws]
 workspace = true
 optional = true
@@ -113,7 +117,7 @@ workspace = true
 optional = true
 
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "lua", "aws", "mcp"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "lua", "aws", "mcp"]
 sqlite = ["dbflux_app/sqlite", "dbflux_ui/sqlite"]
 postgres = ["dbflux_app/postgres", "dbflux_ui/postgres"]
 mysql = ["dbflux_app/mysql", "dbflux_ui/mysql"]
@@ -122,6 +126,7 @@ redis = ["dbflux_app/redis", "dbflux_ui/redis"]
 dynamodb = ["dbflux_app/dynamodb", "dbflux_ui/dynamodb"]
 cloudwatch = ["dbflux_driver_cloudwatch", "dbflux_app/cloudwatch", "dbflux_ui/cloudwatch"]
 influxdb = ["dbflux_driver_influxdb", "dbflux_app/influxdb"]
+mssql = ["dbflux_driver_mssql", "dbflux_app/mssql", "dbflux_ui/mssql"]
 lua = ["dbflux_lua", "dbflux_app/lua", "dbflux_ui/lua"]
 aws = ["dbflux_aws", "dbflux_ssm", "dbflux_app/aws", "dbflux_ui/aws"]
 mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp", "dbflux_ui/mcp"]

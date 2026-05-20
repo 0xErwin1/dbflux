@@ -165,6 +165,11 @@ impl From<QueryResultDto> for QueryResult {
             // Resolved window and metadata_extra are not part of the IPC DTO; drivers set them locally.
             resolved_window: None,
             metadata_extra: None,
+            // The driver RPC DTO does not currently propagate additional
+            // result sets across the wire. External RPC drivers that need
+            // multi-set support would have to extend QueryResultDto first;
+            // until then, IPC-driven connections behave as single-result-set.
+            additional_results: Vec::new(),
         }
     }
 }
