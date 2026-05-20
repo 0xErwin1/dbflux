@@ -239,7 +239,7 @@ pub fn render_chart_toolbar(
 
     let stats_btn = toolbar_btn(
         "chart-toolbar-stats",
-        AppIcon::Zap,
+        AppIcon::ChartBar,
         "Stats",
         is_stats_active,
     )
