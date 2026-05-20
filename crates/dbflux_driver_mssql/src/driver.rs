@@ -1997,6 +1997,15 @@ impl Connection for MssqlConnection {
         // as a single nvarchar(max) row), then turn it off. We unset
         // SHOWPLAN even if the middle batch fails so the session state
         // does not leak.
+
+        // Mirror `execute()`'s poison/cleanup pattern: a prior cancel may
+        // have left the underlying tiberius client dead. Without this an
+        // EXPLAIN issued after a cancel would hit a closed socket and
+        // surface a protocol-level error instead of triggering reconnect.
+        if self.poisoned.load(Ordering::SeqCst) {
+            self.cleanup_after_cancel()?;
+        }
+
         let query = match &request.query {
             Some(q) => q.clone(),
             None => format!(
@@ -2007,9 +2016,18 @@ impl Connection for MssqlConnection {
 
         self.execute_simple("SET SHOWPLAN_XML ON")?;
         let plan_result = self.execute_simple(&query);
-        // Best-effort cleanup; if this fails the session is broken and the
-        // next query will fail loudly.
-        let _ = self.execute_simple("SET SHOWPLAN_XML OFF");
+        // If the cleanup batch fails, every subsequent query on this session
+        // keeps returning XML plan rows instead of real data (SHOWPLAN is
+        // session-scoped). Mark the connection poisoned so the next
+        // `execute()` rebuilds the tiberius client via `cleanup_after_cancel`,
+        // which starts a fresh session with SHOWPLAN off.
+        if let Err(off_err) = self.execute_simple("SET SHOWPLAN_XML OFF") {
+            log::error!(
+                "[EXPLAIN] SET SHOWPLAN_XML OFF failed, poisoning session: {}",
+                off_err
+            );
+            self.poisoned.store(true, Ordering::SeqCst);
+        }
         plan_result
     }
 
