@@ -62,6 +62,15 @@ impl CodeDocument {
                     .map(|finished| finished.duration_since(r.started_at))
             });
 
+        // Keep this label in sync with the RunQuery binding (Cmd+Enter on
+        // macOS, Ctrl+Enter elsewhere) registered in `keymap::defaults`.
+        #[cfg(target_os = "macos")]
+        let shortcut_hint = if is_db_language {
+            "Cmd+Enter (selection/full)"
+        } else {
+            "Cmd+Enter"
+        };
+        #[cfg(not(target_os = "macos"))]
         let shortcut_hint = if is_db_language {
             "Ctrl+Enter (selection/full)"
         } else {
@@ -289,6 +298,26 @@ impl CodeDocument {
                         .child(Icon::new(AppIcon::Info).size(px(12.0)).color(fg)),
                 )
             })
+            .child(
+                div()
+                    .id("toolbar-chart-btn")
+                    .h(Heights::BUTTON)
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(secondary)
+                    .hover(|d| d.bg(secondary_hover))
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.emit_chart_this_query(cx);
+                    }))
+                    .tooltip(|window, cx| {
+                        Tooltip::new("Open current query in a chart document").build(window, cx)
+                    })
+                    .child(Icon::new(AppIcon::Zap).size(px(12.0)).color(fg)),
+            )
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -774,6 +803,46 @@ impl Render for CodeDocument {
                 .update(cx, |state, cx| state.set_value(&start_value, window, cx));
             self.source_end_input
                 .update(cx, |state, cx| state.set_value(&end_value, window, cx));
+        }
+
+        // Lazily create the source-context time-range panel the first time a
+        // connection with labelled start/end inputs is active.  Panel creation
+        // requires a Window reference (for DatePickerState), so it is deferred
+        // here from sync_source_controls which runs in a subscription context.
+        if self.source_time_range_panel.is_none() && self.should_show_source_controls(cx) {
+            let spec = self.current_source_context_spec(cx);
+            if spec.is_some_and(|s| !s.start_label.is_empty() && !s.end_label.is_empty()) {
+                let panel = cx.new(|cx| {
+                    // Index 3 = Last24Hours (24h is the sensible default for time-series sources).
+                    TimeRangePanel::new("24h", Some(3), window, cx)
+                });
+                let sub = cx.subscribe(&panel, |this, _panel, event: &TimeRangeChanged, cx| {
+                    this.on_source_time_range_panel_changed(event.start_ms, event.end_ms, cx);
+                });
+                self.source_time_range_panel = Some(panel.clone());
+                self._source_time_range_sub = Some(sub);
+
+                // Wire the panel into the active result grid so the chart
+                // toolbar's RANGE chips can drive it.
+                if let Some(grid) = self
+                    .active_result_index
+                    .and_then(|i| self.result_tabs.get(i))
+                    .map(|t| t.grid.clone())
+                {
+                    grid.update(cx, |g, cx| {
+                        g.set_chart_time_range_panel(Some(panel.clone()), cx);
+                    });
+                }
+
+                // Seed the initial window for the default preset. The panel
+                // cannot emit during its constructor because the subscription
+                // above is not registered until after `cx.new` returns.
+                panel.update(cx, |panel, cx| panel.emit_initial(cx));
+            }
+        }
+
+        if std::mem::take(&mut self.pending_chart_reexecute) && !self.result_tabs.is_empty() {
+            self.run_query(window, cx);
         }
 
         if let Some(error) = self.pending_error.take() {

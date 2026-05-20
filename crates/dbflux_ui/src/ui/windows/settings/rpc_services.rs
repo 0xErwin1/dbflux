@@ -115,96 +115,6 @@ fn service_row_max_col(row: ServiceFormRow) -> usize {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        ServiceFormRow, build_service_config, editable_service_kind,
-        preserved_api_contract_for_edit, service_form_rows, service_row_max_col,
-    };
-    use dbflux_core::{RpcServiceKind, ServiceConfig, ServiceRpcApiContract};
-    use std::collections::HashMap;
-
-    #[test]
-    fn service_form_rows_include_kind_selector_before_enabled_toggle() {
-        let rows = service_form_rows(0, 0, false);
-
-        assert_eq!(
-            rows,
-            vec![
-                ServiceFormRow::SocketId,
-                ServiceFormRow::Command,
-                ServiceFormRow::Timeout,
-                ServiceFormRow::Kind,
-                ServiceFormRow::Enabled,
-                ServiceFormRow::AddArg,
-                ServiceFormRow::AddEnv,
-                ServiceFormRow::SaveButton,
-            ]
-        );
-    }
-
-    #[test]
-    fn service_row_max_col_allows_driver_and_auth_provider_selection() {
-        assert_eq!(service_row_max_col(ServiceFormRow::Kind), 1);
-        assert_eq!(service_row_max_col(ServiceFormRow::Enabled), 0);
-    }
-
-    #[test]
-    fn editable_service_kind_preserves_saved_auth_provider_kind() {
-        let service = ServiceConfig {
-            socket_id: "auth.sock".into(),
-            enabled: true,
-            command: Some("dbflux-auth".into()),
-            args: vec!["--serve".into()],
-            env: HashMap::new(),
-            startup_timeout_ms: Some(5000),
-            kind: RpcServiceKind::AuthProvider,
-            api_contract: None,
-        };
-
-        assert_eq!(
-            editable_service_kind(&service),
-            RpcServiceKind::AuthProvider
-        );
-    }
-
-    #[test]
-    fn build_service_config_preserves_selected_service_kind() {
-        let service = build_service_config(
-            "auth.sock".into(),
-            true,
-            Some("dbflux-auth".into()),
-            vec!["--serve".into()],
-            HashMap::from([("MODE".into(), "auth".into())]),
-            Some(5000),
-            RpcServiceKind::AuthProvider,
-        );
-
-        assert_eq!(service.kind, RpcServiceKind::AuthProvider);
-        assert_eq!(service.socket_id, "auth.sock");
-    }
-
-    #[test]
-    fn preserved_api_contract_for_edit_returns_saved_metadata() {
-        let api_contract = ServiceRpcApiContract::new("auth_provider_rpc", 1, 0);
-        let services = vec![ServiceConfig {
-            socket_id: "auth.sock".into(),
-            enabled: true,
-            command: Some("dbflux-auth".into()),
-            args: vec!["--serve".into()],
-            env: HashMap::from([("MODE".into(), "auth".into())]),
-            startup_timeout_ms: Some(5000),
-            kind: RpcServiceKind::AuthProvider,
-            api_contract: Some(api_contract.clone()),
-        }];
-
-        assert_eq!(
-            preserved_api_contract_for_edit(&services, Some(0)),
-            Some(api_contract)
-        );
-    }
-}
-
 impl ServicesSection {
     pub(super) fn has_unsaved_svc_changes(&self, cx: &App) -> bool {
         if let Some(idx) = self.editing_svc_idx {
@@ -1561,5 +1471,95 @@ impl ServicesSection {
                         ),
                 ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ServiceFormRow, build_service_config, editable_service_kind,
+        preserved_api_contract_for_edit, service_form_rows, service_row_max_col,
+    };
+    use dbflux_core::{RpcServiceKind, ServiceConfig, ServiceRpcApiContract};
+    use std::collections::HashMap;
+
+    #[test]
+    fn service_form_rows_include_kind_selector_before_enabled_toggle() {
+        let rows = service_form_rows(0, 0, false);
+
+        assert_eq!(
+            rows,
+            vec![
+                ServiceFormRow::SocketId,
+                ServiceFormRow::Command,
+                ServiceFormRow::Timeout,
+                ServiceFormRow::Kind,
+                ServiceFormRow::Enabled,
+                ServiceFormRow::AddArg,
+                ServiceFormRow::AddEnv,
+                ServiceFormRow::SaveButton,
+            ]
+        );
+    }
+
+    #[test]
+    fn service_row_max_col_allows_driver_and_auth_provider_selection() {
+        assert_eq!(service_row_max_col(ServiceFormRow::Kind), 1);
+        assert_eq!(service_row_max_col(ServiceFormRow::Enabled), 0);
+    }
+
+    #[test]
+    fn editable_service_kind_preserves_saved_auth_provider_kind() {
+        let service = ServiceConfig {
+            socket_id: "auth.sock".into(),
+            enabled: true,
+            command: Some("dbflux-auth".into()),
+            args: vec!["--serve".into()],
+            env: HashMap::new(),
+            startup_timeout_ms: Some(5000),
+            kind: RpcServiceKind::AuthProvider,
+            api_contract: None,
+        };
+
+        assert_eq!(
+            editable_service_kind(&service),
+            RpcServiceKind::AuthProvider
+        );
+    }
+
+    #[test]
+    fn build_service_config_preserves_selected_service_kind() {
+        let service = build_service_config(
+            "auth.sock".into(),
+            true,
+            Some("dbflux-auth".into()),
+            vec!["--serve".into()],
+            HashMap::from([("MODE".into(), "auth".into())]),
+            Some(5000),
+            RpcServiceKind::AuthProvider,
+        );
+
+        assert_eq!(service.kind, RpcServiceKind::AuthProvider);
+        assert_eq!(service.socket_id, "auth.sock");
+    }
+
+    #[test]
+    fn preserved_api_contract_for_edit_returns_saved_metadata() {
+        let api_contract = ServiceRpcApiContract::new("auth_provider_rpc", 1, 0);
+        let services = vec![ServiceConfig {
+            socket_id: "auth.sock".into(),
+            enabled: true,
+            command: Some("dbflux-auth".into()),
+            args: vec!["--serve".into()],
+            env: HashMap::from([("MODE".into(), "auth".into())]),
+            startup_timeout_ms: Some(5000),
+            kind: RpcServiceKind::AuthProvider,
+            api_contract: Some(api_contract.clone()),
+        }];
+
+        assert_eq!(
+            preserved_api_contract_for_edit(&services, Some(0)),
+            Some(api_contract)
+        );
     }
 }

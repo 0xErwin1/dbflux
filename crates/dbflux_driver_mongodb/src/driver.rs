@@ -12,21 +12,21 @@ use std::sync::Arc;
 use bson::{Bson, Document, doc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnMeta, Connection,
-    ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult, DangerousQueryKind,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DeploymentClass, DescribeRequest, Diagnostic, DiagnosticSeverity,
-    DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate,
-    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic, FieldInfo,
-    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
-    IndexDirection, KeyValueConnection, LanguageService, MONGODB_FORM, MutationCapabilities,
-    OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationalConnection, Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
-    SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
-    SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TextPosition, TextPositionRange,
-    TransactionCapabilities, ValidationResult, Value, ViewInfo, WhereOperator,
-    detect_dangerous_mongo, sanitize_uri,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnKind, ColumnMeta,
+    Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult,
+    DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
+    DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, Diagnostic,
+    DiagnosticSeverity, DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema,
+    DocumentUpdate, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
+    EditorDiagnostic, FieldInfo, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
+    FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection, LanguageService,
+    MONGODB_FORM, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
+    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row, SchemaDropTarget,
+    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef, SemanticFilter,
+    SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo,
+    TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo,
+    WhereOperator, detect_dangerous_mongo, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -1977,36 +1977,42 @@ impl Connection for MongoConnection {
             ColumnMeta {
                 name: "field_name".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "common_type".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "occurrence_rate".to_string(),
                 type_name: "float".to_string(),
+                kind: ColumnKind::Float,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "is_indexed".to_string(),
                 type_name: "bool".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "index_names".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: true,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "nested_field_count".to_string(),
                 type_name: "int".to_string(),
+                kind: ColumnKind::Integer,
                 nullable: false,
                 is_primary_key: false,
             },
@@ -2735,6 +2741,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "count".to_string(),
                     type_name: "Int64".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2755,6 +2762,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "insertedId".to_string(),
                     type_name: "ObjectId".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2775,6 +2783,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "insertedCount".to_string(),
                     type_name: "Int64".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2806,18 +2815,21 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
+                        kind: ColumnKind::Unknown,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
+                        kind: ColumnKind::Unknown,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
+                        kind: ColumnKind::Unknown,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2854,18 +2866,21 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
+                        kind: ColumnKind::Unknown,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
+                        kind: ColumnKind::Unknown,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
+                        kind: ColumnKind::Unknown,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2891,6 +2906,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2911,6 +2927,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "deletedCount".to_string(),
                     type_name: "Int64".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -2942,18 +2959,21 @@ fn execute_mongo_query(
                     ColumnMeta {
                         name: "matchedCount".to_string(),
                         type_name: "Int64".to_string(),
+                        kind: ColumnKind::Unknown,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "modifiedCount".to_string(),
                         type_name: "Int64".to_string(),
+                        kind: ColumnKind::Unknown,
                         nullable: false,
                         is_primary_key: false,
                     },
                     ColumnMeta {
                         name: "upserted".to_string(),
                         type_name: "Bool".to_string(),
+                        kind: ColumnKind::Unknown,
                         nullable: false,
                         is_primary_key: false,
                     },
@@ -2977,6 +2997,7 @@ fn execute_mongo_query(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3014,6 +3035,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "name".to_string(),
                     type_name: "Text".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3034,6 +3056,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "collection".to_string(),
                     type_name: "Text".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3095,6 +3118,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3110,6 +3134,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "result".to_string(),
                     type_name: "Text".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3149,6 +3174,7 @@ fn execute_db_operation(
                 columns: vec![ColumnMeta {
                     name: "version".to_string(),
                     type_name: "Text".to_string(),
+                    kind: ColumnKind::Unknown,
                     nullable: false,
                     is_primary_key: false,
                 }],
@@ -3214,6 +3240,7 @@ fn documents_to_result(documents: Vec<Document>) -> Result<QueryResultInternal, 
         .map(|name| ColumnMeta {
             name: name.clone(),
             type_name: "BSON".to_string(),
+            kind: ColumnKind::Unknown,
             nullable: true,
             is_primary_key: name == "_id",
         })

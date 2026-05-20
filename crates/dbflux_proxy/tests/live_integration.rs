@@ -98,7 +98,7 @@ fn socks5_tunnel_connects_to_postgres() {
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
         proxy_host: "127.0.0.1".to_string(),
-        proxy_port: proxy_port,
+        proxy_port,
         credentials: None,
     };
 
@@ -143,7 +143,7 @@ fn socks5_tunnel_with_auth_connects_to_postgres() {
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
         proxy_host: "127.0.0.1".to_string(),
-        proxy_port: proxy_port,
+        proxy_port,
         credentials: Some(ProxyCredentials {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
@@ -185,7 +185,7 @@ fn socks5_tunnel_wrong_auth_fails() {
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
         proxy_host: "127.0.0.1".to_string(),
-        proxy_port: proxy_port,
+        proxy_port,
         credentials: Some(ProxyCredentials {
             username: "wrong".to_string(),
             password: "creds".to_string(),
@@ -207,7 +207,7 @@ fn socks5_tunnel_unreachable_target_fails() {
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
         proxy_host: "127.0.0.1".to_string(),
-        proxy_port: proxy_port,
+        proxy_port,
         credentials: None,
     };
 
@@ -228,7 +228,7 @@ fn socks5_tunnel_multiple_connections() {
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
         proxy_host: "127.0.0.1".to_string(),
-        proxy_port: proxy_port,
+        proxy_port,
         credentials: None,
     };
 
@@ -272,7 +272,7 @@ fn socks5_tunnel_drops_cleanly() {
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::Socks5,
         proxy_host: "127.0.0.1".to_string(),
-        proxy_port: proxy_port,
+        proxy_port,
         credentials: None,
     };
 
@@ -323,7 +323,7 @@ fn http_connect_tunnel_to_postgres() {
     let config = ProxyTunnelConfig {
         protocol: ProxyProtocol::HttpConnect,
         proxy_host: "127.0.0.1".to_string(),
-        proxy_port: proxy_port,
+        proxy_port,
         credentials: None,
     };
 

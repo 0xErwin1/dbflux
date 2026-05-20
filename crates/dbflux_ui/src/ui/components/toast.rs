@@ -425,25 +425,33 @@ impl ToastHost {
                 .into_any_element(),
         };
 
+        // Title block: title on its own line, optional subtitle below. Wrapping
+        // the text in a `flex_1 min_w_0` column lets multi-line subtitles wrap
+        // within the toast's `max_w` instead of pushing the card past it.
+        let mut title_block = gpui::div().flex().flex_col().flex_1().min_w_0();
+
+        title_block =
+            title_block.child(Text::body(toast.title.clone()).font_weight(gpui::FontWeight::BOLD));
+
+        if let Some(subtitle) = &toast.subtitle {
+            title_block = title_block.child(Text::caption(subtitle.clone()).color(muted));
+        }
+
         let mut title_row = gpui::div()
             .flex()
             .flex_row()
-            .items_center()
+            .items_start()
             .gap(Spacing::SM)
-            .child(gpui::div().flex_shrink_0().child(icon_element))
-            .child(Text::body(toast.title.clone()).font_weight(gpui::FontWeight::BOLD));
-
-        if let Some(subtitle) = &toast.subtitle {
-            title_row = title_row
-                .child(Text::caption("·").color(muted.opacity(0.6)))
-                .child(Text::caption(subtitle.clone()));
-        }
-
-        // Spacer pushes meta + close to the right.
-        title_row = title_row.child(gpui::div().flex_1());
+            .child(gpui::div().flex_shrink_0().mt(px(2.0)).child(icon_element))
+            .child(title_block);
 
         if let Some(meta) = &toast.meta_right {
-            title_row = title_row.child(Text::caption_xs(meta.clone()));
+            title_row = title_row.child(
+                gpui::div()
+                    .flex_shrink_0()
+                    .mt(px(2.0))
+                    .child(Text::caption_xs(meta.clone())),
+            );
         }
 
         let close_button = IconButton::new(
@@ -455,14 +463,17 @@ impl ToastHost {
             host.dismiss(toast_id, cx);
         }));
 
-        title_row = title_row.child(close_button);
+        title_row = title_row.child(gpui::div().flex_shrink_0().child(close_button));
 
+        // `.occlude()` makes the toast card opaque to hit-testing so clicks on
+        // empty toast area do not leak through to the workspace underneath.
         let mut card = gpui::div()
             .id(("toast", toast_id))
+            .occlude()
             .flex()
             .flex_row()
             .min_w(rems(22.0))
-            .max_w(rems(26.0))
+            .max_w(rems(28.0))
             .border_1()
             .border_color(border_color)
             .bg(card_bg)

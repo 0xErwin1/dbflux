@@ -1,10 +1,16 @@
 //! Audit event filters.
 //!
 //! Provides filter state management for the audit event viewer.
+//! Time-range types live in `crate::ui::common::time_range` and are
+//! re-exported here for backward compatibility.
 
-use dbflux_core::chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dbflux_core::observability::{
     AuditQuerySource, EventActorType, EventCategory, EventOutcome, EventSeverity, EventSourceId,
+};
+
+pub use crate::ui::common::time_range::{
+    TimeRange, TimestampDisplayMode, format_timestamp_ms, timestamp_from_date_time,
+    validate_custom_range_parts,
 };
 
 /// Filter state for audit event queries.
@@ -46,104 +52,6 @@ pub struct AuditFilters {
     pub correlation_id: Option<String>,
 }
 
-/// Time range option for quick selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)]
-pub enum TimeRange {
-    Last5min,
-    Last30min,
-    LastHour,
-    Last3Hours,
-    #[default]
-    Last12Hours,
-    Custom,
-}
-
-/// Timestamp display and custom date parsing mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TimestampDisplayMode {
-    #[default]
-    Local,
-    Utc,
-}
-
-impl TimeRange {
-    /// Returns (start_ms, end_ms) tuple for this time range.
-    pub fn to_filter_values(self) -> (Option<i64>, Option<i64>) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-
-        match self {
-            TimeRange::Last5min => (Some(now - 5 * 60 * 1000), None),
-            TimeRange::Last30min => (Some(now - 30 * 60 * 1000), None),
-            TimeRange::LastHour => (Some(now - 60 * 60 * 1000), None),
-            TimeRange::Last3Hours => (Some(now - 3 * 60 * 60 * 1000), None),
-            TimeRange::Last12Hours => (Some(now - 12 * 60 * 60 * 1000), None),
-            TimeRange::Custom => (None, None),
-        }
-    }
-}
-
-pub fn format_timestamp_ms(ms: i64, mode: TimestampDisplayMode) -> String {
-    let Some(utc) = DateTime::<Utc>::from_timestamp_millis(ms) else {
-        return ms.to_string();
-    };
-
-    match mode {
-        TimestampDisplayMode::Local => utc
-            .with_timezone(&Local)
-            .format("%Y-%m-%d %H:%M:%S%.3f")
-            .to_string(),
-        TimestampDisplayMode::Utc => utc.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
-    }
-}
-
-pub fn timestamp_from_date_time(
-    date: NaiveDate,
-    hour: u32,
-    minute: u32,
-    mode: TimestampDisplayMode,
-) -> Result<i64, String> {
-    let time = NaiveTime::from_hms_opt(hour, minute, 0)
-        .ok_or_else(|| "Time selection is invalid".to_string())?;
-    let naive = NaiveDateTime::new(date, time);
-
-    let timestamp = match mode {
-        TimestampDisplayMode::Utc => Utc.from_utc_datetime(&naive).timestamp_millis(),
-        TimestampDisplayMode::Local => Local
-            .from_local_datetime(&naive)
-            .single()
-            .ok_or_else(|| "Local time is ambiguous or invalid".to_string())?
-            .timestamp_millis(),
-    };
-
-    Ok(timestamp)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn validate_custom_range_parts(
-    start_date: NaiveDate,
-    start_hour: u32,
-    start_minute: u32,
-    end_date: NaiveDate,
-    end_hour: u32,
-    end_minute: u32,
-    mode: TimestampDisplayMode,
-) -> Result<(i64, i64), String> {
-    let start_ms = timestamp_from_date_time(start_date, start_hour, start_minute, mode)
-        .map_err(|error| format!("Invalid start time: {error}"))?;
-    let end_ms = timestamp_from_date_time(end_date, end_hour, end_minute, mode)
-        .map_err(|error| format!("Invalid end time: {error}"))?;
-
-    if start_ms > end_ms {
-        return Err("Start time must be before end time".to_string());
-    }
-
-    Ok((start_ms, end_ms))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -159,11 +67,11 @@ mod tests {
             .unwrap_or(0);
 
         let cases = [
-            (TimeRange::Last5min, 5 * 60 * 1000),
-            (TimeRange::Last30min, 30 * 60 * 1000),
-            (TimeRange::LastHour, 60 * 60 * 1000),
-            (TimeRange::Last3Hours, 3 * 60 * 60 * 1000),
-            (TimeRange::Last12Hours, 12 * 60 * 60 * 1000),
+            (TimeRange::Last15min, 15 * 60_000),
+            (TimeRange::LastHour, 60 * 60_000),
+            (TimeRange::Last6Hours, 6 * 60 * 60_000),
+            (TimeRange::Last24Hours, 24 * 60 * 60_000),
+            (TimeRange::Last7Days, 7 * 24 * 60 * 60_000),
         ];
 
         for (range, expected_ms) in cases {

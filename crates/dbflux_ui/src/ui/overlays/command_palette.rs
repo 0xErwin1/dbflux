@@ -53,6 +53,17 @@ pub enum PaletteItem {
         /// Path relative to the scripts root directory (for display/search).
         relative_path: String,
     },
+    /// A saved chart record surfaced by the "Open chart..." command.
+    SavedChart {
+        id: Uuid,
+        name: String,
+        profile_name: String,
+        profile_id: Uuid,
+        /// `true` when the chart's source is `Collection` (browse mode).
+        /// The palette appends a `[browse]` suffix to help users distinguish
+        /// collection charts from query charts.
+        is_collection_source: bool,
+    },
 }
 
 /// Schema resource variants surfaced by connected profiles.
@@ -91,6 +102,9 @@ impl PaletteItem {
         match self {
             Self::Action { category, name, .. } => format!("{} {}", category, name),
             Self::Connection { name, .. } => format!("Connection {}", name),
+            Self::SavedChart {
+                name, profile_name, ..
+            } => format!("Chart {} {}", name, profile_name),
             Self::Resource(r) => match r {
                 ResourceItem::Table {
                     profile_name,
@@ -151,6 +165,18 @@ impl PaletteItem {
         match self {
             Self::Action { category, name, .. } => (category.to_string(), name.to_string()),
             Self::Connection { name, .. } => ("Connection".to_string(), name.clone()),
+            Self::SavedChart {
+                name,
+                is_collection_source,
+                ..
+            } => {
+                let display = if *is_collection_source {
+                    format!("{} [browse]", name)
+                } else {
+                    name.clone()
+                };
+                ("Chart".to_string(), display)
+            }
             Self::Resource(r) => match r {
                 ResourceItem::Table { name, .. } => ("Table".to_string(), name.clone()),
                 ResourceItem::Collection { name, .. } => ("Collection".to_string(), name.clone()),
@@ -168,8 +194,9 @@ impl PaletteItem {
         match self {
             Self::Action { .. } => 0,
             Self::Connection { .. } => 1,
-            Self::Resource(_) => 2,
-            Self::Script { .. } => 3,
+            Self::SavedChart { .. } => 2,
+            Self::Resource(_) => 3,
+            Self::Script { .. } => 4,
         }
     }
 
@@ -177,6 +204,7 @@ impl PaletteItem {
     pub fn qualifier(&self) -> Option<String> {
         match self {
             Self::Action { shortcut, .. } => shortcut.map(|s| s.to_string()),
+            Self::SavedChart { profile_name, .. } => Some(profile_name.clone()),
             Self::Resource(r) => match r {
                 ResourceItem::Table {
                     profile_name,
@@ -270,6 +298,7 @@ const VISIBLE_ITEMS: usize = 8;
 enum PaletteSection {
     Connections,
     Commands,
+    Charts,
     Tables,
     Scripts,
 }
@@ -279,6 +308,7 @@ impl PaletteSection {
         match self {
             Self::Connections => "Connections",
             Self::Commands => "Commands",
+            Self::Charts => "Charts",
             Self::Tables => "Tables",
             Self::Scripts => "Scripts",
         }
@@ -288,6 +318,7 @@ impl PaletteSection {
         match item {
             PaletteItem::Connection { .. } => Self::Connections,
             PaletteItem::Action { .. } => Self::Commands,
+            PaletteItem::SavedChart { .. } => Self::Charts,
             PaletteItem::Resource(_) => Self::Tables,
             PaletteItem::Script { .. } => Self::Scripts,
         }
@@ -323,7 +354,7 @@ fn palette_item_name(
     };
 
     match item {
-        PaletteItem::Resource(_) | PaletteItem::Script { .. } => {
+        PaletteItem::Resource(_) | PaletteItem::Script { .. } | PaletteItem::SavedChart { .. } => {
             MonoLabel::new(name).color(color).into_any_element()
         }
         _ => Body::new(name).color(color).into_any_element(),
@@ -412,126 +443,6 @@ pub struct CommandPalette {
     matcher: SkimMatcherV2,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{PaletteCommand, palette_qualifier_text, palette_shortcut_text};
-    use crate::ui::theme;
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::AppFonts;
-    use gpui::TestAppContext;
-    use gpui_component::theme::Theme;
-    use std::fs;
-
-    fn command_palette_source() -> String {
-        let source = fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/ui/overlays/command_palette.rs"
-        ))
-        .unwrap_or_else(|error| panic!("failed to read command_palette.rs: {error}"));
-
-        source
-            .rsplit("impl Render for CommandPalette")
-            .next()
-            .map(|render_impl| format!("impl Render for CommandPalette{render_impl}"))
-            .expect("command_palette.rs should contain a render implementation")
-    }
-
-    fn command_palette_overlay_source() -> String {
-        let source = command_palette_source();
-        let start = source
-            .find(".id(\"command-palette-overlay\")")
-            .expect("command_palette render should define the overlay container");
-
-        let remaining = &source[start..];
-        let end = remaining
-            .find(".child(\n                        div()\n                            .id(\"command-palette-list\")")
-            .unwrap_or(remaining.len());
-
-        remaining[..end].to_string()
-    }
-
-    #[gpui::test]
-    fn action_shortcuts_use_mono_caption_instead_of_bold_key_hint(cx: &mut TestAppContext) {
-        cx.update(theme::init);
-
-        let theme = cx.update(|cx| Theme::global(cx).clone());
-
-        let shortcut = palette_shortcut_text("ctrl-k", false, &theme).inspect();
-        let selected_shortcut = palette_shortcut_text("enter", true, &theme).inspect();
-
-        for inspection in [shortcut, selected_shortcut] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
-            assert_eq!(inspection.weight_override, None);
-            assert!(inspection.has_custom_color_override);
-            assert!(!inspection.uses_muted_foreground_override);
-        }
-    }
-
-    #[test]
-    fn palette_commands_still_preserve_explicit_shortcuts() {
-        let command = PaletteCommand::new("id", "Open", "Action").with_shortcut("ctrl-k");
-
-        assert_eq!(command.shortcut, Some("ctrl-k"));
-    }
-
-    #[gpui::test]
-    fn qualifiers_use_mono_caption_role(cx: &mut TestAppContext) {
-        cx.update(theme::init);
-
-        let theme = cx.update(|cx| Theme::global(cx).clone());
-
-        let qualifier = palette_qualifier_text("prod / analytics", false, &theme).inspect();
-        let selected = palette_qualifier_text("scripts/admin", true, &theme).inspect();
-
-        for inspection in [qualifier, selected] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
-            assert_eq!(inspection.weight_override, None);
-            assert!(inspection.has_custom_color_override);
-        }
-    }
-
-    #[test]
-    fn command_palette_overlay_uses_canonical_scrim_and_modal_container_contracts() {
-        let source = command_palette_source();
-
-        assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("surface_modal_container(cx)"));
-        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
-        assert!(!source.contains("surface_panel(cx)"));
-    }
-
-    #[test]
-    fn command_palette_render_keeps_overlay_identity_and_close_behavior() {
-        let source = command_palette_source();
-
-        assert!(source.contains(".id(\"command-palette-overlay\")"));
-        assert!(source.contains(".key_context(ContextId::CommandPalette.as_gpui_context())"));
-        assert!(source.contains("this.hide(cx);"));
-    }
-
-    #[test]
-    fn command_palette_overlay_chain_starts_from_the_shared_modal_container() {
-        let source = command_palette_overlay_source();
-
-        assert!(source.contains("surface_modal_container(cx)"));
-        assert!(source.contains(".id(\"command-palette-container\")"));
-        assert!(!source.contains("surface_panel(cx)"));
-    }
-
-    #[test]
-    fn command_palette_overlay_chain_keeps_the_shared_scrim_close_path() {
-        let source = command_palette_overlay_source();
-
-        assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("this.hide(cx);"));
-        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
-    }
-}
-
 /// Event emitted when the user selects a palette item.
 pub enum PaletteSelection {
     Command {
@@ -558,6 +469,9 @@ pub enum PaletteSelection {
     },
     OpenScript {
         path: PathBuf,
+    },
+    OpenSavedChart {
+        chart_id: Uuid,
     },
 }
 
@@ -810,6 +724,9 @@ impl CommandPalette {
                 PaletteItem::Script { path, .. } => {
                     PaletteSelection::OpenScript { path: path.clone() }
                 }
+                PaletteItem::SavedChart { id, .. } => {
+                    PaletteSelection::OpenSavedChart { chart_id: *id }
+                }
             };
 
             self.visible = false;
@@ -836,7 +753,8 @@ impl CommandPalette {
             }),
             PaletteItem::Connection { .. }
             | PaletteItem::Resource(_)
-            | PaletteItem::Script { .. } => item
+            | PaletteItem::Script { .. }
+            | PaletteItem::SavedChart { .. } => item
                 .qualifier()
                 .map(|q| palette_qualifier_text(q, is_selected, theme).into_any_element()),
         };
@@ -909,6 +827,7 @@ impl Render for CommandPalette {
         let section_order = [
             PaletteSection::Connections,
             PaletteSection::Commands,
+            PaletteSection::Charts,
             PaletteSection::Tables,
             PaletteSection::Scripts,
         ];
@@ -1127,5 +1046,131 @@ impl Render for CommandPalette {
                     ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PaletteCommand, palette_qualifier_text, palette_shortcut_text};
+    use crate::ui::theme;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::TestAppContext;
+    use gpui_component::theme::Theme;
+    use std::fs;
+
+    fn command_palette_source() -> String {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/ui/overlays/command_palette.rs"
+        ))
+        .unwrap_or_else(|error| panic!("failed to read command_palette.rs: {error}"));
+
+        // Extract only the `impl Render` body. The marker is anchored on the
+        // ` {` brace so it matches the real implementation and not the string
+        // literals inside this helper, and the slice stops at the test module
+        // so the assertions never inspect their own source text.
+        let impl_start = source
+            .find("impl Render for CommandPalette {")
+            .expect("command_palette.rs should contain a render implementation");
+        let after_impl = &source[impl_start..];
+        let render_end = after_impl.find("#[cfg(test)]").unwrap_or(after_impl.len());
+
+        after_impl[..render_end].to_string()
+    }
+
+    fn command_palette_overlay_source() -> String {
+        let source = command_palette_source();
+        let start = source
+            .find(".id(\"command-palette-overlay\")")
+            .expect("command_palette render should define the overlay container");
+
+        let remaining = &source[start..];
+        let end = remaining
+            .find(".child(\n                        div()\n                            .id(\"command-palette-list\")")
+            .unwrap_or(remaining.len());
+
+        remaining[..end].to_string()
+    }
+
+    #[gpui::test]
+    fn action_shortcuts_use_mono_caption_instead_of_bold_key_hint(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let shortcut = palette_shortcut_text("ctrl-k", false, &theme).inspect();
+        let selected_shortcut = palette_shortcut_text("enter", true, &theme).inspect();
+
+        for inspection in [shortcut, selected_shortcut] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+            assert!(!inspection.uses_muted_foreground_override);
+        }
+    }
+
+    #[test]
+    fn palette_commands_still_preserve_explicit_shortcuts() {
+        let command = PaletteCommand::new("id", "Open", "Action").with_shortcut("ctrl-k");
+
+        assert_eq!(command.shortcut, Some("ctrl-k"));
+    }
+
+    #[gpui::test]
+    fn qualifiers_use_mono_caption_role(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let qualifier = palette_qualifier_text("prod / analytics", false, &theme).inspect();
+        let selected = palette_qualifier_text("scripts/admin", true, &theme).inspect();
+
+        for inspection in [qualifier, selected] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+        }
+    }
+
+    #[test]
+    fn command_palette_overlay_uses_canonical_scrim_and_modal_container_contracts() {
+        let source = command_palette_source();
+
+        assert!(source.contains(".bg(overlay_bg(theme))"));
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn command_palette_render_keeps_overlay_identity_and_close_behavior() {
+        let source = command_palette_source();
+
+        assert!(source.contains(".id(\"command-palette-overlay\")"));
+        assert!(source.contains(".key_context(ContextId::CommandPalette.as_gpui_context())"));
+        assert!(source.contains("this.hide(cx);"));
+    }
+
+    #[test]
+    fn command_palette_overlay_chain_starts_from_the_shared_modal_container() {
+        let source = command_palette_overlay_source();
+
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(source.contains(".id(\"command-palette-container\")"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn command_palette_overlay_chain_keeps_the_shared_scrim_close_path() {
+        let source = command_palette_overlay_source();
+
+        assert!(source.contains(".bg(overlay_bg(theme))"));
+        assert!(source.contains("this.hide(cx);"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
     }
 }

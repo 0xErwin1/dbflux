@@ -280,6 +280,7 @@ crates/
   dbflux_driver_postgres/   # PostgreSQL driver implementation
   dbflux_driver_sqlite/     # SQLite driver implementation
   dbflux_driver_mysql/      # MySQL/MariaDB driver implementation
+  dbflux_driver_mssql/      # Microsoft SQL Server driver implementation
   dbflux_driver_mongodb/    # MongoDB driver implementation
     src/driver.rs           # Connection, schema discovery, CRUD operations
     src/query_parser.rs     # MongoDB query syntax parser (db.collection.method())
@@ -529,6 +530,7 @@ crates/
 - **PostgreSQL**: `crates/dbflux_driver_postgres/` — `tokio-postgres` with TLS, cancellation, detailed error extraction.
 - **MySQL/MariaDB**: `crates/dbflux_driver_mysql/` — dual connection architecture (sync for schema, async for queries).
 - **SQLite**: `crates/dbflux_driver_sqlite/` — `rusqlite` file-based connections.
+- **Microsoft SQL Server**: `crates/dbflux_driver_mssql/` — `tiberius` TDS client with TLS, SSH tunnel, SQL Browser named-instance routing, multi-schema introspection, CRUD via `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`, and side-channel `KILL`-based cancellation with automatic session restore.
 - **MongoDB**: `crates/dbflux_driver_mongodb/` — `mongodb` async driver with:
   - BSON value handling and conversion
   - Query parser for `db.collection.method()` syntax
@@ -647,6 +649,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - PostgreSQL: `tokio-postgres` client with optional TLS, cancellation support, lazy schema loading, and URI connection mode (crates/dbflux_driver_postgres/src/driver.rs).
 - MySQL/MariaDB: `mysql` crate with dual connection architecture (sync for schema, async for queries), lazy schema loading, and URI connection mode (crates/dbflux_driver_mysql/src/driver.rs).
 - SQLite: `rusqlite` file-based connections with lazy schema loading (crates/dbflux_driver_sqlite/src/driver.rs).
+- Microsoft SQL Server: `tiberius` TDS client with TLS modes (`off`/`on`/`required`), SSH tunneling, SQL Browser named-instance lookup, multi-database/multi-schema introspection via qualified `sys.*` catalog queries, CRUD with `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`, and cooperative cancellation via side-channel `KILL <spid>` with automatic session restore (crates/dbflux_driver_mssql/src/driver.rs).
 - MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, document CRUD, shell query generation, and collection description support for MCP/UI metadata workflows (crates/dbflux_driver_mongodb/src/driver.rs).
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
 - DynamoDB: `aws-sdk-dynamodb` driver with AWS profile/region support for remote DynamoDB, plus optional endpoint override for local emulators and tests (crates/dbflux_driver_dynamodb/src/driver.rs).

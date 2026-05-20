@@ -282,6 +282,7 @@ impl TabBar {
             super::types::DocumentIcon::Script => AppIcon::ScrollText,
             super::types::DocumentIcon::Audit => AppIcon::ScrollText,
             super::types::DocumentIcon::SchemaViz => AppIcon::Link2,
+            super::types::DocumentIcon::Chart => AppIcon::Layers,
         };
 
         let center_x = self.active_tab_center_x.clone();

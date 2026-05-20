@@ -36,6 +36,11 @@ pub enum DataDocumentEvent {
         title: SharedString,
         content: AnyView,
     },
+    /// User requested "Chart this query" from the context menu.
+    ChartThisQuery {
+        query: String,
+        connection_id: Option<Uuid>,
+    },
 }
 
 impl DataDocument {
@@ -72,6 +77,15 @@ impl DataDocument {
                         cx.emit(DataDocumentEvent::OpenInspector {
                             title: title.clone(),
                             content: content.clone(),
+                        });
+                    }
+                    DataGridEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    } => {
+                        cx.emit(DataDocumentEvent::ChartThisQuery {
+                            query: query.clone(),
+                            connection_id: *connection_id,
                         });
                     }
                     _ => {}
@@ -122,6 +136,15 @@ impl DataDocument {
                             content: content.clone(),
                         });
                     }
+                    DataGridEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    } => {
+                        cx.emit(DataDocumentEvent::ChartThisQuery {
+                            query: query.clone(),
+                            connection_id: *connection_id,
+                        });
+                    }
                     _ => {}
                 },
             );
@@ -146,7 +169,7 @@ impl DataDocument {
         cx: &mut Context<Self>,
     ) -> Self {
         let data_grid =
-            cx.new(|cx| DataGridPanel::new_for_result(result, query, app_state, window, cx));
+            cx.new(|cx| DataGridPanel::new_for_result(result, query, None, app_state, window, cx));
 
         let subscription =
             cx.subscribe(
@@ -168,6 +191,15 @@ impl DataDocument {
                         cx.emit(DataDocumentEvent::OpenInspector {
                             title: title.clone(),
                             content: content.clone(),
+                        });
+                    }
+                    DataGridEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    } => {
+                        cx.emit(DataDocumentEvent::ChartThisQuery {
+                            query: query.clone(),
+                            connection_id: *connection_id,
                         });
                     }
                     _ => {}
@@ -219,7 +251,7 @@ impl DataDocument {
         match self.data_grid.read(cx).source() {
             DataSource::Table { profile_id, .. } => Some(*profile_id),
             DataSource::Collection { profile_id, .. } => Some(*profile_id),
-            DataSource::QueryResult { .. } => None,
+            DataSource::QueryResult { profile_id, .. } => *profile_id,
         }
     }
 
@@ -235,6 +267,27 @@ impl DataDocument {
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
         self.data_grid
             .update(cx, |grid, cx| grid.set_refresh_policy(policy, cx));
+    }
+
+    /// Returns the synthesized query text that produced the current result, if available.
+    ///
+    /// For `QueryResult` sources the original query string is returned. For `Table`
+    /// and `Collection` sources the grid builds the query internally and does not
+    /// expose it as a user-readable string — `None` is returned in those cases.
+    ///
+    /// Callers such as `ChartHost::current_query` use this to decide whether
+    /// "Chart this query" is available. A `None` result silently disables that action.
+    pub fn synthesized_query(&self, cx: &App) -> Option<String> {
+        match self.data_grid.read(cx).source() {
+            DataSource::QueryResult { original_query, .. } => {
+                if original_query.is_empty() {
+                    None
+                } else {
+                    Some(original_query.clone())
+                }
+            }
+            DataSource::Table { .. } | DataSource::Collection { .. } => None,
+        }
     }
 
     /// Returns the table reference if this is a table document.

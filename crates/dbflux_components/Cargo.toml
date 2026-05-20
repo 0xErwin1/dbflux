@@ -14,6 +14,13 @@ license.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 dbflux_core.workspace = true
+thiserror.workspace = true
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+uuid = { workspace = true }
+chrono.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+serde_json.workspace = true
+tempfile = "3"

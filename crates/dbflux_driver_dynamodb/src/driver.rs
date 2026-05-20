@@ -21,7 +21,7 @@ use aws_sdk_dynamodb::{Client, types::TableDescription};
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, CollectionInfo,
-    CollectionRef, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
+    CollectionRef, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
     ConnectionProfile, DYNAMODB_FORM, DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig,
     DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DocumentConnection,
     DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
@@ -2969,6 +2969,8 @@ fn items_to_query_result(
 
     if items.is_empty() {
         // Emit PK columns even with no rows so UI can show CRUD actions.
+        // With no items there's nothing to infer the attribute type from, so
+        // leave `type_name` empty — the UI hides the chip when it's blank.
         let columns = field_names
             .iter()
             .map(|name| {
@@ -2976,7 +2978,8 @@ fn items_to_query_result(
                     || key_schema.sort_key.as_deref() == Some(name.as_str());
                 ColumnMeta {
                     name: name.clone(),
-                    type_name: "DynamoDB".to_string(),
+                    type_name: String::new(),
+                    kind: ColumnKind::Unknown,
                     nullable: true,
                     is_primary_key,
                 }
@@ -2995,7 +2998,8 @@ fn items_to_query_result(
 
             ColumnMeta {
                 name: name.clone(),
-                type_name: "DynamoDB".to_string(),
+                type_name: infer_field_type_label(items, name),
+                kind: ColumnKind::Unknown,
                 nullable: true,
                 is_primary_key,
             }
@@ -3025,6 +3029,54 @@ fn crud_result_to_query_result(result: dbflux_core::CrudResult) -> QueryResult {
     let mut query_result = QueryResult::json(Vec::new(), Vec::new(), std::time::Duration::ZERO);
     query_result.affected_rows = Some(result.affected_rows);
     query_result
+}
+
+/// Map a DynamoDB `AttributeValue` to a short, user-facing type label
+/// (`String`, `Number`, `Boolean`, `Binary`, `List`, `Map`, `String Set`,
+/// `Number Set`, `Binary Set`, `Null`). Used for column headers when the
+/// driver has no static schema and must infer types from sampled items.
+fn attribute_value_type_label(value: &AttributeValue) -> &'static str {
+    if value.as_s().is_ok() {
+        "String"
+    } else if value.as_n().is_ok() {
+        "Number"
+    } else if value.as_bool().is_ok() {
+        "Boolean"
+    } else if value.as_b().is_ok() {
+        "Binary"
+    } else if value.as_ss().is_ok() {
+        "String Set"
+    } else if value.as_ns().is_ok() {
+        "Number Set"
+    } else if value.as_bs().is_ok() {
+        "Binary Set"
+    } else if value.as_l().is_ok() {
+        "List"
+    } else if value.as_m().is_ok() {
+        "Map"
+    } else if value.as_null().is_ok() {
+        "Null"
+    } else {
+        ""
+    }
+}
+
+/// Infer the canonical DynamoDB type label for `field_name` from the first
+/// item in `items` that contains a non-null value for it. Returns an empty
+/// string if no item carries the field with a typed value.
+fn infer_field_type_label(
+    items: &[std::collections::HashMap<String, AttributeValue>],
+    field_name: &str,
+) -> String {
+    for item in items {
+        if let Some(attr) = item.get(field_name) {
+            let label = attribute_value_type_label(attr);
+            if !label.is_empty() {
+                return label.to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 fn attribute_value_to_value(value: &AttributeValue) -> Value {

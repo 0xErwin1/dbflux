@@ -488,6 +488,17 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
         ),
         DbConfig::DynamoDB { region, table, .. } => (Some(region.clone()), None, table.clone()),
         DbConfig::CloudWatchLogs { region, .. } => (Some(region.clone()), None, None),
+        DbConfig::InfluxDB {
+            url,
+            default_bucket,
+            ..
+        } => (Some(url.clone()), None, default_bucket.clone()),
+        DbConfig::SqlServer {
+            host,
+            port,
+            database,
+            ..
+        } => (Some(host.clone()), Some(*port), database.clone()),
         DbConfig::External { values, .. } => {
             let host = values.get("host").cloned();
             let port = values

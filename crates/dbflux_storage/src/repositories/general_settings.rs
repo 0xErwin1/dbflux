@@ -189,6 +189,7 @@ mod tests {
             .run_all(&conn)
             .expect("migration should run");
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = GeneralSettingsRepository::new(Arc::new(conn));
 
         let dto = GeneralSettingsDto {
@@ -231,6 +232,7 @@ mod tests {
                 .run_all(&conn)
                 .expect("migration should run");
 
+            #[allow(clippy::arc_with_non_send_sync)]
             let repo = GeneralSettingsRepository::new(Arc::new(conn));
 
             let dto = GeneralSettingsDto {
@@ -277,6 +279,7 @@ mod tests {
 
         // The singleton row is inserted by the initial migration with id=1.
         // The style column should have defaulted to 'default'.
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = GeneralSettingsRepository::new(Arc::new(conn));
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(

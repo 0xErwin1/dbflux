@@ -1,0 +1,33 @@
+# Normalize all text files to LF in the repo and in working trees.
+#
+# Without this, Windows contributors with `core.autocrlf=true` see CRLF in
+# their working tree while the repo (and tools like `cargo fmt`, which writes
+# LF per `rustfmt.toml`) speak LF. The first format run rewrites every file
+# from CRLF to LF in the working tree and `git status` flags every one as
+# modified — even though committing would be a no-op. Pinning `eol=lf`
+# repo-wide removes that mismatch for everyone.
+
+* text=auto eol=lf
+
+# Common binary types — never touch.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.webp  binary
+*.svg   text eol=lf
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.7z    binary
+*.pdf   binary
+*.dylib binary
+*.so    binary
+*.dll   binary
+*.exe   binary

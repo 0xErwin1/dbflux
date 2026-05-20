@@ -511,6 +511,7 @@ mod tests {
             "password".to_string(),
         );
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SshTunnelProfileRepository::new(Arc::new(conn));
         repo.insert(&dto, None).expect("should insert");
 
@@ -550,6 +551,7 @@ mod tests {
             passphrase_secret_ref: Some("dbflux:secret:ssh:passphrase:test".to_string()),
         };
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SshTunnelProfileRepository::new(Arc::new(conn));
         repo.insert(&dto, Some(&auth_dto)).expect("should insert");
 
@@ -595,6 +597,7 @@ mod tests {
             passphrase_secret_ref: None,
         };
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SshTunnelProfileRepository::new(Arc::new(conn));
         repo.insert(&dto, Some(&auth_dto)).expect("should insert");
 

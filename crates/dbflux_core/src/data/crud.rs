@@ -81,8 +81,82 @@ impl RecordIdentity {
 /// Legacy alias for backward compatibility.
 pub type RowIdentity = RecordIdentity;
 
+/// A single column assignment: name, value, and optional driver-reported type.
+///
+/// The optional `type_name` is the raw database type as reported by the driver
+/// (e.g. PostgreSQL's `_text` for `text[]`, `jsonb`, `int4`). Dialects use it
+/// to choose the correct literal syntax — for instance, PostgreSQL needs
+/// `ARRAY['a','b']::text[]` for array columns rather than the generic `::jsonb`
+/// fallback used when no type is known.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnAssignment {
+    pub name: String,
+    pub value: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+}
+
+impl ColumnAssignment {
+    pub fn new(name: impl Into<String>, value: Value) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            type_name: None,
+        }
+    }
+
+    pub fn typed(name: impl Into<String>, value: Value, type_name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value,
+            type_name: Some(type_name.into()),
+        }
+    }
+
+    pub fn with_type_opt(mut self, type_name: Option<String>) -> Self {
+        self.type_name = type_name;
+        self
+    }
+}
+
+impl From<(String, Value)> for ColumnAssignment {
+    fn from((name, value): (String, Value)) -> Self {
+        Self {
+            name,
+            value,
+            type_name: None,
+        }
+    }
+}
+
+impl From<(&str, Value)> for ColumnAssignment {
+    fn from((name, value): (&str, Value)) -> Self {
+        Self {
+            name: name.to_string(),
+            value,
+            type_name: None,
+        }
+    }
+}
+
+/// Wire shape for RowPatch — kept stable for IPC backward compatibility.
+///
+/// Old peers serialize/deserialize `changes` as `Vec<(String, Value)>` and
+/// don't know about `change_types`. The `#[serde(default)]` on `change_types`
+/// lets newer messages flow without breaking older peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RowPatchWire {
+    identity: RowIdentity,
+    table: String,
+    schema: Option<String>,
+    changes: Vec<(String, Value)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    change_types: Vec<Option<String>>,
+}
+
 /// Changes to apply to a single row via UPDATE.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "RowPatchWire", into = "RowPatchWire")]
 pub struct RowPatch {
     /// Unique identification of the row to update.
     pub identity: RowIdentity,
@@ -93,16 +167,35 @@ pub struct RowPatch {
     /// Schema name.
     pub schema: Option<String>,
 
-    /// Column changes: (column_name, new_value).
-    pub changes: Vec<(String, Value)>,
+    /// Column changes, each carrying name, value, and optional type metadata.
+    pub changes: Vec<ColumnAssignment>,
 }
 
 impl RowPatch {
+    /// Construct a RowPatch from `(column, value)` pairs without type info.
+    ///
+    /// Drivers that need type-aware literal emission (e.g. Postgres arrays)
+    /// should construct via [`Self::with_typed_changes`] instead so the
+    /// dialect can pick the right literal syntax.
     pub fn new(
         identity: RowIdentity,
         table: String,
         schema: Option<String>,
         changes: Vec<(String, Value)>,
+    ) -> Self {
+        Self {
+            identity,
+            table,
+            schema,
+            changes: changes.into_iter().map(ColumnAssignment::from).collect(),
+        }
+    }
+
+    pub fn with_typed_changes(
+        identity: RowIdentity,
+        table: String,
+        schema: Option<String>,
+        changes: Vec<ColumnAssignment>,
     ) -> Self {
         Self {
             identity,
@@ -117,8 +210,77 @@ impl RowPatch {
     }
 }
 
+impl From<RowPatchWire> for RowPatch {
+    fn from(wire: RowPatchWire) -> Self {
+        let RowPatchWire {
+            identity,
+            table,
+            schema,
+            changes,
+            change_types,
+        } = wire;
+
+        let changes = changes
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (name, value))| ColumnAssignment {
+                name,
+                value,
+                type_name: change_types.get(idx).cloned().flatten(),
+            })
+            .collect();
+
+        Self {
+            identity,
+            table,
+            schema,
+            changes,
+        }
+    }
+}
+
+impl From<RowPatch> for RowPatchWire {
+    fn from(patch: RowPatch) -> Self {
+        let mut changes = Vec::with_capacity(patch.changes.len());
+        let mut change_types = Vec::with_capacity(patch.changes.len());
+        let mut any_typed = false;
+
+        for assignment in patch.changes {
+            if assignment.type_name.is_some() {
+                any_typed = true;
+            }
+            change_types.push(assignment.type_name);
+            changes.push((assignment.name, assignment.value));
+        }
+
+        if !any_typed {
+            change_types.clear();
+        }
+
+        Self {
+            identity: patch.identity,
+            table: patch.table,
+            schema: patch.schema,
+            changes,
+            change_types,
+        }
+    }
+}
+
+/// Wire shape for RowInsert — kept stable for IPC backward compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RowInsertWire {
+    table: String,
+    schema: Option<String>,
+    columns: Vec<String>,
+    values: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    column_types: Vec<Option<String>>,
+}
+
 /// Data for INSERT operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "RowInsertWire", into = "RowInsertWire")]
 pub struct RowInsert {
     /// Table name.
     pub table: String,
@@ -126,14 +288,16 @@ pub struct RowInsert {
     /// Schema name.
     pub schema: Option<String>,
 
-    /// Column names for the values being inserted.
-    pub columns: Vec<String>,
-
-    /// Values to insert (same order as `columns`).
-    pub values: Vec<Value>,
+    /// Columns being inserted, each carrying name, value, and optional type metadata.
+    pub assignments: Vec<ColumnAssignment>,
 }
 
 impl RowInsert {
+    /// Convenience constructor that takes parallel `columns`/`values` slices
+    /// and produces assignments without type information.
+    ///
+    /// Drivers that need type-aware literal emission (e.g. Postgres arrays)
+    /// should construct via [`Self::with_typed_assignments`] instead.
     pub fn new(
         table: String,
         schema: Option<String>,
@@ -145,16 +309,105 @@ impl RowInsert {
             values.len(),
             "RowInsert: columns and values must have same length"
         );
+        let assignments = columns
+            .into_iter()
+            .zip(values)
+            .map(|(name, value)| ColumnAssignment {
+                name,
+                value,
+                type_name: None,
+            })
+            .collect();
         Self {
             table,
             schema,
-            columns,
-            values,
+            assignments,
+        }
+    }
+
+    pub fn with_typed_assignments(
+        table: String,
+        schema: Option<String>,
+        assignments: Vec<ColumnAssignment>,
+    ) -> Self {
+        Self {
+            table,
+            schema,
+            assignments,
         }
     }
 
     pub fn is_valid(&self) -> bool {
-        !self.columns.is_empty() && self.columns.len() == self.values.len()
+        !self.assignments.is_empty()
+    }
+
+    /// Column names in declared order. Allocates; prefer iterating `assignments` directly.
+    pub fn column_names(&self) -> Vec<String> {
+        self.assignments.iter().map(|a| a.name.clone()).collect()
+    }
+
+    /// Values in declared order. Allocates; prefer iterating `assignments` directly.
+    pub fn values(&self) -> Vec<Value> {
+        self.assignments.iter().map(|a| a.value.clone()).collect()
+    }
+}
+
+impl From<RowInsertWire> for RowInsert {
+    fn from(wire: RowInsertWire) -> Self {
+        let RowInsertWire {
+            table,
+            schema,
+            columns,
+            values,
+            column_types,
+        } = wire;
+
+        let assignments = columns
+            .into_iter()
+            .zip(values)
+            .enumerate()
+            .map(|(idx, (name, value))| ColumnAssignment {
+                name,
+                value,
+                type_name: column_types.get(idx).cloned().flatten(),
+            })
+            .collect();
+
+        Self {
+            table,
+            schema,
+            assignments,
+        }
+    }
+}
+
+impl From<RowInsert> for RowInsertWire {
+    fn from(insert: RowInsert) -> Self {
+        let mut columns = Vec::with_capacity(insert.assignments.len());
+        let mut values = Vec::with_capacity(insert.assignments.len());
+        let mut column_types = Vec::with_capacity(insert.assignments.len());
+        let mut any_typed = false;
+
+        for assignment in insert.assignments {
+            if assignment.type_name.is_some() {
+                any_typed = true;
+            }
+            column_types.push(assignment.type_name);
+            columns.push(assignment.name);
+            values.push(assignment.value);
+        }
+
+        if !any_typed {
+            column_types.clear();
+        }
+
+        Self {
+            table: insert.table,
+            schema: insert.schema,
+            columns,
+            values,
+            column_types,
+        }
     }
 }
 
@@ -171,8 +424,21 @@ pub struct RowDelete {
     pub schema: Option<String>,
 }
 
+/// Wire shape for SqlUpdateRequest — kept stable for IPC backward compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SqlUpdateRequestWire {
+    table: String,
+    schema: Option<String>,
+    filter: SemanticFilter,
+    changes: Vec<(String, Value)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    change_types: Vec<Option<String>>,
+    returning: Option<Vec<String>>,
+}
+
 /// Changes to apply to rows selected by a semantic filter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "SqlUpdateRequestWire", into = "SqlUpdateRequestWire")]
 pub struct SqlUpdateRequest {
     /// Table name.
     pub table: String,
@@ -183,8 +449,8 @@ pub struct SqlUpdateRequest {
     /// Shared filter contract selecting the target rows.
     pub filter: SemanticFilter,
 
-    /// Column changes: (column_name, new_value).
-    pub changes: Vec<(String, Value)>,
+    /// Column changes, each carrying name, value, and optional type metadata.
+    pub changes: Vec<ColumnAssignment>,
 
     /// Columns to return when the dialect supports RETURNING-style clauses.
     pub returning: Option<Vec<String>>,
@@ -206,8 +472,24 @@ pub struct SqlDeleteRequest {
     pub returning: Option<Vec<String>>,
 }
 
+/// Wire shape for SqlUpsertRequest — kept stable for IPC backward compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SqlUpsertRequestWire {
+    table: String,
+    schema: Option<String>,
+    columns: Vec<String>,
+    values: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    column_types: Vec<Option<String>>,
+    conflict_columns: Vec<String>,
+    update_assignments: Vec<(String, Value)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    update_assignment_types: Vec<Option<String>>,
+}
+
 /// Inserts a row and updates matching rows when a conflict occurs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "SqlUpsertRequestWire", into = "SqlUpsertRequestWire")]
 pub struct SqlUpsertRequest {
     /// Table name.
     pub table: String,
@@ -215,25 +497,41 @@ pub struct SqlUpsertRequest {
     /// Schema name.
     pub schema: Option<String>,
 
-    /// Column names for the values being inserted.
-    pub columns: Vec<String>,
-
-    /// Values to insert (same order as `columns`).
-    pub values: Vec<Value>,
+    /// Columns being inserted, each carrying name, value, and optional type metadata.
+    pub assignments: Vec<ColumnAssignment>,
 
     /// Columns that define the conflict target.
     pub conflict_columns: Vec<String>,
 
     /// Column changes to apply when a conflict occurs.
-    pub update_assignments: Vec<(String, Value)>,
+    pub update_assignments: Vec<ColumnAssignment>,
 }
 
 impl SqlUpdateRequest {
+    /// Convenience constructor from `(name, value)` pairs without type info.
+    ///
+    /// Use [`Self::with_typed_changes`] when type metadata is available so
+    /// dialects can emit type-aware literals (e.g. Postgres `ARRAY[...]::T[]`).
     pub fn new(
         table: String,
         schema: Option<String>,
         filter: SemanticFilter,
         changes: Vec<(String, Value)>,
+    ) -> Self {
+        Self {
+            table,
+            schema,
+            filter,
+            changes: changes.into_iter().map(ColumnAssignment::from).collect(),
+            returning: None,
+        }
+    }
+
+    pub fn with_typed_changes(
+        table: String,
+        schema: Option<String>,
+        filter: SemanticFilter,
+        changes: Vec<ColumnAssignment>,
     ) -> Self {
         Self {
             table,
@@ -254,6 +552,66 @@ impl SqlUpdateRequest {
     }
 }
 
+impl From<SqlUpdateRequestWire> for SqlUpdateRequest {
+    fn from(wire: SqlUpdateRequestWire) -> Self {
+        let SqlUpdateRequestWire {
+            table,
+            schema,
+            filter,
+            changes,
+            change_types,
+            returning,
+        } = wire;
+
+        let changes = changes
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (name, value))| ColumnAssignment {
+                name,
+                value,
+                type_name: change_types.get(idx).cloned().flatten(),
+            })
+            .collect();
+
+        Self {
+            table,
+            schema,
+            filter,
+            changes,
+            returning,
+        }
+    }
+}
+
+impl From<SqlUpdateRequest> for SqlUpdateRequestWire {
+    fn from(req: SqlUpdateRequest) -> Self {
+        let mut changes = Vec::with_capacity(req.changes.len());
+        let mut change_types = Vec::with_capacity(req.changes.len());
+        let mut any_typed = false;
+
+        for assignment in req.changes {
+            if assignment.type_name.is_some() {
+                any_typed = true;
+            }
+            change_types.push(assignment.type_name);
+            changes.push((assignment.name, assignment.value));
+        }
+
+        if !any_typed {
+            change_types.clear();
+        }
+
+        Self {
+            table: req.table,
+            schema: req.schema,
+            filter: req.filter,
+            changes,
+            change_types,
+            returning: req.returning,
+        }
+    }
+}
+
 impl SqlDeleteRequest {
     pub fn new(table: String, schema: Option<String>, filter: SemanticFilter) -> Self {
         Self {
@@ -271,6 +629,9 @@ impl SqlDeleteRequest {
 }
 
 impl SqlUpsertRequest {
+    /// Convenience constructor that takes parallel `columns`/`values` slices
+    /// and `(name, value)` update assignments. Use
+    /// [`Self::with_typed_assignments`] when type metadata is available.
     pub fn new(
         table: String,
         schema: Option<String>,
@@ -285,20 +646,138 @@ impl SqlUpsertRequest {
             "SqlUpsertRequest: columns and values must have same length"
         );
 
+        let assignments = columns
+            .into_iter()
+            .zip(values)
+            .map(|(name, value)| ColumnAssignment {
+                name,
+                value,
+                type_name: None,
+            })
+            .collect();
+
         Self {
             table,
             schema,
-            columns,
-            values,
+            assignments,
+            conflict_columns,
+            update_assignments: update_assignments
+                .into_iter()
+                .map(ColumnAssignment::from)
+                .collect(),
+        }
+    }
+
+    pub fn with_typed_assignments(
+        table: String,
+        schema: Option<String>,
+        assignments: Vec<ColumnAssignment>,
+        conflict_columns: Vec<String>,
+        update_assignments: Vec<ColumnAssignment>,
+    ) -> Self {
+        Self {
+            table,
+            schema,
+            assignments,
             conflict_columns,
             update_assignments,
         }
     }
 
     pub fn is_valid(&self) -> bool {
-        !self.columns.is_empty()
-            && self.columns.len() == self.values.len()
-            && !self.conflict_columns.is_empty()
+        !self.assignments.is_empty() && !self.conflict_columns.is_empty()
+    }
+}
+
+impl From<SqlUpsertRequestWire> for SqlUpsertRequest {
+    fn from(wire: SqlUpsertRequestWire) -> Self {
+        let SqlUpsertRequestWire {
+            table,
+            schema,
+            columns,
+            values,
+            column_types,
+            conflict_columns,
+            update_assignments,
+            update_assignment_types,
+        } = wire;
+
+        let assignments = columns
+            .into_iter()
+            .zip(values)
+            .enumerate()
+            .map(|(idx, (name, value))| ColumnAssignment {
+                name,
+                value,
+                type_name: column_types.get(idx).cloned().flatten(),
+            })
+            .collect();
+
+        let update_assignments = update_assignments
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (name, value))| ColumnAssignment {
+                name,
+                value,
+                type_name: update_assignment_types.get(idx).cloned().flatten(),
+            })
+            .collect();
+
+        Self {
+            table,
+            schema,
+            assignments,
+            conflict_columns,
+            update_assignments,
+        }
+    }
+}
+
+impl From<SqlUpsertRequest> for SqlUpsertRequestWire {
+    fn from(req: SqlUpsertRequest) -> Self {
+        fn split_assignments(
+            assignments: Vec<ColumnAssignment>,
+        ) -> (Vec<String>, Vec<Value>, Vec<Option<String>>) {
+            let mut names = Vec::with_capacity(assignments.len());
+            let mut values = Vec::with_capacity(assignments.len());
+            let mut types = Vec::with_capacity(assignments.len());
+            let mut any_typed = false;
+
+            for a in assignments {
+                if a.type_name.is_some() {
+                    any_typed = true;
+                }
+                types.push(a.type_name);
+                names.push(a.name);
+                values.push(a.value);
+            }
+
+            if !any_typed {
+                types.clear();
+            }
+
+            (names, values, types)
+        }
+
+        let (columns, values, column_types) = split_assignments(req.assignments);
+        let (update_columns, update_values, update_assignment_types) =
+            split_assignments(req.update_assignments);
+
+        let update_assignments = update_columns
+            .into_iter()
+            .zip(update_values)
+            .collect::<Vec<_>>();
+
+        Self {
+            table: req.table,
+            schema: req.schema,
+            columns,
+            values,
+            column_types,
+            conflict_columns: req.conflict_columns,
+            update_assignments,
+            update_assignment_types,
+        }
     }
 }
 

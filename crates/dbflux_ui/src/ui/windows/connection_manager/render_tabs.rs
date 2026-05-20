@@ -105,7 +105,9 @@ impl ConnectionManagerWindow {
     }
 
     pub(super) fn render_main_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let Some(driver) = &self.selected_driver else {
+        // Clone the driver Arc up front so we don't hold a reference into `self`
+        // across mutable calls like `render_form_tab` below.
+        let Some(driver) = self.selected_driver.clone() else {
             return Vec::new();
         };
 
@@ -138,12 +140,21 @@ impl ConnectionManagerWindow {
         sections.extend(self.render_form_tab(&main_tab, false, show_focus, ring_color, cx));
 
         if requires_password {
+            // Drivers can rename the canonical secret field (e.g. "API Token" for
+            // InfluxDB v2). The override depends on current form values so that
+            // toggles like a version selector can flip the label live.
+            let form_values = self.collect_form_values(driver.form_definition(), cx);
+            let secret_label = driver
+                .secret_field_label(&form_values)
+                .unwrap_or_else(|| "Password".to_string());
+
             let password_field = self.render_password_field(
                 show_focus,
                 keyring_available,
                 save_password,
                 ring_color,
                 password_help,
+                &secret_label,
                 cx,
             );
 

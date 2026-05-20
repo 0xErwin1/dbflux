@@ -9,23 +9,24 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator,
-    CodeGeneratorInfo, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
-    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CreateTypeRequest,
-    CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
-    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest,
-    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation, ExplainRequest,
-    ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
-    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, POSTGRES_FORM,
-    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
-    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures,
-    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo,
-    TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator, generate_create_table,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri,
+    CodeGeneratorInfo, ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter,
+    ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest,
+    CreateTypeRequest, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo,
+    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
+    DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
+    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
+    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
+    IndexInfo, IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn,
+    POSTGRES_FORM, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    ReindexRequest, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
+    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
+    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
+    TableInfo, TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator,
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -213,6 +214,10 @@ impl SqlDialect for PostgresDialect {
         value_to_pg_literal(value)
     }
 
+    fn value_to_literal_typed(&self, value: &Value, col_type: Option<&str>) -> String {
+        value_to_pg_literal_typed(value, col_type)
+    }
+
     fn escape_string(&self, s: &str) -> String {
         pg_escape_string(s)
     }
@@ -245,24 +250,23 @@ impl SqlDialect for PostgresDialect {
         &self,
         schema: Option<&str>,
         table: &str,
-        columns: &[String],
-        values: &[Value],
+        assignments: &[dbflux_core::ColumnAssignment],
         conflict_columns: &[String],
-        update_assignments: &[(String, Value)],
+        update_assignments: &[dbflux_core::ColumnAssignment],
     ) -> Option<String> {
-        if columns.is_empty() || columns.len() != values.len() || conflict_columns.is_empty() {
+        if assignments.is_empty() || conflict_columns.is_empty() {
             return None;
         }
 
         let table = self.qualified_table(schema, table);
-        let columns = columns
+        let columns = assignments
             .iter()
-            .map(|column| self.quote_identifier(column))
+            .map(|a| self.quote_identifier(&a.name))
             .collect::<Vec<_>>()
             .join(", ");
-        let values = values
+        let values = assignments
             .iter()
-            .map(|value| self.value_to_literal(value))
+            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -280,11 +284,11 @@ impl SqlDialect for PostgresDialect {
 
         let update_clause = update_assignments
             .iter()
-            .map(|(column, value)| {
+            .map(|a| {
                 format!(
                     "{} = {}",
-                    self.quote_identifier(column),
-                    self.value_to_literal(value)
+                    self.quote_identifier(&a.name),
+                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
                 )
             })
             .collect::<Vec<_>>()
@@ -749,6 +753,19 @@ struct ExtractedPostgresConfig {
     /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`). Defaults to `"prefer"` when absent.
     ssl_mode: String,
     ssh_tunnel: Option<SshTunnelConfig>,
+}
+
+/// Map a PostgreSQL type OID to a semantic `ColumnKind`.
+///
+/// Only the most common OIDs are listed; everything else is `Unknown`.
+fn pg_oid_to_kind(oid: u32) -> ColumnKind {
+    match oid {
+        1114 | 1184 | 1082 => ColumnKind::Timestamp, // TIMESTAMP, TIMESTAMPTZ, DATE
+        21 | 23 | 20 => ColumnKind::Integer,         // INT2, INT4, INT8
+        700 | 701 | 1700 => ColumnKind::Float,       // FLOAT4, FLOAT8, NUMERIC
+        25 | 1043 | 1042 | 19 => ColumnKind::Text,   // TEXT, VARCHAR, BPCHAR, NAME
+        _ => ColumnKind::Unknown,
+    }
 }
 
 fn extract_postgres_config(config: &DbConfig) -> Result<ExtractedPostgresConfig, DbError> {
@@ -1389,6 +1406,7 @@ impl Connection for PostgresConnection {
                 .map(|col| ColumnMeta {
                     name: col.name().to_string(),
                     type_name: col.type_().name().to_string(),
+                    kind: pg_oid_to_kind(col.type_().oid()),
                     nullable: true,
                     is_primary_key: false,
                 })
@@ -2785,6 +2803,121 @@ fn needs_postgres_text_comparison_cast(type_name: &str) -> bool {
     normalized == "uuid" || normalized == "tsvector" || normalized == "tsquery"
 }
 
+/// Convert a Value to a safe PostgreSQL literal string, guided by the target
+/// column's driver-reported type.
+///
+/// When the column is an array type, this emits a typed `ARRAY[...]::T[]`
+/// literal so that round-trip insert/update against `text[]`, `int4[]`, etc.
+/// works regardless of whether the cell value arrived as `Value::Array`
+/// (untouched from the driver) or `Value::Json(s)` (user edited the cell as
+/// a JSON array text). For non-array columns it falls back to the untyped
+/// formatter.
+fn value_to_pg_literal_typed(value: &Value, col_type: Option<&str>) -> String {
+    if let Some(ty) = col_type
+        && let Some(elem_type) = pg_array_element_type(ty)
+    {
+        return format_pg_array_literal(value, elem_type);
+    }
+
+    value_to_pg_literal(value)
+}
+
+/// Returns the canonical PostgreSQL element type for an array column type,
+/// or None if the type is not an array.
+///
+/// Accepts both the internal name (`_text`, `_int4`) returned by the
+/// `postgres` crate via `Type::name()` and the SQL-level name (`text[]`,
+/// `int4[]`) that may come from other paths like `information_schema`.
+fn pg_array_element_type(type_name: &str) -> Option<&'static str> {
+    let normalized = type_name.trim().to_ascii_lowercase();
+
+    let elem = if let Some(stripped) = normalized.strip_prefix('_') {
+        stripped
+    } else if let Some(stripped) = normalized.strip_suffix("[]") {
+        stripped.trim()
+    } else {
+        return None;
+    };
+
+    // Map driver-reported element names to a canonical PostgreSQL type name
+    // suitable for use in an `::T[]` cast. Unknown element types fall back
+    // to `text` — safer than failing the literal emission, and the server
+    // will reject the cast if it really doesn't fit.
+    Some(match elem {
+        "bool" | "boolean" => "boolean",
+        "int2" | "smallint" => "int2",
+        "int4" | "integer" | "int" => "int4",
+        "int8" | "bigint" => "int8",
+        "float4" | "real" => "float4",
+        "float8" | "double precision" => "float8",
+        "numeric" | "decimal" => "numeric",
+        "text" => "text",
+        "varchar" | "character varying" => "varchar",
+        "bpchar" | "character" => "bpchar",
+        "uuid" => "uuid",
+        "json" => "json",
+        "jsonb" => "jsonb",
+        "date" => "date",
+        "time" => "time",
+        "timestamp" => "timestamp",
+        "timestamptz" => "timestamptz",
+        "inet" => "inet",
+        "citext" => "citext",
+        "name" => "name",
+        _ => "text",
+    })
+}
+
+/// Build a typed `ARRAY[...]::elem[]` literal for the given value and
+/// element type.
+///
+/// Accepts:
+/// - `Value::Null` — emitted as `NULL::elem[]`.
+/// - `Value::Array(items)` — items formatted individually as untyped PG
+///   literals.
+/// - `Value::Json(s)` — `s` is parsed as a JSON array (so a user-edited cell
+///   containing `["a","b"]` round-trips). Falls back to a Json fallback if
+///   parsing fails.
+/// - Any other variant — passed through `value_to_pg_literal` and wrapped as
+///   `ARRAY[<lit>]::elem[]`.
+fn format_pg_array_literal(value: &Value, elem_type: &str) -> String {
+    match value {
+        Value::Null => format!("NULL::{}[]", elem_type),
+
+        Value::Array(items) => {
+            let lits: Vec<String> = items.iter().map(value_to_pg_literal).collect();
+            format!("ARRAY[{}]::{}[]", lits.join(", "), elem_type)
+        }
+
+        Value::Json(s) => match serde_json::from_str::<JsonValue>(s) {
+            Ok(JsonValue::Array(items)) => {
+                let lits: Vec<String> = items.iter().map(json_value_to_pg_literal).collect();
+                format!("ARRAY[{}]::{}[]", lits.join(", "), elem_type)
+            }
+            // Non-array JSON for an array column is a real type mismatch —
+            // surface it by letting the server reject the cast rather than
+            // silently mangling the data.
+            _ => format!("{}::{}[]", pg_quote_string(s), elem_type),
+        },
+
+        other => format!("ARRAY[{}]::{}[]", value_to_pg_literal(other), elem_type),
+    }
+}
+
+/// Convert a JSON scalar to a PostgreSQL literal suitable as an array element.
+fn json_value_to_pg_literal(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => "NULL".to_string(),
+        JsonValue::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        JsonValue::Number(n) => n.to_string(),
+        JsonValue::String(s) => pg_quote_string(s),
+        // Nested objects/arrays in a flat array column don't have a clean
+        // mapping; pass the raw JSON text through as a quoted string and let
+        // the server error if the destination element type can't take it.
+        JsonValue::Array(_) | JsonValue::Object(_) => pg_quote_string(&value.to_string()),
+    }
+}
+
 /// Convert a Value to a safe PostgreSQL literal string.
 ///
 /// Uses escaped single-quoted literals for readable generated SQL.
@@ -3581,6 +3714,143 @@ fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
     }
 }
 
+// =============================================================================
+// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// =============================================================================
+//
+// Wiring note: `table_details()` on the `RelationalConnection` trait returns
+// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
+// layer would need to call `fetch_dependents` in the same background task that
+// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
+// That wiring is deferred to a follow-up slice once the fetch task pattern is
+// extended to return both `TableInfo` and `Vec<RelationRef>`.
+
+/// Fetch objects that depend on `schema.table` from a live PostgreSQL client.
+///
+/// Covers:
+///  - Views (`pg_class.relkind = 'v'`) depending on the table via `pg_depend`.
+///  - Materialized views (`pg_class.relkind = 'm'`).
+///  - Tables with a foreign-key referencing this table (`information_schema`).
+///  - Triggers defined on the table.
+///
+/// Returns an error if the query fails; returns an empty `Vec` when the table
+/// has no dependents.
+pub fn fetch_dependents(
+    client: &mut Client,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
+    use dbflux_core::{RelationKind, RelationRef};
+
+    let mut deps: Vec<RelationRef> = Vec::new();
+
+    // Views and materialized views via pg_depend
+    let view_rows = client
+        .query(
+            "
+        SELECT
+            n.nspname AS dep_schema,
+            c.relname AS dep_name,
+            c.relkind  AS dep_kind
+        FROM pg_depend d
+        JOIN pg_class c  ON c.oid = d.objid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_class src ON src.oid = d.refobjid
+        JOIN pg_namespace sn ON sn.oid = src.relnamespace
+        WHERE d.deptype = 'n'
+          AND src.relname = $1
+          AND sn.nspname  = $2
+          AND c.relkind IN ('v', 'm')
+        ",
+            &[&table, &schema],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
+
+    for row in view_rows {
+        let dep_schema: &str = row.get("dep_schema");
+        let dep_name: &str = row.get("dep_name");
+        let relkind: i8 = row.get("dep_kind");
+        let kind = if relkind == b'm' as i8 {
+            RelationKind::MaterializedView
+        } else {
+            RelationKind::View
+        };
+        deps.push(RelationRef {
+            kind,
+            qualified_name: format!("{}.{}", dep_schema, dep_name),
+        });
+    }
+
+    // FK child tables via information_schema
+    let fk_rows = client
+        .query(
+            "
+        SELECT
+            kcu.table_schema AS child_schema,
+            kcu.table_name   AS child_table,
+            kcu.column_name  AS child_col
+        FROM information_schema.referential_constraints rc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_name = rc.constraint_name
+         AND kcu.constraint_schema = rc.constraint_schema
+        JOIN information_schema.key_column_usage pku
+          ON pku.constraint_name = rc.unique_constraint_name
+         AND pku.constraint_schema = rc.unique_constraint_schema
+        WHERE pku.table_schema = $1
+          AND pku.table_name   = $2
+        GROUP BY kcu.table_schema, kcu.table_name, kcu.column_name
+        ",
+            &[&schema, &table],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
+
+    for row in fk_rows {
+        let child_schema: &str = row.get("child_schema");
+        let child_table: &str = row.get("child_table");
+        let child_col: &str = row.get("child_col");
+        let qualified = format!("{}.{}.{}", child_schema, child_table, child_col);
+
+        // Deduplicate: only add the table reference once per unique table.
+        let table_qname = format!("{}.{}", child_schema, child_table);
+        if !deps
+            .iter()
+            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == table_qname)
+        {
+            let _ = child_col;
+            deps.push(RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: table_qname,
+            });
+        }
+        let _ = qualified;
+    }
+
+    // Triggers on the table
+    let trigger_rows = client
+        .query(
+            "
+        SELECT trigger_schema, trigger_name
+        FROM information_schema.triggers
+        WHERE event_object_schema = $1
+          AND event_object_table  = $2
+        GROUP BY trigger_schema, trigger_name
+        ",
+            &[&schema, &table],
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents triggers: {}", e).into()))?;
+
+    for row in trigger_rows {
+        let trig_schema: &str = row.get("trigger_schema");
+        let trig_name: &str = row.get("trigger_name");
+        deps.push(RelationRef {
+            kind: RelationKind::Trigger,
+            qualified_name: format!("{}.{}", trig_schema, trig_name),
+        });
+    }
+
+    Ok(deps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3916,141 +4186,121 @@ mod tests {
 
         assert!(generator.generate_create_type(&request).is_none());
     }
-}
 
-// =============================================================================
-// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
-// =============================================================================
-//
-// Wiring note: `table_details()` on the `RelationalConnection` trait returns
-// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
-// layer would need to call `fetch_dependents` in the same background task that
-// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
-// That wiring is deferred to a follow-up slice once the fetch task pattern is
-// extended to return both `TableInfo` and `Vec<RelationRef>`.
+    // ===== Array literal emission (#76) =====
 
-/// Fetch objects that depend on `schema.table` from a live PostgreSQL client.
-///
-/// Covers:
-///  - Views (`pg_class.relkind = 'v'`) depending on the table via `pg_depend`.
-///  - Materialized views (`pg_class.relkind = 'm'`).
-///  - Tables with a foreign-key referencing this table (`information_schema`).
-///  - Triggers defined on the table.
-///
-/// Returns an error if the query fails; returns an empty `Vec` when the table
-/// has no dependents.
-pub fn fetch_dependents(
-    client: &mut Client,
-    schema: &str,
-    table: &str,
-) -> Result<Vec<dbflux_core::RelationRef>, DbError> {
-    use dbflux_core::{RelationKind, RelationRef};
+    use super::{format_pg_array_literal, pg_array_element_type, value_to_pg_literal_typed};
 
-    let mut deps: Vec<RelationRef> = Vec::new();
-
-    // Views and materialized views via pg_depend
-    let view_rows = client
-        .query(
-            "
-        SELECT
-            n.nspname AS dep_schema,
-            c.relname AS dep_name,
-            c.relkind  AS dep_kind
-        FROM pg_depend d
-        JOIN pg_class c  ON c.oid = d.objid
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        JOIN pg_class src ON src.oid = d.refobjid
-        JOIN pg_namespace sn ON sn.oid = src.relnamespace
-        WHERE d.deptype = 'n'
-          AND src.relname = $1
-          AND sn.nspname  = $2
-          AND c.relkind IN ('v', 'm')
-        ",
-            &[&table, &schema],
-        )
-        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
-
-    for row in view_rows {
-        let dep_schema: &str = row.get("dep_schema");
-        let dep_name: &str = row.get("dep_name");
-        let relkind: i8 = row.get("dep_kind");
-        let kind = if relkind == b'm' as i8 {
-            RelationKind::MaterializedView
-        } else {
-            RelationKind::View
-        };
-        deps.push(RelationRef {
-            kind,
-            qualified_name: format!("{}.{}", dep_schema, dep_name),
-        });
+    #[test]
+    fn pg_array_element_type_handles_internal_and_sql_names() {
+        assert_eq!(pg_array_element_type("_text"), Some("text"));
+        assert_eq!(pg_array_element_type("_int4"), Some("int4"));
+        assert_eq!(pg_array_element_type("text[]"), Some("text"));
+        assert_eq!(pg_array_element_type("integer[]"), Some("int4"));
+        assert_eq!(pg_array_element_type("BIGINT[]"), Some("int8"));
+        assert_eq!(pg_array_element_type("text"), None);
+        assert_eq!(pg_array_element_type("jsonb"), None);
     }
 
-    // FK child tables via information_schema
-    let fk_rows = client
-        .query(
-            "
-        SELECT
-            kcu.table_schema AS child_schema,
-            kcu.table_name   AS child_table,
-            kcu.column_name  AS child_col
-        FROM information_schema.referential_constraints rc
-        JOIN information_schema.key_column_usage kcu
-          ON kcu.constraint_name = rc.constraint_name
-         AND kcu.constraint_schema = rc.constraint_schema
-        JOIN information_schema.key_column_usage pku
-          ON pku.constraint_name = rc.unique_constraint_name
-         AND pku.constraint_schema = rc.unique_constraint_schema
-        WHERE pku.table_schema = $1
-          AND pku.table_name   = $2
-        GROUP BY kcu.table_schema, kcu.table_name, kcu.column_name
-        ",
-            &[&schema, &table],
-        )
-        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
-
-    for row in fk_rows {
-        let child_schema: &str = row.get("child_schema");
-        let child_table: &str = row.get("child_table");
-        let child_col: &str = row.get("child_col");
-        let qualified = format!("{}.{}.{}", child_schema, child_table, child_col);
-
-        // Deduplicate: only add the table reference once per unique table.
-        let table_qname = format!("{}.{}", child_schema, child_table);
-        if !deps
-            .iter()
-            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == table_qname)
-        {
-            let _ = child_col;
-            deps.push(RelationRef {
-                kind: RelationKind::ForeignKeyChild,
-                qualified_name: table_qname,
-            });
-        }
-        let _ = qualified;
+    #[test]
+    fn array_literal_from_value_array() {
+        let value = Value::Array(vec![
+            Value::Text("Espacio".into()),
+            Value::Text("hola".into()),
+        ]);
+        let sql = format_pg_array_literal(&value, "text");
+        assert_eq!(sql, "ARRAY['Espacio', 'hola']::text[]");
     }
 
-    // Triggers on the table
-    let trigger_rows = client
-        .query(
-            "
-        SELECT trigger_schema, trigger_name
-        FROM information_schema.triggers
-        WHERE event_object_schema = $1
-          AND event_object_table  = $2
-        GROUP BY trigger_schema, trigger_name
-        ",
-            &[&schema, &table],
-        )
-        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents triggers: {}", e).into()))?;
-
-    for row in trigger_rows {
-        let trig_schema: &str = row.get("trigger_schema");
-        let trig_name: &str = row.get("trigger_name");
-        deps.push(RelationRef {
-            kind: RelationKind::Trigger,
-            qualified_name: format!("{}.{}", trig_schema, trig_name),
-        });
+    #[test]
+    fn array_literal_from_json_array_string() {
+        // Cell was edited as JSON text in the data grid.
+        let value = Value::Json(r#"["Espacio","hola"]"#.into());
+        let sql = format_pg_array_literal(&value, "text");
+        assert_eq!(sql, "ARRAY['Espacio', 'hola']::text[]");
     }
 
-    Ok(deps)
+    #[test]
+    fn array_literal_int_elements() {
+        let value = Value::Json(r#"[1, 2, 3]"#.into());
+        let sql = format_pg_array_literal(&value, "int4");
+        assert_eq!(sql, "ARRAY[1, 2, 3]::int4[]");
+    }
+
+    #[test]
+    fn array_literal_null() {
+        let sql = format_pg_array_literal(&Value::Null, "text");
+        assert_eq!(sql, "NULL::text[]");
+    }
+
+    #[test]
+    fn array_literal_empty() {
+        let value = Value::Array(vec![]);
+        let sql = format_pg_array_literal(&value, "text");
+        assert_eq!(sql, "ARRAY[]::text[]");
+    }
+
+    #[test]
+    fn array_literal_escapes_single_quotes() {
+        let value = Value::Array(vec![Value::Text("it's".into())]);
+        let sql = format_pg_array_literal(&value, "text");
+        assert_eq!(sql, "ARRAY['it''s']::text[]");
+    }
+
+    #[test]
+    fn typed_literal_falls_back_to_jsonb_for_jsonb_column() {
+        let value = Value::Json(r#"{"k":1}"#.into());
+        let sql = value_to_pg_literal_typed(&value, Some("jsonb"));
+        assert_eq!(sql, "'{\"k\":1}'::jsonb");
+    }
+
+    #[test]
+    fn typed_literal_no_type_info_uses_default() {
+        let value = Value::Text("hi".into());
+        let sql = value_to_pg_literal_typed(&value, None);
+        assert_eq!(sql, "'hi'");
+    }
+
+    #[test]
+    fn typed_literal_routes_text_array_via_array_path() {
+        let value = Value::Array(vec![Value::Text("a".into())]);
+        let sql = value_to_pg_literal_typed(&value, Some("_text"));
+        assert_eq!(sql, "ARRAY['a']::text[]");
+    }
+
+    #[test]
+    fn typed_literal_null_for_array_column() {
+        // When the column type is known to be an array, emit `NULL::elem[]`
+        // explicitly. Bare `NULL` would also work in INSERT/UPDATE column
+        // position because the server infers from the destination, but an
+        // explicit cast is safer in expression contexts (e.g. COALESCE).
+        let sql = value_to_pg_literal_typed(&Value::Null, Some("_text"));
+        assert_eq!(sql, "NULL::text[]");
+    }
+
+    #[test]
+    fn typed_literal_null_no_type_info_stays_bare() {
+        let sql = value_to_pg_literal_typed(&Value::Null, None);
+        assert_eq!(sql, "NULL");
+    }
+
+    #[test]
+    fn pg_array_element_type_covers_common_string_aliases() {
+        assert_eq!(pg_array_element_type("_varchar"), Some("varchar"));
+        assert_eq!(pg_array_element_type("_bpchar"), Some("bpchar"));
+        assert_eq!(pg_array_element_type("varchar[]"), Some("varchar"));
+        assert_eq!(
+            pg_array_element_type("character varying[]"),
+            Some("varchar")
+        );
+    }
+
+    #[test]
+    fn array_literal_wraps_scalar_value_for_array_column() {
+        // Fallback path: caller passed a scalar where an array was expected.
+        // The dialect wraps it as a single-element ARRAY[...] literal and
+        // lets the server validate the element type.
+        let sql = format_pg_array_literal(&Value::Text("solo".into()), "text");
+        assert_eq!(sql, "ARRAY['solo']::text[]");
+    }
 }

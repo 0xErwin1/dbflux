@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnMeta,
-    Connection, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
+    CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo, ColumnInfo, ColumnKind,
+    ColumnMeta, Connection, ConnectionExt, ConnectionProfile, ConstraintInfo, ConstraintKind,
     CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection,
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest,
@@ -189,24 +189,23 @@ impl SqlDialect for SqliteDialect {
         &self,
         schema: Option<&str>,
         table: &str,
-        columns: &[String],
-        values: &[Value],
+        assignments: &[dbflux_core::ColumnAssignment],
         conflict_columns: &[String],
-        update_assignments: &[(String, Value)],
+        update_assignments: &[dbflux_core::ColumnAssignment],
     ) -> Option<String> {
-        if columns.is_empty() || columns.len() != values.len() || conflict_columns.is_empty() {
+        if assignments.is_empty() || conflict_columns.is_empty() {
             return None;
         }
 
         let table = self.qualified_table(schema, table);
-        let columns = columns
+        let columns = assignments
             .iter()
-            .map(|column| self.quote_identifier(column))
+            .map(|a| self.quote_identifier(&a.name))
             .collect::<Vec<_>>()
             .join(", ");
-        let values = values
+        let values = assignments
             .iter()
-            .map(|value| self.value_to_literal(value))
+            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
             .collect::<Vec<_>>()
             .join(", ");
         let conflict_columns = conflict_columns
@@ -224,11 +223,11 @@ impl SqlDialect for SqliteDialect {
 
         let update_clause = update_assignments
             .iter()
-            .map(|(column, value)| {
+            .map(|a| {
                 format!(
                     "{} = {}",
-                    self.quote_identifier(column),
-                    self.value_to_literal(value)
+                    self.quote_identifier(&a.name),
+                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
                 )
             })
             .collect::<Vec<_>>()
@@ -676,15 +675,33 @@ impl Connection for SqliteConnection {
             || sql_trimmed.starts_with("EXPLAIN");
 
         if is_query {
-            // For SELECT statements, use query() to get rows
+            // For SELECT statements, use query() to get rows.
+            // Use Statement::columns() (requires the `column_decltype` rusqlite feature)
+            // to get declared type strings, then apply SQLite affinity heuristics to
+            // populate ColumnKind. Columns whose declared type is NULL (dynamic columns
+            // or expressions) fall back to ColumnKind::Unknown.
             let column_count = stmt.column_count();
-            let column_names: Vec<String> =
-                stmt.column_names().iter().map(|s| s.to_string()).collect();
-            let columns: Vec<ColumnMeta> = column_names
+            let col_meta: Vec<(String, String, ColumnKind)> = stmt
+                .columns()
                 .into_iter()
-                .map(|name| ColumnMeta {
+                .map(|col| {
+                    let name = col.name().to_string();
+                    let decl = col.decl_type().unwrap_or("");
+                    let type_name = if decl.is_empty() {
+                        "TEXT".to_string()
+                    } else {
+                        decl.to_uppercase()
+                    };
+                    let kind = kind_from_decltype(col.decl_type());
+                    (name, type_name, kind)
+                })
+                .collect();
+            let columns: Vec<ColumnMeta> = col_meta
+                .into_iter()
+                .map(|(name, type_name, kind)| ColumnMeta {
                     name,
-                    type_name: "TEXT".to_string(),
+                    type_name,
+                    kind,
                     nullable: true,
                     is_primary_key: false,
                 })
@@ -1996,16 +2013,204 @@ fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
     }
 }
 
+/// Map a SQLite declared-type string to a `ColumnKind` using SQLite's type-affinity rules.
+///
+/// The mapping is case-insensitive substring matching following the SQLite type affinity
+/// algorithm (https://www.sqlite.org/datatype3.html), adapted to chart-column needs:
+/// - Contains "INT"                       → `Integer`
+/// - Contains "REAL", "FLOA", "DOUB",
+///   "NUMERIC", or "DECIMAL"             → `Float`
+/// - Contains "DATE", "TIME", or "STAMP" → `Timestamp`
+/// - Contains "CHAR", "TEXT", or "CLOB"  → `Text`
+/// - `None` (expression / dynamic type)
+///   or any other string                 → `Unknown`
+pub(crate) fn kind_from_decltype(decl: Option<&str>) -> ColumnKind {
+    let decl = match decl {
+        Some(d) if !d.is_empty() => d.to_uppercase(),
+        _ => return ColumnKind::Unknown,
+    };
+
+    if decl.contains("INT") {
+        return ColumnKind::Integer;
+    }
+
+    if decl.contains("REAL")
+        || decl.contains("FLOA")
+        || decl.contains("DOUB")
+        || decl.contains("NUMERIC")
+        || decl.contains("DECIMAL")
+    {
+        return ColumnKind::Float;
+    }
+
+    if decl.contains("DATE") || decl.contains("TIME") || decl.contains("STAMP") {
+        return ColumnKind::Timestamp;
+    }
+
+    if decl.contains("CHAR") || decl.contains("TEXT") || decl.contains("CLOB") {
+        return ColumnKind::Text;
+    }
+
+    ColumnKind::Unknown
+}
+
+// =============================================================================
+// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// =============================================================================
+//
+// Wiring note: `table_details()` on the `RelationalConnection` trait returns
+// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
+// layer would need to call `fetch_dependents` in the same background task that
+// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
+// That wiring is deferred to a follow-up slice once the fetch task pattern is
+// extended to return both `TableInfo` and `Vec<RelationRef>`.
+
+/// Fetch objects that depend on `table` from a live SQLite connection.
+///
+/// Covers:
+///  - Views defined in `sqlite_master` that reference this table.
+///  - Triggers defined on this table in `sqlite_master`.
+///  - Tables with a foreign key referencing this table via `pragma_foreign_key_list`.
+///
+/// Note: SQLite does not support materialized views.
+pub fn fetch_dependents(
+    conn: &RusqliteConnection,
+    table: &str,
+) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
+    use dbflux_core::{DbError, RelationKind, RelationRef};
+
+    let mut deps: Vec<RelationRef> = Vec::new();
+
+    // Views and triggers in sqlite_master
+    let mut stmt = conn
+        .prepare(
+            "SELECT type, name FROM sqlite_master
+             WHERE type IN ('view', 'trigger')
+               AND sql LIKE '%' || ?1 || '%'",
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents objects: {}", e).into()))?;
+
+    let rows: Vec<(String, String)> = stmt
+        .query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents query: {}", e).into()))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for (obj_type, obj_name) in rows {
+        let kind = match obj_type.as_str() {
+            "view" => RelationKind::View,
+            "trigger" => RelationKind::Trigger,
+            _ => continue,
+        };
+        deps.push(RelationRef {
+            kind,
+            qualified_name: obj_name,
+        });
+    }
+
+    // Foreign key children via pragma_foreign_key_list on all tables
+    let all_tables: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
+            })?;
+
+        stmt.query_map([], |row| row.get(0))
+            .map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
+    };
+
+    for child_table in all_tables {
+        let has_fk = {
+            let query = format!(
+                "SELECT 1 FROM pragma_foreign_key_list('{}') WHERE \"table\" = ?1 LIMIT 1",
+                child_table.replace('\'', "''")
+            );
+            let mut fk_stmt = conn.prepare(&query).map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents fk_check: {}", e).into())
+            })?;
+
+            fk_stmt.exists([table]).map_err(|e| {
+                DbError::QueryFailed(format!("fetch_dependents fk_check: {}", e).into())
+            })?
+        };
+
+        if has_fk {
+            deps.push(RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: child_table,
+            });
+        }
+    }
+
+    Ok(deps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        SqliteDialect, SqliteDriver, plan_sqlite_semantic_request, sqlite_generate_create_table,
+        SqliteDialect, SqliteDriver, kind_from_decltype, plan_sqlite_semantic_request,
+        sqlite_generate_create_table,
     };
     use dbflux_core::{
-        ColumnInfo, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
+        ColumnInfo, ColumnKind, DatabaseCategory, DbConfig, DbDriver, FormValues, MutationRequest,
         QueryLanguage, RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest, TableInfo,
         TableRef, Value, WhereOperator,
     };
+
+    // --- kind_from_decltype unit tests (TDD: RED → GREEN) ---
+
+    #[test]
+    fn kind_from_decltype_integer_variants() {
+        assert_eq!(kind_from_decltype(Some("INTEGER")), ColumnKind::Integer);
+        assert_eq!(kind_from_decltype(Some("INT")), ColumnKind::Integer);
+        assert_eq!(kind_from_decltype(Some("BIGINT")), ColumnKind::Integer);
+        assert_eq!(kind_from_decltype(Some("TINYINT")), ColumnKind::Integer);
+        assert_eq!(kind_from_decltype(Some("integer")), ColumnKind::Integer);
+    }
+
+    #[test]
+    fn kind_from_decltype_float_variants() {
+        assert_eq!(kind_from_decltype(Some("REAL")), ColumnKind::Float);
+        assert_eq!(kind_from_decltype(Some("FLOAT")), ColumnKind::Float);
+        assert_eq!(kind_from_decltype(Some("DOUBLE")), ColumnKind::Float);
+        assert_eq!(kind_from_decltype(Some("NUMERIC")), ColumnKind::Float);
+        assert_eq!(kind_from_decltype(Some("DECIMAL")), ColumnKind::Float);
+        assert_eq!(
+            kind_from_decltype(Some("double precision")),
+            ColumnKind::Float
+        );
+    }
+
+    #[test]
+    fn kind_from_decltype_timestamp_variants() {
+        assert_eq!(kind_from_decltype(Some("DATETIME")), ColumnKind::Timestamp);
+        assert_eq!(kind_from_decltype(Some("TIMESTAMP")), ColumnKind::Timestamp);
+        assert_eq!(kind_from_decltype(Some("DATE")), ColumnKind::Timestamp);
+        assert_eq!(kind_from_decltype(Some("TIME")), ColumnKind::Timestamp);
+        assert_eq!(kind_from_decltype(Some("datetime")), ColumnKind::Timestamp);
+    }
+
+    #[test]
+    fn kind_from_decltype_text_variants() {
+        assert_eq!(kind_from_decltype(Some("TEXT")), ColumnKind::Text);
+        assert_eq!(kind_from_decltype(Some("VARCHAR")), ColumnKind::Text);
+        assert_eq!(kind_from_decltype(Some("CHAR")), ColumnKind::Text);
+        assert_eq!(kind_from_decltype(Some("CLOB")), ColumnKind::Text);
+        assert_eq!(kind_from_decltype(Some("varchar(255)")), ColumnKind::Text);
+    }
+
+    #[test]
+    fn kind_from_decltype_unknown_cases() {
+        assert_eq!(kind_from_decltype(None), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("BLOB")), ColumnKind::Unknown);
+        assert_eq!(kind_from_decltype(Some("NONE")), ColumnKind::Unknown);
+    }
 
     #[test]
     fn build_config_requires_non_empty_path() {
@@ -2189,100 +2394,4 @@ mod tests {
             "SELECT \"customer_id\", AVG(\"amount\") AS \"avg_amount\" FROM \"orders\" GROUP BY \"customer_id\" HAVING \"avg_amount\" > 10"
         );
     }
-}
-
-// =============================================================================
-// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
-// =============================================================================
-//
-// Wiring note: `table_details()` on the `RelationalConnection` trait returns
-// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
-// layer would need to call `fetch_dependents` in the same background task that
-// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
-// That wiring is deferred to a follow-up slice once the fetch task pattern is
-// extended to return both `TableInfo` and `Vec<RelationRef>`.
-
-/// Fetch objects that depend on `table` from a live SQLite connection.
-///
-/// Covers:
-///  - Views defined in `sqlite_master` that reference this table.
-///  - Triggers defined on this table in `sqlite_master`.
-///  - Tables with a foreign key referencing this table via `pragma_foreign_key_list`.
-///
-/// Note: SQLite does not support materialized views.
-pub fn fetch_dependents(
-    conn: &RusqliteConnection,
-    table: &str,
-) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
-    use dbflux_core::{DbError, RelationKind, RelationRef};
-
-    let mut deps: Vec<RelationRef> = Vec::new();
-
-    // Views and triggers in sqlite_master
-    let mut stmt = conn
-        .prepare(
-            "SELECT type, name FROM sqlite_master
-             WHERE type IN ('view', 'trigger')
-               AND sql LIKE '%' || ?1 || '%'",
-        )
-        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents objects: {}", e).into()))?;
-
-    let rows: Vec<(String, String)> = stmt
-        .query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))
-        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents query: {}", e).into()))?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    for (obj_type, obj_name) in rows {
-        let kind = match obj_type.as_str() {
-            "view" => RelationKind::View,
-            "trigger" => RelationKind::Trigger,
-            _ => continue,
-        };
-        deps.push(RelationRef {
-            kind,
-            qualified_name: obj_name,
-        });
-    }
-
-    // Foreign key children via pragma_foreign_key_list on all tables
-    let all_tables: Vec<String> = {
-        let mut stmt = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
-            .map_err(|e| {
-                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
-            })?;
-
-        stmt.query_map([], |row| row.get(0))
-            .map_err(|e| {
-                DbError::QueryFailed(format!("fetch_dependents list_tables: {}", e).into())
-            })?
-            .filter_map(|r| r.ok())
-            .collect()
-    };
-
-    for child_table in all_tables {
-        let has_fk = {
-            let query = format!(
-                "SELECT 1 FROM pragma_foreign_key_list('{}') WHERE \"table\" = ?1 LIMIT 1",
-                child_table.replace('\'', "''")
-            );
-            let mut fk_stmt = conn.prepare(&query).map_err(|e| {
-                DbError::QueryFailed(format!("fetch_dependents fk_check: {}", e).into())
-            })?;
-
-            fk_stmt.exists([table]).map_err(|e| {
-                DbError::QueryFailed(format!("fetch_dependents fk_check: {}", e).into())
-            })?
-        };
-
-        if has_fk {
-            deps.push(RelationRef {
-                kind: RelationKind::ForeignKeyChild,
-                qualified_name: child_table,
-            });
-        }
-    }
-
-    Ok(deps)
 }

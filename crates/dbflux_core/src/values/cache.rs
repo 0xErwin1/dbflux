@@ -160,7 +160,7 @@ mod tests {
         for i in 0..10 {
             let cache = Arc::clone(&cache);
             handles.push(thread::spawn(move || {
-                let key = CacheKey::new("provider", &format!("key-{}", i), None);
+                let key = CacheKey::new("provider", format!("key-{}", i), None);
                 cache.put(key.clone(), CachedValue::Plain(format!("val-{}", i)));
 
                 for _ in 0..100 {

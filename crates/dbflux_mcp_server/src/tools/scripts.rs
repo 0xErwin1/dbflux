@@ -600,7 +600,8 @@ impl DbFluxServer {
             | QueryLanguage::RedisCommands
             | QueryLanguage::Cql
             | QueryLanguage::Cypher
-            | QueryLanguage::InfluxQuery => {
+            | QueryLanguage::InfluxQuery
+            | QueryLanguage::Flux => {
                 // Execute as query
                 Self::execute_query_content(state, connection_id, content).await
             }

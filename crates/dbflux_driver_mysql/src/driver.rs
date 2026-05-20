@@ -7,22 +7,22 @@ use std::time::Instant;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope, CodeGenerator, CodeGeneratorInfo,
-    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult, DatabaseCategory, DatabaseInfo,
-    DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
-    DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
-    DriverMetadata, DropForeignKeyRequest, DropIndexRequest, ExplainRequest, ForeignKeyBuilder,
-    ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel,
-    KeyValueConnection, MYSQL_FORM, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, Value,
-    ViewInfo, WhereOperator, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri,
+    ColumnInfo, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
+    ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
+    DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
+    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
+    IndexInfo, IsolationLevel, KeyValueConnection, MYSQL_FORM, MutationCapabilities, OrderByColumn,
+    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity,
+    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
+    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo,
+    TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template, render_semantic_filter_sql, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -356,24 +356,23 @@ impl SqlDialect for MysqlDialect {
         &self,
         schema: Option<&str>,
         table: &str,
-        columns: &[String],
-        values: &[Value],
+        assignments: &[dbflux_core::ColumnAssignment],
         _conflict_columns: &[String],
-        update_assignments: &[(String, Value)],
+        update_assignments: &[dbflux_core::ColumnAssignment],
     ) -> Option<String> {
-        if columns.is_empty() || columns.len() != values.len() {
+        if assignments.is_empty() {
             return None;
         }
 
         let table = self.qualified_table(schema, table);
-        let columns = columns
+        let columns = assignments
             .iter()
-            .map(|column| self.quote_identifier(column))
+            .map(|a| self.quote_identifier(&a.name))
             .collect::<Vec<_>>()
             .join(", ");
-        let values = values
+        let values = assignments
             .iter()
-            .map(|value| self.value_to_literal(value))
+            .map(|a| self.value_to_literal_typed(&a.value, a.type_name.as_deref()))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -386,11 +385,11 @@ impl SqlDialect for MysqlDialect {
 
         let update_clause = update_assignments
             .iter()
-            .map(|(column, value)| {
+            .map(|a| {
                 format!(
                     "{} = {}",
-                    self.quote_identifier(column),
-                    self.value_to_literal(value)
+                    self.quote_identifier(&a.name),
+                    self.value_to_literal_typed(&a.value, a.type_name.as_deref())
                 )
             })
             .collect::<Vec<_>>()
@@ -767,6 +766,138 @@ struct ExtractedMysqlConfig {
     /// MySQL native ssl-mode identifier (e.g. `"PREFERRED"`, `"VERIFY_CA"`). Defaults to `"PREFERRED"` when absent.
     ssl_mode: String,
     ssh_tunnel: Option<SshTunnelConfig>,
+}
+
+/// Map a MySQL column to a canonical SQL type label (e.g. `VARCHAR`,
+/// `BIGINT UNSIGNED`, `DECIMAL(10,2)`, `DATETIME`, `ENUM`).
+///
+/// The raw MySQL protocol type enum (`MYSQL_TYPE_VAR_STRING`, …) is not a
+/// user-facing label; mapping it here keeps driver internals out of the UI.
+fn mysql_type_to_sql_label(col: &mysql::Column) -> String {
+    use mysql::consts::{ColumnFlags, ColumnType as CT};
+
+    let col_type = col.column_type();
+    let flags = col.flags();
+    let is_unsigned = flags.contains(ColumnFlags::UNSIGNED_FLAG);
+    let is_binary = flags.contains(ColumnFlags::BINARY_FLAG);
+    let is_enum = flags.contains(ColumnFlags::ENUM_FLAG);
+    let is_set = flags.contains(ColumnFlags::SET_FLAG);
+
+    let unsigned_suffix = if is_unsigned { " UNSIGNED" } else { "" };
+
+    match col_type {
+        CT::MYSQL_TYPE_TINY => {
+            // TINYINT(1) is MySQL's idiomatic boolean; preserve the display width
+            // so users can tell it apart from a regular TINYINT.
+            if col.column_length() == 1 && !is_unsigned {
+                "TINYINT(1)".to_string()
+            } else {
+                format!("TINYINT{}", unsigned_suffix)
+            }
+        }
+        CT::MYSQL_TYPE_SHORT => format!("SMALLINT{}", unsigned_suffix),
+        CT::MYSQL_TYPE_INT24 => format!("MEDIUMINT{}", unsigned_suffix),
+        CT::MYSQL_TYPE_LONG => format!("INT{}", unsigned_suffix),
+        CT::MYSQL_TYPE_LONGLONG => format!("BIGINT{}", unsigned_suffix),
+
+        CT::MYSQL_TYPE_FLOAT => "FLOAT".to_string(),
+        CT::MYSQL_TYPE_DOUBLE => "DOUBLE".to_string(),
+
+        CT::MYSQL_TYPE_DECIMAL | CT::MYSQL_TYPE_NEWDECIMAL => {
+            let scale = col.decimals() as u32;
+            // column_length encodes the textual width including the sign and the
+            // decimal point — subtract them to recover the actual precision.
+            let raw_len = col.column_length();
+            let overhead = if scale > 0 { 2 } else { 1 };
+            let precision = raw_len.saturating_sub(overhead);
+            if precision > 0 {
+                format!("DECIMAL({},{})", precision, scale)
+            } else {
+                "DECIMAL".to_string()
+            }
+        }
+
+        CT::MYSQL_TYPE_DATE => "DATE".to_string(),
+        CT::MYSQL_TYPE_TIME | CT::MYSQL_TYPE_TIME2 => "TIME".to_string(),
+        CT::MYSQL_TYPE_DATETIME | CT::MYSQL_TYPE_DATETIME2 => "DATETIME".to_string(),
+        CT::MYSQL_TYPE_TIMESTAMP | CT::MYSQL_TYPE_TIMESTAMP2 => "TIMESTAMP".to_string(),
+        CT::MYSQL_TYPE_YEAR => "YEAR".to_string(),
+
+        CT::MYSQL_TYPE_BIT => "BIT".to_string(),
+        CT::MYSQL_TYPE_JSON => "JSON".to_string(),
+        CT::MYSQL_TYPE_GEOMETRY => "GEOMETRY".to_string(),
+        CT::MYSQL_TYPE_NULL => "NULL".to_string(),
+        CT::MYSQL_TYPE_ENUM => "ENUM".to_string(),
+        CT::MYSQL_TYPE_SET => "SET".to_string(),
+
+        CT::MYSQL_TYPE_VARCHAR | CT::MYSQL_TYPE_VAR_STRING => {
+            if is_enum {
+                "ENUM".to_string()
+            } else if is_set {
+                "SET".to_string()
+            } else if is_binary {
+                "VARBINARY".to_string()
+            } else {
+                "VARCHAR".to_string()
+            }
+        }
+        CT::MYSQL_TYPE_STRING => {
+            if is_enum {
+                "ENUM".to_string()
+            } else if is_set {
+                "SET".to_string()
+            } else if is_binary {
+                "BINARY".to_string()
+            } else {
+                "CHAR".to_string()
+            }
+        }
+
+        // BLOB family: the protocol uses one enum per size class for both the
+        // binary BLOB types and their textual counterparts. The BINARY_FLAG bit
+        // disambiguates them.
+        CT::MYSQL_TYPE_TINY_BLOB => if is_binary { "TINYBLOB" } else { "TINYTEXT" }.to_string(),
+        CT::MYSQL_TYPE_MEDIUM_BLOB => if is_binary {
+            "MEDIUMBLOB"
+        } else {
+            "MEDIUMTEXT"
+        }
+        .to_string(),
+        CT::MYSQL_TYPE_LONG_BLOB => if is_binary { "LONGBLOB" } else { "LONGTEXT" }.to_string(),
+        CT::MYSQL_TYPE_BLOB => if is_binary { "BLOB" } else { "TEXT" }.to_string(),
+
+        _ => "UNKNOWN".to_string(),
+    }
+}
+
+/// Map a MySQL column type to a semantic `ColumnKind`.
+fn mysql_type_to_kind(col_type: mysql::consts::ColumnType) -> ColumnKind {
+    use mysql::consts::ColumnType as CT;
+    match col_type {
+        CT::MYSQL_TYPE_TIMESTAMP
+        | CT::MYSQL_TYPE_DATETIME
+        | CT::MYSQL_TYPE_DATE
+        | CT::MYSQL_TYPE_TIMESTAMP2
+        | CT::MYSQL_TYPE_DATETIME2 => ColumnKind::Timestamp,
+
+        CT::MYSQL_TYPE_TINY
+        | CT::MYSQL_TYPE_SHORT
+        | CT::MYSQL_TYPE_LONG
+        | CT::MYSQL_TYPE_LONGLONG
+        | CT::MYSQL_TYPE_INT24 => ColumnKind::Integer,
+
+        CT::MYSQL_TYPE_FLOAT
+        | CT::MYSQL_TYPE_DOUBLE
+        | CT::MYSQL_TYPE_DECIMAL
+        | CT::MYSQL_TYPE_NEWDECIMAL => ColumnKind::Float,
+
+        CT::MYSQL_TYPE_VARCHAR
+        | CT::MYSQL_TYPE_VAR_STRING
+        | CT::MYSQL_TYPE_STRING
+        | CT::MYSQL_TYPE_BLOB => ColumnKind::Text,
+
+        _ => ColumnKind::Unknown,
+    }
 }
 
 fn extract_mysql_config(config: &DbConfig) -> Result<ExtractedMysqlConfig, DbError> {
@@ -1566,7 +1697,8 @@ impl Connection for MysqlConnection {
             .iter()
             .map(|col| ColumnMeta {
                 name: col.name_str().to_string(),
-                type_name: format!("{:?}", col.column_type()),
+                type_name: mysql_type_to_sql_label(col),
+                kind: mysql_type_to_kind(col.column_type()),
                 nullable: true,
                 is_primary_key: false,
             })
@@ -2014,9 +2146,9 @@ impl Connection for MysqlConnection {
 
         let select_sql = if last_id > 0 {
             let first_col = insert
-                .columns
+                .assignments
                 .first()
-                .map(|c| MYSQL_DIALECT.quote_identifier(c))
+                .map(|a| MYSQL_DIALECT.quote_identifier(&a.name))
                 .unwrap_or_else(|| "`id`".to_string());
             let table = MYSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
 
@@ -2025,7 +2157,7 @@ impl Connection for MysqlConnection {
                 table, first_col, last_id
             )
         } else {
-            let identity = RecordIdentity::composite(insert.columns.clone(), insert.values.clone());
+            let identity = RecordIdentity::composite(insert.column_names(), insert.values());
             builder
                 .build_select_by_identity(insert.schema.as_deref(), &insert.table, &identity)
                 .ok_or_else(|| DbError::query_failed("Failed to build SELECT query".to_string()))?
@@ -3070,6 +3202,83 @@ fn fetch_schema_foreign_keys(
     Ok(builder.build())
 }
 
+// =============================================================================
+// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
+// =============================================================================
+//
+// Wiring note: `table_details()` on the `RelationalConnection` trait returns
+// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
+// layer would need to call `fetch_dependents` in the same background task that
+// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
+// That wiring is deferred to a follow-up slice once the fetch task pattern is
+// extended to return both `TableInfo` and `Vec<RelationRef>`.
+
+/// Fetch objects that depend on `database.table` from a live MySQL/MariaDB connection.
+///
+/// Covers:
+///  - Views depending on the table via `information_schema.VIEW_TABLE_USAGE`.
+///  - Tables with a foreign key referencing this table via `information_schema.KEY_COLUMN_USAGE`.
+///
+/// Note: MySQL does not support materialized views or user-defined triggers on arbitrary tables
+/// in the same way PostgreSQL does; triggers are not included here.
+pub fn fetch_dependents(
+    conn: &mut Conn,
+    database: &str,
+    table: &str,
+) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
+    use dbflux_core::{DbError, RelationKind, RelationRef};
+    use mysql::prelude::Queryable;
+
+    let mut deps: Vec<RelationRef> = Vec::new();
+
+    // Views that use this table
+    let view_rows: Vec<(String, String)> = conn
+        .exec(
+            "SELECT TABLE_SCHEMA, TABLE_NAME
+             FROM information_schema.VIEW_TABLE_USAGE
+             WHERE VIEW_TABLE_SCHEMA = ?
+               AND VIEW_TABLE_NAME   = ?",
+            (database, table),
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
+
+    for (view_schema, view_name) in view_rows {
+        deps.push(RelationRef {
+            kind: RelationKind::View,
+            qualified_name: format!("{}.{}", view_schema, view_name),
+        });
+    }
+
+    // FK child tables
+    let fk_rows: Vec<(String, String)> = conn
+        .exec(
+            "SELECT DISTINCT kcu.TABLE_SCHEMA, kcu.TABLE_NAME
+             FROM information_schema.KEY_COLUMN_USAGE kcu
+             JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+               ON rc.CONSTRAINT_NAME   = kcu.CONSTRAINT_NAME
+              AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
+             WHERE rc.REFERENCED_TABLE_NAME = ?
+               AND kcu.REFERENCED_TABLE_SCHEMA = ?",
+            (table, database),
+        )
+        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
+
+    for (child_schema, child_table) in fk_rows {
+        let qualified = format!("{}.{}", child_schema, child_table);
+        if !deps
+            .iter()
+            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == qualified)
+        {
+            deps.push(RelationRef {
+                kind: RelationKind::ForeignKeyChild,
+                qualified_name: qualified,
+            });
+        }
+    }
+
+    Ok(deps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3297,81 +3506,4 @@ mod tests {
         assert!(!mysql.form_definition().tabs.is_empty());
         assert!(!mariadb.form_definition().tabs.is_empty());
     }
-}
-
-// =============================================================================
-// Dependents introspection (stub — not yet wired into ConnectedProfile cache)
-// =============================================================================
-//
-// Wiring note: `table_details()` on the `RelationalConnection` trait returns
-// `TableInfo` synchronously and has no access to `ConnectedProfile`. The app
-// layer would need to call `fetch_dependents` in the same background task that
-// fetches table details, then write the result via `ConnectedProfile::populate_dependents`.
-// That wiring is deferred to a follow-up slice once the fetch task pattern is
-// extended to return both `TableInfo` and `Vec<RelationRef>`.
-
-/// Fetch objects that depend on `database.table` from a live MySQL/MariaDB connection.
-///
-/// Covers:
-///  - Views depending on the table via `information_schema.VIEW_TABLE_USAGE`.
-///  - Tables with a foreign key referencing this table via `information_schema.KEY_COLUMN_USAGE`.
-///
-/// Note: MySQL does not support materialized views or user-defined triggers on arbitrary tables
-/// in the same way PostgreSQL does; triggers are not included here.
-pub fn fetch_dependents(
-    conn: &mut Conn,
-    database: &str,
-    table: &str,
-) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
-    use dbflux_core::{DbError, RelationKind, RelationRef};
-    use mysql::prelude::Queryable;
-
-    let mut deps: Vec<RelationRef> = Vec::new();
-
-    // Views that use this table
-    let view_rows: Vec<(String, String)> = conn
-        .exec(
-            "SELECT TABLE_SCHEMA, TABLE_NAME
-             FROM information_schema.VIEW_TABLE_USAGE
-             WHERE VIEW_TABLE_SCHEMA = ?
-               AND VIEW_TABLE_NAME   = ?",
-            (database, table),
-        )
-        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents views: {}", e).into()))?;
-
-    for (view_schema, view_name) in view_rows {
-        deps.push(RelationRef {
-            kind: RelationKind::View,
-            qualified_name: format!("{}.{}", view_schema, view_name),
-        });
-    }
-
-    // FK child tables
-    let fk_rows: Vec<(String, String)> = conn
-        .exec(
-            "SELECT DISTINCT kcu.TABLE_SCHEMA, kcu.TABLE_NAME
-             FROM information_schema.KEY_COLUMN_USAGE kcu
-             JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
-               ON rc.CONSTRAINT_NAME   = kcu.CONSTRAINT_NAME
-              AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
-             WHERE rc.REFERENCED_TABLE_NAME = ?
-               AND kcu.REFERENCED_TABLE_SCHEMA = ?",
-            (table, database),
-        )
-        .map_err(|e| DbError::QueryFailed(format!("fetch_dependents fk_children: {}", e).into()))?;
-
-    for (child_schema, child_table) in fk_rows {
-        let qualified = format!("{}.{}", child_schema, child_table);
-        if !deps
-            .iter()
-            .any(|d| d.kind == RelationKind::ForeignKeyChild && d.qualified_name == qualified)
-        {
-            deps.push(RelationRef {
-                kind: RelationKind::ForeignKeyChild,
-                qualified_name: qualified,
-            });
-        }
-    }
-
-    Ok(deps)
 }

@@ -245,9 +245,15 @@ impl SecretManager {
                 ssh_tunnel_profile_id,
                 ..
             } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
+            DbConfig::SqlServer {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => {
                 return None;
             }

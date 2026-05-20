@@ -308,13 +308,21 @@ impl CodeDocument {
             })
             .unwrap_or_else(|| "default".to_string());
 
+        let default_schema = self.exec_ctx.schema.clone();
+
         self.drift_preflight_running = true;
         cx.notify();
 
         let query_capture = query.clone();
 
         let task = cx.background_executor().spawn(async move {
-            check_schema_drift(&connection, &table_details, &query, &database)
+            check_schema_drift(
+                &connection,
+                &table_details,
+                &query,
+                &database,
+                default_schema.as_deref(),
+            )
         });
 
         cx.spawn(async move |this, cx| {
@@ -761,6 +769,7 @@ impl CodeDocument {
             query.as_deref(),
             duration_ms,
             None,
+            None,
         );
     }
 
@@ -855,6 +864,10 @@ impl CodeDocument {
                 let affected_rows = qr.affected_rows;
                 let row_count = affected_rows.unwrap_or(qr.rows.len() as u64);
                 let execution_time = qr.execution_time;
+
+                // Extract driver-provided audit fields before the result is moved into Arc.
+                let metadata_extra = qr.metadata_extra.clone();
+
                 record.rows_affected = Some(row_count);
                 let arc_result = Arc::new(qr);
                 record.result = Some(arc_result.clone());
@@ -926,6 +939,7 @@ impl CodeDocument {
                         Some(&pending.query),
                         duration_ms,
                         None,
+                        None,
                     );
                 } else {
                     self.emit_audit_event(
@@ -937,6 +951,7 @@ impl CodeDocument {
                         Some(&pending.query),
                         duration_ms,
                         None,
+                        metadata_extra.as_ref(),
                     );
                 }
             }
@@ -1010,6 +1025,7 @@ impl CodeDocument {
                         Some(&pending.query),
                         duration_ms,
                         Some(&error_msg),
+                        None,
                     );
                 } else {
                     self.emit_audit_event(
@@ -1021,6 +1037,7 @@ impl CodeDocument {
                         Some(&pending.query),
                         duration_ms,
                         Some(&error_msg),
+                        None,
                     );
                 }
             }
@@ -1056,8 +1073,10 @@ impl CodeDocument {
         } else if let Some(index) = self.active_result_index
             && let Some(tab) = self.result_tabs.get_mut(index)
         {
-            tab.grid
-                .update(cx, |g, cx| g.set_query_result(result, query.clone(), cx));
+            let profile_id = self.connection_id;
+            tab.grid.update(cx, |g, cx| {
+                g.set_query_result(result, query.clone(), profile_id, cx)
+            });
         }
     }
 
@@ -1073,8 +1092,22 @@ impl CodeDocument {
         let title = format!("Result {}", self.result_tab_counter);
 
         let app_state = self.app_state.clone();
-        let grid = cx
-            .new(|cx| DataGridPanel::new_for_result(result, query.clone(), app_state, window, cx));
+        let grid = cx.new(|cx| {
+            DataGridPanel::new_for_result(
+                result,
+                query.clone(),
+                self.connection_id,
+                app_state,
+                window,
+                cx,
+            )
+        });
+
+        if let Some(panel) = self.source_time_range_panel.clone() {
+            grid.update(cx, |g, cx| {
+                g.set_chart_time_range_panel(Some(panel), cx);
+            });
+        }
 
         let subscription = cx.subscribe(
             &grid,
@@ -1104,6 +1137,11 @@ impl CodeDocument {
                         title: title.clone(),
                         content: content.clone(),
                     });
+                }
+                DataGridEvent::ChartThisQuery { .. } => {
+                    // CodeDocument result tabs use QueryResult sources created without an
+                    // original_query, so can_chart_from_context_menu is always false for them.
+                    // This arm exists only for exhaustiveness.
                 }
             },
         );
@@ -1397,6 +1435,9 @@ impl CodeDocument {
                         text_body: Some(output),
                         raw_bytes: None,
                         next_page_token: None,
+                        resolved_window: None,
+                        metadata_extra: None,
+                        additional_results: Vec::new(),
                     })
                 }
                 Err(error) => Err(DbError::query_failed(error)),

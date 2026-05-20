@@ -9,6 +9,7 @@ use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::chart::detect_chart_columns;
 use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
@@ -568,6 +569,7 @@ impl DataGridPanel {
         let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
         let has_generate_sql = !is_document_view;
         let has_copy_query = self.has_copy_query_support();
+        let can_chart = self.can_chart_from_context_menu(cx);
 
         // Layout:
         //   [base items]
@@ -575,8 +577,12 @@ impl DataGridPanel {
         //   [Order trigger]?          (if has_order, shares separator with filter)
         //   [sep + GenSQL trigger]?   (if has_generate_sql)
         //   [sep + CopyQuery trigger]?(if has_copy_query)
-        let base_items =
-            Self::build_context_menu_items(is_editable, is_document_view, has_row_target);
+        let base_items = Self::build_context_menu_items(
+            is_editable,
+            is_document_view,
+            has_row_target,
+            can_chart,
+        );
         let base_count = base_items.len();
 
         // Filter: sep(1) + filter(1) = 2; Order adds 1 more
@@ -938,6 +944,7 @@ impl DataGridPanel {
         is_editable: bool,
         is_document_view: bool,
         has_row_target: bool,
+        can_chart: bool,
     ) -> Vec<ContextMenuItem> {
         if is_document_view {
             // Document view menu: Copy, View/Edit Document, CRUD operations
@@ -1103,6 +1110,23 @@ impl DataGridPanel {
             }
         }
 
+        if can_chart {
+            items.push(ContextMenuItem {
+                label: "",
+                action: None,
+                icon: None,
+                is_separator: true,
+                is_danger: false,
+            });
+            items.push(ContextMenuItem {
+                label: "Chart this query",
+                action: Some(ContextMenuAction::ChartThisQuery),
+                icon: Some(AppIcon::Zap),
+                is_separator: false,
+                is_danger: false,
+            });
+        }
+
         items
     }
 
@@ -1110,7 +1134,7 @@ impl DataGridPanel {
     /// This includes all visible items plus the Generate SQL trigger (for table view).
     #[allow(dead_code)]
     pub(super) fn context_menu_item_count(is_editable: bool, is_document_view: bool) -> usize {
-        let base_items = Self::build_context_menu_items(is_editable, is_document_view, true);
+        let base_items = Self::build_context_menu_items(is_editable, is_document_view, true, false);
         let base_count = base_items.iter().filter(|i| !i.is_separator).count();
         // Add 1 for Generate SQL only in table view
         if is_document_view {
@@ -1245,8 +1269,13 @@ impl DataGridPanel {
 
         // Build visible menu items list for keyboard navigation
         let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
-        let visible_items =
-            Self::build_context_menu_items(is_editable, menu.is_document_view, has_row_target);
+        let can_chart = self.can_chart_from_context_menu(cx);
+        let visible_items = Self::build_context_menu_items(
+            is_editable,
+            menu.is_document_view,
+            has_row_target,
+            can_chart,
+        );
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
 
@@ -2285,6 +2314,17 @@ impl DataGridPanel {
             }
             ContextMenuAction::InspectRow => {
                 self.open_row_inspector(menu.row, menu.col, cx);
+            }
+            ContextMenuAction::ChartThisQuery => {
+                let query = self.chart_host_current_query(cx);
+                let connection_id = self.chart_host_connection_id(cx);
+
+                if let Some(query) = query {
+                    cx.emit(DataGridEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    });
+                }
             }
         }
 
@@ -3854,6 +3894,26 @@ impl DataGridPanel {
         )
     }
 
+    /// Returns true when a "Chart this query" context menu item should be shown.
+    ///
+    /// The item only makes sense when the panel has a non-empty original query (i.e., a
+    /// `QueryResult` source) AND `detect_chart_columns` on the current result returns Ok.
+    fn can_chart_from_context_menu(&self, _cx: &App) -> bool {
+        let has_query = matches!(
+            &self.source,
+            DataSource::QueryResult { original_query, .. } if !original_query.is_empty()
+        );
+
+        if !has_query {
+            return false;
+        }
+
+        matches!(
+            detect_chart_columns(&self.result),
+            dbflux_components::chart::ChartDetection::Ok { .. }
+        )
+    }
+
     pub(super) fn handle_copy_as_query(
         &mut self,
         visual_row: usize,
@@ -3918,6 +3978,12 @@ impl DataGridPanel {
         let visual_order = buffer.compute_visual_order();
 
         let col_names: Vec<String> = self.result.columns.iter().map(|c| c.name.clone()).collect();
+        let col_types: Vec<String> = self
+            .result
+            .columns
+            .iter()
+            .map(|c| c.type_name.clone())
+            .collect();
 
         let row_values: Vec<Value> = match visual_order.get(visual_row).copied() {
             Some(VisualRowSource::Base(base_idx)) => {
@@ -3946,11 +4012,21 @@ impl DataGridPanel {
                     return None;
                 }
 
-                let insert = RowInsert::new(
+                let assignments: Vec<dbflux_core::ColumnAssignment> = col_names
+                    .iter()
+                    .zip(row_values.iter())
+                    .zip(col_types.iter())
+                    .map(|((name, value), type_name)| dbflux_core::ColumnAssignment {
+                        name: name.clone(),
+                        value: value.clone(),
+                        type_name: Some(type_name.clone()),
+                    })
+                    .collect();
+
+                let insert = RowInsert::with_typed_assignments(
                     table.name.clone(),
                     table.schema.clone(),
-                    col_names,
-                    row_values,
+                    assignments,
                 );
                 Some(MutationRequest::SqlInsert(insert))
             }
@@ -3983,16 +4059,27 @@ impl DataGridPanel {
 
                 let identity = RowIdentity::new(pk_columns, pk_values);
 
-                let changes: Vec<(String, Value)> = col_names
+                let changes: Vec<dbflux_core::ColumnAssignment> = col_names
                     .into_iter()
                     .zip(row_values)
+                    .zip(col_types)
                     .enumerate()
                     .filter(|(idx, _)| !pk_indices.contains(idx))
-                    .map(|(_, pair)| pair)
+                    .map(
+                        |(_, ((name, value), type_name))| dbflux_core::ColumnAssignment {
+                            name,
+                            value,
+                            type_name: Some(type_name),
+                        },
+                    )
                     .collect();
 
-                let patch =
-                    RowPatch::new(identity, table.name.clone(), table.schema.clone(), changes);
+                let patch = RowPatch::with_typed_changes(
+                    identity,
+                    table.name.clone(),
+                    table.schema.clone(),
+                    changes,
+                );
                 Some(MutationRequest::SqlUpdate(patch))
             }
 
@@ -4219,7 +4306,7 @@ mod tests {
 
     #[test]
     fn empty_table_menu_keeps_insert_actions_but_hides_row_actions() {
-        let items = DataGridPanel::build_context_menu_items(true, false, false);
+        let items = DataGridPanel::build_context_menu_items(true, false, false, false);
         let labels = labels(&items);
 
         assert!(labels.contains(&"Add Row"));
@@ -4231,14 +4318,14 @@ mod tests {
 
     #[test]
     fn non_editable_table_menu_stays_unchanged_without_row_target() {
-        let items = DataGridPanel::build_context_menu_items(false, false, false);
+        let items = DataGridPanel::build_context_menu_items(false, false, false, false);
 
         assert_eq!(labels(&items), vec!["Copy"]);
     }
 
     #[test]
     fn editable_table_menu_with_row_target_keeps_row_actions() {
-        let items = DataGridPanel::build_context_menu_items(true, false, true);
+        let items = DataGridPanel::build_context_menu_items(true, false, true, false);
         let labels = labels(&items);
 
         assert!(labels.contains(&"Edit"));
@@ -4246,5 +4333,30 @@ mod tests {
         assert!(labels.contains(&"Add Row"));
         assert!(labels.contains(&"Duplicate Row"));
         assert!(labels.contains(&"Delete Row"));
+    }
+
+    #[test]
+    fn chart_this_query_absent_when_can_chart_false() {
+        // can_chart = false: item must NOT appear regardless of other flags.
+        let table_items = DataGridPanel::build_context_menu_items(false, false, false, false);
+        assert!(!labels(&table_items).contains(&"Chart this query"));
+
+        let editable_items = DataGridPanel::build_context_menu_items(true, false, true, false);
+        assert!(!labels(&editable_items).contains(&"Chart this query"));
+    }
+
+    #[test]
+    fn chart_this_query_present_only_when_can_chart_true() {
+        // can_chart = true: item must appear.
+        let items = DataGridPanel::build_context_menu_items(false, false, false, true);
+        assert!(labels(&items).contains(&"Chart this query"));
+    }
+
+    #[test]
+    fn chart_this_query_absent_in_document_view_regardless_of_can_chart() {
+        // Document-view menu never shows Chart this query because the source is never
+        // a QueryResult when is_document_view is true.
+        let doc_items = DataGridPanel::build_context_menu_items(false, true, false, true);
+        assert!(!labels(&doc_items).contains(&"Chart this query"));
     }
 }

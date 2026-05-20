@@ -108,6 +108,8 @@ pub enum ContextMenuAction {
     RemoveOrdering,
     /// Open the row inspector panel for the selected row.
     InspectRow,
+    /// Open a new ChartDocument seeded with the current query and result columns.
+    ChartThisQuery,
 }
 
 /// Events emitted by the DataTable component.

@@ -413,6 +413,7 @@ mod tests {
 
         let dto = ServiceDto::new("test-socket".to_string());
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ServiceRepository::new(Arc::new(conn));
         repo.insert(&dto).expect("should insert");
 
@@ -436,6 +437,7 @@ mod tests {
             .run_all(&conn)
             .expect("migration should run");
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ServiceRepository::new(Arc::new(conn));
         let dto = ServiceDto {
             socket_id: "auth-socket".to_string(),
@@ -477,6 +479,7 @@ mod tests {
             .run_all(&conn)
             .expect("migration should run");
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ServiceRepository::new(Arc::new(conn));
         let dto = ServiceDto::new("driver-socket".to_string());
 

@@ -53,7 +53,7 @@
           # Import default.nix with crane support
           dbflux = import ./default.nix {
             inherit pkgs craneLib;
-            version = "0.6.0-dev.0";
+            version = "0.6.0-dev.5";
           };
 
           # Source build (current behavior, compiles locally via crane).
@@ -78,6 +78,10 @@
               rustToolchain
               pkgs.rust-analyzer
               opensslStatic.dev
+              # Faster, process-isolated test runner for the large workspace.
+              # Run with `cargo nextest run` (doctests still need `cargo test --doc`).
+              # mold is inherited from dbflux.nativeBuildInputs (see default.nix).
+              pkgs.cargo-nextest
             ];
 
             buildInputs = dbflux.buildInputs;

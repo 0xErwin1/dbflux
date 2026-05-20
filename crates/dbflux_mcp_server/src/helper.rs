@@ -51,15 +51,44 @@ pub fn json_to_db_value(value: serde_json::Value) -> Value {
     }
 }
 
-/// Serialize a QueryResult into a JSON value suitable for MCP responses
+/// Serialize a QueryResult into a JSON value suitable for MCP responses.
+///
+/// Drivers whose protocol can return multiple result sets per batch
+/// (currently MSSQL via `SELECT 1; SELECT 2;` or multi-`SELECT` stored
+/// procs) populate `QueryResult.additional_results`. Surfacing only the
+/// primary set across the MCP boundary would silently drop every set
+/// except the last, so when extras are present we emit a `result_sets`
+/// array containing every set in batch order.
 #[allow(dead_code)]
 pub fn serialize_query_result(result: &QueryResult) -> serde_json::Value {
     let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
     let rows = serialize_rows(result);
 
+    if result.has_additional_results() {
+        let result_sets: Vec<serde_json::Value> = result
+            .iter_result_sets()
+            .map(serialize_single_result_set)
+            .collect();
+        serde_json::json!({
+            "columns": columns,
+            "rows": rows,
+            "row_count": result.rows.len(),
+            "result_sets": result_sets,
+        })
+    } else {
+        serde_json::json!({
+            "columns": columns,
+            "rows": rows,
+            "row_count": result.rows.len(),
+        })
+    }
+}
+
+fn serialize_single_result_set(result: &QueryResult) -> serde_json::Value {
+    let columns: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
     serde_json::json!({
         "columns": columns,
-        "rows": rows,
+        "rows": serialize_rows(result),
         "row_count": result.rows.len(),
     })
 }
@@ -149,7 +178,7 @@ impl IntoErrorData for String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::{ColumnMeta, QueryResult, Value};
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
     use std::time::Duration;
 
     #[test]
@@ -165,6 +194,7 @@ mod tests {
             vec![ColumnMeta {
                 name: "id".into(),
                 type_name: "int".into(),
+                kind: ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: true,
             }],
@@ -174,5 +204,59 @@ mod tests {
         );
 
         assert_eq!(mutation_affected_rows(&result), 2);
+    }
+
+    #[test]
+    fn serialize_query_result_emits_result_sets_when_multiple_present() {
+        let column = |name: &str| ColumnMeta {
+            name: name.into(),
+            type_name: "int".into(),
+            kind: ColumnKind::Integer,
+            nullable: false,
+            is_primary_key: false,
+        };
+
+        let mut primary = QueryResult::table(
+            vec![column("b")],
+            vec![vec![Value::Int(2)]],
+            None,
+            Duration::ZERO,
+        );
+        let earlier = QueryResult::table(
+            vec![column("a")],
+            vec![vec![Value::Int(1)]],
+            None,
+            Duration::ZERO,
+        );
+        primary.push_additional_result(earlier);
+
+        let json = serialize_query_result(&primary);
+        let sets = json
+            .get("result_sets")
+            .and_then(|v| v.as_array())
+            .expect("result_sets present");
+        assert_eq!(sets.len(), 2);
+        // Primary first, then the earlier set in batch order.
+        assert_eq!(sets[0]["columns"][0], serde_json::json!("b"));
+        assert_eq!(sets[1]["columns"][0], serde_json::json!("a"));
+    }
+
+    #[test]
+    fn serialize_query_result_omits_result_sets_for_single_set() {
+        let result = QueryResult::table(
+            vec![ColumnMeta {
+                name: "n".into(),
+                type_name: "int".into(),
+                kind: ColumnKind::Integer,
+                nullable: false,
+                is_primary_key: false,
+            }],
+            vec![vec![Value::Int(1)]],
+            None,
+            Duration::ZERO,
+        );
+
+        let json = serialize_query_result(&result);
+        assert!(json.get("result_sets").is_none());
     }
 }

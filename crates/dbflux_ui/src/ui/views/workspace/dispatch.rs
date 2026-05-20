@@ -767,7 +767,7 @@ impl CommandDispatcher for Workspace {
                 false
             }
 
-            Command::ResultsAddRow | Command::ResultsCopyRow => {
+            Command::ResultsAddRow | Command::ResultsCopyRow | Command::ResultsCopyCell => {
                 if let Some(doc) = self.tab_manager.read(cx).active_document().cloned() {
                     doc.dispatch_command(cmd, window, cx);
                 }
@@ -781,6 +781,24 @@ impl CommandDispatcher for Workspace {
                     cmd
                 );
                 false
+            }
+
+            Command::OpenSavedChart => {
+                // Build a palette populated only with saved chart items,
+                // then open the command palette so the user can fuzzy-search them.
+                let chart_items = self.build_saved_chart_palette_items(cx);
+                if chart_items.is_empty() {
+                    Toast::warning("No saved charts for the current profile")
+                        .meta_right(now_hms())
+                        .push(cx);
+                } else {
+                    // Prepend the chart items before any other items so the
+                    // palette opens showing only charts (the user searched "open chart").
+                    self.command_palette.update(cx, |palette, cx| {
+                        palette.open_with_items(chart_items, window, cx);
+                    });
+                }
+                true
             }
 
             Command::OpenTabMenu => {

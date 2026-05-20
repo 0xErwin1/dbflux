@@ -65,6 +65,15 @@ impl TabManager {
                         content: content.clone(),
                     });
                 }
+                DocumentEvent::ChartThisQuery {
+                    query,
+                    connection_id,
+                } => {
+                    cx.emit(TabManagerEvent::ChartThisQuery {
+                        query: query.clone(),
+                        connection_id: *connection_id,
+                    });
+                }
                 _ => {}
             });
         });
@@ -384,6 +393,11 @@ pub enum TabManagerEvent {
     OpenInspector {
         title: gpui::SharedString,
         content: gpui::AnyView,
+    },
+    /// User requested "Chart this query" from a data document's context menu.
+    ChartThisQuery {
+        query: String,
+        connection_id: Option<uuid::Uuid>,
     },
 }
 

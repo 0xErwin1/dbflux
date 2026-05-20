@@ -21,6 +21,8 @@ pub enum DbKind {
     Redis,
     DynamoDB,
     CloudWatchLogs,
+    InfluxDB,
+    SqlServer,
 }
 
 impl DbKind {
@@ -34,8 +36,23 @@ impl DbKind {
             DbKind::Redis => "Redis",
             DbKind::DynamoDB => "DynamoDB",
             DbKind::CloudWatchLogs => "CloudWatch Logs",
+            DbKind::InfluxDB => "InfluxDB",
+            DbKind::SqlServer => "SQL Server",
         }
     }
+}
+
+/// InfluxDB API version.
+///
+/// Determines the authentication scheme and query API endpoint used by the driver.
+/// V2 uses token-based auth and the Flux/InfluxQL v2 API; V1 uses username/password
+/// and the InfluxQL v1 API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum InfluxVersion {
+    V1,
+    #[default]
+    V2,
 }
 
 /// Returns `true` when the given SSL mode id string requires a root CA certificate.
@@ -426,6 +443,78 @@ pub enum DbConfig {
         #[serde(default)]
         endpoint: Option<String>,
     },
+    /// InfluxDB connection parameters.
+    ///
+    /// Supports both v1 (InfluxQL, user/password) and v2 (Flux/InfluxQL, token-based).
+    /// `org` and `token` are v2-only; `retention_policy` is v1-only.
+    ///
+    /// `default_bucket` is optional: when absent the user selects a bucket (v2) or
+    /// database (v1) per-query from the source-context dropdown. When set it is
+    /// pre-selected in the editor but can always be overridden at query time.
+    InfluxDB {
+        version: InfluxVersion,
+        /// HTTP endpoint, e.g. "http://localhost:8086".
+        url: String,
+        /// Organization name (v2 only; ignored for v1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        org: Option<String>,
+        /// Default bucket (v2) or database (v1) to pre-select in the query editor.
+        ///
+        /// This is optional: leaving it unset allows the token/credentials to access
+        /// all buckets/databases and lets the user choose per-query from the dropdown.
+        ///
+        /// The `bucket_or_database` alias preserves backwards-compatibility with
+        /// profiles serialized before this field was made optional.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            alias = "bucket_or_database"
+        )]
+        default_bucket: Option<String>,
+        /// Retention policy name (v1 only; ignored for v2).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retention_policy: Option<String>,
+        /// Username for HTTP Basic auth (v1 only; ignored for v2 which uses token).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        /// Request timeout override in seconds (both versions).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_timeout_seconds: Option<u64>,
+    },
+    SqlServer {
+        #[serde(default)]
+        use_uri: bool,
+        #[serde(default)]
+        uri: Option<String>,
+        host: String,
+        port: u16,
+        user: String,
+        #[serde(default)]
+        database: Option<String>,
+        /// Optional named SQL Server instance (e.g. `"SQLEXPRESS"`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
+        /// SQL Server encryption mode id: `"off"`, `"on"`, or `"required"`.
+        ///
+        /// Maps to tiberius `EncryptionLevel::Off`, `EncryptionLevel::On`, and
+        /// `EncryptionLevel::Required`.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_ssl_mode_option"
+        )]
+        ssl_mode: Option<String>,
+        /// When true, the server certificate is accepted without validation
+        /// (equivalent to SqlServer's `TrustServerCertificate=true`).
+        #[serde(default)]
+        trust_server_certificate: bool,
+        /// Path to a root CA certificate (PEM/DER) for certificate validation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_root_cert_path: Option<String>,
+        ssh_tunnel: Option<SshTunnelConfig>,
+        #[serde(default)]
+        ssh_tunnel_profile_id: Option<Uuid>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -448,6 +537,8 @@ impl DbConfig {
             DbConfig::Redis { .. } => DbKind::Redis,
             DbConfig::DynamoDB { .. } => DbKind::DynamoDB,
             DbConfig::CloudWatchLogs { .. } => DbKind::CloudWatchLogs,
+            DbConfig::InfluxDB { .. } => DbKind::InfluxDB,
+            DbConfig::SqlServer { .. } => DbKind::SqlServer,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -538,6 +629,18 @@ impl DbConfig {
         }
     }
 
+    pub fn default_influxdb() -> Self {
+        DbConfig::InfluxDB {
+            version: InfluxVersion::V2,
+            url: "http://localhost:8086".to_string(),
+            org: None,
+            default_bucket: None,
+            retention_policy: None,
+            user: None,
+            request_timeout_seconds: None,
+        }
+    }
+
     pub fn default_cloudwatch_logs() -> Self {
         DbConfig::CloudWatchLogs {
             region: "us-east-1".to_string(),
@@ -546,15 +649,34 @@ impl DbConfig {
         }
     }
 
+    pub fn default_sqlserver() -> Self {
+        DbConfig::SqlServer {
+            use_uri: false,
+            uri: None,
+            host: "localhost".to_string(),
+            port: 1433,
+            user: "sa".to_string(),
+            database: None,
+            instance: None,
+            ssl_mode: Some("on".to_string()),
+            trust_server_certificate: true,
+            ssl_root_cert_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
             | DbConfig::MySQL { ssh_tunnel, .. }
             | DbConfig::MongoDB { ssh_tunnel, .. }
-            | DbConfig::Redis { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
+            | DbConfig::Redis { ssh_tunnel, .. }
+            | DbConfig::SqlServer { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -577,10 +699,15 @@ impl DbConfig {
             | DbConfig::Redis {
                 ssh_tunnel_profile_id,
                 ..
+            }
+            | DbConfig::SqlServer {
+                ssh_tunnel_profile_id,
+                ..
             } => *ssh_tunnel_profile_id,
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -607,10 +734,16 @@ impl DbConfig {
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
+            }
+            | DbConfig::SqlServer {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
             } => ssh_tunnel.is_some() || ssh_tunnel_profile_id.is_some(),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => false,
         }
     }
@@ -621,10 +754,12 @@ impl DbConfig {
             DbConfig::Postgres { host, port, .. }
             | DbConfig::MySQL { host, port, .. }
             | DbConfig::MongoDB { host, port, .. }
-            | DbConfig::Redis { host, port, .. } => Some((host, *port)),
+            | DbConfig::Redis { host, port, .. }
+            | DbConfig::SqlServer { host, port, .. } => Some((host, *port)),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -655,6 +790,12 @@ impl DbConfig {
                 port,
                 use_uri,
                 ..
+            }
+            | DbConfig::SqlServer {
+                host,
+                port,
+                use_uri,
+                ..
             } => {
                 *host = "127.0.0.1".to_string();
                 *port = tunnel_port;
@@ -663,6 +804,7 @@ impl DbConfig {
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -676,10 +818,12 @@ impl DbConfig {
             DbConfig::Postgres { use_uri, uri, .. }
             | DbConfig::MySQL { use_uri, uri, .. }
             | DbConfig::MongoDB { use_uri, uri, .. }
-            | DbConfig::Redis { use_uri, uri, .. } => (use_uri, uri),
+            | DbConfig::Redis { use_uri, uri, .. }
+            | DbConfig::SqlServer { use_uri, uri, .. } => (use_uri, uri),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
             | DbConfig::External { .. } => {
                 return None;
             }
@@ -708,8 +852,10 @@ impl DbConfig {
             DbConfig::MySQL { database, .. } => database.clone(),
             DbConfig::MongoDB { database, .. } => database.clone(),
             DbConfig::Redis { database, .. } => database.map(|d| d.to_string()),
+            DbConfig::SqlServer { database, .. } => database.clone(),
             DbConfig::SQLite { .. } => Some("main".to_string()),
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
+            DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
             DbConfig::External { .. } => None,
         }
     }
@@ -835,6 +981,33 @@ impl DbConfig {
                     ssh_tunnel_profile_id,
                 })
             }
+            DbConfig::SqlServer {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                instance,
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => Ok(DbConfig::SqlServer {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database: Some(database.to_string()),
+                instance,
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+            }),
             _ => Err("Changing database is not supported for this database type".to_string()),
         }
     }
@@ -1120,6 +1293,8 @@ impl ConnectionProfile {
             DbKind::Redis => "redis",
             DbKind::DynamoDB => "dynamodb",
             DbKind::CloudWatchLogs => "cloudwatch",
+            DbKind::InfluxDB => "influxdb",
+            DbKind::SqlServer => "mssql",
         }
     }
 
@@ -1178,6 +1353,10 @@ impl ConnectionProfile {
                 ..
             }
             | DbConfig::Redis {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            }
+            | DbConfig::SqlServer {
                 ssh_tunnel_profile_id: Some(id),
                 ..
             } => AccessKind::Ssh {
@@ -1684,6 +1863,31 @@ mod tests {
         assert!(governance.enabled);
         assert_eq!(governance.policy_bindings.len(), 1);
         assert_eq!(governance.policy_bindings[0].actor_id, "agent-a");
+    }
+
+    // --- InfluxVersion tests ---
+
+    #[test]
+    fn influx_version_default_is_v2() {
+        assert_eq!(InfluxVersion::default(), InfluxVersion::V2);
+    }
+
+    #[test]
+    fn influx_version_serde_roundtrip() {
+        let v1 = InfluxVersion::V1;
+        let v2 = InfluxVersion::V2;
+
+        let v1_json = serde_json::to_string(&v1).expect("serialize V1");
+        let v2_json = serde_json::to_string(&v2).expect("serialize V2");
+
+        assert_eq!(v1_json, "\"v1\"");
+        assert_eq!(v2_json, "\"v2\"");
+
+        let v1_back: InfluxVersion = serde_json::from_str(&v1_json).expect("deserialize V1");
+        let v2_back: InfluxVersion = serde_json::from_str(&v2_json).expect("deserialize V2");
+
+        assert_eq!(v1_back, InfluxVersion::V1);
+        assert_eq!(v2_back, InfluxVersion::V2);
     }
 
     // --- TestConnectionResult::format_body tests ---

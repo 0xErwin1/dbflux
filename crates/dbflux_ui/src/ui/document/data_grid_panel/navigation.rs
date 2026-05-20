@@ -639,6 +639,10 @@ impl DataGridPanel {
                 }
                 true
             }
+            Command::ResultsCopyCell => {
+                self.handle_copy(window, cx);
+                true
+            }
             _ => false,
         }
     }

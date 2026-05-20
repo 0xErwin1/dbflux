@@ -323,6 +323,33 @@ impl LanguageService for SqlLanguageService {
     }
 }
 
+/// Language service for T-SQL (Microsoft SQL Server).
+///
+/// Behaves like `SqlLanguageService` for dangerous-query detection (the
+/// destructive keywords DROP/TRUNCATE/DELETE are spelled identically), but
+/// skips the live parse diagnostics entirely. The shared `tree-sitter-sequel`
+/// grammar follows generic ANSI SQL and flags T-SQL-only constructs as
+/// errors — `SELECT TOP n`, `OUTPUT INSERTED.*`, `MERGE`, `CROSS APPLY /
+/// OUTER APPLY`, table hints like `WITH (NOLOCK)`, `OFFSET … ROWS FETCH
+/// NEXT … ROWS ONLY`, etc. The server is the source of truth for syntax
+/// validity; surfacing parser false-positives in the editor only adds
+/// noise.
+pub struct TSqlLanguageService;
+
+impl LanguageService for TSqlLanguageService {
+    fn validate(&self, _query: &str) -> ValidationResult {
+        ValidationResult::Valid
+    }
+
+    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
+        detect_dangerous_sql(query)
+    }
+
+    fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
+        Vec::new()
+    }
+}
+
 /// Produce editor diagnostics for SQL using tree-sitter error nodes.
 fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
     if query.trim().is_empty() {
@@ -353,7 +380,49 @@ fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
     diagnostics
 }
 
+/// Detect whether the query contains a complete PostgreSQL dollar-quoted block
+/// (e.g. `$$ ... $$` or `$tag$ ... $tag$`).
+///
+/// The bundled tree-sitter SQL grammar does not understand dollar quoting or
+/// PL/pgSQL bodies, so any query using them produces spurious ERROR nodes.
+/// Requiring a *closed* block avoids masking genuine syntax errors in plain
+/// SQL that merely contains a stray `$`.
+fn contains_dollar_quoted_block(query: &str) -> bool {
+    let bytes = query.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            index += 1;
+            continue;
+        }
+
+        let mut tag_end = index + 1;
+        while tag_end < bytes.len()
+            && (bytes[tag_end] == b'_' || bytes[tag_end].is_ascii_alphanumeric())
+        {
+            tag_end += 1;
+        }
+
+        if tag_end < bytes.len() && bytes[tag_end] == b'$' {
+            let tag = &query[index..=tag_end];
+
+            if query[tag_end + 1..].contains(tag) {
+                return true;
+            }
+        }
+
+        index += 1;
+    }
+
+    false
+}
+
 fn should_skip_sql_parse_diagnostics(query: &str) -> bool {
+    if contains_dollar_quoted_block(query) {
+        return true;
+    }
+
     query
         .split(';')
         .map(strip_leading_comments)
@@ -1200,6 +1269,40 @@ mod tests {
             "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sesquire;",
         );
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn postgres_do_dollar_quoted_block_has_no_diagnostics() {
+        let query = r#"DO $$
+DECLARE
+    r record;
+BEGIN
+    FOR r IN
+        SELECT schemaname, tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+    LOOP
+        EXECUTE format(
+            'GRANT SELECT ON TABLE %I.%I TO sesquire',
+            r.schemaname,
+            r.tablename
+        );
+    END LOOP;
+END $$;"#;
+        assert!(sql_editor_diagnostics(query).is_empty());
+    }
+
+    #[test]
+    fn postgres_tagged_dollar_quoted_block_has_no_diagnostics() {
+        let diags = sql_editor_diagnostics("DO $body$ BEGIN PERFORM 1; END $body$;");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn stray_dollar_sign_still_reports_diagnostics() {
+        // A lone `$` is not a closed dollar-quoted block, so real errors still surface.
+        let diags = sql_editor_diagnostics("SELEC $ FROM users");
+        assert!(!diags.is_empty());
     }
 
     // ==================== Redis tests ====================

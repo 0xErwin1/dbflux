@@ -873,6 +873,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SessionRepository::new(Arc::new(conn));
 
         let dto = SessionDto {
@@ -899,6 +900,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SessionRepository::new(Arc::new(conn));
 
         let dto1 = SessionDto {
@@ -936,6 +938,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SessionRepository::new(Arc::new(conn));
 
         let session_id = Uuid::new_v4().to_string();
@@ -987,6 +990,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SessionRepository::new(Arc::new(conn));
 
         let manifest = WorkspaceSessionManifest {
@@ -1029,6 +1033,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SessionRepository::new(Arc::new(conn));
 
         let session_id = Uuid::new_v4().to_string();
@@ -1059,6 +1064,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SessionRepository::new(Arc::new(conn));
 
         // Create a temp artifact store directory
@@ -1151,6 +1157,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let arc_conn = Arc::new(conn);
         let repo = SessionRepository::new(arc_conn.clone());
 
@@ -1227,6 +1234,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let arc_conn = Arc::new(conn);
         let repo = SessionRepository::new(arc_conn.clone());
 
@@ -1297,6 +1305,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let arc_conn = Arc::new(conn);
         let repo = SessionRepository::new(arc_conn.clone());
 
@@ -1423,6 +1432,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let arc_conn = Arc::new(conn);
         let repo = SessionRepository::new(arc_conn.clone());
 
@@ -1524,6 +1534,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SessionRepository::new(Arc::new(conn));
 
         let manifest = WorkspaceSessionManifest {
@@ -1600,6 +1611,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SessionRepository::new(Arc::new(conn));
 
         for i in 0..3 {

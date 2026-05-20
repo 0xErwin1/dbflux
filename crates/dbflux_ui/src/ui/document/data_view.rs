@@ -104,6 +104,7 @@ mod tests {
         DataSource::QueryResult {
             result: Arc::new(result),
             original_query: "SELECT 1".to_string(),
+            profile_id: None,
         }
     }
 
