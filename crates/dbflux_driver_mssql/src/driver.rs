@@ -55,6 +55,14 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     uri_scheme: "sqlserver".into(),
     icon: Icon::Database,
     syntax: Some(SyntaxInfo {
+        // T-SQL identifiers are bracketed (`[name]`), but `SyntaxInfo`
+        // models the quote as a single `char`. The dialect's
+        // `quote_identifier` (see `MssqlDialect` impl) emits the
+        // bracket-pair form correctly and is the authoritative source
+        // for SQL generation. The `'"'` here is a placeholder — T-SQL
+        // does accept `"name"` when `QUOTED_IDENTIFIER` is ON, so it is
+        // not actively wrong, but new consumers should call
+        // `dialect().quote_identifier()` rather than reading this field.
         identifier_quote: '"',
         string_quote: '\'',
         placeholder_style: PlaceholderStyle::QuestionMark,
