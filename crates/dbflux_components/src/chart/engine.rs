@@ -394,6 +394,21 @@ impl ChartView {
         })
     }
 
+    /// Switch the chart kind in place. Cheap — the `RenderModel` is kind-agnostic
+    /// (decimated points, ticks, and bounds are identical for Line and Bar), so
+    /// only `render` needs to re-run.
+    pub fn set_kind(&mut self, kind: crate::chart::spec::ChartKind, cx: &mut Context<Self>) {
+        if self.spec.kind != kind {
+            self.spec.kind = kind;
+            cx.notify();
+        }
+    }
+
+    /// The current chart kind.
+    pub fn kind(&self) -> crate::chart::spec::ChartKind {
+        self.spec.kind
+    }
+
     /// Update legend visibility. Cheap — does not rebuild the render model.
     pub fn set_legend_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         self.spec.legend_visible = visible;
@@ -584,6 +599,57 @@ impl ChartView {
 
         let cursor_data_x = x_min + (rel_x as f64 / plot_w as f64) * x_range;
 
+        // Bar charts focus by column: the series whose bar sits horizontally
+        // under the cursor wins across the bar's full height — not only near its
+        // top where the data point lives (which is how the line hit-test below
+        // works). This mirrors the geometry in `paint_bars`, including the bar
+        // x-inset, so the hit area matches the painted bars exactly.
+        if matches!(self.spec.kind, crate::chart::spec::ChartKind::Bar) {
+            let visible: Vec<usize> = (0..self.render_model.decimated.len())
+                .filter(|i| !self.hidden.contains(i))
+                .collect();
+            if visible.is_empty() {
+                return;
+            }
+
+            let num_visible = visible.len();
+            let max_points = self
+                .render_model
+                .decimated
+                .iter()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(1)
+                .max(1);
+
+            let x_pad = plot_w * (0.5 / max_points as f32);
+            let usable_w = (plot_w - 2.0 * x_pad).max(1.0);
+            let slot_w = plot_w / max_points as f32;
+            let group_w = slot_w * 0.8;
+            let bar_w = (group_w / num_visible as f32).max(1.0);
+
+            let data_to_screen_x = |dx: f64| -> f32 {
+                plot_x0 + x_pad + ((dx - x_min) / x_range * usable_w as f64) as f32
+            };
+
+            let cursor_sx = f32::from(hover_x);
+
+            for (group_pos, &s_idx) in visible.iter().enumerate() {
+                let offset = group_pos as f32 * bar_w - group_w / 2.0;
+                for &(x, _) in &self.render_model.decimated[s_idx] {
+                    let bar_left = data_to_screen_x(x) + offset;
+                    let bar_right = bar_left + bar_w * 0.92;
+                    if cursor_sx >= bar_left && cursor_sx <= bar_right {
+                        self.focused_series_idx = s_idx;
+                        return;
+                    }
+                }
+            }
+
+            // Cursor fell in a gap between bars: keep the current focus.
+            return;
+        }
+
         let data_to_screen_y =
             |dy: f64| -> f32 { plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32 };
 
@@ -642,19 +708,21 @@ impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::chart::spec::ChartKind;
 
-        // Non-Line chart kinds render a placeholder frame. The full Bar and
-        // Scatter implementations ship in the next change once the seams are
-        // in place. This branch must never panic.
-        let is_placeholder = match self.spec.kind {
-            ChartKind::Line => false,
-            ChartKind::Bar | ChartKind::Scatter => true,
+        let kind = self.spec.kind;
+
+        // `Line` and `Bar` share the same plot frame (axes, gridlines, ticks)
+        // and only differ in how each series is painted. `Scatter` still renders
+        // a placeholder frame until its paint arm lands. This branch must never
+        // panic.
+        let is_placeholder = match kind {
+            ChartKind::Line | ChartKind::Bar => false,
+            ChartKind::Scatter => true,
         };
 
         if is_placeholder {
-            let label = match self.spec.kind {
-                ChartKind::Bar => "Bar chart coming soon",
+            let label = match kind {
                 ChartKind::Scatter => "Scatter chart coming soon",
-                ChartKind::Line => unreachable!(),
+                ChartKind::Line | ChartKind::Bar => unreachable!(),
             };
             return div()
                 .flex()
@@ -682,6 +750,33 @@ impl Render for ChartView {
         let x_range = (x_max - x_min).max(1.0);
         let y_range = (y_max - y_min).max(1.0);
 
+        // Bar charts need breathing room the line chart does not: vertical
+        // headroom so the tallest bar never touches the top border, and a
+        // horizontal inset of half a column so the first and last bars sit fully
+        // inside the plot instead of being clipped against its edges. Line keeps
+        // the full range — its points are meant to reach the edges.
+        let is_bar = matches!(kind, ChartKind::Bar);
+
+        let (y_max, y_range) = if is_bar {
+            let padded_max = y_max + y_range * 0.08;
+            (padded_max, (padded_max - y_min).max(1.0))
+        } else {
+            (y_max, y_range)
+        };
+
+        let bar_x_inset_fraction: f32 = if is_bar {
+            let max_points = model
+                .decimated
+                .iter()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(1)
+                .max(1);
+            0.5 / max_points as f32
+        } else {
+            0.0
+        };
+
         let palette = model.palette_colors.clone();
         let decimated = model.decimated.clone();
         let x_is_time = spec.x_axis.kind == AxisKind::Time;
@@ -706,6 +801,8 @@ impl Render for ChartView {
         let hover_x_canvas = hover_x;
         let y_tick_labels_canvas = y_tick_labels.clone();
         let hidden_canvas = self.hidden.clone();
+        let kind_canvas = kind;
+        let bar_x_inset_canvas = bar_x_inset_fraction;
 
         // Shared plot-area bounds: written by the canvas prepaint closure,
         // read here to compute the readout and inside the on_mouse_move
@@ -800,8 +897,15 @@ impl Render for ChartView {
                                 let plot_w = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
                                 let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
 
+                                // Bars inset both edges by half a column so the
+                                // first/last bar fits; Line uses the full width
+                                // (inset fraction is 0).
+                                let x_pad = plot_w * bar_x_inset_canvas;
+                                let usable_w = (plot_w - 2.0 * x_pad).max(1.0);
                                 let data_to_screen_x = |dx: f64| -> f32 {
-                                    plot_x0 + ((dx - x_min) / x_range * plot_w as f64) as f32
+                                    plot_x0
+                                        + x_pad
+                                        + ((dx - x_min) / x_range * usable_w as f64) as f32
                                 };
                                 let data_to_screen_y = |dy: f64| -> f32 {
                                     // Y is inverted: top = y_max, bottom = y_min.
@@ -850,80 +954,107 @@ impl Render for ChartView {
                                     ));
                                 }
 
-                                // --- Series polylines (two-pass) ---
+                                // --- Series painting ---
                                 //
-                                // Pass 1: all non-focused series at 2.0 px so they
-                                // render below the focused line.
-                                // Pass 2: focused series at 2.8 px, composited on top.
-                                let paint_series =
-                                    |pts: &[(f64, f64)],
-                                     color: Hsla,
-                                     stroke_w: f32,
-                                     window: &mut Window| {
-                                        if pts.is_empty() {
-                                            return;
-                                        }
-                                        if pts.len() == 1 {
-                                            // Single-point fallback: paint a square whose
-                                            // side scales with stroke width.
-                                            let half = stroke_w * 1.5;
-                                            let sx = data_to_screen_x(pts[0].0);
-                                            let sy = data_to_screen_y(pts[0].1);
-                                            window.paint_quad(fill(
-                                                gpui::Bounds {
-                                                    origin: point(
-                                                        gpui::px(sx - half),
-                                                        gpui::px(sy - half),
-                                                    ),
-                                                    size: gpui::Size {
-                                                        width: gpui::px(half * 2.0),
-                                                        height: gpui::px(half * 2.0),
-                                                    },
-                                                },
-                                                color,
-                                            ));
-                                        } else {
-                                            let mut builder =
-                                                PathBuilder::stroke(gpui::px(stroke_w));
-                                            let (x0, y0) = pts[0];
-                                            builder.move_to(point(
-                                                gpui::px(data_to_screen_x(x0)),
-                                                gpui::px(data_to_screen_y(y0)),
-                                            ));
-                                            for &(x, y) in pts.iter().skip(1) {
-                                                builder.line_to(point(
-                                                    gpui::px(data_to_screen_x(x)),
-                                                    gpui::px(data_to_screen_y(y)),
-                                                ));
-                                            }
-                                            if let Ok(path) = builder.build() {
-                                                window.paint_path(path, color);
-                                            }
-                                        }
-                                    };
+                                // Line and Bar share the plot frame painted above
+                                // and differ only in per-series geometry: Line draws
+                                // polylines (focused series composited on top); Bar
+                                // draws grouped vertical bars anchored at the zero
+                                // baseline.
+                                match kind_canvas {
+                                    ChartKind::Line => {
+                                        // Pass 1: non-focused series below the focused
+                                        // line. Pass 2: focused series composited on top.
+                                        let paint_series =
+                                            |pts: &[(f64, f64)],
+                                             color: Hsla,
+                                             stroke_w: f32,
+                                             window: &mut Window| {
+                                                if pts.is_empty() {
+                                                    return;
+                                                }
+                                                if pts.len() == 1 {
+                                                    // Single-point fallback: paint a square
+                                                    // whose side scales with stroke width.
+                                                    let half = stroke_w * 1.5;
+                                                    let sx = data_to_screen_x(pts[0].0);
+                                                    let sy = data_to_screen_y(pts[0].1);
+                                                    window.paint_quad(fill(
+                                                        gpui::Bounds {
+                                                            origin: point(
+                                                                gpui::px(sx - half),
+                                                                gpui::px(sy - half),
+                                                            ),
+                                                            size: gpui::Size {
+                                                                width: gpui::px(half * 2.0),
+                                                                height: gpui::px(half * 2.0),
+                                                            },
+                                                        },
+                                                        color,
+                                                    ));
+                                                } else {
+                                                    let mut builder =
+                                                        PathBuilder::stroke(gpui::px(stroke_w));
+                                                    let (x0, y0) = pts[0];
+                                                    builder.move_to(point(
+                                                        gpui::px(data_to_screen_x(x0)),
+                                                        gpui::px(data_to_screen_y(y0)),
+                                                    ));
+                                                    for &(x, y) in pts.iter().skip(1) {
+                                                        builder.line_to(point(
+                                                            gpui::px(data_to_screen_x(x)),
+                                                            gpui::px(data_to_screen_y(y)),
+                                                        ));
+                                                    }
+                                                    if let Ok(path) = builder.build() {
+                                                        window.paint_path(path, color);
+                                                    }
+                                                }
+                                            };
 
-                                // Pass 1 — non-focused, non-hidden series at 1.4 px.
-                                for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                    if s_idx == focused_idx || hidden_canvas.contains(&s_idx) {
-                                        continue;
+                                        // Pass 1 — non-focused, non-hidden series at 1.4 px.
+                                        for (s_idx, pts) in decimated_canvas.iter().enumerate() {
+                                            if s_idx == focused_idx
+                                                || hidden_canvas.contains(&s_idx)
+                                            {
+                                                continue;
+                                            }
+                                            let color = palette_canvas
+                                                .get(s_idx)
+                                                .copied()
+                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+                                            paint_series(pts, color, 1.4, window);
+                                        }
+
+                                        // Pass 2 — focused series at 2.2 px on top.
+                                        if !hidden_canvas.contains(&focused_idx)
+                                            && let Some(pts) =
+                                                decimated_canvas.get(focused_idx)
+                                        {
+                                            let color = palette_canvas
+                                                .get(focused_idx)
+                                                .copied()
+                                                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+                                            paint_series(pts, color, 2.2, window);
+                                        }
                                     }
-                                    let color = palette_canvas
-                                        .get(s_idx)
-                                        .copied()
-                                        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                    paint_series(pts, color, 1.4, window);
-                                }
-
-                                // Pass 2 — focused series at 2.2 px (composited on top).
-                                // Skip if the focused series is hidden.
-                                if !hidden_canvas.contains(&focused_idx)
-                                    && let Some(pts) = decimated_canvas.get(focused_idx)
-                                {
-                                    let color = palette_canvas
-                                        .get(focused_idx)
-                                        .copied()
-                                        .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
-                                    paint_series(pts, color, 2.2, window);
+                                    ChartKind::Bar => {
+                                        paint_bars(
+                                            window,
+                                            &decimated_canvas,
+                                            &palette_canvas,
+                                            &hidden_canvas,
+                                            focused_idx,
+                                            plot_w,
+                                            y_min,
+                                            y_max,
+                                            &data_to_screen_x,
+                                            &data_to_screen_y,
+                                        );
+                                    }
+                                    // Scatter renders the placeholder frame above and
+                                    // never reaches this paint closure.
+                                    ChartKind::Scatter => {}
                                 }
 
                                 // --- Crosshair (dashed, amber #FFB454 at 0.7 opacity) ---
@@ -940,12 +1071,17 @@ impl Render for ChartView {
                                             3.0,
                                         );
 
-                                        // --- Hover dots per series ---
+                                        // --- Hover dots per series (Line only) ---
                                         // Two-pass: fill background first, then stroke series color.
+                                        // Bar charts rely on the crosshair plus the readout
+                                        // overlay; per-point dots would float off the bars.
                                         let cursor_data_x = x_min
                                             + ((sx - plot_x0) as f64 / plot_w as f64) * x_range;
 
                                         for (s_idx, pts) in decimated_canvas.iter().enumerate() {
+                                            if matches!(kind_canvas, ChartKind::Bar) {
+                                                break;
+                                            }
                                             if hidden_canvas.contains(&s_idx) {
                                                 continue;
                                             }
@@ -1106,6 +1242,92 @@ impl Render for ChartView {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Paint grouped vertical bars for every visible series.
+///
+/// Each X position owns a slot whose width derives from the densest series so
+/// bars stay inside their column even when series have differing point counts.
+/// Within a slot, visible series are laid out side by side (grouped, never
+/// overlapping). Bars are anchored at the zero baseline when zero lies inside
+/// the value range, otherwise at the data minimum so a positive-only series
+/// still grows from the axis floor.
+///
+/// Non-focused series are dimmed when more than one series is visible, mirroring
+/// the emphasis the Line arm gives the focused polyline.
+#[allow(clippy::too_many_arguments)]
+fn paint_bars<FX, FY>(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    plot_w: f32,
+    y_min: f64,
+    y_max: f64,
+    data_to_screen_x: &FX,
+    data_to_screen_y: &FY,
+) where
+    FX: Fn(f64) -> f32,
+    FY: Fn(f64) -> f32,
+{
+    let baseline = if y_min <= 0.0 && y_max >= 0.0 {
+        0.0
+    } else {
+        y_min
+    };
+    let baseline_sy = data_to_screen_y(baseline);
+
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+    let num_visible = visible.len().max(1);
+
+    let max_points = decimated
+        .iter()
+        .map(|s| s.len())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    let slot_w = plot_w / max_points as f32;
+    let group_w = slot_w * 0.8;
+    let bar_w = (group_w / num_visible as f32).max(1.0);
+
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+
+    for (group_pos, &s_idx) in visible.iter().enumerate() {
+        let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+        let color = if num_visible > 1 && s_idx != focused_idx {
+            gpui::hsla(base_color.h, base_color.s, base_color.l, 0.55)
+        } else {
+            base_color
+        };
+
+        let offset = group_pos as f32 * bar_w - group_w / 2.0;
+
+        for &(x, y) in &decimated[s_idx] {
+            let bar_left = data_to_screen_x(x) + offset;
+            let value_sy = data_to_screen_y(y);
+
+            let (rect_top, rect_height) = if value_sy <= baseline_sy {
+                (value_sy, baseline_sy - value_sy)
+            } else {
+                (baseline_sy, value_sy - baseline_sy)
+            };
+
+            window.paint_quad(fill(
+                gpui::Bounds {
+                    origin: point(gpui::px(bar_left), gpui::px(rect_top)),
+                    size: gpui::Size {
+                        width: gpui::px(bar_w * 0.92),
+                        height: gpui::px(rect_height.max(1.0)),
+                    },
+                },
+                color,
+            ));
+        }
+    }
+}
 
 /// Paint a vertical dashed line using short filled quads.
 ///
@@ -1704,8 +1926,8 @@ mod tests {
 
     /// `ChartView::build` with `ChartKind::Bar` must not panic.
     ///
-    /// The Bar paint arm renders a placeholder; it must never call `panic!()` or
-    /// `todo!()`. This test drives the implementation of the placeholder branch.
+    /// Bar shares the kind-agnostic `RenderModel` with Line, so `build` succeeds
+    /// identically; the Bar-specific geometry is produced later in `render`.
     #[test]
     fn build_with_bar_kind_does_not_panic() {
         let rows = vec![
@@ -1748,6 +1970,29 @@ mod tests {
         spec.kind = crate::chart::spec::ChartKind::Scatter;
 
         let _ = ChartView::build(&result, spec).expect("build with Scatter kind must not fail");
+    }
+
+    /// `ChartView::build` defaults the kind from the spec, and `kind()` reflects it.
+    #[test]
+    fn build_preserves_bar_kind_in_spec() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(1000), Value::Float(2.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.kind = crate::chart::spec::ChartKind::Bar;
+
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+        assert_eq!(view.kind(), crate::chart::spec::ChartKind::Bar);
     }
 
     // T-CE-G04: source_indices tracking tests

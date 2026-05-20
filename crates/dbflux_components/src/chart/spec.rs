@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 /// Extension seam for chart kinds.
 ///
-/// Only `Line` is fully implemented in v0.6. `Bar` and `Scatter` are declared
-/// here so the next change is purely additive.
+/// `Line` and `Bar` are fully implemented; `Scatter` is declared here and still
+/// renders a placeholder frame until its paint arm lands, so adding it is purely
+/// additive.
 ///
 /// `#[serde(default)]` on the containing `ChartSpec.kind` field ensures that
 /// existing serialized `ChartSpec` JSON without a `kind` key deserializes to

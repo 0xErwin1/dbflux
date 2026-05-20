@@ -15,7 +15,7 @@ pub enum ChartRailTab {
 
 use super::host::{ChartHost, HostAdapter};
 use dbflux_components::chart::{
-    AxisPill, BindingSpec, ChartDetection, ChartSpec, ChartView, DataPointRef,
+    AxisPill, BindingSpec, ChartDetection, ChartKind, ChartSpec, ChartView, DataPointRef,
     ManualChartSelection, SourceRowRef, detect_chart_columns,
 };
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult};
@@ -90,6 +90,11 @@ pub struct ChartShell {
     // ---- AxisBar state ----
     /// Which AxisBar pill picker is currently open.
     pub(crate) axis_open_pill: Option<AxisPill>,
+
+    // ---- chart kind ----
+    /// User-selected chart kind (Line, Bar, …). Applied to every `ChartSpec`
+    /// the shell produces, so it survives rebuilds triggered by binding edits.
+    chart_kind: ChartKind,
 }
 
 impl ChartShell {
@@ -123,6 +128,7 @@ impl ChartShell {
             chart_rail_picker_x_col: 0,
             chart_rail_picker_y_checked: Vec::new(),
             axis_open_pill: None,
+            chart_kind: ChartKind::default(),
         }
     }
 
@@ -209,6 +215,7 @@ impl ChartShell {
         }?;
 
         spec.legend_visible = self.chart_legend_visible && spec.series.len() > 1;
+        spec.kind = self.chart_kind;
 
         match ChartView::build(result, spec) {
             Ok(chart_view) => {
@@ -307,6 +314,30 @@ impl ChartShell {
         cx.notify();
     }
 
+    /// The currently selected chart kind.
+    pub fn chart_kind(&self) -> ChartKind {
+        self.chart_kind
+    }
+
+    /// Switch the chart kind (Line, Bar, …).
+    ///
+    /// Because the `ChartView` render model is kind-agnostic, an existing live
+    /// view is updated in place rather than rebuilt. When no view exists yet the
+    /// kind is stored and applied on the next `ensure_chart_view`.
+    pub fn set_chart_kind(&mut self, kind: ChartKind, cx: &mut Context<Self>) {
+        if self.chart_kind == kind {
+            return;
+        }
+
+        self.chart_kind = kind;
+
+        if let Some(chart_entity) = self.chart_view.clone() {
+            chart_entity.update(cx, |view, cx| view.set_kind(kind, cx));
+        }
+
+        cx.notify();
+    }
+
     /// Toggle the open/closed state of an AxisBar pill picker.
     ///
     /// Clicking the same pill again closes it (toggle). Clicking a different
@@ -336,8 +367,9 @@ impl ChartShell {
     pub fn current_chart_spec(&self, columns: &[dbflux_core::ColumnMeta]) -> ChartSpec {
         // Manual selection takes priority.
         if let Some(manual) = &self.chart_manual_selection
-            && let Some(spec) = ChartSpec::from_manual_selection(manual, columns, 10_000)
+            && let Some(mut spec) = ChartSpec::from_manual_selection(manual, columns, 10_000)
         {
+            spec.kind = self.chart_kind;
             return spec;
         }
 
@@ -346,15 +378,16 @@ impl ChartShell {
             time_col,
             numeric_cols,
         }) = &self.chart_detection
-            && let Some(spec) =
+            && let Some(mut spec) =
                 ChartSpec::from_detection(*time_col, numeric_cols.clone(), columns, 10_000)
         {
+            spec.kind = self.chart_kind;
             return spec;
         }
 
         // Minimal placeholder.
         ChartSpec {
-            kind: dbflux_components::chart::ChartKind::Line,
+            kind: self.chart_kind,
             x_axis: dbflux_components::chart::AxisSpec {
                 column_index: 0,
                 label: String::new(),

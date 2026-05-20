@@ -20,7 +20,7 @@ use crate::ui::common::time_range::view::TimeRangePanel;
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
-use dbflux_components::chart::{format_resolution, format_x_value};
+use dbflux_components::chart::{ChartKind, format_resolution, format_x_value};
 use dbflux_components::primitives::Icon;
 use gpui::prelude::*;
 use gpui::*;
@@ -31,6 +31,8 @@ use std::sync::Arc;
 pub type RangePresetHandler = Arc<dyn Fn(usize, &mut Window, &mut App)>;
 /// Handler called when the Stats button, PNG button, or Save button is clicked.
 pub type ActionHandler = Arc<dyn Fn(&mut Window, &mut App)>;
+/// Handler called when a chart-kind chip is clicked; receives the chosen kind.
+pub type ChartKindHandler = Arc<dyn Fn(ChartKind, &mut Window, &mut App)>;
 
 /// All read-only state the toolbar needs to render itself.
 ///
@@ -74,6 +76,8 @@ pub struct ChartToolbarHandlers {
     pub on_png_export: ActionHandler,
     /// Called when the "Save chart" button is clicked.
     pub on_save_chart: ActionHandler,
+    /// Called when a chart-kind chip (Line / Bar) is clicked.
+    pub on_select_chart_kind: ChartKindHandler,
 }
 
 /// Render the chart toolbar row.
@@ -94,12 +98,13 @@ pub fn render_chart_toolbar(
     let primary_fg = theme.primary_foreground;
 
     // --- Read rail state from the shell ---
-    let (chart_view_entity, rail_open, rail_tab) = {
+    let (chart_view_entity, rail_open, rail_tab, current_kind) = {
         let shell = ctx.chart_shell.read(cx);
         (
             shell.chart_view().cloned(),
             shell.chart_rail_open,
             shell.chart_rail_tab,
+            shell.chart_kind(),
         )
     };
 
@@ -232,6 +237,59 @@ pub fn render_chart_toolbar(
             .child(label)
     };
 
+    // --- Chart kind chips (Line | Bar) ---
+    let on_select_kind = handlers.on_select_chart_kind.clone();
+    let kind_options: [(ChartKind, &'static str); 2] =
+        [(ChartKind::Line, "Line"), (ChartKind::Bar, "Bar")];
+    let num_kinds = kind_options.len();
+
+    let kind_chips = div()
+        .flex()
+        .items_center()
+        .border_1()
+        .border_color(border)
+        .rounded(Radii::SM)
+        .overflow_hidden()
+        .children(
+            kind_options
+                .into_iter()
+                .enumerate()
+                .map(|(i, (kind, label))| {
+                    let is_active = kind == current_kind;
+                    let is_last = i == num_kinds - 1;
+                    let handler = on_select_kind.clone();
+
+                    let mut chip = div()
+                        .id(ElementId::Name(format!("chart-kind-{label}").into()))
+                        .px(px(8.0))
+                        .py(px(3.0))
+                        .text_size(px(11.0))
+                        .font(font("JetBrains Mono"))
+                        .cursor_pointer()
+                        .when(is_active, |d| {
+                            d.bg(primary)
+                                .text_color(primary_fg)
+                                .font_weight(FontWeight::SEMIBOLD)
+                        })
+                        .when(!is_active, |d| {
+                            d.text_color(muted).hover(move |d| d.bg(secondary))
+                        })
+                        .when(!is_last, |d| d.border_r_1().border_color(border))
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            handler(kind, window, cx);
+                        })
+                        .child(label);
+
+                    if i == 0 {
+                        chip = chip.rounded_tl(Radii::SM).rounded_bl(Radii::SM);
+                    } else if is_last {
+                        chip = chip.rounded_tr(Radii::SM).rounded_br(Radii::SM);
+                    }
+
+                    chip
+                }),
+        );
+
     let is_stats_active = rail_open && rail_tab == ChartRailTab::Stats;
     let on_stats = handlers.on_toggle_stats_rail.clone();
     let on_png = handlers.on_png_export.clone();
@@ -317,6 +375,22 @@ pub fn render_chart_toolbar(
                 .child(SharedString::from(format!("{row_count} pts")))
                 .child("\u{00b7}")
                 .child(resolution_label),
+        )
+        .child(vdivider(border))
+        // Chart kind selector (Line | Bar)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(muted)
+                        .font_weight(FontWeight::BOLD)
+                        .child("TYPE"),
+                )
+                .child(kind_chips),
         )
         .child(vdivider(border))
         .child(stats_btn)
