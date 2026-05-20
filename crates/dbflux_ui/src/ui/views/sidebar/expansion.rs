@@ -325,6 +325,33 @@ impl Sidebar {
             }
         }
 
+        if let Some(SchemaNodeId::RoutinesFolder {
+            profile_id,
+            database,
+            schema,
+        }) = &parsed
+        {
+            let needs_fetch =
+                self.app_state
+                    .read(cx)
+                    .needs_schema_routines(*profile_id, database, Some(schema));
+
+            if needs_fetch {
+                let pending = PendingAction::ExpandSchemaRoutinesFolder {
+                    item_id: item_id.to_string(),
+                };
+                if !self.spawn_fetch_schema_routines(
+                    *profile_id,
+                    database,
+                    Some(schema),
+                    pending,
+                    cx,
+                ) {
+                    return false;
+                }
+            }
+        }
+
         if matches!(parsed, Some(SchemaNodeId::Database { .. })) {
             self.handle_database_click(item_id, cx);
         }
@@ -508,6 +535,11 @@ impl Sidebar {
                     database,
                     schema,
                 }) => !state.needs_schema_foreign_keys(profile_id, &database, Some(&schema)),
+                Some(SchemaNodeId::RoutinesFolder {
+                    profile_id,
+                    database,
+                    schema,
+                }) => !state.needs_schema_routines(profile_id, &database, Some(&schema)),
                 _ => true,
             }
         });

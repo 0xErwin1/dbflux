@@ -1,10 +1,173 @@
-#![allow(dead_code)]
-#![allow(unreachable_code)]
+#![allow(clippy::type_complexity)]
 
-use super::handle::DocumentHandle;
-use super::types::DocumentId;
-use gpui::{App, Context, EventEmitter, Subscription};
+use super::dedup::DocumentKey;
+use super::handle::DocumentEvent;
+use super::pane::PaneHandle;
+use super::types::{DocumentId, DocumentKind, DocumentMetaSnapshot};
+use crate::keymap::{Command, ContextId};
+use dbflux_core::RefreshPolicy;
+use gpui::{AnyElement, App, Context, EventEmitter, Subscription, Window};
 use std::collections::HashMap;
+
+/// Wrapper around a `PaneHandle` representing one open workspace tab.
+///
+/// `PaneHandle` is large (many `Box<dyn Fn>` closure fields), so it is
+/// heap-allocated via `Box` to keep the `Tab` size small.
+///
+/// The enum form is kept for forward-compatibility: additional variants such
+/// as a detachable pane could be added here without touching all call sites.
+#[non_exhaustive]
+pub enum Tab {
+    /// A document managed via the closure-erased `PaneHandle` shell.
+    Pane(Box<PaneHandle>),
+}
+
+impl Tab {
+    // --- Identity (no cx required) ---
+
+    pub fn id(&self) -> DocumentId {
+        match self {
+            Tab::Pane(p) => p.id(),
+        }
+    }
+
+    pub fn kind(&self) -> DocumentKind {
+        match self {
+            Tab::Pane(p) => p.kind(),
+        }
+    }
+
+    // --- Rendering and behaviour ---
+
+    pub fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement {
+        match self {
+            Tab::Pane(p) => p.render(window, cx),
+        }
+    }
+
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        match self {
+            Tab::Pane(p) => p.focus(window, cx),
+        }
+    }
+
+    pub fn dispatch_command(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
+        match self {
+            Tab::Pane(p) => p.dispatch_command(cmd, window, cx),
+        }
+    }
+
+    // --- Pure reads ---
+
+    pub fn meta_snapshot(&self, cx: &App) -> DocumentMetaSnapshot {
+        match self {
+            Tab::Pane(p) => p.meta_snapshot(cx),
+        }
+    }
+
+    pub fn tab_title(&self, cx: &App) -> String {
+        match self {
+            Tab::Pane(p) => p.tab_title(cx),
+        }
+    }
+
+    pub fn can_close(&self, cx: &App) -> bool {
+        match self {
+            Tab::Pane(p) => p.can_close(cx),
+        }
+    }
+
+    pub fn connection_id(&self, cx: &App) -> Option<uuid::Uuid> {
+        match self {
+            Tab::Pane(p) => p.connection_id(cx),
+        }
+    }
+
+    pub fn active_context(&self, cx: &App) -> ContextId {
+        match self {
+            Tab::Pane(p) => p.active_context(cx),
+        }
+    }
+
+    pub fn change_summary(&self, cx: &App) -> Option<String> {
+        match self {
+            Tab::Pane(p) => p.change_summary(cx),
+        }
+    }
+
+    pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
+        match self {
+            Tab::Pane(p) => p.refresh_policy(cx),
+        }
+    }
+
+    pub fn flush_auto_save(&self, cx: &App) {
+        match self {
+            Tab::Pane(p) => p.flush_auto_save(cx),
+        }
+    }
+
+    // --- Mutations ---
+
+    pub fn set_active_tab(&self, active: bool, cx: &mut App) {
+        match self {
+            Tab::Pane(p) => p.set_active_tab(active, cx),
+        }
+    }
+
+    pub fn set_refresh_policy(&self, policy: RefreshPolicy, cx: &mut App) {
+        match self {
+            Tab::Pane(p) => p.set_refresh_policy(policy, cx),
+        }
+    }
+
+    // --- Dedup ---
+
+    pub fn matches_dedup_key(&self, key: &DocumentKey, cx: &App) -> bool {
+        match self {
+            Tab::Pane(p) => p.matches_dedup_key(key, cx),
+        }
+    }
+
+    // --- Subscription ---
+
+    pub fn subscribe<F>(&self, cx: &mut App, callback: F) -> Subscription
+    where
+        F: Fn(&DocumentEvent, &mut App) + 'static,
+    {
+        match self {
+            Tab::Pane(p) => p.subscribe(cx, callback),
+        }
+    }
+
+    // --- PaneHandle accessors ---
+
+    /// Returns the inner `PaneHandle`.
+    pub fn as_pane(&self) -> &PaneHandle {
+        match self {
+            Tab::Pane(p) => p.as_ref(),
+        }
+    }
+
+    /// Returns the path of the backing file if this tab is a file-backed script
+    /// that is currently empty — used by the empty-script cleanup path on close.
+    ///
+    /// Returns `None` for non-script tabs and non-empty or non-file-backed scripts.
+    pub fn is_file_backed_empty(&self, cx: &App) -> Option<std::path::PathBuf> {
+        match self {
+            Tab::Pane(p) => p.is_file_backed_empty.as_ref().and_then(|f| f(cx)),
+        }
+    }
+
+    /// Returns a session snapshot for this tab if it is a code document with
+    /// a persistent backing (file-backed or scratch). Returns `None` for all
+    /// other document types and for ephemeral tabs with no backing path.
+    pub fn session_tab_snapshot(&self, cx: &App) -> Option<super::pane::CodeSessionTabSnapshot> {
+        match self {
+            Tab::Pane(p) => p.session_tab_snapshot.as_ref().and_then(|f| f(cx)),
+        }
+    }
+}
 
 /// Manages open documents (tabs) in the workspace.
 ///
@@ -15,7 +178,7 @@ use std::collections::HashMap;
 /// - Handle document subscriptions for cleanup on close
 pub struct TabManager {
     /// Documents in visual order (left to right in tab bar).
-    documents: Vec<DocumentHandle>,
+    documents: Vec<Tab>,
 
     /// Index of the active document (in `documents`).
     active_index: Option<usize>,
@@ -38,14 +201,14 @@ impl TabManager {
     }
 
     /// Opens a new document and activates it.
-    pub fn open(&mut self, doc: DocumentHandle, cx: &mut Context<Self>) {
+    pub fn open(&mut self, doc: Tab, cx: &mut Context<Self>) {
         let id = doc.id();
 
-        // Subscribe to document events
-        // Capture the TabManager entity to emit events from within the callback
+        // Subscribe to document events.
+        // The TabManager entity is captured so events can be re-emitted from
+        // within the subscription callback.
         let tab_manager = cx.entity().clone();
         let subscription = doc.subscribe(cx, move |event, cx| {
-            use super::handle::DocumentEvent;
             tab_manager.update(cx, |_, cx| match event {
                 DocumentEvent::RequestFocus => {
                     cx.emit(TabManagerEvent::DocumentRequestedFocus);
@@ -77,8 +240,8 @@ impl TabManager {
                 _ => {}
             });
         });
-        self.subscriptions.insert(id, subscription);
 
+        self.subscriptions.insert(id, subscription);
         self.documents.push(doc);
         let new_index = self.documents.len() - 1;
         self.active_index = Some(new_index);
@@ -275,14 +438,39 @@ impl TabManager {
         self.documents.iter().position(|d| d.id() == id)
     }
 
-    /// Returns the active document.
-    pub fn active_document(&self) -> Option<&DocumentHandle> {
+    /// Returns the active tab.
+    pub fn active_tab(&self) -> Option<&Tab> {
         self.active_index.and_then(|i| self.documents.get(i))
+    }
+
+    /// Renders the active tab.
+    ///
+    /// Returns `None` when no tab is active.
+    pub fn render_active(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        Some(self.active_tab()?.render(window, cx))
+    }
+
+    /// Dispatches a command to the active tab.
+    ///
+    /// Returns `true` when the command was handled, `false` when there is no
+    /// active tab or the tab declined the command.
+    pub fn dispatch_active(&self, cmd: Command, window: &mut Window, cx: &mut App) -> bool {
+        match self.active_tab() {
+            Some(tab) => tab.dispatch_command(cmd, window, cx),
+            None => false,
+        }
+    }
+
+    /// Focuses the active tab. No-ops when no tab is active.
+    pub fn focus_active(&self, window: &mut Window, cx: &mut App) {
+        if let Some(tab) = self.active_tab() {
+            tab.focus(window, cx);
+        }
     }
 
     /// Returns the active document ID.
     pub fn active_id(&self) -> Option<DocumentId> {
-        self.active_document().map(|d| d.id())
+        self.active_tab().map(|d| d.id())
     }
 
     /// Returns the active document index.
@@ -290,14 +478,29 @@ impl TabManager {
         self.active_index
     }
 
-    /// Returns all documents (for TabBar).
-    pub fn documents(&self) -> &[DocumentHandle] {
+    /// Returns all tabs (for TabBar and action iteration).
+    pub fn documents(&self) -> &[Tab] {
         &self.documents
     }
 
-    /// Finds a document by ID.
-    pub fn document(&self, id: DocumentId) -> Option<&DocumentHandle> {
+    /// Finds a tab by ID.
+    pub fn document(&self, id: DocumentId) -> Option<&Tab> {
         self.documents.iter().find(|d| d.id() == id)
+    }
+
+    /// Opens a pane-style document and activates it.
+    pub fn open_pane(&mut self, pane: PaneHandle, cx: &mut Context<Self>) {
+        self.open(Tab::Pane(Box::new(pane)), cx);
+    }
+
+    /// Returns the first tab whose identity matches `key`.
+    ///
+    /// Used by `actions.rs` paths for deduplication instead of `is_*` methods.
+    pub fn find_by_key(&self, key: &DocumentKey, cx: &App) -> Option<DocumentId> {
+        self.documents
+            .iter()
+            .find(|tab| tab.matches_dedup_key(key, cx))
+            .map(|tab| tab.id())
     }
 
     /// Returns `(DocumentId, summary)` for every document that reports pending changes.
@@ -354,6 +557,7 @@ impl Default for TabManager {
 
 impl EventEmitter<TabManagerEvent> for TabManager {}
 
+#[cfg(test)]
 fn ids_to_close_others(all_ids: &[DocumentId], keep_id: DocumentId) -> Vec<DocumentId> {
     all_ids
         .iter()
@@ -362,6 +566,7 @@ fn ids_to_close_others(all_ids: &[DocumentId], keep_id: DocumentId) -> Vec<Docum
         .collect()
 }
 
+#[cfg(test)]
 fn ids_to_close_left(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
     let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
         return Vec::new();
@@ -369,6 +574,7 @@ fn ids_to_close_left(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<Docum
     all_ids[..idx].to_vec()
 }
 
+#[cfg(test)]
 fn ids_to_close_right(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
     let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
         return Vec::new();
@@ -477,5 +683,17 @@ mod tests {
         let unknown = DocumentId(Uuid::new_v4());
         let result = ids_to_close_right(&ids, unknown);
         assert!(result.is_empty());
+    }
+
+    /// Regression guard for `ids_to_close_right` from the first position.
+    #[test]
+    fn close_right_from_first_returns_two_tabs() {
+        let ids = make_ids(3);
+        let result = ids_to_close_right(&ids, ids[0]);
+        assert_eq!(
+            result.len(),
+            2,
+            "structural: close-right from first keeps 2 tabs"
+        );
     }
 }

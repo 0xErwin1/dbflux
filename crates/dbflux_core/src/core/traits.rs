@@ -9,8 +9,8 @@ use crate::{
     DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, DriverCapabilities,
     DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest, FormValues,
     LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationRef, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaSnapshot, SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect,
+    RelationRef, RoutineInfo, RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner, SemanticRequest, SqlDialect,
     SqlGenerationRequest, SqlLanguageService, TableBrowseRequest, TableCountRequest, TableInfo,
     Value, ViewInfo,
     config::DriverKey,
@@ -775,6 +775,37 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Fetch all routines (stored procedures / user-defined functions) in a schema.
+    ///
+    /// Returns an empty `Vec` by default so drivers that do not support routines
+    /// degrade gracefully. Drivers that set `DriverCapabilities::ROUTINES` MUST
+    /// override this method.
+    fn schema_routines(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<RoutineInfo>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Fetch the full definition text of a single routine identified by its
+    /// `specific_name` (name + identity arguments) within the given schema.
+    ///
+    /// Returns `Err(DbError::NotSupported(...))` by default. PostgreSQL implements
+    /// this via `pg_get_functiondef`. For aggregate and window routines where
+    /// `pg_get_functiondef` is unavailable, a synthesized placeholder body is
+    /// returned instead.
+    fn routine_definition(
+        &self,
+        _database: &str,
+        _schema: &str,
+        _specific_name: &str,
+    ) -> Result<String, DbError> {
+        Err(DbError::NotSupported(
+            "routine_definition not implemented for this driver".to_string(),
+        ))
+    }
+
     /// Best-effort extraction of tables referenced by a SQL query string.
     ///
     /// Returns `None` if the driver cannot parse the query, or `Some(refs)` with
@@ -1461,6 +1492,17 @@ mod tests {
         assert!(
             matches!(result, Err(DbError::NotSupported(_))),
             "default impl must return NotSupported, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn schema_routines_default_returns_empty_vec() {
+        let conn = StubConnection;
+        let result = conn.schema_routines("mydb", Some("public"));
+        assert!(
+            matches!(result, Ok(ref v) if v.is_empty()),
+            "default schema_routines must return Ok(vec![]), got: {:?}",
             result
         );
     }

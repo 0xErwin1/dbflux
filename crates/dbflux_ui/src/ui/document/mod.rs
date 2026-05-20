@@ -9,6 +9,8 @@ mod code;
 mod data_document;
 mod data_grid_panel;
 mod data_view;
+pub mod data_view_trait;
+pub mod dedup;
 
 #[cfg(feature = "mcp")]
 mod governance;
@@ -16,6 +18,7 @@ mod governance;
 mod handle;
 mod key_value;
 mod new_key_modal;
+pub mod pane;
 mod result_view;
 pub mod schema_viz;
 pub mod tab_bar;
@@ -29,16 +32,19 @@ pub use code::CodeDocument;
 pub use data_document::DataDocument;
 pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 pub use data_view::{DataViewConfig, DataViewMode};
+pub use data_view_trait::DataView;
 
 #[cfg(feature = "mcp")]
 pub use governance::McpApprovalsView;
 
-pub use handle::{DocumentEvent, DocumentHandle};
-pub use key_value::{KeyValueDocument, KeyValueDocumentEvent};
+pub use dedup::DocumentKey;
+pub use handle::DocumentEvent;
+pub use key_value::KeyValueDocument;
+pub use pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
 pub use result_view::ResultViewMode;
 pub use schema_viz::SchemaVizDocument;
 pub use tab_bar::{TabBar, TabBarEvent};
-pub use tab_manager::{TabManager, TabManagerEvent};
+pub use tab_manager::{Tab, TabManager, TabManagerEvent};
 pub use task_runner::DocumentTaskRunner;
 pub use types::{
     DataSourceKind, DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState,

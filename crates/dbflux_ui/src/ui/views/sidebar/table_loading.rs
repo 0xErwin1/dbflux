@@ -510,6 +510,54 @@ impl Sidebar {
         )
     }
 
+    pub(super) fn spawn_fetch_schema_routines(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        pending_action: PendingAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let params = match self
+            .app_state
+            .read(cx)
+            .prepare_fetch_schema_routines(profile_id, database, schema)
+        {
+            Ok(p) => p,
+            Err(e) => {
+                if e != "Schema routines already cached" {
+                    log::warn!("Cannot fetch schema routines: {}", e);
+                }
+                return false;
+            }
+        };
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { params.execute() });
+
+        self.spawn_fetch_with_result(
+            pending_action,
+            None,
+            task,
+            "Failed to fetch schema routines",
+            "Failed to load routines",
+            |app_state, res, cx| {
+                app_state.update(cx, |state, cx| {
+                    state.set_schema_routines(
+                        res.profile_id,
+                        res.database,
+                        res.schema,
+                        res.routines,
+                    );
+                    cx.emit(AppStateChanged);
+                });
+            },
+            |_app_state, _cx| {},
+            cx,
+        )
+    }
+
     /// Execute the stored action for a completed fetch.
     pub(super) fn complete_pending_action(&mut self, item_id: &str, cx: &mut Context<Self>) {
         let Some(action) = self.pending_actions.remove(item_id) else {
@@ -529,6 +577,7 @@ impl Sidebar {
             PendingAction::ExpandTypesFolder { item_id }
             | PendingAction::ExpandSchemaIndexesFolder { item_id }
             | PendingAction::ExpandSchemaForeignKeysFolder { item_id }
+            | PendingAction::ExpandSchemaRoutinesFolder { item_id }
             | PendingAction::ExpandCollection { item_id } => {
                 self.expand_schema_folder(&item_id, cx);
             }

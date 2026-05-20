@@ -1,8 +1,10 @@
+use super::KvValueViewMode;
 use super::parsing::{MemberEntry, parse_json_to_value, parse_members};
-use super::{KeyValueDocumentEvent, KvValueViewMode};
+use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState, NodeId,
 };
+use crate::ui::document::handle::DocumentEvent;
 use dbflux_core::{DbError, HashSetRequest, KeyType, TaskKind, Value};
 use gpui::*;
 
@@ -93,7 +95,7 @@ impl super::KeyValueDocument {
             &tree_state,
             |this, _state, event: &DocumentTreeEvent, cx| match event {
                 DocumentTreeEvent::Focused => {
-                    cx.emit(KeyValueDocumentEvent::RequestFocus);
+                    cx.emit(DocumentEvent::RequestFocus);
                 }
                 DocumentTreeEvent::InlineEditCommitted { node_id, new_value } => {
                     this.handle_tree_inline_edit(node_id, new_value, cx);

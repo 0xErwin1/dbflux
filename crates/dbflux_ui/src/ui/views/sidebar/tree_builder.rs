@@ -210,6 +210,11 @@ impl Sidebar {
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
             let is_document_db = schema.is_document();
             let is_time_series_db = schema.is_time_series();
+            let supports_routines = connected
+                .connection
+                .metadata()
+                .capabilities
+                .contains(DriverCapabilities::ROUTINES);
 
             if schema.is_key_value() {
                 let mut database_names: Vec<String> = schema
@@ -293,6 +298,8 @@ impl Sidebar {
                                     &connected.schema_types,
                                     &connected.schema_indexes,
                                     &connected.schema_foreign_keys,
+                                    &connected.schema_routines,
+                                    supports_routines,
                                     &connected.dependents_cache,
                                 )
                             }
@@ -319,6 +326,8 @@ impl Sidebar {
                                 &connected.schema_types,
                                 &connected.schema_indexes,
                                 &connected.schema_foreign_keys,
+                                &connected.schema_routines,
+                                supports_routines,
                                 &connected.dependents_cache,
                             )
                         } else {
@@ -374,6 +383,8 @@ impl Sidebar {
                                 &connected.schema_types,
                                 &connected.schema_indexes,
                                 &connected.schema_foreign_keys,
+                                &connected.schema_routines,
+                                supports_routines,
                                 &connected.dependents_cache,
                             )
                         }
@@ -440,6 +451,8 @@ impl Sidebar {
                     &connected.schema_types,
                     &connected.schema_indexes,
                     &connected.schema_foreign_keys,
+                    &connected.schema_routines,
+                    supports_routines,
                     &connected.dependents_cache,
                 );
 
@@ -529,6 +542,8 @@ impl Sidebar {
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
         schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
         schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+        schema_routines: &HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
+        supports_routines: bool,
         dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
     ) -> Vec<TreeItem> {
         let mut children = Vec::new();
@@ -543,6 +558,8 @@ impl Sidebar {
                 schema_types,
                 schema_indexes,
                 schema_foreign_keys,
+                schema_routines,
+                supports_routines,
                 dependents_cache,
             );
 
@@ -861,6 +878,8 @@ impl Sidebar {
         schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
         schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
         schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+        schema_routines: &HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
+        supports_routines: bool,
         dependents_cache: &HashMap<(String, String), Vec<RelationRef>>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
@@ -1120,6 +1139,72 @@ impl Sidebar {
                     .expanded(false)
                     .children(vec![placeholder]),
             );
+        }
+
+        // Schema-level Routines folder (gated on ROUTINES driver capability)
+        if supports_routines {
+            let routines_cache_key = SchemaCacheKey::new(database_name, Some(schema_name));
+            let cached_routines = schema_routines.get(&routines_cache_key);
+            let routines_item_id = SchemaNodeId::RoutinesFolder {
+                profile_id,
+                database: database_name.to_string(),
+                schema: schema_name.to_string(),
+            }
+            .to_string();
+
+            if let Some(routines) = cached_routines {
+                if !routines.is_empty() {
+                    let routine_children: Vec<TreeItem> = routines
+                        .iter()
+                        .map(|r| {
+                            let kind_label = match r.kind {
+                                dbflux_core::RoutineKind::Function => "fn",
+                                dbflux_core::RoutineKind::Procedure => "proc",
+                                dbflux_core::RoutineKind::Aggregate => "agg",
+                                dbflux_core::RoutineKind::Window => "win",
+                            };
+                            let label = format!("{} ({})", r.name, kind_label);
+                            TreeItem::new(
+                                SchemaNodeId::Routine {
+                                    profile_id,
+                                    schema: schema_name.to_string(),
+                                    specific_name: r.specific_name.clone(),
+                                }
+                                .to_string(),
+                                label,
+                            )
+                        })
+                        .collect();
+
+                    content.push(
+                        TreeItem::new(routines_item_id, format!("Routines ({})", routines.len()))
+                            .expanded(false)
+                            .children(routine_children),
+                    );
+                } else {
+                    content.push(
+                        TreeItem::new(routines_item_id, "Routines (0)".to_string())
+                            .expanded(false)
+                            .children(vec![]),
+                    );
+                }
+            } else {
+                let placeholder = TreeItem::new(
+                    SchemaNodeId::RoutinesLoadingFolder {
+                        profile_id,
+                        database: database_name.to_string(),
+                        schema: schema_name.to_string(),
+                    }
+                    .to_string(),
+                    "Loading...".to_string(),
+                );
+
+                content.push(
+                    TreeItem::new(routines_item_id, "Routines".to_string())
+                        .expanded(false)
+                        .children(vec![placeholder]),
+                );
+            }
         }
 
         content
@@ -1788,6 +1873,8 @@ mod tests {
             &Default::default(),
             &Default::default(),
             &Default::default(),
+            &Default::default(),
+            false,
             &Default::default(),
         );
 

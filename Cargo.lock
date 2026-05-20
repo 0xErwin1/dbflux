@@ -605,9 +605,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.16.3"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ec6fb3fe69024a75fa7e1bfb48aa6cf59706a101658ea01bfd33b2b248a038f"
+checksum = "5ec2f1fc3ec205783a5da9a7e6c1509cc69dedf09a1949e412c1e18469326d00"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -615,9 +615,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.40.0"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f50037ee5e1e41e7b8f9d161680a725bd1626cb6f8c7e901f91f942850852fe7"
+checksum = "1a2f9779ce85b93ab6170dd940ad0169b5766ff848247aff13bb788b832fe3f4"
 dependencies = [
  "cc",
  "cmake",
@@ -925,10 +925,12 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-json"
-version = "0.62.5"
+version = "0.62.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9648b0bb82a2eedd844052c6ad2a1a822d1f8e3adee5fbf668366717e428856a"
+checksum = "517089205f18ab4adc5a3e02888cb139bbbbb2e168eac9f396216925d1fbeaf5"
 dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
  "aws-smithy-types",
 ]
 
@@ -953,15 +955,16 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime"
-version = "1.11.1"
+version = "1.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0504b1ab12debb5959e5165ee5fe97dd387e7aa7ea6a477bfd7635dfe769a4f5"
+checksum = "b8e6f5caf6fea86f8c2206541ab5857cfcda9013426cdbe8fa0098b9e2d32182"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
  "aws-smithy-http-client",
  "aws-smithy-observability",
  "aws-smithy-runtime-api",
+ "aws-smithy-schema",
  "aws-smithy-types",
  "bytes",
  "fastrand 2.4.1",
@@ -978,9 +981,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime-api"
-version = "1.12.0"
+version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b71a13df6ada0aafbf21a73bdfcdf9324cfa9df77d96b8446045be3cde61b42e"
+checksum = "dc117c179ecf39a62a0a3f49f600e9ac26a7ad7dd172177999f83933af776c32"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api-macros",
@@ -1006,10 +1009,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-smithy-types"
-version = "1.4.7"
+name = "aws-smithy-schema"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d73dbfbaa8e4bc57b9045137680b958d274823509a360abfd8e1d514d40c95c"
+checksum = "7442cb268338f0eb8278140a107c046756aa01093d8ef5e99628d34ae09c94f5"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "http 1.4.0",
+]
+
+[[package]]
+name = "aws-smithy-types"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "056b66dbce2f81cc0c1e2b05bb402eb58f8a3530479d650efadd5bbae9a4050b"
 dependencies = [
  "base64-simd",
  "bytes",
@@ -1730,7 +1744,7 @@ version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b60b5124979fccd9addd89d8b97a1d6eebb4950694520c75ddd722535ea443f"
 dependencies = [
- "nix 0.31.2",
+ "nix 0.31.3",
  "thiserror 2.0.18",
 ]
 
@@ -2116,9 +2130,9 @@ dependencies = [
 
 [[package]]
 name = "crypto-common"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77727bb15fa921304124b128af125e7e3b968275d1b108b379190264f4423710"
+checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
  "hybrid-array",
 ]
@@ -2287,7 +2301,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "dbflux"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2339,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_app"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "async-trait",
  "dbflux_audit",
@@ -2373,7 +2387,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_approval"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_policy",
  "serde",
@@ -2384,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_audit"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "dbflux_storage",
@@ -2400,7 +2414,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_aws"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -2425,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_components"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -2441,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_core"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "async-trait",
  "bitflags 2.11.1",
@@ -2466,7 +2480,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_cloudwatch"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "aws-config",
  "aws-sdk-cloudwatchlogs",
@@ -2478,7 +2492,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_dynamodb"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
@@ -2490,7 +2504,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_host"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "dbflux_driver_dynamodb",
@@ -2510,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_influxdb"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2528,7 +2542,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_ipc"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "bincode",
  "dbflux_core",
@@ -2543,7 +2557,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_mongodb"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "base64 0.22.1",
  "bson",
@@ -2561,7 +2575,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_mssql"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -2581,7 +2595,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_mysql"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -2597,7 +2611,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_postgres"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -2615,7 +2629,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_redis"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "dbflux_ssh",
@@ -2628,7 +2642,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_sqlite"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "dbflux_test_support",
@@ -2641,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_export"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "base64 0.22.1",
  "csv",
@@ -2653,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ipc"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "async-trait",
  "bincode",
@@ -2667,7 +2681,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_lua"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "log",
@@ -2678,7 +2692,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_mcp"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_approval",
  "dbflux_audit",
@@ -2692,7 +2706,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_mcp_server"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2728,7 +2742,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_policy"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -2738,7 +2752,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_proxy"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "dbflux_tunnel_core",
@@ -2763,7 +2777,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ssh"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "dbflux_tunnel_core",
@@ -2775,7 +2789,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ssm"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "dbflux_tunnel_core",
@@ -2785,7 +2799,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_storage"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "chrono",
  "dbflux_core",
@@ -2803,7 +2817,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_test_support"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "dbflux_driver_redis",
@@ -2816,7 +2830,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_tunnel_core"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "dbflux_core",
  "log",
@@ -2824,7 +2838,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_ui"
-version = "0.6.0-dev.5"
+version = "0.6.0-dev.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3015,7 +3029,7 @@ checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer 0.12.0",
  "const-oid 0.10.2",
- "crypto-common 0.2.1",
+ "crypto-common 0.2.2",
  "ctutils",
 ]
 
@@ -3487,9 +3501,9 @@ dependencies = [
 
 [[package]]
 name = "filetime"
-version = "0.2.28"
+version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d5b2eef6fafbf69f877e55509ce5b11a760690ac9700a2921be067aa6afaef6"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
 dependencies = [
  "cfg-if",
  "libc",
@@ -4842,9 +4856,9 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hybrid-array"
-version = "0.4.11"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d46837a0ed51fe95bd3b05de33cd64a1ee88fc797477ca48446872504507c5"
+checksum = "9155a582abd142abc056962c29e3ce5ff2ad5469f4246b537ed42c5deba857da"
 dependencies = [
  "typenum",
 ]
@@ -5453,9 +5467,9 @@ dependencies = [
 
 [[package]]
 name = "kqueue-sys"
-version = "1.1.0"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7b65860415f949f23fa882e669f2dbd4a0f0eeb1acdd56790b30494afd7da2f"
+checksum = "07293a4e297ac234359b510362495713f75ea345d5307140414f20c69ffeb087"
 dependencies = [
  "bitflags 2.11.1",
  "libc",
@@ -6077,7 +6091,7 @@ dependencies = [
  "rustversion",
  "serde",
  "serde_bytes",
- "serde_with 3.19.0",
+ "serde_with 3.20.0",
  "sha1",
  "sha2 0.10.9",
  "socket2 0.6.3",
@@ -6286,9 +6300,9 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.31.2"
+version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d6d0705320c1e6ba1d912b5e37cf18071b6c2e9b7fa8215a1e8a7651966f5d3"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags 2.11.1",
  "cfg-if",
@@ -6437,9 +6451,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
+checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
 
 [[package]]
 name = "num-derive"
@@ -6687,9 +6701,9 @@ dependencies = [
 
 [[package]]
 name = "open"
-version = "5.3.4"
+version = "5.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f3bab717c29a857abf75fcef718d441ec7cb2725f937343c734740a985d37fd"
+checksum = "2fbaa89d2ddc8473c78a3adf69eea8cffa28c483b8e02a971ef31527cd0fc92c"
 dependencies = [
  "is-wsl",
  "libc",
@@ -6840,9 +6854,9 @@ checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
 name = "pastey"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5a797f0e07bdf071d15742978fc3128ec6c22891c31a3a931513263904c982a"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "pathdiff"
@@ -7023,18 +7037,18 @@ checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
 
 [[package]]
 name = "pin-project"
-version = "1.1.12"
+version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbf0d9e68100b3a7989b4901972f265cd542e560a3a8a724e1e20322f4d06ce9"
+checksum = "2466b2336ed02bcdca6b294417127b90ec92038d1d5c4fbeac971a922e0e0924"
 dependencies = [
  "pin-project-internal",
 ]
 
 [[package]]
 name = "pin-project-internal"
-version = "1.1.12"
+version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a990e22f43e84855daf260dded30524ef4a9021cc7541c26540500a50b624389"
+checksum = "c96395f0a926bc13b1c17622aaddda1ecb55d49c8f1bf9777e4d877800a43f8b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8018,15 +8032,15 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.6.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e12ca9067b5ebfbd5b3fcdc4acfceb81aa7d5ab2a879dff7cb75d22434276aad"
+checksum = "0810a9f717d9828f475fe1f629f4c305c8464b7f496c3a854b58d29e65f4058e"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
  "futures",
- "pastey 0.2.2",
+ "pastey 0.2.3",
  "pin-project-lite",
  "rmcp-macros",
  "schemars",
@@ -8040,9 +8054,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "1.6.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7caa6743cc0888e433105fe1bc551a7f607940b126a37bc97b478e86064627eb"
+checksum = "6aefac48c364756e97f04c0401ba3231e8607882c7c1d92da0437dc16307904d"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -8735,12 +8749,12 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.19.0"
+version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f05839ce67618e14a09b286535c0d9c94e85ef25469b0e13cb4f844e5593eb19"
+checksum = "e72c1c2cb7b223fafb600a619537a871c2818583d619401b785e7c0b746ccde2"
 dependencies = [
  "serde_core",
- "serde_with_macros 3.19.0",
+ "serde_with_macros 3.20.0",
 ]
 
 [[package]]
@@ -8757,9 +8771,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.19.0"
+version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf2ebbe86054f9b45bc3881e865683ccfaccce97b9b4cb53f3039d67f355a334"
+checksum = "b90c488738ecb4fb0262f41f43bc40efc5868d9fb744319ddf5f5317f417bfac"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -9764,7 +9778,7 @@ dependencies = [
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.2",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -9808,7 +9822,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
- "winnow 1.0.2",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -9817,7 +9831,7 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
- "winnow 1.0.2",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -9849,9 +9863,9 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.6.10"
+version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68d6fdd9f81c2819c9a8b0e0cd91660e7746a8e6ea2ba7c6b2b057985f6bcb51"
+checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "async-compression",
  "bitflags 2.11.1",
@@ -11781,9 +11795,9 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee1708bef14716a11bae175f579062d4554d95be2c6829f518df847b7b3fdd0"
+checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 dependencies = [
  "memchr",
 ]
@@ -12133,7 +12147,7 @@ dependencies = [
  "uds_windows",
  "uuid",
  "windows-sys 0.61.2",
- "winnow 1.0.2",
+ "winnow 1.0.3",
  "zbus_macros",
  "zbus_names",
  "zvariant",
@@ -12161,7 +12175,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7074f3e50b894eac91750142016d30d0a89be8e67dbfd9704fb875825760e52d"
 dependencies = [
  "serde",
- "winnow 1.0.2",
+ "winnow 1.0.3",
  "zvariant",
 ]
 
@@ -12263,9 +12277,9 @@ dependencies = [
 
 [[package]]
 name = "zerofrom"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69faa1f2a1ea75661980b013019ed6687ed0e83d069bc1114e2cc74c6c04c4df"
+checksum = "0ec05a11813ea801ff6d75110ad09cd0824ddba17dfe17128ea0d5f68e6c5272"
 dependencies = [
  "zerofrom-derive",
 ]
@@ -12445,7 +12459,7 @@ dependencies = [
  "enumflags2",
  "serde",
  "serde_bytes",
- "winnow 1.0.2",
+ "winnow 1.0.3",
  "zvariant_derive",
  "zvariant_utils",
 ]
@@ -12473,5 +12487,5 @@ dependencies = [
  "quote",
  "serde",
  "syn 2.0.117",
- "winnow 1.0.2",
+ "winnow 1.0.3",
 ]

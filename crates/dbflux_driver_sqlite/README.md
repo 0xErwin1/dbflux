@@ -6,6 +6,7 @@
 - Supports SQL execution, schema discovery, views, indexes, foreign keys, check constraints, and unique constraints.
 - Supports query cancellation via SQLite interrupt handles.
 - Includes SQL/code generation for CRUD, indexes, reindex, create table, and drop table.
+- Multi-statement scripts (several `;`-separated statements) are split and executed statement by statement, each through the typed prepared path, returning one result set per statement. (`rusqlite::prepare` only parses the first statement of a string, so a script must be split.)
 
 ## Limitations
 

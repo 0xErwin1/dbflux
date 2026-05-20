@@ -1,4 +1,5 @@
 pub mod inspector;
+pub mod pane;
 
 use gpui::prelude::*;
 use gpui::*;
