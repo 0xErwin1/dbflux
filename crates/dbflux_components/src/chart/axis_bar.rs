@@ -16,7 +16,7 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Anchor, App, ElementId, MouseButton, SharedString, Window, anchored, deferred, div,
+    Anchor, AnyElement, App, ElementId, MouseButton, SharedString, Window, anchored, deferred, div,
     point, px,
 };
 
