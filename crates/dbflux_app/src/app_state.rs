@@ -79,8 +79,8 @@ use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
 
 pub use dbflux_core::{
     ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
-    FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaTypesParams,
-    FetchTableDetailsParams, SwitchDatabaseParams,
+    FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaRoutinesParams,
+    FetchSchemaTypesParams, FetchTableDetailsParams, SwitchDatabaseParams,
 };
 
 struct BuiltDrivers {
@@ -1032,6 +1032,40 @@ impl AppState {
         self.facade
             .connections
             .needs_schema_foreign_keys(profile_id, database, schema)
+    }
+
+    pub fn set_schema_routines(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        schema: Option<String>,
+        routines: Vec<dbflux_core::RoutineInfo>,
+    ) {
+        self.facade
+            .connections
+            .set_schema_routines(profile_id, database, schema, routines);
+    }
+
+    pub fn needs_schema_routines(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> bool {
+        self.facade
+            .connections
+            .needs_schema_routines(profile_id, database, schema)
+    }
+
+    pub fn prepare_fetch_schema_routines(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<FetchSchemaRoutinesParams, String> {
+        self.facade
+            .connections
+            .prepare_fetch_schema_routines(profile_id, database, schema)
     }
 
     #[allow(dead_code)]

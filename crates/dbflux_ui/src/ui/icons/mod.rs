@@ -90,6 +90,8 @@ pub enum AppIcon {
     Box,
     Braces,
     SquareTerminal,
+    Parentheses,
+    Sigma,
 
     // Database generic
     Database,
@@ -186,6 +188,8 @@ impl AppIcon {
             Self::Box => "icons/ui/box.svg",
             Self::Braces => "icons/ui/braces.svg",
             Self::SquareTerminal => "icons/ui/square-terminal.svg",
+            Self::Parentheses => "icons/ui/parentheses.svg",
+            Self::Sigma => "icons/ui/sigma.svg",
             Self::Database => "icons/ui/database.svg",
             Self::Logs => "icons/ui/logs.svg",
             Self::BrandPostgres => "icons/brand/postgresql.svg",
@@ -303,6 +307,10 @@ impl AppIcon {
             Self::SquareTerminal => {
                 include_bytes!("../../../../../resources/icons/ui/square-terminal.svg")
             }
+            Self::Parentheses => {
+                include_bytes!("../../../../../resources/icons/ui/parentheses.svg")
+            }
+            Self::Sigma => include_bytes!("../../../../../resources/icons/ui/sigma.svg"),
             Self::Database => include_bytes!("../../../../../resources/icons/ui/database.svg"),
             Self::Logs => include_bytes!("../../../../../resources/icons/ui/logs.svg"),
             Self::BrandPostgres => {
@@ -444,6 +452,8 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Box,
     AppIcon::Braces,
     AppIcon::SquareTerminal,
+    AppIcon::Parentheses,
+    AppIcon::Sigma,
     AppIcon::Database,
     AppIcon::Logs,
     AppIcon::BrainCircuit,

@@ -913,6 +913,123 @@ impl Workspace {
         .detach();
     }
 
+    /// Opens a read-only code document showing a routine's definition.
+    ///
+    /// Fetches the definition in the background (via `routine_definition`) and
+    /// defers creation to the next render cycle where `Window` is available.
+    /// Focuses the existing tab when already open.
+    pub fn open_routine_definition(
+        &mut self,
+        profile_id: uuid::Uuid,
+        schema: String,
+        specific_name: String,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::DocumentKey;
+
+        let dedup_key = DocumentKey::Routine {
+            profile_id,
+            schema: schema.clone(),
+            specific_name: specific_name.clone(),
+        };
+
+        if let Some(existing_id) = self.tab_manager.read(cx).find_by_key(&dedup_key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(existing_id, cx);
+            });
+            return;
+        }
+
+        let connections = self.app_state.read(cx).connections();
+        let connected = match connections.get(&profile_id) {
+            Some(c) => c,
+            None => return,
+        };
+
+        let database = connected
+            .active_database
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let connection = connected.connection.clone();
+
+        let schema_fetch = schema.clone();
+        let specific_name_fetch = specific_name.clone();
+
+        cx.spawn(async move |this, cx| {
+            let definition = cx
+                .background_executor()
+                .spawn(async move {
+                    connection.routine_definition(&database, &schema_fetch, &specific_name_fetch)
+                })
+                .await;
+
+            let body = match definition {
+                Ok(def) => def,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to fetch routine definition for {}: {}",
+                        specific_name,
+                        e
+                    );
+                    format!("-- Failed to load routine definition:\n-- {}", e)
+                }
+            };
+
+            cx.update(|cx| {
+                this.update(cx, |ws, cx| {
+                    ws.pending_open_routine = Some(PendingOpenRoutine {
+                        profile_id,
+                        schema,
+                        specific_name,
+                        title,
+                        body,
+                    });
+                    cx.notify();
+                })
+                .ok();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn finalize_open_routine(
+        &mut self,
+        pending: PendingOpenRoutine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let doc = cx.new(|cx| {
+            let connection_id = Some(pending.profile_id);
+            let mut doc = CodeDocument::new_with_language(
+                self.app_state.clone(),
+                connection_id,
+                dbflux_core::QueryLanguage::Sql,
+                window,
+                cx,
+            )
+            .with_title(pending.title)
+            .with_read_only(cx)
+            .with_routine_dedup(
+                pending.profile_id,
+                pending.schema,
+                pending.specific_name,
+            );
+
+            doc.set_content(&pending.body, window, cx);
+            doc
+        });
+
+        let pane = CodeDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Opens a script file from a known path and content (called after file read).
     fn open_script_with_content(
         &mut self,
@@ -1236,6 +1353,73 @@ impl Workspace {
                 }
                 _ => manifest_language,
             };
+
+            // Routine tabs are persisted with their descriptor encoded in exec_ctx:
+            // connection_id=profile_id, schema=schema, container=specific_name.
+            // Reconstruct as a read-only document; the definition is re-fetched when the
+            // connection becomes available (handled by AppStateChanged in CodeDocument).
+            if tab.tab_kind == "Routine" {
+                let exec_ctx_json = tab.exec_ctx_json.as_str();
+                let exec_ctx: dbflux_core::ExecutionContext = serde_json::from_str(exec_ctx_json)
+                    .unwrap_or_else(|_| dbflux_core::ExecutionContext::default());
+
+                let Some(profile_id) = exec_ctx.connection_id else {
+                    log::warn!(
+                        "Routine tab '{}' has no profile_id in exec_ctx — skipping",
+                        tab.title
+                    );
+                    continue;
+                };
+
+                let Some(schema) = exec_ctx.schema.clone() else {
+                    log::warn!(
+                        "Routine tab '{}' has no schema in exec_ctx — skipping",
+                        tab.title
+                    );
+                    continue;
+                };
+
+                let Some(specific_name) = exec_ctx.container.clone() else {
+                    log::warn!(
+                        "Routine tab '{}' has no specific_name (container) in exec_ctx — skipping",
+                        tab.title
+                    );
+                    continue;
+                };
+
+                let title = tab.title.clone();
+
+                let doc = cx.new(|cx| {
+                    // Pass Some(profile_id) as connection_id so the exec context
+                    // is pre-seeded; the connection might not be active yet.
+                    CodeDocument::new_with_language(
+                        self.app_state.clone(),
+                        Some(profile_id),
+                        language,
+                        window,
+                        cx,
+                    )
+                    .with_title(title)
+                    .with_read_only(cx)
+                    .with_routine_dedup(profile_id, schema, specific_name)
+                    .with_routine_definition_pending()
+                });
+
+                // If the connection is already active at restore time, trigger
+                // the definition fetch immediately via the same path used by
+                // the AppStateChanged handler.
+                doc.update(cx, |d, cx| {
+                    d.try_fetch_pending_routine_definition(cx);
+                });
+
+                let pane = CodeDocument::into_pane(doc, cx);
+
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
+                });
+
+                continue;
+            }
 
             let (content, path, scratch_path, shadow_path) = match tab.tab_kind.as_str() {
                 "Scratch" => {

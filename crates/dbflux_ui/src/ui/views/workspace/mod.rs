@@ -236,6 +236,15 @@ pub(super) struct PendingOpenScript {
     pub exec_ctx: ExecutionContext,
 }
 
+/// Deferred routine-definition open (needs `Window` access for CodeDocument creation).
+pub(super) struct PendingOpenRoutine {
+    pub profile_id: uuid::Uuid,
+    pub schema: String,
+    pub specific_name: String,
+    pub title: String,
+    pub body: String,
+}
+
 pub struct Workspace {
     app_state: Entity<AppStateEntity>,
     sidebar: Entity<Sidebar>,
@@ -272,6 +281,7 @@ pub struct Workspace {
     pending_sql: Option<String>,
     pending_focus: Option<FocusTarget>,
     pending_open_script: Option<PendingOpenScript>,
+    pending_open_routine: Option<PendingOpenRoutine>,
     needs_focus_restore: bool,
 
     /// Active pipeline progress watcher for pipeline-enabled connects.
@@ -714,6 +724,20 @@ impl Workspace {
                         modal.open(req, window, cx);
                     });
                 }
+                SidebarEvent::OpenRoutineDefinition {
+                    profile_id,
+                    schema,
+                    specific_name,
+                    title,
+                } => {
+                    this.open_routine_definition(
+                        *profile_id,
+                        schema.clone(),
+                        specific_name.clone(),
+                        title.clone(),
+                        cx,
+                    );
+                }
                 SidebarEvent::RequestTunnelAuth {
                     tunnel_id,
                     tunnel_name,
@@ -958,6 +982,7 @@ impl Workspace {
             pending_sql: None,
             pending_focus: None,
             pending_open_script: None,
+            pending_open_routine: None,
             needs_focus_restore: false,
             pipeline_progress: None,
             _pipeline_subscription: None,

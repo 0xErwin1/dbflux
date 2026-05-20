@@ -756,6 +756,28 @@ pub struct SchemaForeignKeyInfo {
     pub on_update: Option<String>,
 }
 
+/// Routine kind, mapped from engine metadata (e.g. PostgreSQL pg_proc.prokind).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoutineKind {
+    Function,
+    Procedure,
+    Aggregate,
+    Window,
+}
+
+/// Schema-level routine info (stored procedures / user-defined functions).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutineInfo {
+    pub name: String,
+    pub kind: RoutineKind,
+    /// Engine-specific unique identity within the schema; includes argument
+    /// signature so overloads do not collide. PostgreSQL uses
+    /// `pg_get_function_identity_arguments(oid)`.
+    pub specific_name: String,
+    pub parameter_types: Vec<String>,
+    pub return_type_hint: Option<String>,
+}
+
 // =============================================================================
 // Document Database Types (MongoDB, CouchDB, etc.)
 // =============================================================================
@@ -1044,5 +1066,43 @@ mod tests {
 
         let key_value = SchemaSnapshot::key_value(KeyValueSchema::default());
         assert!(key_value.measurements().is_empty());
+    }
+
+    #[test]
+    fn routine_info_serde_roundtrip() {
+        let original = RoutineInfo {
+            name: "add".to_string(),
+            kind: RoutineKind::Function,
+            specific_name: "add(integer, integer)".to_string(),
+            parameter_types: vec!["integer".to_string(), "integer".to_string()],
+            return_type_hint: Some("integer".to_string()),
+        };
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        let decoded: RoutineInfo = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(decoded.name, original.name);
+        assert_eq!(decoded.kind, original.kind);
+        assert_eq!(decoded.specific_name, original.specific_name);
+        assert_eq!(decoded.parameter_types, original.parameter_types);
+        assert_eq!(decoded.return_type_hint, original.return_type_hint);
+    }
+
+    #[test]
+    fn routine_kind_serde_roundtrip_all_variants() {
+        for kind in [
+            RoutineKind::Function,
+            RoutineKind::Procedure,
+            RoutineKind::Aggregate,
+            RoutineKind::Window,
+        ] {
+            let json = serde_json::to_string(&kind).expect("serialize");
+            let decoded: RoutineKind = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(
+                decoded, kind,
+                "RoutineKind round-trip failed for {:?}",
+                kind
+            );
+        }
     }
 }

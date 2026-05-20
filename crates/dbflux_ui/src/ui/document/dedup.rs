@@ -47,6 +47,13 @@ pub enum DocumentKey {
         profile_id: Uuid,
         target: dbflux_core::EventStreamTarget,
     },
+
+    /// A read-only routine definition document (stored procedure or function).
+    Routine {
+        profile_id: Uuid,
+        schema: String,
+        specific_name: String,
+    },
 }
 
 #[cfg(test)]
