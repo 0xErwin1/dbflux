@@ -31,7 +31,7 @@ use dbflux_core::{
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
 use postgres::types::{FromSql, Kind, Type};
-use postgres::{CancelToken as PgCancelToken, Client, NoTls};
+use postgres::{CancelToken as PgCancelToken, Client, NoTls, SimpleQueryMessage};
 use postgres_native_tls::MakeTlsConnector;
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
@@ -56,7 +56,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::CUSTOM_TYPES.bits()
             | DriverCapabilities::RETURNING.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
-            | DriverCapabilities::ROUTINES.bits(),
+            | DriverCapabilities::ROUTINES.bits()
+            | DriverCapabilities::MULTI_STATEMENT.bits(),
     ),
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
@@ -1381,15 +1382,23 @@ impl Connection for PostgresConnection {
             sql_preview.replace('\n', " ")
         );
 
-        let (columns, rows) = {
-            let mut client = match self.client.lock() {
-                Ok(guard) => guard,
-                Err(poison_err) => {
-                    log::warn!("[CLEANUP] Recovering from poisoned mutex during cleanup");
-                    poison_err.into_inner()
-                }
-            };
+        let mut client = match self.client.lock() {
+            Ok(guard) => guard,
+            Err(poison_err) => {
+                log::warn!("[CLEANUP] Recovering from poisoned mutex during cleanup");
+                poison_err.into_inner()
+            }
+        };
 
+        // A multi-statement batch cannot use the extended (prepared) protocol,
+        // which rejects more than one command per statement (SQLSTATE 42601).
+        // Route it through the simple query protocol, which executes the whole
+        // batch and returns one result set per statement.
+        if QueryLanguage::Sql.statement_count(&req.sql) > 1 {
+            return execute_statement_batch(&mut client, &req.sql, query_id, start, req.limit);
+        }
+
+        let (columns, rows) = {
             // Prepare the statement first to get column metadata
             let stmt = client.prepare(&req.sql).map_err(|e| {
                 if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
@@ -1425,6 +1434,8 @@ impl Connection for PostgresConnection {
 
             (columns, rows)
         };
+
+        drop(client);
 
         let query_time = start.elapsed();
 
@@ -3501,6 +3512,127 @@ fn format_pg_query_error(e: &postgres::Error) -> DbError {
     let message = formatted.to_display_string();
     log::error!("PostgreSQL query failed: {}", message);
     formatted.into_query_error()
+}
+
+/// Executes a multi-statement batch via the simple query protocol.
+///
+/// The extended (prepared) protocol used by [`PostgresConnection::execute`]
+/// rejects batches with more than one command (SQLSTATE 42601), so a script
+/// must go through `simple_query`. The trade-off is that the simple protocol
+/// returns every value as text and carries no type metadata, so result columns
+/// are reported with [`ColumnKind::Unknown`]. Each statement in the batch
+/// becomes a separate result set; the first is the primary result and the rest
+/// are attached as `additional_results`.
+fn execute_statement_batch(
+    client: &mut Client,
+    sql: &str,
+    query_id: Uuid,
+    start: Instant,
+    limit: Option<u32>,
+) -> Result<QueryResult, DbError> {
+    let messages = client.simple_query(sql).map_err(|e| {
+        if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+            log::info!("[QUERY] Batch query {} was cancelled", query_id);
+            DbError::Cancelled
+        } else {
+            format_pg_query_error(&e)
+        }
+    })?;
+
+    let total_time = start.elapsed();
+    let mut result_sets = simple_query_messages_to_results(messages, total_time, limit);
+
+    log::debug!(
+        "[QUERY] Batch completed in {:.2}ms, {} result set(s)",
+        total_time.as_secs_f64() * 1000.0,
+        result_sets.len()
+    );
+
+    if result_sets.is_empty() {
+        return Ok(QueryResult::table(Vec::new(), Vec::new(), None, total_time));
+    }
+
+    let mut primary = result_sets.remove(0);
+    for extra in result_sets {
+        primary.push_additional_result(extra);
+    }
+
+    Ok(primary)
+}
+
+/// Groups the flat stream of [`SimpleQueryMessage`]s into one [`QueryResult`]
+/// per statement. A `CommandComplete` closes the current statement: if it
+/// produced rows the result is a table, otherwise it reports the affected-row
+/// count. Row values arrive as text and columns are typed `Unknown`.
+fn simple_query_messages_to_results(
+    messages: Vec<SimpleQueryMessage>,
+    total_time: std::time::Duration,
+    limit: Option<u32>,
+) -> Vec<QueryResult> {
+    let row_limit = limit.unwrap_or(u32::MAX) as usize;
+
+    let mut results = Vec::new();
+    let mut columns: Option<Vec<ColumnMeta>> = None;
+    let mut rows: Vec<Row> = Vec::new();
+
+    for message in messages {
+        match message {
+            SimpleQueryMessage::Row(row) => {
+                if columns.is_none() {
+                    columns = Some(
+                        row.columns()
+                            .iter()
+                            .map(|col| ColumnMeta {
+                                name: col.name().to_string(),
+                                type_name: String::new(),
+                                kind: ColumnKind::Unknown,
+                                nullable: true,
+                                is_primary_key: false,
+                            })
+                            .collect(),
+                    );
+                }
+
+                if rows.len() < row_limit {
+                    let values = (0..row.columns().len())
+                        .map(|i| match row.get(i) {
+                            Some(text) => Value::Text(text.to_string()),
+                            None => Value::Null,
+                        })
+                        .collect();
+                    rows.push(values);
+                }
+            }
+            SimpleQueryMessage::CommandComplete(affected) => {
+                let statement_columns = columns.take().unwrap_or_default();
+                let statement_rows = std::mem::take(&mut rows);
+                let returned_rows = !statement_columns.is_empty();
+
+                let affected_rows = if returned_rows { None } else { Some(affected) };
+
+                results.push(QueryResult::table(
+                    statement_columns,
+                    statement_rows,
+                    affected_rows,
+                    total_time,
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    // Guard against a trailing row group that never received a CommandComplete.
+    if columns.is_some() || !rows.is_empty() {
+        let statement_columns = columns.take().unwrap_or_default();
+        results.push(QueryResult::table(
+            statement_columns,
+            std::mem::take(&mut rows),
+            None,
+            total_time,
+        ));
+    }
+
+    results
 }
 
 fn format_pg_uri_error(e: &postgres::Error, uri: &str) -> DbError {

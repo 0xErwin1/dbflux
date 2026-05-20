@@ -150,8 +150,65 @@ impl CodeDocument {
     }
 
     fn run_query_impl(&mut self, in_new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let query = self.selected_or_full_query(window, cx);
+        // A selection always runs as-is, without the script confirmation.
+        if let Some(query) = self.selected_query(window, cx) {
+            self.run_query_text(query, in_new_tab, window, cx);
+            return;
+        }
+
+        let query = self.input_state.read(cx).value().to_string();
+
+        // No selection means the whole buffer runs. When it holds more than one
+        // statement and the driver can execute batches, confirm before running
+        // the entire script.
+        if let Some(statement_count) = self.script_statement_count(&query, cx) {
+            self.pending_script_confirm = Some(PendingScriptConfirm {
+                query,
+                in_new_tab,
+                statement_count,
+            });
+            cx.notify();
+            return;
+        }
+
         self.run_query_text(query, in_new_tab, window, cx);
+    }
+
+    /// Returns the statement count when `query` is a multi-statement script and
+    /// the active connection's driver advertises `MULTI_STATEMENT`.
+    ///
+    /// Returns `None` for a single statement or a driver that cannot execute
+    /// batches, in which case no confirmation is shown.
+    fn script_statement_count(&self, query: &str, cx: &Context<Self>) -> Option<usize> {
+        let count = self.query_language.statement_count(query);
+        if count <= 1 {
+            return None;
+        }
+
+        let conn_id = self.connection_id?;
+        let app_state = self.app_state.read(cx);
+        let connected = app_state.connections().get(&conn_id)?;
+
+        let supports_batch = connected
+            .connection
+            .metadata()
+            .capabilities
+            .contains(DriverCapabilities::MULTI_STATEMENT);
+
+        supports_batch.then_some(count)
+    }
+
+    pub(super) fn confirm_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_script_confirm.take() else {
+            return;
+        };
+
+        self.run_query_text(pending.query, pending.in_new_tab, window, cx);
+    }
+
+    pub(super) fn cancel_script_query(&mut self, cx: &mut Context<Self>) {
+        self.pending_script_confirm = None;
+        cx.notify();
     }
 
     fn run_query_text(
@@ -1067,6 +1124,14 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A multi-statement batch yields one result set per statement. Give
+        // each its own tab so every statement's output is visible, rather than
+        // surfacing only the primary set.
+        if result.has_additional_results() {
+            self.create_result_tabs_for_batch(result, query, window, cx);
+            return;
+        }
+
         let should_create_new_tab = self.run_in_new_tab
             || self.result_tabs.is_empty()
             || self.active_result_index.is_none();
@@ -1082,6 +1147,33 @@ impl CodeDocument {
             tab.grid.update(cx, |g, cx| {
                 g.set_query_result(result, query.clone(), profile_id, cx)
             });
+        }
+    }
+
+    /// Creates one result tab per result set of a multi-statement batch.
+    ///
+    /// The first new tab is activated so the user lands on the first
+    /// statement's output. Each set is rendered on its own, so the per-set
+    /// `additional_results` is stripped from the primary before display.
+    fn create_result_tabs_for_batch(
+        &mut self,
+        result: Arc<QueryResult>,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.run_in_new_tab = false;
+
+        let first_new_index = self.result_tabs.len();
+
+        for set in result.iter_result_sets() {
+            let mut single = set.clone();
+            single.additional_results.clear();
+            self.create_result_tab(Arc::new(single), query.clone(), window, cx);
+        }
+
+        if first_new_index < self.result_tabs.len() {
+            self.active_result_index = Some(first_new_index);
         }
     }
 

@@ -9,10 +9,12 @@
 - Includes SQL/code generation for CRUD, indexes, foreign keys, and table DDL operations.
 - Routine discovery: lists stored procedures and user-defined functions from `information_schema.ROUTINES` including parameter types and return type hints (Functions only).
 - Routine definition: retrieves the full `CREATE FUNCTION` or `CREATE PROCEDURE` body via `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` (read-only; definition is not editable or executable in the viewer).
+- Multi-statement scripts (several `;`-separated statements) are split and executed statement by statement, each through the typed prepared path, returning one result set per statement.
 
 ## Limitations
 
 - SQL-only driver; it does not expose document or key-value APIs.
+- A multi-statement script runs each statement sequentially rather than as one atomic server-side batch; statement splitting is text-based and may missplit stored-program bodies that embed `;` (e.g. `CREATE PROCEDURE ... BEGIN ... END`).
 - Cancellation depends on server permissions and connection state when `KILL QUERY` is issued.
 - Code generation is scoped to supported MySQL/MariaDB constructs; unsupported generator IDs return `NotSupported`.
 - Routine listing covers only FUNCTION and PROCEDURE types. MySQL aggregate functions (registered via `CREATE AGGREGATE FUNCTION` UDF plugin) and window functions are not surfaced in `information_schema.ROUTINES` and are therefore not listed.
