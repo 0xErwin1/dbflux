@@ -60,6 +60,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            mold \
             pkg-config \
             libssl-dev \
             libdbus-1-dev \
@@ -292,8 +293,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Build the x86_64 target on the Apple Silicon runner via cross
+          # compilation. GitHub's Intel macOS runner is ~5x slower; arm64 ->
+          # x86_64 is a trivial same-OS cross (universal SDK, shared linker),
+          # so this cuts the Intel build from ~1h to the arm64 build's time.
           - arch: amd64
-            runs_on: macos-15-intel
+            runs_on: macos-14
             target: x86_64-apple-darwin
           - arch: arm64
             runs_on: macos-14

@@ -119,3 +119,15 @@ dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
 indexing_slicing = "warn"
+
+# Development build profile tuned for memory and link speed.
+# Full debug info (debug = 2) is the main driver of peak RAM and disk usage
+# when linking this many crates; line tables keep backtraces usable at a
+# fraction of the cost.
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies rarely need debugging; dropping their debug info entirely is a
+# large reduction in target/ size and link-time memory.
+[profile.dev.package."*"]
+debug = false

@@ -21,12 +21,21 @@ cargo build
 cargo run
 ```
 
+On Linux, the [`mold`](https://github.com/rui314/mold) linker is **required** for local builds: `.cargo/config.toml` links the `x86_64-unknown-linux-gnu` target with `-fuse-ld=mold` to cut link time and memory across the workspace. Install it via your package manager (e.g. `apt install mold`); the Nix dev shell provides it automatically. Windows and macOS are unaffected.
+
 Before opening a PR run:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace -- -D warnings
 cargo test --workspace
+```
+
+Tests can also be run with [`cargo-nextest`](https://nexte.st) (faster on this workspace, provided by the Nix dev shell). Note nextest does not run doctests:
+
+```bash
+cargo nextest run --workspace
+cargo test --doc --workspace
 ```
 
 A Nix dev shell is available: `nix develop`.
