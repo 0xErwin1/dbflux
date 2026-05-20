@@ -60,6 +60,10 @@ impl Render for Workspace {
             self.finalize_open_script(pending, window, cx);
         }
 
+        if let Some(pending) = self.pending_open_routine.take() {
+            self.finalize_open_routine(pending, window, cx);
+        }
+
         if self.needs_focus_restore {
             self.needs_focus_restore = false;
             self.set_focus(self.focus_target, window, cx);

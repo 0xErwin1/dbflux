@@ -285,7 +285,8 @@ impl DatabaseCategory {
                     | DriverCapabilities::TRIGGERS.bits()
                     | DriverCapabilities::STORED_PROCEDURES.bits()
                     | DriverCapabilities::SEQUENCES.bits()
-                    | DriverCapabilities::RETURNING.bits(),
+                    | DriverCapabilities::RETURNING.bits()
+                    | DriverCapabilities::ROUTINES.bits(),
             ),
 
             DatabaseCategory::Document | DatabaseCategory::LogStream => {
@@ -493,6 +494,11 @@ bitflags! {
         /// When true, the driver can execute DDL statements within a transaction,
         /// allowing dry-run schema changes via transaction rollback.
         const TRANSACTIONAL_DDL = 1 << 46;
+
+        /// Driver exposes stored routines (functions, procedures, aggregates, window
+        /// functions) through the schema_routines seam. When set, the sidebar renders
+        /// a Routines folder for each schema.
+        const ROUTINES = 1 << 47;
     }
 }
 
@@ -1641,6 +1647,33 @@ mod tests {
         assert_eq!(
             QueryLanguage::RedisCommands.display_name(),
             "Redis Commands"
+        );
+    }
+
+    #[test]
+    fn test_routines_capability_bit() {
+        assert_eq!(
+            DriverCapabilities::ROUTINES.bits(),
+            1u64 << 47,
+            "ROUTINES must be bit 47"
+        );
+        assert!(
+            DatabaseCategory::Relational
+                .relevant_capabilities()
+                .contains(DriverCapabilities::ROUTINES),
+            "Relational category must include ROUTINES"
+        );
+        assert!(
+            DatabaseCategory::TimeSeries
+                .relevant_capabilities()
+                .contains(DriverCapabilities::ROUTINES),
+            "TimeSeries category must include ROUTINES"
+        );
+        assert!(
+            !DatabaseCategory::KeyValue
+                .relevant_capabilities()
+                .contains(DriverCapabilities::ROUTINES),
+            "KeyValue category must NOT include ROUTINES"
         );
     }
 

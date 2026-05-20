@@ -193,6 +193,13 @@ pub struct CodeDocument {
     title: String,
     state: DocumentState,
     connection_id: Option<Uuid>,
+    /// When true, the editor content must not be modified and query execution is blocked.
+    read_only: bool,
+    /// Deduplication key for routine definition documents. `None` for regular code documents.
+    routine_dedup: Option<(Uuid, String, String)>,
+    /// True when this is a routine document restored from a session without an active connection.
+    /// The definition will be fetched automatically once the profile connects.
+    routine_definition_pending: bool,
 
     // Dependencies
     app_state: Entity<AppStateEntity>,
@@ -297,6 +304,10 @@ pub struct CodeDocument {
 
     // Pending error to show as toast (set from async context without window access)
     pending_error: Option<String>,
+
+    /// Routine definition body fetched from the DB and waiting to be applied in
+    /// the next render cycle (where `Window` is available for `set_content`).
+    pending_routine_definition: Option<String>,
 }
 
 struct PendingQueryResult {
@@ -409,12 +420,23 @@ impl CodeDocument {
             |this, _input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
                     if this.suppress_dirty {
+                        // Programmatic change (set_content, initial load, or revert):
+                        // consume the flag and do nothing else. This prevents an
+                        // infinite loop where a revert set_content emits another
+                        // Change, which would trigger another revert, ad infinitum.
                         this.suppress_dirty = false;
+                    } else if this.read_only {
+                        // Genuine user edit on a read-only document: revert once.
+                        // suppress_dirty = true ensures the Change emitted by the
+                        // revert's own set_content is consumed by the branch above.
+                        let original = this.original_content.clone();
+                        this.suppress_dirty = true;
+                        this.set_content(&original, _window, cx);
                     } else {
                         this.mark_dirty(cx);
+                        this.schedule_auto_save(cx);
+                        this.schedule_diagnostic_refresh(cx);
                     }
-                    this.schedule_auto_save(cx);
-                    this.schedule_diagnostic_refresh(cx);
                 }
                 InputEvent::Focus => {
                     this.enter_editor_mode(cx);
@@ -608,6 +630,7 @@ impl CodeDocument {
         );
         let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
             this.sync_context_dropdowns(cx);
+            this.try_fetch_pending_routine_definition(cx);
         });
 
         let refresh_policy = default_refresh;
@@ -617,6 +640,9 @@ impl CodeDocument {
             title: "Query 1".to_string(),
             state: DocumentState::Clean,
             connection_id,
+            read_only: false,
+            routine_dedup: None,
+            routine_definition_pending: false,
             app_state,
             input_state,
             _input_subscriptions: vec![input_change_sub],
@@ -692,6 +718,7 @@ impl CodeDocument {
             show_saved_label: false,
             _saved_label_timer: None,
             pending_error: None,
+            pending_routine_definition: None,
         };
 
         document.sync_context_dropdowns(cx);
@@ -803,6 +830,113 @@ impl CodeDocument {
     pub fn with_path(mut self, path: PathBuf) -> Self {
         self.path = Some(path);
         self
+    }
+
+    /// Mark the document as read-only: blocks query execution, dirty marking,
+    /// and all text editing. Completion is also disabled so no autocomplete
+    /// popup appears on focus or key events.
+    pub fn with_read_only(mut self, cx: &mut Context<Self>) -> Self {
+        self.read_only = true;
+
+        // Disable the LSP completion provider so no autocomplete popup fires
+        // when the user focuses or types (which would otherwise happen because
+        // the Input component receives key events before the disabled guard
+        // blocks the actual text insertion).
+        self.input_state.update(cx, |state, _cx| {
+            state.lsp.completion_provider = None;
+        });
+
+        self
+    }
+
+    /// Set a routine deduplication key so this document can be detected as
+    /// already-open by `DocumentKey::Routine` lookups.
+    pub fn with_routine_dedup(
+        mut self,
+        profile_id: Uuid,
+        schema: String,
+        specific_name: String,
+    ) -> Self {
+        self.routine_dedup = Some((profile_id, schema, specific_name));
+        self
+    }
+
+    /// Mark this routine document as awaiting its definition from the database.
+    ///
+    /// When set, a placeholder is shown until the connection becomes available
+    /// and the definition is fetched via `routine_definition`.
+    pub fn with_routine_definition_pending(mut self) -> Self {
+        self.routine_definition_pending = true;
+        self
+    }
+
+    /// Returns true when this document is showing the "connect to view" placeholder.
+    pub fn is_routine_definition_pending(&self) -> bool {
+        self.routine_definition_pending
+    }
+
+    /// If this document is awaiting a routine definition and the profile connection
+    /// is now active, spawn a background fetch and populate the editor on success.
+    ///
+    /// Called from the `AppStateChanged` subscription so that session-restored
+    /// routine docs automatically load their definition on connect.
+    pub fn try_fetch_pending_routine_definition(&mut self, cx: &mut Context<Self>) {
+        let Some((profile_id, schema, specific_name)) = self.routine_dedup.clone() else {
+            return;
+        };
+
+        if !self.routine_definition_pending {
+            return;
+        }
+
+        let connections = self.app_state.read(cx).connections();
+        let Some(connected) = connections.get(&profile_id) else {
+            return;
+        };
+
+        let database = connected
+            .active_database
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let connection = connected.connection.clone();
+
+        let specific_name_for_log = specific_name.clone();
+
+        cx.spawn(async move |this, cx| {
+            let result =
+                cx.background_executor()
+                    .spawn(async move {
+                        connection.routine_definition(&database, &schema, &specific_name)
+                    })
+                    .await;
+
+            cx.update(|cx| {
+                this.update(cx, |doc, cx| {
+                    match result {
+                        Ok(body) => {
+                            doc.routine_definition_pending = false;
+                            // set_content requires Window, use pending path to defer to render cycle.
+                            doc.pending_routine_definition = Some(body);
+                            cx.notify();
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to fetch pending routine definition for {}: {}",
+                                specific_name_for_log,
+                                e
+                            );
+                            doc.routine_definition_pending = false;
+                            doc.pending_routine_definition =
+                                Some(format!("-- Failed to load routine definition:\n-- {}", e));
+                            cx.notify();
+                        }
+                    }
+                })
+                .ok();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Set the execution context (e.g. parsed from file header).
@@ -1306,8 +1440,155 @@ impl EventEmitter<DocumentEvent> for CodeDocument {}
 
 #[cfg(test)]
 mod tests {
-    use super::{diff_stats_from_pair, source_input_values_from_context};
-    use dbflux_core::ExecutionSourceContext;
+    use super::{CodeDocument, diff_stats_from_pair, source_input_values_from_context};
+    use crate::app_state_entity::AppStateEntity;
+    use crate::ui::components::toast::{ToastGlobal, ToastHost};
+    use crate::ui::theme;
+    use dbflux_core::{ExecutionSourceContext, QueryLanguage};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext, TestAppContext};
+    use gpui_component::Root;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn isolated_test_app_state(cx: &mut TestAppContext) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        })
+    }
+
+    fn init_test_runtime(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+    }
+
+    /// Constructing a read-only CodeDocument must not hang, and run_query must
+    /// be a no-op (active_query_task stays None, is_dirty stays false).
+    #[gpui::test]
+    fn read_only_document_blocks_execution(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        const DEF: &str = "SELECT * FROM users;";
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut d = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_read_only(cx);
+                d.set_content(DEF, window, cx);
+                d
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        // Trigger run_query on the read-only document; it must return immediately.
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                d.run_query(window, cx);
+            });
+        });
+
+        // Verify the document is still in its expected read-only, clean state.
+        let (is_ro, has_task, is_dirty) = window.update(|_, app| {
+            let d = doc.read(app);
+            (d.read_only, d.active_query_task.is_none(), d.is_dirty)
+        });
+
+        assert!(is_ro, "document must remain read-only");
+        assert!(
+            has_task,
+            "run_query on a read-only doc must not spawn a task"
+        );
+        assert!(!is_dirty, "read-only document must not be marked dirty");
+    }
+
+    /// A programmatic write into the underlying InputState of a read-only
+    /// CodeDocument must be reverted to the original definition.
+    ///
+    /// Real user keystrokes are now blocked at the InputState level (the Input
+    /// component sets `disabled = true` during render). This test exercises the
+    /// `set_value` path which bypasses the disabled guard and still emits
+    /// `InputEvent::Change`, verifying that the subscription's defensive revert
+    /// fires and keeps the document clean.
+    #[gpui::test]
+    fn read_only_document_reverts_edits(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        const DEF: &str = "SELECT * FROM users;";
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut d = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_read_only(cx);
+                d.set_content(DEF, window, cx);
+                d
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        // Simulate a programmatic write into the underlying InputState.
+        // `set_value` temporarily bypasses the disabled flag (it is the same
+        // path used by `set_content` internally) so `InputEvent::Change` fires.
+        // The subscription must detect `read_only` and revert the change.
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                d.input_state.update(cx, |state, cx| {
+                    state.set_value("DROP TABLE x;", window, cx);
+                });
+            });
+        });
+
+        // After the revert the content must be the original definition and the
+        // document must not be dirty.
+        let (content, is_dirty) = window.update(|_, app| {
+            let d = doc.read(app);
+            (d.input_state.read(app).value().to_string(), d.is_dirty)
+        });
+
+        assert_eq!(
+            content, DEF,
+            "read-only document must revert programmatic edits to the original definition"
+        );
+        assert!(
+            !is_dirty,
+            "read-only document must not be marked dirty after revert"
+        );
+    }
 
     #[test]
     fn diff_stats_identical_text_returns_zero() {

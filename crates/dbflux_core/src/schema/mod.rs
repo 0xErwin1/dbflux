@@ -24,8 +24,8 @@ pub use types::{
     ForeignKeyInfo, GraphInfo, GraphSchema, IndexData, IndexDirection, IndexInfo, KeyInfo,
     KeySpaceInfo, KeyValueSchema, MeasurementInfo, MultiModelCapabilities, MultiModelSchema,
     NodeLabelInfo, PropertyInfo, RelationalSchema, RelationshipTypeInfo, RetentionPolicyInfo,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SearchIndexInfo, SearchMappingInfo,
-    SearchSchema, TableInfo, TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo,
-    VectorMetadataField, VectorMetric, VectorSchema, ViewInfo, WideColumnInfo,
-    WideColumnKeyspaceInfo, WideColumnSchema,
+    RoutineInfo, RoutineKind, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot,
+    SearchIndexInfo, SearchMappingInfo, SearchSchema, TableInfo, TimeSeriesFieldInfo,
+    TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric, VectorSchema,
+    ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
 };
