@@ -14,16 +14,16 @@ For the branching model, version rules, tag flow, and release procedure, use `do
 
 ```bash
 cargo check --workspace              # Fast type checking
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws  # Debug build
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws --release  # Release build
-cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws    # Run app
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,mssql,aws  # Debug build
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,mssql,aws --release  # Release build
+cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,mssql,aws    # Run app
 
 # MCP server (AI integration) - included by default
 cargo build -p dbflux  # MCP included in default features
 ./target/debug/dbflux mcp --client-id test-client
 
 # Build without MCP support (smaller binary, no AI integration)
-cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mongodb,redis,dynamodb,lua,aws
+cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mongodb,redis,dynamodb,mssql,lua,aws
 
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint

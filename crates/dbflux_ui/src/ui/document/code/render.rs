@@ -718,6 +718,76 @@ impl CodeDocument {
             ))
     }
 
+    fn render_script_confirm_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let entity = cx.entity().clone();
+        let entity_cancel = cx.entity().clone();
+
+        let statement_count = self
+            .pending_script_confirm
+            .as_ref()
+            .map(|p| p.statement_count)
+            .unwrap_or(0);
+        let message = format!(
+            "No text is selected, so the entire script will run as {} statements in order. Continue?",
+            statement_count
+        );
+
+        div()
+            .id("script-confirm-modal-overlay")
+            .absolute()
+            .inset_0()
+            .bg(overlay_bg(theme))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                surface_panel(cx)
+                    .rounded(Radii::MD)
+                    .min_w(px(350.0))
+                    .max_w(px(500.0))
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::MD)
+                    .p(Spacing::MD)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(AppIcon::TriangleAlert).size(px(20.0)).warning())
+                            .child(Text::heading("Run entire script")),
+                    )
+                    .child(Text::caption(message))
+                    .child(
+                        div().flex().justify_end().items_center().child(
+                            div()
+                                .flex()
+                                .gap(Spacing::SM)
+                                .child(Button::new("script-confirm-cancel-btn", "Cancel").on_click(
+                                    move |_, _, cx| {
+                                        entity_cancel.update(cx, |doc, cx| {
+                                            doc.cancel_script_query(cx);
+                                        });
+                                    },
+                                ))
+                                .child(
+                                    Button::new("script-confirm-run-btn", "Run Script").on_click(
+                                        move |_, window, cx| {
+                                            entity.update(cx, |doc, cx| {
+                                                doc.confirm_script_query(window, cx);
+                                            });
+                                        },
+                                    ),
+                                ),
+                        ),
+                    ),
+            )
+    }
+
     fn render_dangerous_query_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let entity = cx.entity().clone();
@@ -960,6 +1030,9 @@ impl Render for CodeDocument {
             .child(self.history_modal.clone())
             .when(self.pending_dangerous_query.is_some(), |el| {
                 el.child(self.render_dangerous_query_modal(cx))
+            })
+            .when(self.pending_script_confirm.is_some(), |el| {
+                el.child(self.render_script_confirm_modal(cx))
             })
             .when(drift_modal_visible, |el| {
                 el.child(self.schema_drift_modal.clone())
