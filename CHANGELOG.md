@@ -4,20 +4,39 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
-## [0.6.0-dev.5] - 2026-05-20
+## [0.6.0-dev.6] - 2026-05-20
 
 ### Added
 
-* **Microsoft SQL Server driver** — first-class SQL Server support
-  built on `tiberius`, with TLS modes (`off`, `on`, `required` +
-  `trust_server_certificate`), SSH tunnel and SQL Browser named-
-  instance routing, full multi-schema introspection (`hr`, `sales`,
-  `dbo`, …), CRUD via `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`,
-  `OFFSET ... FETCH NEXT` paging, and cooperative query cancellation
-  via side-channel `KILL <spid>` with automatic session restore and
-  active-database recovery. `ColumnKind` is wired across every
-  `tiberius::ColumnType` so MSSQL results integrate with chart
-  auto-detection.
+* **Multi-statement script execution** — running a buffer with no active
+  selection now offers to execute the whole script (multiple
+  `;`-separated statements) behind a "Run entire script (N statements)?"
+  confirmation, on drivers that advertise the new
+  `DriverCapabilities::MULTI_STATEMENT` flag. `QueryLanguage` splits
+  SQL-family buffers while skipping separators inside strings,
+  identifiers, line/block comments, and PostgreSQL dollar-quoted bodies;
+  non-SQL languages stay single-statement. PostgreSQL routes batches
+  through the simple query protocol (batched columns are untyped text);
+  MySQL/MariaDB and SQLite split client-side and run each statement
+  through the typed prepared path (also fixing SQLite silently executing
+  only the first statement); MSSQL already executed batches natively.
+  Each result set renders in its own result tab. The seam is
+  driver-agnostic — the UI gates on the capability flag, never on driver
+  identity.
+* **Stored Procedures / Routines folder** — a capability-gated Routines
+  folder now appears under schema nodes in the sidebar, gated on the new
+  `DriverCapabilities::ROUTINES` flag (never on driver id). Core exposes
+  `RoutineInfo` / `RoutineKind` keyed on the engine-provided
+  `specific_name` for overload-safe node identity, plus
+  `Connection::schema_routines` / `routine_definition` with default
+  empty implementations so non-supporting drivers fall back gracefully.
+  PostgreSQL (via `pg_proc`/`pg_get_functiondef` with an aggregate/window
+  fallback), MySQL/MariaDB (via `information_schema.ROUTINES` +
+  `SHOW CREATE`), and SQL Server (via `sys.objects` +
+  `OBJECT_DEFINITION`) implement listing. Clicking a routine opens a
+  read-only `CodeDocument` (editor disabled, completion off, mutating and
+  execution toolbar buttons hidden) that round-trips across session
+  restore.
 
 ### Changed
 
@@ -35,6 +54,13 @@ All notable changes to DBFlux will be documented in this file.
   and similar view-provided controls. `handle.rs` reduced from 486 to
   29 LOC; `audit/mod.rs` reduced from 3454 to 1628 LOC. No new
   dependencies, no functional regressions, 2169 tests pass.
+* **Chart-specific icons across chart surfaces and the result mode bar**
+  — added `ChartSpline`/`ChartArea`/`ChartColumnBig`/`ChartBar`/
+  `ChartPie`/`ChartNetwork` icons (with a `for_chart_kind` helper) and
+  replaced generic placeholders: the chart tab and the "Chart this
+  query" menu/editor button now use `ChartSpline`, the chart toolbar
+  Stats button uses `ChartBar`, and the Data | Chart | JSON result-view
+  mode bar gains per-mode icons.
 
 ### Fixed
 
@@ -44,6 +70,23 @@ All notable changes to DBFlux will be documented in this file.
   moment a `QueryResult` arrives (instead of only after the user
   manually switched away from Table). Regression introduced earlier in
   the workspace-view refactor.
+
+## [0.6.0-dev.5] - 2026-05-20
+
+### Added
+
+* **Microsoft SQL Server driver** — first-class SQL Server support
+  built on `tiberius`, with TLS modes (`off`, `on`, `required` +
+  `trust_server_certificate`), SSH tunnel and SQL Browser named-
+  instance routing, full multi-schema introspection (`hr`, `sales`,
+  `dbo`, …), CRUD via `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`,
+  `OFFSET ... FETCH NEXT` paging, and cooperative query cancellation
+  via side-channel `KILL <spid>` with automatic session restore and
+  active-database recovery. `ColumnKind` is wired across every
+  `tiberius::ColumnType` so MSSQL results integrate with chart
+  auto-detection.
+
+### Fixed
 
 * **Long text wraps in toasts, banners, and the delete-confirmation
   modal** — long error strings and titles previously overflowed past
