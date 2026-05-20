@@ -20,9 +20,7 @@ use crate::keymap::{
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
-use crate::ui::document::{
-    CodeDocument, DataDocument, DocumentHandle, TabBar, TabBarEvent, TabManager,
-};
+use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager};
 
 #[cfg(feature = "mcp")]
 use crate::ui::document::McpApprovalsView;
@@ -450,13 +448,15 @@ impl Workspace {
                     UnsavedChangesOutcome::SaveSelected(ids) => {
                         let ids = ids.clone();
                         for id in &ids {
-                            if let Some(doc) = this.tab_manager.read(cx).document(*id).cloned() {
-                                doc.dispatch_command(
-                                    crate::keymap::Command::SaveFileAs,
-                                    window,
-                                    cx,
-                                );
-                            }
+                            this.tab_manager.update(cx, |mgr, cx| {
+                                if let Some(tab) = mgr.document(*id) {
+                                    tab.dispatch_command(
+                                        crate::keymap::Command::SaveFileAs,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            });
                         }
                     }
                     UnsavedChangesOutcome::Cancelled => {}
@@ -893,16 +893,20 @@ impl Workspace {
                         });
                     }
                     TabManagerEvent::Activated(new_id) => {
-                        let docs: Vec<_> = this
+                        let doc_ids: Vec<_> = this
                             .tab_manager
                             .read(cx)
                             .documents()
                             .iter()
-                            .map(|d| (d.clone(), d.id() == *new_id))
+                            .map(|d| (d.id(), d.id() == *new_id))
                             .collect();
 
-                        for (doc, is_active) in docs {
-                            doc.set_active_tab(is_active, cx);
+                        for (id, is_active) in doc_ids {
+                            this.tab_manager.update(cx, |mgr, cx| {
+                                if let Some(tab) = mgr.document(id) {
+                                    tab.set_active_tab(is_active, cx);
+                                }
+                            });
                         }
 
                         this.write_session_manifest(cx);
@@ -1250,9 +1254,9 @@ impl Workspace {
 
         // When focused on document area, delegate context to the active document
         if self.focus_target == FocusTarget::Document
-            && let Some(doc) = self.tab_manager.read(cx).active_document()
+            && let Some(tab) = self.tab_manager.read(cx).active_tab()
         {
-            return doc.active_context(cx);
+            return tab.active_context(cx);
         }
 
         self.focus_target.to_context()
@@ -1276,10 +1280,9 @@ impl Workspace {
             self.focus_handle.focus(window);
         }
 
-        if target == FocusTarget::Document
-            && let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
-        {
-            doc.focus(window, cx);
+        if target == FocusTarget::Document {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.focus_active(window, cx));
         }
 
         cx.notify();
