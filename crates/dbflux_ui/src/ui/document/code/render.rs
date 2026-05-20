@@ -397,8 +397,8 @@ impl CodeDocument {
 
         let has_error = error.is_some();
         let has_live_output = self.live_output.is_some() && !has_error;
-        let active_grid = self.active_result_grid();
-        let has_grid = active_grid.is_some();
+        let active_panel = self.active_result_panel();
+        let has_panel = active_panel.is_some();
         let has_tabs = !has_live_output && !self.result_tabs.is_empty();
 
         focus_frame(
@@ -419,14 +419,14 @@ impl CodeDocument {
                         .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
                         .when(has_live_output, |el| el.child(self.render_live_output(cx)))
                         .when(!has_live_output, |el| {
-                            el.when_some(active_grid, |el, grid| el.child(grid))
+                            el.when_some(active_panel, |el, panel| el.child(panel))
                         })
                         .when(
-                            !has_live_output && !has_grid && !has_error && is_executing,
+                            !has_live_output && !has_panel && !has_error && is_executing,
                             |el| el.child(self.render_loading_results(cx)),
                         )
                         .when(
-                            !has_live_output && !has_grid && !has_error && !is_executing,
+                            !has_live_output && !has_panel && !has_error && !is_executing,
                             |el| el.child(self.render_empty_results(cx)),
                         ),
                 ),

@@ -1,15 +1,21 @@
 //! Render implementation for `ChartDocument`.
 //!
-//! Layout:
+//! Layout (as seen inside `ResultPanel`):
+//!
 //!   ┌──────────────────────────────────────────────┐
-//!   │ header: title · Run · Save                   │
+//!   │ chrome row: title · Run · Save               │  ← ToolbarSegments
 //!   ├──────────────────────────────────────────────┤
-//!   │ chart toolbar (RANGE/REFRESH/...)            │
-//!   ├──────────────────────────────────────────────┤
-//!   │ axis bar (bindings)                          │
-//!   ├──────────────────────────────────────────────┤
-//!   │ chart area (fills remaining space)           │
+//!   │ chart toolbar (RANGE/REFRESH/...)            │  ┐
+//!   ├──────────────────────────────────────────────┤  │ render_chart_content
+//!   │ axis bar (bindings)                          │  │
+//!   ├──────────────────────────────────────────────┤  │
+//!   │ chart area (fills remaining space)           │  ┘
 //!   └──────────────────────────────────────────────┘
+//!
+//! The chrome row is owned by `ResultPanel`; its content comes from the
+//! `ToolbarSegment`s returned by `ChartDocument::header_segments`.
+//! The chart content area is rendered by `render_chart_content`, called from
+//! the `ViewHandle::render` closure built by `into_view_handle`.
 
 use super::ChartDocument;
 use crate::ui::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
@@ -18,10 +24,11 @@ use crate::ui::document::chart::ChartRailTab;
 use crate::ui::document::chart::toolbar::{
     ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar,
 };
-use crate::ui::tokens::{Heights, Spacing};
+use crate::ui::tokens::Spacing;
 use dbflux_components::chart::{ChartDetection, axis_bar_element};
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::Text;
+use dbflux_components::result_panel::ResultPanel;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
@@ -69,15 +76,8 @@ impl Render for ChartDocument {
             self.request_reexecute(window, cx);
         }
 
-        let theme = cx.theme().clone();
-
-        let is_executing = self.exec_state == super::ExecState::Running;
-        let focus_handle = self.focus_handle.clone();
-        let title = self.title.clone();
-        let show_name_prompt = self.name_prompt.is_some();
-
         // -- Ensure chart view is built for the current result --
-        // This must happen before reading shell state so ensure_chart_view
+        // Must happen before ViewHandle::render is called so ensure_chart_view
         // has a chance to construct the ChartView entity.
         if let Some(result) = self.last_result.clone() {
             self.chart_shell.update(cx, |shell, cx| {
@@ -85,33 +85,23 @@ impl Render for ChartDocument {
             });
         }
 
-        // -- Read chart view entity from shell --
-        let chart_view_entity = self.chart_shell.read(cx).chart_view().cloned();
+        // -- Lazily build ResultPanel on first render --
+        // Self-referential construction requires a live entity handle, which
+        // is available from within the render closure via cx.entity().
+        if self.result_panel.is_none() {
+            let entity = cx.entity();
+            let view_handle = ChartDocument::into_view_handle(entity, cx);
+            let panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
+            self.result_panel = Some(panel);
+        }
 
-        let chart_detection = self.chart_shell.read(cx).chart_detection.clone();
+        let focus_handle = self.focus_handle.clone();
+        let result_panel = self.result_panel.as_ref().unwrap().clone();
 
-        // -- Chart area content --
-        let chart_area: AnyElement = if let Some(chart_entity) = chart_view_entity {
-            div().size_full().child(chart_entity).into_any_element()
-        } else {
-            // Degraded state: show a placeholder based on detection result.
-            let msg = match &chart_detection {
-                Some(ChartDetection::EmptyResult) | None => "Run the query to populate the chart.",
-                Some(ChartDetection::NoTimeColumn) => "No time column detected in result.",
-                Some(ChartDetection::NoNumericSeries) => "No numeric series detected in result.",
-                Some(ChartDetection::Ok { .. }) => "Chart build failed.",
-            };
-            div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(Text::muted(msg))
-                .into_any_element()
-        };
-
-        // -- Name prompt modal --
+        // -- Name prompt modal overlay --
+        let show_name_prompt = self.name_prompt.is_some();
         let name_prompt_element = show_name_prompt.then(|| {
+            let theme = cx.theme().clone();
             let input = self.name_prompt.as_ref().unwrap().input.clone();
 
             div()
@@ -157,35 +147,53 @@ impl Render for ChartDocument {
                 )
         });
 
-        let header = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(Heights::TOOLBAR)
-            .px(Spacing::MD)
-            .gap(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .child(Text::label(title))
-            .child(
-                Button::new("run-query")
-                    .label(if is_executing { "Running…" } else { "Run" })
-                    .small()
-                    .with_variant(ButtonVariant::Primary)
-                    .disabled(is_executing)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.request_reexecute(window, cx);
-                    })),
-            )
-            .child(div().flex_grow())
-            .child(
-                Button::new("save-chart")
-                    .label("Save")
-                    .small()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_name_prompt(window, cx);
-                    })),
-            );
+        // Outer container: tracks focus, hosts ResultPanel and the name-prompt
+        // overlay as a sibling (not inside the chrome row).
+        div()
+            .size_full()
+            .relative()
+            .track_focus(&focus_handle)
+            .child(result_panel)
+            .when_some(name_prompt_element, |el, modal| el.child(modal))
+    }
+}
+
+impl ChartDocument {
+    /// Render the chart content area: chart toolbar row + axis bar + chart area.
+    ///
+    /// Called from the `ViewHandle::render` closure produced by
+    /// `into_view_handle`. Pixel-equivalent to the former standalone render body
+    /// minus the header row (which is now projected as chrome-row segments).
+    pub(super) fn render_chart_content(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+
+        // -- Read chart view entity from shell --
+        let chart_view_entity = self.chart_shell.read(cx).chart_view().cloned();
+        let chart_detection = self.chart_shell.read(cx).chart_detection.clone();
+
+        // -- Chart area content --
+        let chart_area: AnyElement = if let Some(chart_entity) = chart_view_entity {
+            div().size_full().child(chart_entity).into_any_element()
+        } else {
+            // Degraded state: show a placeholder based on detection result.
+            let msg = match &chart_detection {
+                Some(ChartDetection::EmptyResult) | None => "Run the query to populate the chart.",
+                Some(ChartDetection::NoTimeColumn) => "No time column detected in result.",
+                Some(ChartDetection::NoNumericSeries) => "No numeric series detected in result.",
+                Some(ChartDetection::Ok { .. }) => "Chart build failed.",
+            };
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(Text::muted(msg))
+                .into_any_element()
+        };
 
         // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / PNG / Save --
         let chart_toolbar_row = {
@@ -208,7 +216,7 @@ impl Render for ChartDocument {
             let ctx = ChartToolbarContext {
                 theme: &theme,
                 chart_shell: self.chart_shell.clone(),
-                refresh_dropdown: self.refresh_dropdown.clone(),
+                refresh_dropdown: Some(self.refresh_dropdown.clone()),
                 time_range_panel: self.time_range_panel.clone(),
                 row_count,
                 resolved_window,
@@ -335,11 +343,9 @@ impl Render for ChartDocument {
             .flex()
             .flex_col()
             .size_full()
-            .track_focus(&focus_handle)
-            .child(header)
             .child(chart_toolbar_row)
             .child(axis_row)
-            .child(div().flex_grow().min_h_0().child(chart_area))
-            .when_some(name_prompt_element, |el, modal| el.child(modal))
+            .child(div().flex_1().min_h_0().child(chart_area))
+            .into_any_element()
     }
 }

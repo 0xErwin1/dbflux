@@ -44,7 +44,9 @@ pub struct ChartToolbarContext<'a> {
     /// chart view's data bounds (x_min / x_max).
     pub chart_shell: Entity<ChartShell>,
     /// The REFRESH dropdown entity rendered inline.
-    pub refresh_dropdown: Entity<Dropdown>,
+    /// `None` when the surrounding `ResultPanel` has not yet wired the dropdown
+    /// (e.g. during initial construction before `set_refresh_dropdown` is called).
+    pub refresh_dropdown: Option<Entity<Dropdown>>,
     /// The `TimeRangePanel` driving RANGE chip state. When `None` the RANGE
     /// chip row and divider are hidden entirely.
     pub time_range_panel: Option<Entity<TimeRangePanel>>,
@@ -281,12 +283,9 @@ pub fn render_chart_toolbar(
                         .font_weight(FontWeight::BOLD)
                         .child("REFRESH"),
                 )
-                .child(
-                    div()
-                        .w(px(80.0))
-                        .h(px(22.0))
-                        .child(ctx.refresh_dropdown.clone()),
-                ),
+                .when_some(ctx.refresh_dropdown.clone(), |d, dropdown| {
+                    d.child(div().w(px(80.0)).h(px(22.0)).child(dropdown))
+                }),
         )
         .child(vdivider(border))
         // Clock icon + resolved window string
