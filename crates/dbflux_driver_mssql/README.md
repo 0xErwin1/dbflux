@@ -155,6 +155,9 @@ Microsoft SQL Server driver for DBFlux, built on the
 
 ## Limitations
 
+- Minimum supported SQL Server: 2016 (13.0). The driver uses
+  `DROP INDEX IF EXISTS … ON …` syntax that older servers reject with a
+  syntax error (102). Azure SQL Database and Managed Instance are fine.
 - CRUD on tables (or updateable views) with `INSTEAD OF` triggers is not
   supported. The driver returns the post-mutation row via
   `OUTPUT INSERTED.*` / `OUTPUT DELETED.*` without an `INTO` clause, which
