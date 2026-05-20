@@ -403,6 +403,9 @@ impl AppIcon {
             ChartKind::Line => Self::ChartSpline,
             ChartKind::Bar => Self::ChartColumnBig,
             ChartKind::Scatter => Self::ChartNetwork,
+            ChartKind::Area => Self::ChartArea,
+            ChartKind::StackedBar => Self::ChartColumnBig,
+            ChartKind::Pie => Self::ChartPie,
         }
     }
 

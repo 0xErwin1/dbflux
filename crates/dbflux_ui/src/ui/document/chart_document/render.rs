@@ -209,6 +209,7 @@ impl ChartDocument {
                 .unwrap_or(0);
 
             let shell_for_stats = self.chart_shell.clone();
+            let shell_for_kind = self.chart_shell.clone();
             let weak_self_for_png = cx.weak_entity();
             let weak_self_for_save = cx.weak_entity();
             let weak_self_for_range = cx.weak_entity();
@@ -260,6 +261,9 @@ impl ChartDocument {
                             this.open_name_prompt(window, cx);
                         });
                     }
+                }),
+                on_select_chart_kind: Arc::new(move |kind, _window, cx| {
+                    shell_for_kind.update(cx, |s, cx| s.set_chart_kind(kind, cx));
                 }),
             };
 
