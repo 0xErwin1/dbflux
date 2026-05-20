@@ -563,9 +563,9 @@ dependencies = [
 
 [[package]]
 name = "aws-config"
-version = "1.8.16"
+version = "1.8.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50f156acdd2cf55f5aa53ee416c4ac851cf1222694506c0b1f78c85695e9ca9d"
+checksum = "517aa062d8bd9015ee23d6daa5e1c1372328412fdae4e6c4c1be9b69c6ad37a2"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -577,6 +577,7 @@ dependencies = [
  "aws-smithy-json",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
+ "aws-smithy-schema",
  "aws-smithy-types",
  "aws-types",
  "bytes",
@@ -627,9 +628,9 @@ dependencies = [
 
 [[package]]
 name = "aws-runtime"
-version = "1.7.3"
+version = "1.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dcd93c82209ac7413532388067dce79be5a8780c1786e5fae3df22e4dee2864"
+checksum = "77ed8e8c52d2dc2390ad9f15647fe663f71e9780b4262c190fbb823a32721566"
 dependencies = [
  "aws-credential-types",
  "aws-sigv4",
@@ -653,9 +654,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-cloudwatchlogs"
-version = "1.131.0"
+version = "1.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff364cad0c58f3e67d81b68a56f4d1d8a26249128573298195b3d0dd79039f5b"
+checksum = "65ca82adfbd982dbc9a12047d6aea0c60afd96ad8abe963e9a67401f01634616"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -678,9 +679,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-dynamodb"
-version = "1.111.0"
+version = "1.112.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc418346e3cb248c7d59e642acbcb06488b7c7cd2ba6ebc79e8003f618c60099"
+checksum = "08d2b44e71eda015705fe8a2d3f8061003432ad722d4e321ac38b3e2680fbe49"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -702,9 +703,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-secretsmanager"
-version = "1.104.0"
+version = "1.105.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "811bcb3da8bf26e571da7a248c0a93152bba9642aa4c8c907c58d949fa5f1d5c"
+checksum = "1c4e56ac810211dc33810c7aa3612eda29a8b1e8c7e2db6e960c8657e3d95e42"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -726,9 +727,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssm"
-version = "1.109.0"
+version = "1.110.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69f4bdbeea2c7d18632093cd158644902f1e91ae025a3f68afaa449f620ae658"
+checksum = "7f5cebf0afdf44d02ec076cafe36a6554dbe3c4b42ab366961ad6e5ff575f4a5"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -750,9 +751,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sso"
-version = "1.98.0"
+version = "1.99.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d69c77aafa20460c68b6b3213c84f6423b6e76dbf89accd3e1789a686ffd9489"
+checksum = "9f4055e6099b2ec264abdc0d9bbfffce306c1601809275c861594779a0b04b45"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -774,9 +775,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.100.0"
+version = "1.101.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c7e7b09346d5ca22a2a08267555843a6a0127fb20d8964cb6ecfb8fdb190225"
+checksum = "02f009ba0284c5d696425fd7b4dcc5b189f5726f4041b7a5794daecb3a68d598"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -798,9 +799,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.103.0"
+version = "1.104.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2249b81a2e73a8027c41c378463a81ec39b8510f184f2caab87de912af0f49b"
+checksum = "6aa6622798e19e6a76b690562085dd4771c736cd48343464a53ab4ae2f2c9f84"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -823,9 +824,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sigv4"
-version = "1.4.3"
+version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68dc0b907359b120170613b5c09ccc61304eac3998ff6274b97d93ee6490115a"
+checksum = "b7083fb918b38474ac65ffbf8a69fc8792d36879f4ac5f1667b43aec61efe9a5"
 dependencies = [
  "aws-credential-types",
  "aws-smithy-eventstream",
@@ -833,7 +834,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes",
- "crypto-bigint 0.5.5",
+ "crypto-bigint",
  "form_urlencoded",
  "hex",
  "hmac 0.13.0",
@@ -841,7 +842,6 @@ dependencies = [
  "http 1.4.0",
  "p256",
  "percent-encoding",
- "ring",
  "sha2 0.11.0",
  "subtle",
  "time",
@@ -1056,13 +1056,14 @@ dependencies = [
 
 [[package]]
 name = "aws-types"
-version = "1.3.15"
+version = "1.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f4bbcaa9304ea40902d3d5f42a0428d1bd895a2b0f6999436fb279ffddc58ac"
+checksum = "d16bf10b03a3c01e6b3b7d47cd964e873ffe9e7d4e80fad16bd4c077cb068531"
 dependencies = [
  "aws-credential-types",
  "aws-smithy-async",
  "aws-smithy-runtime-api",
+ "aws-smithy-schema",
  "aws-smithy-types",
  "rustc_version",
  "tracing",
@@ -1085,9 +1086,9 @@ dependencies = [
 
 [[package]]
 name = "base16ct"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "349a06037c7bf932dd7e7d1f653678b2038b9ad46a74102f1fc7bd7872678cce"
+checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
 
 [[package]]
 name = "base62"
@@ -1710,7 +1711,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "indexmap",
  "rustc-hash 2.1.2",
@@ -2098,24 +2099,14 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "crypto-bigint"
-version = "0.4.9"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef2b4b23cddf68b89b8f8069890e8c270d54e2d5fe1b143820234805e4cb17ef"
+checksum = "0dc92fb57ca44df6db8059111ab3af99a63d5d0f8375d9972e319a379c6bab76"
 dependencies = [
  "generic-array",
  "rand_core 0.6.4",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "crypto-bigint"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dc92fb57ca44df6db8059111ab3af99a63d5d0f8375d9972e319a379c6bab76"
-dependencies = [
- "rand_core 0.6.4",
- "subtle",
 ]
 
 [[package]]
@@ -2927,11 +2918,12 @@ checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
 
 [[package]]
 name = "der"
-version = "0.6.1"
+version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1a467a65c5e759bce6e65eaf91cc29f466cdc57cb65777bd646872a8a1fd4de"
+checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid 0.9.6",
+ "pem-rfc7468",
  "zeroize",
 ]
 
@@ -2992,7 +2984,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3017,6 +3009,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer 0.10.4",
+ "const-oid 0.9.6",
  "crypto-common 0.1.7",
  "subtle",
 ]
@@ -3175,35 +3168,37 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "ecdsa"
-version = "0.14.8"
+version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413301934810f597c1d19ca71c8710e99a3f1ba28a0d2ebc01551a2daeea3c5c"
+checksum = "ee27f32b5c5292967d2d4a9d7f1e0b0aed2c15daded5a60300e4abb9d8020bca"
 dependencies = [
  "der",
+ "digest 0.10.7",
  "elliptic-curve",
  "rfc6979",
  "signature",
+ "spki",
 ]
 
 [[package]]
 name = "either"
-version = "1.15.0"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "elliptic-curve"
-version = "0.12.3"
+version = "0.13.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7bb888ab5300a19b8e5bceef25ac745ad065f3c9f7efc6de1b91958110891d3"
+checksum = "b5e6043086bf7973472e0c7dff2142ea0b680d30e18d9cc40f267efbf222bd47"
 dependencies = [
  "base16ct",
- "crypto-bigint 0.4.9",
- "der",
+ "crypto-bigint",
  "digest 0.10.7",
  "ff",
  "generic-array",
  "group",
+ "pem-rfc7468",
  "pkcs8",
  "rand_core 0.6.4",
  "sec1",
@@ -3480,9 +3475,9 @@ dependencies = [
 
 [[package]]
 name = "ff"
-version = "0.12.1"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d013fc25338cc558c5c2cfbad646908fb23591e2404481826742b651c9af7160"
+checksum = "c0b50bfb653653f9ca9095b427bed08ab8d75a137839d9ad64eb11810d5b6393"
 dependencies = [
  "rand_core 0.6.4",
  "subtle",
@@ -3916,6 +3911,7 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+ "zeroize",
 ]
 
 [[package]]
@@ -4080,7 +4076,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -4106,7 +4102,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -4274,7 +4270,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -4323,7 +4319,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "async-task",
@@ -4365,7 +4361,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -4376,7 +4372,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "console_error_panic_hook",
  "gpui",
@@ -4389,7 +4385,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "schemars",
  "serde",
@@ -4399,7 +4395,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "log",
@@ -4408,7 +4404,7 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4432,7 +4428,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4450,6 +4446,7 @@ dependencies = [
  "raw-window-handle",
  "smallvec",
  "swash",
+ "unicode-segmentation",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -4460,7 +4457,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "collections",
@@ -4490,9 +4487,9 @@ checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
 
 [[package]]
 name = "group"
-version = "0.12.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dfbfb3a6cfbd390d5c9564ab283a0349b9b9fcd46a706c1eb10e0db70bfbac7"
+checksum = "f0f9ef7462f7c099f518d754361858f86d8a07af53ba9af0fe635bbccb151a63"
 dependencies = [
  "ff",
  "rand_core 0.6.4",
@@ -4820,7 +4817,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5919,7 +5916,7 @@ dependencies = [
 [[package]]
 name = "media"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "bindgen 0.71.1",
@@ -6214,7 +6211,7 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "29.0.3"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#357a0c56e0070480ad9daea5d2eaa83150b79e88"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "arrayvec",
  "bit-set 0.9.1",
@@ -6802,12 +6799,13 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "p256"
-version = "0.11.1"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51f44edd08f51e2ade572f141051021c5af22677e42b7dd28a88155151c33594"
+checksum = "c9863ad85fa8f4460f9c48cb909d38a0d689dba1f6f6988a5e3e0d31071bcd4b"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
+ "primeorder",
  "sha2 0.10.9",
 ]
 
@@ -6904,6 +6902,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pem-rfc7468"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412"
+dependencies = [
+ "base64ct",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6912,7 +6919,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "collections",
  "serde",
@@ -7080,9 +7087,9 @@ dependencies = [
 
 [[package]]
 name = "pkcs8"
-version = "0.9.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9eca2c590a5f85da82668fa685c09ce2888b9430e83299debf1f34b65fd4a4ba"
+checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
 dependencies = [
  "der",
  "spki",
@@ -7287,6 +7294,15 @@ checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "primeorder"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "353e1ca18966c16d9deb1c69278edbc5f194139612772bd9537af60ac231e1e6"
+dependencies = [
+ "elliptic-curve",
 ]
 
 [[package]]
@@ -7822,7 +7838,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "derive_refineable",
 ]
@@ -7942,13 +7958,12 @@ dependencies = [
 
 [[package]]
 name = "rfc6979"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7743f17af12fa0b03b803ba12cd6a8d9483a587e89c69445e3909655c0b9fabb"
+checksum = "f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2"
 dependencies = [
- "crypto-bigint 0.4.9",
  "hmac 0.12.1",
- "zeroize",
+ "subtle",
 ]
 
 [[package]]
@@ -8444,7 +8459,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "async-task",
  "backtrace",
@@ -8536,9 +8551,9 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "sec1"
-version = "0.3.0"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3be24c1842290c45df0a7bf069e0c268a747ad05a192f2fd7dcfdbc1cba40928"
+checksum = "d3e97a565f76233a6003f9f5c54be1d9c5bdfa3eccfb189469f11ec4901c47dc"
 dependencies = [
  "base16ct",
  "der",
@@ -8860,9 +8875,9 @@ dependencies = [
 
 [[package]]
 name = "signature"
-version = "1.6.4"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74233d3b3b2f6d4b006dc19dee745e73e2a6bfb6f93607cd3b02bd5b00797d7c"
+checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest 0.10.7",
  "rand_core 0.6.4",
@@ -9022,9 +9037,9 @@ dependencies = [
 
 [[package]]
 name = "spki"
-version = "0.6.0"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67cf02bbac7a337dc36e4f5a693db6c21e7863f45070f7064577eb4367a3212b"
+checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
@@ -9197,7 +9212,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "heapless",
  "log",
@@ -10571,7 +10586,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "util"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "async-fs",
@@ -10610,7 +10625,7 @@ dependencies = [
 [[package]]
 name = "util_macros"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "perf",
  "quote",
@@ -11035,7 +11050,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "wgpu"
 version = "29.0.3"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#357a0c56e0070480ad9daea5d2eaa83150b79e88"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.1",
@@ -11064,7 +11079,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "29.0.3"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#357a0c56e0070480ad9daea5d2eaa83150b79e88"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "arrayvec",
  "bit-set 0.9.1",
@@ -11096,7 +11111,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-apple"
 version = "29.0.3"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#357a0c56e0070480ad9daea5d2eaa83150b79e88"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "wgpu-hal",
 ]
@@ -11104,7 +11119,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-emscripten"
 version = "29.0.3"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#357a0c56e0070480ad9daea5d2eaa83150b79e88"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "wgpu-hal",
 ]
@@ -11112,7 +11127,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-windows-linux-android"
 version = "29.0.3"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#357a0c56e0070480ad9daea5d2eaa83150b79e88"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "wgpu-hal",
 ]
@@ -11120,7 +11135,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "29.0.3"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#357a0c56e0070480ad9daea5d2eaa83150b79e88"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -11173,7 +11188,7 @@ dependencies = [
 [[package]]
 name = "wgpu-naga-bridge"
 version = "29.0.3"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#357a0c56e0070480ad9daea5d2eaa83150b79e88"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "naga",
  "wgpu-types",
@@ -11182,7 +11197,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "29.0.3"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#357a0c56e0070480ad9daea5d2eaa83150b79e88"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "bitflags 2.11.1",
  "bytemuck",
@@ -12352,7 +12367,7 @@ dependencies = [
 [[package]]
 name = "zlog"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "anyhow",
  "chrono",
@@ -12397,7 +12412,7 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -12408,7 +12423,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#95dcd1c485a9c55e7a22105e3fb566721e199d76"
+source = "git+https://github.com/0xErwin1/zed?branch=feature%2F53306-07-text-raster-subpixel-regressions#fc4c1586647ad987cb88bf96e1fb4e543f4bdaca"
 
 [[package]]
 name = "zune-core"
