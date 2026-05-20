@@ -1009,9 +1009,12 @@ impl QueryCancelHandle for MssqlCancelHandle {
 
         let spid = self.spid.load(Ordering::SeqCst);
         if spid == 0 {
-            // No session id captured yet — nothing meaningful to kill. The
-            // cancel flag is still set so a not-yet-started query will exit
-            // on its first error check.
+            // No session id captured yet — nothing meaningful to kill. Mark
+            // the connection poisoned so the next `execute()` runs
+            // `cleanup_after_cancel`, which clears both flags. Without this
+            // the `cancelled` flag stays set forever and every subsequent
+            // query short-circuits to `DbError::Cancelled`.
+            self.poisoned.store(true, Ordering::SeqCst);
             return Ok(());
         }
 
