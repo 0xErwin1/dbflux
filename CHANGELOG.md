@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-dev.5] - 2026-05-20
+
 ### Added
 
 * **Microsoft SQL Server driver** — first-class SQL Server support
