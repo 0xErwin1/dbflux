@@ -110,9 +110,13 @@ impl SchemaVizDocument {
                             return false;
                         }
                         match (&d.mode, table) {
-                            (SchemaVizMode::Focused { table: t, schema: s }, Some(qt)) => {
-                                t == qt && s.as_deref() == schema.as_deref()
-                            }
+                            (
+                                SchemaVizMode::Focused {
+                                    table: t,
+                                    schema: s,
+                                },
+                                Some(qt),
+                            ) => t == qt && s.as_deref() == schema.as_deref(),
                             (SchemaVizMode::Global, None) => true,
                             _ => false,
                         }
