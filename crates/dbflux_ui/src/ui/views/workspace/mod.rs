@@ -344,6 +344,7 @@ impl Workspace {
             &modal_delete_connection,
             |this, _, outcome: &crate::ui::overlays::modals::DeleteConnectionOutcome, cx| {
                 use crate::ui::overlays::modals::DeleteConnectionOutcome;
+                log::debug!("ModalDeleteConnection outcome received: {:?}", outcome);
                 if matches!(outcome, DeleteConnectionOutcome::Confirmed) {
                     this.sidebar.update(cx, |sidebar, cx| {
                         sidebar.confirm_modal_delete(cx);

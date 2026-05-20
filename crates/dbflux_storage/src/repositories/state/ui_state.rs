@@ -153,6 +153,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = UiStateRepository::new(Arc::new(conn));
 
         repo.set("ui_layout", r#"{"sidebar_collapsed":false}"#)
@@ -175,6 +176,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = UiStateRepository::new(Arc::new(conn));
 
         repo.set("key1", r#"{"a":1}"#).expect("set");

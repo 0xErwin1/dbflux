@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn y_label_single_column() {
-        let cols = vec![
+        let cols = [
             make_col("ts", ColumnKind::Timestamp),
             make_col("cpu", ColumnKind::Float),
         ];
@@ -614,7 +614,7 @@ mod tests {
 
     #[test]
     fn y_label_multi_column_shows_plus_n() {
-        let cols = vec![
+        let cols = [
             make_col("ts", ColumnKind::Timestamp),
             make_col("cpu", ColumnKind::Float),
             make_col("mem", ColumnKind::Float),
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn x_candidates_include_only_numeric_and_timestamp() {
-        let cols = vec![
+        let cols = [
             make_col("ts", ColumnKind::Timestamp),
             make_col("cpu", ColumnKind::Float),
             make_col("host", ColumnKind::Text),
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn y_candidates_include_only_numeric() {
-        let cols = vec![
+        let cols = [
             make_col("ts", ColumnKind::Timestamp),
             make_col("cpu", ColumnKind::Float),
             make_col("host", ColumnKind::Text),

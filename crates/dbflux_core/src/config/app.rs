@@ -1151,8 +1151,10 @@ mod tests {
 
     #[test]
     fn app_config_roundtrip_with_driver_overrides_and_settings() {
-        let mut config = AppConfig::default();
-        config.version = 3;
+        let mut config = AppConfig {
+            version: 3,
+            ..Default::default()
+        };
         config.driver_overrides.insert(
             "builtin:redis".to_string(),
             GlobalOverrides {

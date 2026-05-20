@@ -227,6 +227,7 @@ mod tests {
             8080,
         );
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let profile_repo = ProxyProfileRepository::new(conn_arc.clone());
         profile_repo
@@ -274,6 +275,7 @@ mod tests {
             8080,
         );
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let profile_repo = ProxyProfileRepository::new(conn_arc.clone());
         profile_repo
@@ -330,6 +332,7 @@ mod tests {
             8080,
         );
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let profile_repo = ProxyProfileRepository::new(conn_arc.clone());
         profile_repo

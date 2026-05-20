@@ -102,7 +102,7 @@ mod tests {
 
         let impact = analyze_cascade_impact(sql, &before, &after).unwrap();
         assert!(impact.has_cascade);
-        assert!(impact.affected_objects.len() > 0);
+        assert!(!impact.affected_objects.is_empty());
         assert_eq!(impact.affected_objects[0].object_type, "dependent_views");
     }
 
@@ -114,7 +114,7 @@ mod tests {
 
         let impact = analyze_cascade_impact(sql, &before, &after).unwrap();
         assert!(impact.has_cascade);
-        assert!(impact.affected_objects.len() > 0);
+        assert!(!impact.affected_objects.is_empty());
     }
 
     #[test]
@@ -125,7 +125,7 @@ mod tests {
 
         let impact = analyze_cascade_impact(sql, &before, &after).unwrap();
         assert!(impact.has_cascade);
-        assert!(impact.affected_objects.len() > 0);
+        assert!(!impact.affected_objects.is_empty());
         assert_eq!(impact.affected_objects[0].object_type, "schema_objects");
     }
 

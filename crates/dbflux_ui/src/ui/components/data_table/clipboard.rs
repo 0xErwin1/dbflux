@@ -69,7 +69,7 @@ mod tests {
         assert_eq!(format_cell(&CellValue::null()), "");
         assert_eq!(format_cell(&CellValue::bool(true)), "true");
         assert_eq!(format_cell(&CellValue::int(42)), "42");
-        assert_eq!(format_cell(&CellValue::float(3.14)), "3.14");
+        assert_eq!(format_cell(&CellValue::float(2.5)), "2.5");
         assert_eq!(format_cell(&CellValue::text("hello")), "hello");
     }
 

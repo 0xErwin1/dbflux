@@ -296,6 +296,7 @@ mod tests {
             .run_all(&conn)
             .expect("migration should run");
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let values_repo = DriverSettingValuesRepository::new(conn_arc.clone());
         let overrides_repo =

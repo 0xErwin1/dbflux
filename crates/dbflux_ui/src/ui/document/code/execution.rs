@@ -1459,6 +1459,7 @@ impl CodeDocument {
                         next_page_token: None,
                         resolved_window: None,
                         metadata_extra: None,
+                        additional_results: Vec::new(),
                     })
                 }
                 Err(error) => Err(DbError::query_failed(error)),

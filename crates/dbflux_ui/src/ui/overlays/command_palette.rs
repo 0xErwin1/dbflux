@@ -443,126 +443,6 @@ pub struct CommandPalette {
     matcher: SkimMatcherV2,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{PaletteCommand, palette_qualifier_text, palette_shortcut_text};
-    use crate::ui::theme;
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::AppFonts;
-    use gpui::TestAppContext;
-    use gpui_component::theme::Theme;
-    use std::fs;
-
-    fn command_palette_source() -> String {
-        let source = fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/ui/overlays/command_palette.rs"
-        ))
-        .unwrap_or_else(|error| panic!("failed to read command_palette.rs: {error}"));
-
-        source
-            .rsplit("impl Render for CommandPalette")
-            .next()
-            .map(|render_impl| format!("impl Render for CommandPalette{render_impl}"))
-            .expect("command_palette.rs should contain a render implementation")
-    }
-
-    fn command_palette_overlay_source() -> String {
-        let source = command_palette_source();
-        let start = source
-            .find(".id(\"command-palette-overlay\")")
-            .expect("command_palette render should define the overlay container");
-
-        let remaining = &source[start..];
-        let end = remaining
-            .find(".child(\n                        div()\n                            .id(\"command-palette-list\")")
-            .unwrap_or(remaining.len());
-
-        remaining[..end].to_string()
-    }
-
-    #[gpui::test]
-    fn action_shortcuts_use_mono_caption_instead_of_bold_key_hint(cx: &mut TestAppContext) {
-        cx.update(theme::init);
-
-        let theme = cx.update(|cx| Theme::global(cx).clone());
-
-        let shortcut = palette_shortcut_text("ctrl-k", false, &theme).inspect();
-        let selected_shortcut = palette_shortcut_text("enter", true, &theme).inspect();
-
-        for inspection in [shortcut, selected_shortcut] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
-            assert_eq!(inspection.weight_override, None);
-            assert!(inspection.has_custom_color_override);
-            assert!(!inspection.uses_muted_foreground_override);
-        }
-    }
-
-    #[test]
-    fn palette_commands_still_preserve_explicit_shortcuts() {
-        let command = PaletteCommand::new("id", "Open", "Action").with_shortcut("ctrl-k");
-
-        assert_eq!(command.shortcut, Some("ctrl-k"));
-    }
-
-    #[gpui::test]
-    fn qualifiers_use_mono_caption_role(cx: &mut TestAppContext) {
-        cx.update(theme::init);
-
-        let theme = cx.update(|cx| Theme::global(cx).clone());
-
-        let qualifier = palette_qualifier_text("prod / analytics", false, &theme).inspect();
-        let selected = palette_qualifier_text("scripts/admin", true, &theme).inspect();
-
-        for inspection in [qualifier, selected] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
-            assert_eq!(inspection.weight_override, None);
-            assert!(inspection.has_custom_color_override);
-        }
-    }
-
-    #[test]
-    fn command_palette_overlay_uses_canonical_scrim_and_modal_container_contracts() {
-        let source = command_palette_source();
-
-        assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("surface_modal_container(cx)"));
-        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
-        assert!(!source.contains("surface_panel(cx)"));
-    }
-
-    #[test]
-    fn command_palette_render_keeps_overlay_identity_and_close_behavior() {
-        let source = command_palette_source();
-
-        assert!(source.contains(".id(\"command-palette-overlay\")"));
-        assert!(source.contains(".key_context(ContextId::CommandPalette.as_gpui_context())"));
-        assert!(source.contains("this.hide(cx);"));
-    }
-
-    #[test]
-    fn command_palette_overlay_chain_starts_from_the_shared_modal_container() {
-        let source = command_palette_overlay_source();
-
-        assert!(source.contains("surface_modal_container(cx)"));
-        assert!(source.contains(".id(\"command-palette-container\")"));
-        assert!(!source.contains("surface_panel(cx)"));
-    }
-
-    #[test]
-    fn command_palette_overlay_chain_keeps_the_shared_scrim_close_path() {
-        let source = command_palette_overlay_source();
-
-        assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("this.hide(cx);"));
-        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
-    }
-}
-
 /// Event emitted when the user selects a palette item.
 pub enum PaletteSelection {
     Command {
@@ -1166,5 +1046,131 @@ impl Render for CommandPalette {
                     ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PaletteCommand, palette_qualifier_text, palette_shortcut_text};
+    use crate::ui::theme;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::TestAppContext;
+    use gpui_component::theme::Theme;
+    use std::fs;
+
+    fn command_palette_source() -> String {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/ui/overlays/command_palette.rs"
+        ))
+        .unwrap_or_else(|error| panic!("failed to read command_palette.rs: {error}"));
+
+        // Extract only the `impl Render` body. The marker is anchored on the
+        // ` {` brace so it matches the real implementation and not the string
+        // literals inside this helper, and the slice stops at the test module
+        // so the assertions never inspect their own source text.
+        let impl_start = source
+            .find("impl Render for CommandPalette {")
+            .expect("command_palette.rs should contain a render implementation");
+        let after_impl = &source[impl_start..];
+        let render_end = after_impl.find("#[cfg(test)]").unwrap_or(after_impl.len());
+
+        after_impl[..render_end].to_string()
+    }
+
+    fn command_palette_overlay_source() -> String {
+        let source = command_palette_source();
+        let start = source
+            .find(".id(\"command-palette-overlay\")")
+            .expect("command_palette render should define the overlay container");
+
+        let remaining = &source[start..];
+        let end = remaining
+            .find(".child(\n                        div()\n                            .id(\"command-palette-list\")")
+            .unwrap_or(remaining.len());
+
+        remaining[..end].to_string()
+    }
+
+    #[gpui::test]
+    fn action_shortcuts_use_mono_caption_instead_of_bold_key_hint(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let shortcut = palette_shortcut_text("ctrl-k", false, &theme).inspect();
+        let selected_shortcut = palette_shortcut_text("enter", true, &theme).inspect();
+
+        for inspection in [shortcut, selected_shortcut] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+            assert!(!inspection.uses_muted_foreground_override);
+        }
+    }
+
+    #[test]
+    fn palette_commands_still_preserve_explicit_shortcuts() {
+        let command = PaletteCommand::new("id", "Open", "Action").with_shortcut("ctrl-k");
+
+        assert_eq!(command.shortcut, Some("ctrl-k"));
+    }
+
+    #[gpui::test]
+    fn qualifiers_use_mono_caption_role(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let theme = cx.update(|cx| Theme::global(cx).clone());
+
+        let qualifier = palette_qualifier_text("prod / analytics", false, &theme).inspect();
+        let selected = palette_qualifier_text("scripts/admin", true, &theme).inspect();
+
+        for inspection in [qualifier, selected] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.weight_override, None);
+            assert!(inspection.has_custom_color_override);
+        }
+    }
+
+    #[test]
+    fn command_palette_overlay_uses_canonical_scrim_and_modal_container_contracts() {
+        let source = command_palette_source();
+
+        assert!(source.contains(".bg(overlay_bg(theme))"));
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn command_palette_render_keeps_overlay_identity_and_close_behavior() {
+        let source = command_palette_source();
+
+        assert!(source.contains(".id(\"command-palette-overlay\")"));
+        assert!(source.contains(".key_context(ContextId::CommandPalette.as_gpui_context())"));
+        assert!(source.contains("this.hide(cx);"));
+    }
+
+    #[test]
+    fn command_palette_overlay_chain_starts_from_the_shared_modal_container() {
+        let source = command_palette_overlay_source();
+
+        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(source.contains(".id(\"command-palette-container\")"));
+        assert!(!source.contains("surface_panel(cx)"));
+    }
+
+    #[test]
+    fn command_palette_overlay_chain_keeps_the_shared_scrim_close_path() {
+        let source = command_palette_overlay_source();
+
+        assert!(source.contains(".bg(overlay_bg(theme))"));
+        assert!(source.contains("this.hide(cx);"));
+        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
     }
 }

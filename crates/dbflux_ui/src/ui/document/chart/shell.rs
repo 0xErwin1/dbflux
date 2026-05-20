@@ -612,7 +612,7 @@ mod tests {
     /// Verify that `reset_picker` produces the right default X and Y selections.
     #[test]
     fn reset_picker_defaults() {
-        let columns = vec![
+        let columns = [
             make_col("ts", ColumnKind::Timestamp),
             make_col("val_a", ColumnKind::Float),
             make_col("val_b", ColumnKind::Float),

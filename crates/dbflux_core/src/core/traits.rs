@@ -424,6 +424,23 @@ pub trait DbDriver: Send + Sync {
         self.test_connection(profile)
             .map(|()| crate::TestConnectionResult::default())
     }
+
+    /// Test the connection using credentials supplied directly by the caller
+    /// (e.g. the password and SSH passphrase the user just typed in the
+    /// "Test Connection" UI), rather than reading from the keyring.
+    ///
+    /// The default implementation opens a connection via `connect_with_secrets`
+    /// and drops it immediately. Drivers that need richer telemetry can
+    /// override.
+    fn test_connection_rich_with_secrets(
+        &self,
+        profile: &ConnectionProfile,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
+    ) -> Result<crate::TestConnectionResult, DbError> {
+        let _conn = self.connect_with_secrets(profile, password, ssh_secret)?;
+        Ok(crate::TestConnectionResult::default())
+    }
 }
 
 /// Key-value operations exposed by drivers in `DatabaseCategory::KeyValue`.

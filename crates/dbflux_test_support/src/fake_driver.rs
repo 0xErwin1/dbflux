@@ -243,6 +243,20 @@ impl DbDriver for FakeDriver {
                 user: get_optional_string(values, "user"),
                 request_timeout_seconds: None,
             },
+            DbKind::SqlServer => DbConfig::SqlServer {
+                use_uri: false,
+                uri: None,
+                host: get_string(values, "host", "localhost"),
+                port: get_u16(values, "port", 1433),
+                user: get_string(values, "user", "sa"),
+                database: get_optional_string(values, "database"),
+                instance: get_optional_string(values, "instance"),
+                ssl_mode: Some("on".to_string()),
+                trust_server_certificate: true,
+                ssl_root_cert_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
         };
 
         Ok(config)
@@ -348,6 +362,20 @@ impl DbDriver for FakeDriver {
                     "retention_policy".to_string(),
                     retention_policy.clone().unwrap_or_default(),
                 );
+            }
+            DbConfig::SqlServer {
+                host,
+                port,
+                user,
+                database,
+                instance,
+                ..
+            } => {
+                values.insert("host".to_string(), host.clone());
+                values.insert("port".to_string(), port.to_string());
+                values.insert("user".to_string(), user.clone());
+                values.insert("database".to_string(), database.clone().unwrap_or_default());
+                values.insert("instance".to_string(), instance.clone().unwrap_or_default());
             }
             DbConfig::External { values: vals, .. } => {
                 values.extend(vals.clone());
@@ -486,7 +514,9 @@ impl Connection for FakeConnection {
 
     fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
         match self.kind {
-            DbKind::MySQL | DbKind::MariaDB => SchemaLoadingStrategy::LazyPerDatabase,
+            DbKind::MySQL | DbKind::MariaDB | DbKind::SqlServer => {
+                SchemaLoadingStrategy::LazyPerDatabase
+            }
             DbKind::Postgres => SchemaLoadingStrategy::ConnectionPerDatabase,
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
@@ -519,6 +549,7 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::DynamoDB { table, .. } => table.clone(),
         DbConfig::CloudWatchLogs { .. } => None,
         DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
+        DbConfig::SqlServer { database, .. } => database.clone(),
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
@@ -534,6 +565,8 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::DynamoDB => &FAKE_DYNAMODB_METADATA,
         DbKind::CloudWatchLogs => &FAKE_CLOUDWATCH_METADATA,
         DbKind::InfluxDB => &FAKE_INFLUXDB_METADATA,
+        // Tests treat SQL Server like a relational driver — reuse postgres metadata.
+        DbKind::SqlServer => &FAKE_POSTGRES_METADATA,
     }
 }
 
@@ -547,6 +580,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::DynamoDB => &DYNAMODB_FORM,
         DbKind::CloudWatchLogs => &CLOUDWATCH_FORM,
         DbKind::InfluxDB => &INFLUXDB_FORM,
+        DbKind::SqlServer => &dbflux_core::SQLSERVER_FORM,
     }
 }
 
@@ -1118,6 +1152,7 @@ mod tests {
                 DbKind::CloudWatchLogs,
                 SchemaLoadingStrategy::SingleDatabase,
             ),
+            (DbKind::SqlServer, SchemaLoadingStrategy::LazyPerDatabase),
         ];
 
         for (kind, expected_strategy) in cases {
@@ -1148,6 +1183,7 @@ mod tests {
                 DbKind::DynamoDB => DbConfig::default_dynamodb(),
                 DbKind::CloudWatchLogs => DbConfig::default_cloudwatch_logs(),
                 DbKind::InfluxDB => DbConfig::default_influxdb(),
+                DbKind::SqlServer => DbConfig::default_sqlserver(),
             };
 
             let profile = ConnectionProfile::new("fake", config);
