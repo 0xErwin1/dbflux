@@ -929,7 +929,10 @@ impl Sidebar {
             if !types.is_empty() {
                 let type_children: Vec<TreeItem> = types
                     .iter()
-                    .map(|t| Self::build_custom_type_item(profile_id, schema_name, t))
+                    .map(|t| {
+                        let item_schema = t.schema.as_deref().unwrap_or(schema_name);
+                        Self::build_custom_type_item(profile_id, item_schema, t)
+                    })
                     .collect();
 
                 content.push(
@@ -1434,7 +1437,8 @@ impl Sidebar {
 mod tests {
     use super::Sidebar;
     use dbflux_core::{
-        CollectionChildInfo, CollectionChildrenCache, CollectionPresentation, FieldInfo, TableInfo,
+        CollectionChildInfo, CollectionChildrenCache, CollectionPresentation, CustomTypeInfo,
+        FieldInfo, TableInfo,
     };
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -1616,7 +1620,7 @@ mod tests {
 
     #[test]
     fn build_db_schema_content_uses_per_table_schema_when_present() {
-        use dbflux_core::{DbSchemaInfo, SchemaNodeId, SchemaNodeKind, ViewInfo};
+        use dbflux_core::{CustomTypeKind, DbSchemaInfo, SchemaNodeId, SchemaNodeKind, ViewInfo};
 
         let profile_id = Uuid::new_v4();
         let db_schema = DbSchemaInfo {
@@ -1660,7 +1664,22 @@ mod tests {
                 name: "active_customers".to_string(),
                 schema: Some("sales".to_string()),
             }],
-            custom_types: None,
+            custom_types: Some(vec![
+                CustomTypeInfo {
+                    name: "address".to_string(),
+                    schema: Some("sales".to_string()),
+                    kind: CustomTypeKind::Composite,
+                    enum_values: None,
+                    base_type: None,
+                },
+                CustomTypeInfo {
+                    name: "tier".to_string(),
+                    schema: None,
+                    kind: CustomTypeKind::Domain,
+                    enum_values: None,
+                    base_type: Some("varchar(32)".to_string()),
+                },
+            ]),
         };
 
         let content = Sidebar::build_db_schema_content(
@@ -1707,6 +1726,25 @@ mod tests {
                 assert_eq!(name, "active_customers");
             }
             _ => panic!("expected View variant"),
+        }
+
+        let types_folder = content
+            .iter()
+            .find(|item| item.label.as_ref().starts_with("Data Types"))
+            .expect("Data Types folder present");
+        assert_eq!(types_folder.children.len(), 2);
+
+        let expected_type_schemas = ["sales", "dbflux_test"];
+        for (child, want) in types_folder
+            .children
+            .iter()
+            .zip(expected_type_schemas.iter())
+        {
+            let id: SchemaNodeId = child.id.as_ref().parse().expect("type id parses");
+            match id {
+                SchemaNodeId::CustomType { schema, .. } => assert_eq!(schema, *want),
+                _ => panic!("expected CustomType variant"),
+            }
         }
     }
 }
