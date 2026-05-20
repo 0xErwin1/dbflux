@@ -398,16 +398,34 @@ mod tests {
         assert_eq!(b.aggregation, AggKind::None);
     }
 
-    // Seam preservation: these references ensure ChartKind::Bar, ChartKind::Scatter,
-    // and AggKind remain reachable and cannot silently disappear.
+    // Seam preservation: these references ensure ChartKind variants remain
+    // reachable and cannot silently disappear across refactors.
     #[test]
-    fn seam_chart_kind_bar_and_scatter_are_reachable() {
-        // This test exists solely so the compiler will catch removal of these variants.
+    fn seam_chart_kind_all_variants_are_reachable() {
+        // This test exists solely so the compiler will catch removal of variants.
         let _bar = ChartKind::Bar;
         let _scatter = ChartKind::Scatter;
+        let _area = ChartKind::Area;
+        let _stacked = ChartKind::StackedBar;
+        let _pie = ChartKind::Pie;
         assert_ne!(ChartKind::Bar, ChartKind::Line);
         assert_ne!(ChartKind::Scatter, ChartKind::Line);
+        assert_ne!(ChartKind::Area, ChartKind::Line);
+        assert_ne!(ChartKind::StackedBar, ChartKind::Line);
+        assert_ne!(ChartKind::Pie, ChartKind::Line);
         assert_ne!(ChartKind::Bar, ChartKind::Scatter);
+    }
+
+    #[test]
+    fn chart_kind_serde_round_trip_new_variants() {
+        // Verify that StackedBar and Pie survive a JSON round-trip so persisted
+        // ChartSpec documents can be read back after these variants are added.
+        let kinds = [ChartKind::Area, ChartKind::StackedBar, ChartKind::Pie];
+        for kind in kinds {
+            let json = serde_json::to_string(&kind).expect("serialize");
+            let back: ChartKind = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(kind, back, "round-trip failed for {:?}", kind);
+        }
     }
 
     // ---------------------------------------------------------------------------
