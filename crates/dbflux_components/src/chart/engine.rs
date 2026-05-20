@@ -650,6 +650,165 @@ impl ChartView {
             return;
         }
 
+        // StackedBar: full-width single bars per x slot. Find the x column
+        // under the cursor, then pick the series whose stacked segment the
+        // cursor's Y falls inside for the most precise focus.
+        if matches!(
+            self.spec.kind,
+            crate::chart::spec::ChartKind::StackedBar
+        ) {
+            let visible: Vec<usize> = (0..self.render_model.decimated.len())
+                .filter(|i| !self.hidden.contains(i))
+                .collect();
+            if visible.is_empty() {
+                return;
+            }
+
+            let max_points = self
+                .render_model
+                .decimated
+                .iter()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(1)
+                .max(1);
+
+            let x_pad = plot_w * (0.5 / max_points as f32);
+            let usable_w = (plot_w - 2.0 * x_pad).max(1.0);
+            let slot_w = plot_w / max_points as f32;
+            let bar_w = (slot_w * 0.8).max(1.0);
+
+            let data_to_screen_x = |dx: f64| -> f32 {
+                plot_x0 + x_pad + ((dx - x_min) / x_range * usable_w as f64) as f32
+            };
+
+            let cursor_sx = f32::from(hover_x);
+            let cursor_sy = f32::from(hover_y);
+
+            let y_range_local = (self.render_model.y_max - y_min).max(1.0);
+            let data_to_screen_y = |dy: f64| -> f32 {
+                plot_y0 + plot_h
+                    - ((dy - y_min) / y_range_local * plot_h as f64) as f32
+            };
+
+            // Use the first visible series as x-position anchor.
+            let anchor = visible[0];
+            for pt_idx in 0..self.render_model.decimated[anchor].len() {
+                let (x, _) = self.render_model.decimated[anchor][pt_idx];
+                let bar_center = data_to_screen_x(x);
+                if cursor_sx < bar_center - bar_w / 2.0
+                    || cursor_sx > bar_center + bar_w / 2.0
+                {
+                    continue;
+                }
+
+                // Cursor is inside this bar column. Find which series segment
+                // the cursor's Y lands in by checking stacked segment boundaries.
+                let baseline = if y_min <= 0.0 && self.render_model.y_max >= 0.0 {
+                    0.0_f64
+                } else {
+                    y_min
+                };
+                let mut cumulative = baseline;
+
+                for &s_idx in &visible {
+                    let Some(&(_, y)) = self.render_model.decimated[s_idx].get(pt_idx)
+                    else {
+                        break;
+                    };
+                    let seg_bottom_sy = data_to_screen_y(cumulative);
+                    cumulative += y;
+                    let seg_top_sy = data_to_screen_y(cumulative);
+
+                    let (top, bot) = if seg_top_sy <= seg_bottom_sy {
+                        (seg_top_sy, seg_bottom_sy)
+                    } else {
+                        (seg_bottom_sy, seg_top_sy)
+                    };
+
+                    if cursor_sy >= top && cursor_sy <= bot {
+                        self.focused_series_idx = s_idx;
+                        return;
+                    }
+                }
+
+                // Cursor in the column but outside all segments: focus topmost.
+                if let Some(&s_idx) = visible.last() {
+                    self.focused_series_idx = s_idx;
+                }
+                return;
+            }
+
+            return;
+        }
+
+        // Pie: focus by angle from the pie centre.
+        if matches!(self.spec.kind, crate::chart::spec::ChartKind::Pie) {
+            let pie_cx = plot_x0 + plot_w / 2.0;
+            let pie_cy = plot_y0 + plot_h / 2.0;
+            let base_radius = (plot_w.min(plot_h) * 0.4).max(1.0);
+
+            let cursor_sx = f32::from(hover_x);
+            let cursor_sy = f32::from(hover_y);
+
+            let dx = (cursor_sx - pie_cx) as f64;
+            let dy = (cursor_sy - pie_cy) as f64;
+            let dist = (dx * dx + dy * dy).sqrt() as f32;
+
+            // Only respond when cursor is inside the pie disc.
+            if dist > base_radius * 1.1 {
+                return;
+            }
+
+            let cursor_angle = (dy).atan2(dx); // atan2(y, x) in [-π, π]
+
+            // Normalise to [0, 2π) from –π/2 start (same as paint_pie).
+            let start_offset = -std::f64::consts::FRAC_PI_2;
+            let normalise = |angle: f64| -> f64 {
+                let a = angle - start_offset;
+                a.rem_euclid(2.0 * std::f64::consts::PI)
+            };
+            let cursor_norm = normalise(cursor_angle);
+
+            let visible: Vec<usize> = (0..self.render_model.decimated.len())
+                .filter(|i| !self.hidden.contains(i))
+                .collect();
+
+            let totals: Vec<(usize, f64)> = visible
+                .iter()
+                .filter_map(|&s_idx| {
+                    let total: f64 = self.render_model.decimated[s_idx]
+                        .iter()
+                        .map(|(_, y)| *y)
+                        .filter(|y| y.is_finite())
+                        .sum();
+                    if total > 0.0 {
+                        Some((s_idx, total))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let grand_total: f64 = totals.iter().map(|(_, t)| t).sum();
+            if grand_total <= 0.0 {
+                return;
+            }
+
+            let mut accumulated = 0.0_f64;
+            for &(s_idx, total) in &totals {
+                let sweep = (total / grand_total) * 2.0 * std::f64::consts::PI;
+                let end_norm = accumulated + sweep;
+                if cursor_norm >= accumulated && cursor_norm < end_norm {
+                    self.focused_series_idx = s_idx;
+                    return;
+                }
+                accumulated = end_norm;
+            }
+
+            return;
+        }
+
         // Scatter charts focus by the nearest discrete point (2D distance),
         // since there is no connecting line to project onto. Focus only switches
         // when a point is within a small pixel tolerance of the cursor.
@@ -764,21 +923,57 @@ impl Render for ChartView {
         let x_range = (x_max - x_min).max(1.0);
         let y_range = (y_max - y_min).max(1.0);
 
-        // Bar charts need breathing room the line chart does not: vertical
+        // Bar-family charts need breathing room the line chart does not: vertical
         // headroom so the tallest bar never touches the top border, and a
         // horizontal inset of half a column so the first and last bars sit fully
         // inside the plot instead of being clipped against its edges. Line keeps
         // the full range — its points are meant to reach the edges.
-        let is_bar = matches!(kind, ChartKind::Bar);
+        //
+        // StackedBar also needs the bar layout, but uses a stacked y-range
+        // rather than the individual-series y_max stored in the RenderModel.
+        let needs_bar_layout = matches!(kind, ChartKind::Bar | ChartKind::StackedBar);
 
-        let (y_max, y_range) = if is_bar {
+        // For StackedBar, compute the true y ceiling by summing visible series
+        // at each shared point index. Baseline = 0 when in range, else y_min.
+        let (y_max, y_range, stacked_y_ticks) = if matches!(kind, ChartKind::StackedBar) {
+            let visible: Vec<usize> = (0..model.decimated.len())
+                .filter(|i| !self.hidden.contains(i))
+                .collect();
+
+            let max_points = model
+                .decimated
+                .iter()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(0);
+
+            let stacked_max = (0..max_points)
+                .map(|pt_idx| {
+                    visible
+                        .iter()
+                        .filter_map(|&s| model.decimated[s].get(pt_idx).map(|(_, y)| *y))
+                        .filter(|y| y.is_finite())
+                        .sum::<f64>()
+                })
+                .fold(f64::NEG_INFINITY, f64::max);
+
+            let stacked_max = if stacked_max.is_finite() {
+                stacked_max
+            } else {
+                y_max
+            };
+            let padded_max = stacked_max + (stacked_max - y_min).abs() * 0.08;
+            let new_range = (padded_max - y_min).max(1.0);
+            let ticks = ticks_numeric(y_min, padded_max, 5);
+            (padded_max, new_range, Some(ticks))
+        } else if needs_bar_layout {
             let padded_max = y_max + y_range * 0.08;
-            (padded_max, (padded_max - y_min).max(1.0))
+            (padded_max, (padded_max - y_min).max(1.0), None)
         } else {
-            (y_max, y_range)
+            (y_max, y_range, None)
         };
 
-        let bar_x_inset_fraction: f32 = if is_bar {
+        let bar_x_inset_fraction: f32 = if needs_bar_layout {
             let max_points = model
                 .decimated
                 .iter()
@@ -795,9 +990,15 @@ impl Render for ChartView {
         let decimated = model.decimated.clone();
         let x_is_time = spec.x_axis.kind == AxisKind::Time;
 
+        // For StackedBar, override the Y ticks with the stacked-range ticks so
+        // both the gridlines and tick labels reflect the true stacked ceiling.
+        let effective_y_ticks = stacked_y_ticks
+            .as_ref()
+            .unwrap_or(&model.y_ticks)
+            .clone();
+
         // Tick label strings for in-canvas painting (Y data order; painting handles positioning).
-        let y_tick_labels: Vec<(f64, SharedString)> = model
-            .y_ticks
+        let y_tick_labels: Vec<(f64, SharedString)> = effective_y_ticks
             .iter()
             .map(|t| (t.value, SharedString::from(t.label.clone())))
             .collect();
@@ -811,7 +1012,7 @@ impl Render for ChartView {
         // Clone for canvas closure.
         let decimated_canvas = decimated.clone();
         let palette_canvas = palette.clone();
-        let y_ticks_canvas = model.y_ticks.clone();
+        let y_ticks_canvas = effective_y_ticks;
         let hover_x_canvas = hover_x;
         let y_tick_labels_canvas = y_tick_labels.clone();
         let hidden_canvas = self.hidden.clone();
@@ -939,7 +1140,11 @@ impl Render for ChartView {
                                 };
 
                                 // --- Horizontal gridlines at each Y tick ---
-                                for tick in &y_ticks_canvas {
+                                // Pie has no axes — skip all gridlines and tick labels.
+                                for tick in y_ticks_canvas
+                                    .iter()
+                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
+                                {
                                     let sy = data_to_screen_y(tick.value);
                                     window.paint_quad(fill(
                                         gpui::Bounds {
@@ -954,7 +1159,10 @@ impl Render for ChartView {
                                 }
 
                                 // --- Vertical gridlines at each X tick ---
-                                for tick in &x_ticks_dynamic {
+                                for tick in x_ticks_dynamic
+                                    .iter()
+                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
+                                {
                                     let sx = data_to_screen_x(tick.value);
                                     window.paint_quad(fill(
                                         gpui::Bounds {
@@ -1090,10 +1298,43 @@ impl Render for ChartView {
                                             &data_to_screen_y,
                                         );
                                     }
+                                    ChartKind::StackedBar => {
+                                        paint_stacked_bars(
+                                            window,
+                                            &decimated_canvas,
+                                            &palette_canvas,
+                                            &hidden_canvas,
+                                            focused_idx,
+                                            plot_w,
+                                            y_min,
+                                            y_max,
+                                            &data_to_screen_x,
+                                            &data_to_screen_y,
+                                        );
+                                    }
+                                    ChartKind::Pie => {
+                                        paint_pie(
+                                            window,
+                                            &decimated_canvas,
+                                            &palette_canvas,
+                                            &hidden_canvas,
+                                            focused_idx,
+                                            plot_x0,
+                                            plot_y0,
+                                            plot_w,
+                                            plot_h,
+                                        );
+                                    }
                                 }
 
-                                // --- Crosshair (dashed, amber #FFB454 at 0.7 opacity) ---
-                                if let Some(hx) = hover_x_canvas {
+                                // --- Crosshair and hover dots ---
+                                //
+                                // Pie has no X/Y axes, so crosshair and readout are skipped.
+                                // StackedBar and Bar show the crosshair but not hover dots.
+                                // Line and Area show both.
+                                if let Some(hx) = hover_x_canvas
+                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
+                                {
                                     let sx = f32::from(hx);
                                     if sx >= plot_x0 && sx <= plot_x0 + plot_w {
                                         paint_dashed_vline(
@@ -1115,9 +1356,10 @@ impl Render for ChartView {
 
                                         for (s_idx, pts) in decimated_canvas.iter().enumerate() {
                                             // Hover dots are shown for Line and Area only.
-                                            // Bar and Scatter skip them — Bar uses the crosshair
-                                            // + readout overlay; Scatter paints discrete points
-                                            // that already act as their own indicators.
+                                            // Bar, StackedBar, and Scatter skip them:
+                                            // bar kinds rely on the crosshair + readout overlay;
+                                            // Scatter paints discrete points that are already
+                                            // their own indicators.
                                             if !matches!(
                                                 kind_canvas,
                                                 ChartKind::Line | ChartKind::Area
@@ -1205,12 +1447,16 @@ impl Render for ChartView {
 
                                 // --- In-canvas Y-axis tick labels ---
                                 // Right-aligned in the MARGIN_LEFT column.
+                                // Pie has no axes — skip all tick labels.
                                 let tick_color = gpui::hsla(0.0, 0.0, 0.55, 1.0);
                                 let tick_font = font("Zed Mono");
                                 let tick_size = gpui::px(10.0);
                                 let line_height = gpui::px(12.0);
 
-                                for (value, label) in &y_tick_labels_canvas {
+                                for (value, label) in y_tick_labels_canvas
+                                    .iter()
+                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
+                                {
                                     let sy = data_to_screen_y(*value);
                                     let run = TextRun {
                                         len: label.len(),
@@ -1242,7 +1488,10 @@ impl Render for ChartView {
                                 // Centered below each tick, in the MARGIN_BOTTOM band.
                                 let x_baseline_y = plot_y0 + plot_h + 10.0;
 
-                                for tick in &x_ticks_dynamic {
+                                for tick in x_ticks_dynamic
+                                    .iter()
+                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
+                                {
                                     let value = tick.value;
                                     let label = SharedString::from(tick.label.clone());
                                     let sx = data_to_screen_x(value);
@@ -1368,6 +1617,222 @@ fn paint_bars<FX, FY>(
                 color,
             ));
         }
+    }
+}
+
+/// Paint stacked vertical bars for every visible series.
+///
+/// Unlike `paint_bars` (which groups series side-by-side), stacked bars pile
+/// series on top of each other at each X position. The visual footprint per
+/// X slot is a single full-width bar column, with each series' segment sitting
+/// on the cumulative total of the series below it.
+///
+/// The Y axis **must** have already been rescaled to the maximum stack sum
+/// before calling this function — `render()` does this for `ChartKind::StackedBar`.
+///
+/// Series with mismatched lengths are handled safely: iteration stops at the
+/// shortest series at each point index.
+#[allow(clippy::too_many_arguments)]
+fn paint_stacked_bars<FX, FY>(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    plot_w: f32,
+    y_min: f64,
+    y_max: f64,
+    data_to_screen_x: &FX,
+    data_to_screen_y: &FY,
+) where
+    FX: Fn(f64) -> f32,
+    FY: Fn(f64) -> f32,
+{
+    let baseline = if y_min <= 0.0 && y_max >= 0.0 {
+        0.0
+    } else {
+        y_min
+    };
+
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+    let num_visible = visible.len();
+    if num_visible == 0 {
+        return;
+    }
+
+    // Bar width: one slot per X position (single full-width column per x,
+    // since the series stack rather than sit side-by-side).
+    let max_points = decimated
+        .iter()
+        .map(|s| s.len())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    let slot_w = plot_w / max_points as f32;
+    let bar_w = (slot_w * 0.8).max(1.0);
+
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+
+    // Iterate over x positions using the first visible series as the anchor.
+    // For each x position, collect the y values from all visible series in order.
+    let anchor_series = visible[0];
+    let n_points = decimated[anchor_series].len();
+
+    for pt_idx in 0..n_points {
+        let (x, _) = decimated[anchor_series][pt_idx];
+        let bar_center_sx = data_to_screen_x(x);
+        let bar_left = bar_center_sx - bar_w / 2.0;
+
+        // Accumulate from the baseline upward, one segment per visible series.
+        let mut cumulative = baseline;
+
+        for &s_idx in &visible {
+            let Some(&(_, y)) = decimated[s_idx].get(pt_idx) else {
+                // This series has fewer points — skip remaining series for this slot.
+                break;
+            };
+
+            let seg_bottom_sy = data_to_screen_y(cumulative);
+            let seg_top_sy = data_to_screen_y(cumulative + y);
+            cumulative += y;
+
+            let (rect_top, rect_h) = if seg_top_sy <= seg_bottom_sy {
+                (seg_top_sy, seg_bottom_sy - seg_top_sy)
+            } else {
+                (seg_bottom_sy, seg_top_sy - seg_bottom_sy)
+            };
+
+            let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+            let color = if num_visible > 1 && s_idx != focused_idx {
+                gpui::hsla(base_color.h, base_color.s, base_color.l, 0.55)
+            } else {
+                base_color
+            };
+
+            window.paint_quad(fill(
+                gpui::Bounds {
+                    origin: point(gpui::px(bar_left), gpui::px(rect_top)),
+                    size: gpui::Size {
+                        width: gpui::px(bar_w),
+                        height: gpui::px(rect_h.max(1.0)),
+                    },
+                },
+                color,
+            ));
+        }
+    }
+}
+
+/// Paint a pie chart: one wedge per visible series, sized proportional to the
+/// sum of that series' Y values.
+///
+/// Wedges are drawn by subdividing each arc into small line segments (~2°
+/// steps) to avoid pitfalls with GPUI's arc_to large-arc handling. The focused
+/// series is drawn at full opacity and slightly larger radius; non-focused
+/// slices are slightly dimmed.
+///
+/// When all visible series totals are ≤ 0, nothing is painted.
+#[allow(clippy::too_many_arguments)]
+fn paint_pie(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    plot_x0: f32,
+    plot_y0: f32,
+    plot_w: f32,
+    plot_h: f32,
+) {
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+
+    // Sum each visible series; skip series with non-positive totals.
+    let totals: Vec<(usize, f64)> = visible
+        .iter()
+        .filter_map(|&s_idx| {
+            let total: f64 = decimated[s_idx]
+                .iter()
+                .map(|(_, y)| *y)
+                .filter(|y| y.is_finite())
+                .sum();
+            if total > 0.0 {
+                Some((s_idx, total))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if totals.is_empty() {
+        return;
+    }
+
+    let grand_total: f64 = totals.iter().map(|(_, t)| t).sum();
+    if grand_total <= 0.0 {
+        return;
+    }
+
+    let cx = plot_x0 + plot_w / 2.0;
+    let cy = plot_y0 + plot_h / 2.0;
+    let base_radius = (plot_w.min(plot_h) * 0.4).max(1.0);
+
+    // Each slice spans [start_angle, end_angle] in radians (0 = right, CCW).
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+    let mut start_angle: f64 = -std::f64::consts::FRAC_PI_2; // Start from the top.
+
+    for &(s_idx, total) in &totals {
+        let fraction = total / grand_total;
+        let sweep = fraction * 2.0 * std::f64::consts::PI;
+        let end_angle = start_angle + sweep;
+
+        let is_focused = s_idx == focused_idx;
+        let radius = if is_focused {
+            base_radius * 1.04
+        } else {
+            base_radius
+        };
+        let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+        let alpha = if is_focused { 1.0_f32 } else { 0.75_f32 };
+        let color = gpui::hsla(base_color.h, base_color.s, base_color.l, alpha);
+
+        // Subdivide the arc into 2-degree segments to avoid large-arc pitfalls.
+        const STEP: f64 = 2.0 * std::f64::consts::PI / 180.0; // 2 degrees
+
+        let mut builder = PathBuilder::fill();
+
+        // Start from the centre and trace the wedge outline.
+        builder.move_to(point(gpui::px(cx), gpui::px(cy)));
+
+        let mut angle = start_angle;
+        let first_x = cx + (radius as f64 * angle.cos()) as f32;
+        let first_y = cy + (radius as f64 * angle.sin()) as f32;
+        builder.line_to(point(gpui::px(first_x), gpui::px(first_y)));
+
+        // Trace the arc rim by small straight segments.
+        while angle < end_angle - STEP * 0.5 {
+            angle = (angle + STEP).min(end_angle);
+            let rim_x = cx + (radius as f64 * angle.cos()) as f32;
+            let rim_y = cy + (radius as f64 * angle.sin()) as f32;
+            builder.line_to(point(gpui::px(rim_x), gpui::px(rim_y)));
+        }
+
+        // Ensure the final point lands exactly on end_angle.
+        let last_x = cx + (radius as f64 * end_angle.cos()) as f32;
+        let last_y = cy + (radius as f64 * end_angle.sin()) as f32;
+        builder.line_to(point(gpui::px(last_x), gpui::px(last_y)));
+
+        builder.close();
+
+        if let Ok(path) = builder.build() {
+            window.paint_path(path, color);
+        }
+
+        start_angle = end_angle;
     }
 }
 
@@ -2459,5 +2924,63 @@ mod tests {
 
         let view = ChartView::build(&result, spec).expect("build with Area kind must not fail");
         assert_eq!(view.kind(), crate::chart::spec::ChartKind::Area);
+    }
+
+    /// `ChartView::build` with `ChartKind::StackedBar` must not panic.
+    ///
+    /// StackedBar shares the same kind-agnostic `RenderModel` as Bar; the
+    /// stacked-y-range override and stacking geometry are applied in `render`.
+    #[test]
+    fn build_with_stacked_bar_kind_does_not_panic() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(1.0), Value::Float(2.0)],
+            vec![Value::Int(1000), Value::Float(3.0), Value::Float(4.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("a", ColumnKind::Float),
+                make_col("b", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1, 2]);
+        spec.kind = crate::chart::spec::ChartKind::StackedBar;
+
+        let view =
+            ChartView::build(&result, spec).expect("build with StackedBar kind must not fail");
+        assert_eq!(
+            view.kind(),
+            crate::chart::spec::ChartKind::StackedBar
+        );
+    }
+
+    /// `ChartView::build` with `ChartKind::Pie` must not panic.
+    ///
+    /// Pie shares the same kind-agnostic `RenderModel`; the wedge geometry
+    /// and axis suppression are applied in `render`.
+    #[test]
+    fn build_with_pie_kind_does_not_panic() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(10.0), Value::Float(20.0)],
+            vec![Value::Int(1000), Value::Float(15.0), Value::Float(25.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("a", ColumnKind::Float),
+                make_col("b", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1, 2]);
+        spec.kind = crate::chart::spec::ChartKind::Pie;
+
+        let view = ChartView::build(&result, spec).expect("build with Pie kind must not fail");
+        assert_eq!(view.kind(), crate::chart::spec::ChartKind::Pie);
     }
 }

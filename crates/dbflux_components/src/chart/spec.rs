@@ -15,6 +15,17 @@ pub enum ChartKind {
     Line,
     Bar,
     Scatter,
+    /// Filled line chart: the area between the series line and the baseline is
+    /// shaded. Shares all of Line's geometry and hover behaviour.
+    Area,
+    /// Stacked vertical bars: each X position shows one bar per series,
+    /// stacked cumulatively rather than grouped side-by-side. The Y axis is
+    /// re-scaled at render time to the maximum stack sum, since the precomputed
+    /// `RenderModel.y_max` reflects individual-series maxima only.
+    StackedBar,
+    /// Pie chart: no X/Y axes; each visible series becomes one wedge sized by
+    /// the sum of that series' Y values. Focus by angle from the pie centre.
+    Pie,
 }
 
 /// Axis classification used to pick the appropriate tick and label format.
