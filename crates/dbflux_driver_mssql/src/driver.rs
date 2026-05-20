@@ -1050,8 +1050,17 @@ impl QueryCancelHandle for MssqlCancelHandle {
                 Ok(())
             }
             Err(err) => {
-                log::error!("[CANCEL] KILL {} failed: {}", spid, err);
-                Err(format_mssql_query_error(&err))
+                // `poisoned == true` is already set above, so the next
+                // `execute()` will run `cleanup_after_cancel` and reconnect.
+                // Surfacing this transport failure to the caller would show
+                // "cancel failed" in the UI even though recovery is armed,
+                // so log it and report success instead.
+                log::error!(
+                    "[CANCEL] KILL {} transport failed (recovery armed): {}",
+                    spid,
+                    err
+                );
+                Ok(())
             }
         }
     }
