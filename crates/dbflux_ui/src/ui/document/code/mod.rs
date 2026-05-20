@@ -279,6 +279,9 @@ pub struct CodeDocument {
     // Dangerous query confirmation
     pending_dangerous_query: Option<PendingDangerousQuery>,
 
+    // Multi-statement script confirmation
+    pending_script_confirm: Option<PendingScriptConfirm>,
+
     // Schema drift detection
     schema_drift_modal: Entity<ModalSchemaDrift>,
     _schema_drift_subscriptions: Vec<Subscription>,
@@ -330,6 +333,16 @@ struct PendingDangerousQuery {
     query: String,
     kind: DangerousQueryKind,
     in_new_tab: bool,
+}
+
+/// Pending confirmation for running a whole multi-statement script.
+///
+/// Raised when the user runs without a selection, the buffer holds more than
+/// one statement, and the driver advertises `MULTI_STATEMENT`.
+struct PendingScriptConfirm {
+    query: String,
+    in_new_tab: bool,
+    statement_count: usize,
 }
 
 /// Action resolved by the schema-drift modal.
@@ -701,6 +714,7 @@ impl CodeDocument {
             _refresh_subscriptions: vec![refresh_policy_sub],
             is_active_tab: true,
             pending_dangerous_query: None,
+            pending_script_confirm: None,
             schema_drift_modal,
             _schema_drift_subscriptions: vec![
                 drift_refresh_sub,
