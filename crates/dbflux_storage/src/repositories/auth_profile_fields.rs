@@ -304,6 +304,7 @@ mod tests {
             "Test Profile".to_string(),
             "aws-sso".to_string(),
         );
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let profile_repo = AuthProfileRepository::new(conn_arc.clone());
         profile_repo
@@ -350,6 +351,7 @@ mod tests {
             "Test Profile".to_string(),
             "aws-sso".to_string(),
         );
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let profile_repo = AuthProfileRepository::new(conn_arc.clone());
         profile_repo

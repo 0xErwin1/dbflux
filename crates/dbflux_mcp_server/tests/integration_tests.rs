@@ -427,12 +427,6 @@ fn example_connection_retry_pattern() {
 }
 
 #[test]
-fn test_placeholder() {
-    // Placeholder test to ensure the file compiles
-    assert!(true);
-}
-
-#[test]
 fn select_data_schema_keeps_shared_filter_and_pagination_contract() {
     let schema =
         serde_json::to_value(schema_for!(SelectDataParams)).expect("schema should serialize");
@@ -573,7 +567,7 @@ async fn mcp_execution_writes_correlated_audit_events() {
     }
 
     let mut max_group_size = 0;
-    for (_, group) in &correlation_groups {
+    for group in correlation_groups.values() {
         if group.len() > max_group_size {
             max_group_size = group.len();
         }

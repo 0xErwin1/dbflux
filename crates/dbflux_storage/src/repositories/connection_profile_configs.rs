@@ -288,6 +288,7 @@ mod tests {
 
         // Create parent profile first
         let profile = ConnectionProfileDto::new(uuid::Uuid::new_v4(), "Test Profile".to_string());
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let profile_repo = ConnectionProfileRepository::new(conn_arc.clone());
         profile_repo
@@ -324,6 +325,7 @@ mod tests {
             .expect("migration should run");
 
         let profile = ConnectionProfileDto::new(uuid::Uuid::new_v4(), "Test Profile".to_string());
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let profile_repo = ConnectionProfileRepository::new(conn_arc.clone());
         profile_repo

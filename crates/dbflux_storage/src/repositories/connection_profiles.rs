@@ -479,6 +479,7 @@ mod tests {
         // Insert a profile
         let dto = ConnectionProfileDto::new(Uuid::new_v4(), "Test Profile".to_string());
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ConnectionProfileRepository::new(Arc::new(conn));
         repo.insert(&dto).expect("should insert");
 
@@ -505,6 +506,7 @@ mod tests {
         let id = Uuid::new_v4();
         let dto = ConnectionProfileDto::new(id, "Original".to_string());
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ConnectionProfileRepository::new(Arc::new(conn));
         repo.insert(&dto).expect("should insert");
 
@@ -542,6 +544,7 @@ mod tests {
             .run_all(&conn)
             .expect("migration should run");
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ConnectionProfileRepository::new(Arc::new(conn));
 
         // Empty initially

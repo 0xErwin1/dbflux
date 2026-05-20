@@ -484,6 +484,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SavedQueriesRepository::new(Arc::new(conn));
 
         let dto = SavedQueryDto::new("Test Query".to_string(), "SELECT 1".to_string(), None);
@@ -510,6 +511,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SavedQueriesRepository::new(Arc::new(conn));
 
         let folder = SavedQueryFolderDto {
@@ -537,6 +539,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = SavedQueriesRepository::new(Arc::new(conn));
 
         repo.insert(&SavedQueryDto::new(

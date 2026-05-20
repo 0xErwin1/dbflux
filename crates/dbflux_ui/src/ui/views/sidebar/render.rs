@@ -336,35 +336,6 @@ impl Sidebar {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::sidebar_tab_text;
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::AppFonts;
-    use gpui::FontWeight;
-
-    #[test]
-    fn sidebar_tabs_keep_mono_family_and_stateful_weight_hierarchy() {
-        let inactive = sidebar_tab_text("CONNECTIONS", false, false, gpui::blue()).inspect();
-        let active = sidebar_tab_text("SCRIPTS", true, false, gpui::red()).inspect();
-        let focused = sidebar_tab_text("SCRIPTS", true, true, gpui::green()).inspect();
-
-        for inspection in [inactive, active, focused] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            // Tab labels use SM (13px) — the bigger size matches the
-            // design after the visual review pass; the original XS was
-            // judged too cramped against the rest of the chrome.
-            assert_eq!(inspection.size_override, Some(FontSizes::SM));
-            assert!(inspection.has_custom_color_override);
-        }
-
-        assert_eq!(inactive.weight_override, Some(FontWeight::MEDIUM));
-        assert_eq!(active.weight_override, Some(FontWeight::SEMIBOLD));
-        assert_eq!(focused.weight_override, Some(FontWeight::BOLD));
-    }
-}
-
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::ui::components::toast::flush_pending_toast(self.pending_toast.take(), window, cx);
@@ -472,5 +443,34 @@ impl Render for Sidebar {
                     .child(self.render_footer(cx)),
             )
             .when(self.add_menu_open, |el| el.child(self.render_add_menu(cx)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidebar_tab_text;
+    use dbflux_components::tokens::FontSizes;
+    use dbflux_components::typography::AppFonts;
+    use gpui::FontWeight;
+
+    #[test]
+    fn sidebar_tabs_keep_mono_family_and_stateful_weight_hierarchy() {
+        let inactive = sidebar_tab_text("CONNECTIONS", false, false, gpui::blue()).inspect();
+        let active = sidebar_tab_text("SCRIPTS", true, false, gpui::red()).inspect();
+        let focused = sidebar_tab_text("SCRIPTS", true, true, gpui::green()).inspect();
+
+        for inspection in [inactive, active, focused] {
+            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            // Tab labels use SM (13px) — the bigger size matches the
+            // design after the visual review pass; the original XS was
+            // judged too cramped against the rest of the chrome.
+            assert_eq!(inspection.size_override, Some(FontSizes::SM));
+            assert!(inspection.has_custom_color_override);
+        }
+
+        assert_eq!(inactive.weight_override, Some(FontWeight::MEDIUM));
+        assert_eq!(active.weight_override, Some(FontWeight::SEMIBOLD));
+        assert_eq!(focused.weight_override, Some(FontWeight::BOLD));
     }
 }

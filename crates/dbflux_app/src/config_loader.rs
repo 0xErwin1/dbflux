@@ -1678,8 +1678,8 @@ mod tests {
         let loaded = load_config(&runtime);
 
         assert_eq!(loaded.general_settings.theme, ThemeSetting::Dark);
-        assert_eq!(loaded.general_settings.restore_session_on_startup, false);
-        assert_eq!(loaded.general_settings.reopen_last_connections, true);
+        assert!(!loaded.general_settings.restore_session_on_startup);
+        assert!(loaded.general_settings.reopen_last_connections);
         assert_eq!(
             loaded.general_settings.default_focus_on_startup,
             dbflux_core::StartupFocus::LastTab
@@ -1692,19 +1692,21 @@ mod tests {
         );
         assert_eq!(loaded.general_settings.default_refresh_interval_secs, 15);
         assert_eq!(loaded.general_settings.max_concurrent_background_tasks, 4);
-        assert_eq!(loaded.general_settings.auto_refresh_pause_on_error, false);
-        assert_eq!(loaded.general_settings.auto_refresh_only_if_visible, true);
-        assert_eq!(loaded.general_settings.confirm_dangerous_queries, false);
-        assert_eq!(loaded.general_settings.dangerous_requires_where, false);
-        assert_eq!(loaded.general_settings.dangerous_requires_preview, true);
+        assert!(!loaded.general_settings.auto_refresh_pause_on_error);
+        assert!(loaded.general_settings.auto_refresh_only_if_visible);
+        assert!(!loaded.general_settings.confirm_dangerous_queries);
+        assert!(!loaded.general_settings.dangerous_requires_where);
+        assert!(loaded.general_settings.dangerous_requires_preview);
     }
 
     #[test]
     fn save_general_settings_persists_mirage_without_mutating_fonts_or_other_fields() {
-        let mut settings = GeneralSettings::default();
-        settings.theme = ThemeSetting::Mirage;
-        settings.max_history_entries = 77;
-        settings.auto_save_interval_ms = 1234;
+        let settings = GeneralSettings {
+            theme: ThemeSetting::Mirage,
+            max_history_entries: 77,
+            auto_save_interval_ms: 1234,
+            ..Default::default()
+        };
 
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
@@ -1726,8 +1728,10 @@ mod tests {
         use dbflux_core::AppStyle;
 
         // Compact round-trip
-        let mut settings = GeneralSettings::default();
-        settings.style = AppStyle::Compact;
+        let mut settings = GeneralSettings {
+            style: AppStyle::Compact,
+            ..Default::default()
+        };
 
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
         super::save_general_settings(&runtime, &settings).expect("save compact style");
@@ -1808,7 +1812,7 @@ mod tests {
             save_secret: false,
         };
 
-        save_ssh_tunnels(&runtime, &[ssh_tunnel.clone()]).expect("save ssh tunnel profile");
+        save_ssh_tunnels(&runtime, std::slice::from_ref(&ssh_tunnel)).expect("save ssh tunnel profile");
 
         let mut profile = ConnectionProfile::new("pg-with-ssh", DbConfig::default_postgres());
         profile.access_kind = Some(AccessKind::Ssh {

@@ -3476,7 +3476,7 @@ mod tests {
         let driver = drivers
             .get("influxdb")
             .expect("influxdb driver must be registered");
-        let key: String = driver.driver_key().into();
+        let key: String = driver.driver_key();
         assert_eq!(
             key, "builtin:influxdb",
             "driver_key() must be 'builtin:influxdb'"

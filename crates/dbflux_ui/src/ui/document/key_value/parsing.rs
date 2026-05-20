@@ -491,8 +491,8 @@ mod tests {
 
     #[test]
     fn serde_json_to_value_float() {
-        let v = serde_json_to_value(&serde_json::json!(3.14));
-        assert!(matches!(v, Value::Float(f) if (f - 3.14).abs() < f64::EPSILON));
+        let v = serde_json_to_value(&serde_json::json!(2.5));
+        assert!(matches!(v, Value::Float(f) if (f - 2.5).abs() < f64::EPSILON));
     }
 
     #[test]

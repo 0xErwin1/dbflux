@@ -320,7 +320,7 @@ mod tests {
         let result = parse_influxql_json(body).expect("parse must succeed");
         assert_eq!(result.columns.len(), 3);
         assert_eq!(result.columns[0].name, "time");
-        assert_eq!(result.columns[0].is_primary_key, true);
+        assert!(result.columns[0].is_primary_key);
         assert_eq!(result.rows.len(), 2);
     }
 

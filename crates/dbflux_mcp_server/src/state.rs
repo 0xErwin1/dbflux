@@ -1094,7 +1094,7 @@ mod tests {
         }];
 
         let registry = build_auth_provider_registry(&services);
-        assert!(registry.get("bad-auth").is_none());
+        assert!(!registry.contains_key("bad-auth"));
 
         services[0].api_contract = Some(dbflux_core::ServiceRpcApiContract::new(
             "auth_provider_rpc",
@@ -1103,7 +1103,7 @@ mod tests {
         ));
 
         let registry = build_auth_provider_registry(&services);
-        assert!(registry.get("bad-auth").is_none());
+        assert!(!registry.contains_key("bad-auth"));
     }
 
     #[tokio::test]
@@ -1297,7 +1297,7 @@ mod tests {
         let services = dbflux_storage::load_service_configs(&runtime);
         let registry = build_auth_provider_registry(&services);
 
-        assert!(registry.get("rpc-auth").is_none());
+        assert!(!registry.contains_key("rpc-auth"));
         server.wait().expect("fake server join");
     }
 
