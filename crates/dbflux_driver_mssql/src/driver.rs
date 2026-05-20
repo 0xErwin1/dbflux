@@ -236,6 +236,41 @@ impl SqlDialect for MssqlDialect {
     }
 }
 
+/// Returns `true` when `s` looks like a SQL Server-safe numeric literal:
+/// optional sign, decimal digits with at most one `.`, and an optional
+/// `e[+-]?\d+` exponent. Accepts inputs the engine itself would emit when
+/// formatting a `numeric`/`decimal`/`float` value as text.
+fn is_numeric_literal(s: &str) -> bool {
+    let mut chars = s.chars().peekable();
+    if matches!(chars.peek(), Some('+' | '-')) {
+        chars.next();
+    }
+    let mut has_digit = false;
+    let mut seen_dot = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '0'..='9' => has_digit = true,
+            '.' if !seen_dot => seen_dot = true,
+            'e' | 'E' if has_digit => {
+                if matches!(chars.peek(), Some('+' | '-')) {
+                    chars.next();
+                }
+                let mut exp_digits = 0usize;
+                for ec in chars.by_ref() {
+                    if ec.is_ascii_digit() {
+                        exp_digits += 1;
+                    } else {
+                        return false;
+                    }
+                }
+                return exp_digits > 0;
+            }
+            _ => return false,
+        }
+    }
+    has_digit
+}
+
 fn value_to_mssql_literal(value: &Value) -> String {
     match value {
         Value::Null => "NULL".to_string(),
@@ -257,7 +292,19 @@ fn value_to_mssql_literal(value: &Value) -> String {
             format!("0x{}", hex)
         }
         Value::Json(s) => format!("N'{}'", s.replace('\'', "''")),
-        Value::Decimal(s) => s.clone(),
+        Value::Decimal(s) => {
+            // `Value::Decimal` is a public variant. The driver's own conversion
+            // path (`tiberius::ColumnData::Numeric -> Value::Decimal`) emits a
+            // well-formed string, but other producers (MCP tools, external RPC
+            // drivers, tests) can construct it from untrusted input. Validate
+            // before inlining; emit NULL if the string isn't a plain numeric
+            // literal so we never splice arbitrary text into SQL.
+            if is_numeric_literal(s) {
+                s.clone()
+            } else {
+                "NULL".to_string()
+            }
+        }
         Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S%.f")),
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Time(t) => format!("'{}'", t.format("%H:%M:%S%.f")),
@@ -3459,6 +3506,41 @@ mod tests {
         assert_eq!(classify_mssql_code(229), Some(MssqlErrorClass::Permission));
         assert_eq!(classify_mssql_code(102), Some(MssqlErrorClass::Syntax));
         assert_eq!(classify_mssql_code(99999), None);
+    }
+
+    #[test]
+    fn is_numeric_literal_accepts_decimal_and_scientific() {
+        assert!(is_numeric_literal("0"));
+        assert!(is_numeric_literal("-42"));
+        assert!(is_numeric_literal("+3.14"));
+        assert!(is_numeric_literal("0.5"));
+        assert!(is_numeric_literal("1e10"));
+        assert!(is_numeric_literal("-1.5E-3"));
+    }
+
+    #[test]
+    fn is_numeric_literal_rejects_injection_attempts() {
+        assert!(!is_numeric_literal(""));
+        assert!(!is_numeric_literal("1; DROP TABLE users"));
+        assert!(!is_numeric_literal("1'or'1"));
+        assert!(!is_numeric_literal("NaN"));
+        assert!(!is_numeric_literal("1..2"));
+        assert!(!is_numeric_literal("1e"));
+        assert!(!is_numeric_literal("1.2.3"));
+        assert!(!is_numeric_literal(" 42"));
+        assert!(!is_numeric_literal("42 "));
+    }
+
+    #[test]
+    fn decimal_literal_emits_value_when_valid_and_null_otherwise() {
+        assert_eq!(
+            MSSQL_DIALECT.value_to_literal(&Value::Decimal("123.45".into())),
+            "123.45"
+        );
+        assert_eq!(
+            MSSQL_DIALECT.value_to_literal(&Value::Decimal("1; DROP TABLE x--".into())),
+            "NULL"
+        );
     }
 
     #[test]
