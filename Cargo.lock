@@ -2589,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "dbflux_driver_mssql"
-version = "0.6.0-dev.3"
+version = "0.6.0-dev.4"
 dependencies = [
  "chrono",
  "dbflux_core",

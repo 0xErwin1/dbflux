@@ -8,7 +8,8 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dbflux_core::QueryGenerator;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    ColumnAssignment, ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
+    ConnectionProfile,
     ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
     DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities,
     DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef,
@@ -233,10 +234,9 @@ impl SqlDialect for MssqlDialect {
         &self,
         _schema: Option<&str>,
         _table: &str,
-        _columns: &[String],
-        _values: &[Value],
+        _assignments: &[ColumnAssignment],
         _conflict_columns: &[String],
-        _update_assignments: &[(String, Value)],
+        _update_assignments: &[ColumnAssignment],
     ) -> Option<String> {
         // SQL Server uses MERGE for upsert; not generated here to avoid producing
         // an incorrect template. Use UPDATE/INSERT separately.
@@ -2799,15 +2799,15 @@ fn is_kill_error(err: &DbError) -> bool {
 fn build_insert_with_output(insert: &RowInsert) -> Result<String, DbError> {
     let table = MSSQL_DIALECT.qualified_table(insert.schema.as_deref(), &insert.table);
     let columns = insert
-        .columns
+        .assignments
         .iter()
-        .map(|c| MSSQL_DIALECT.quote_identifier(c))
+        .map(|a| MSSQL_DIALECT.quote_identifier(&a.name))
         .collect::<Vec<_>>()
         .join(", ");
     let values = insert
-        .values
+        .assignments
         .iter()
-        .map(|v| MSSQL_DIALECT.value_to_literal(v))
+        .map(|a| MSSQL_DIALECT.value_to_literal(&a.value))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -2822,11 +2822,11 @@ fn build_update_with_output(patch: &RowPatch) -> Result<String, DbError> {
     let set_clause = patch
         .changes
         .iter()
-        .map(|(col, value)| {
+        .map(|change| {
             format!(
                 "{} = {}",
-                MSSQL_DIALECT.quote_identifier(col),
-                MSSQL_DIALECT.value_to_literal(value)
+                MSSQL_DIALECT.quote_identifier(&change.name),
+                MSSQL_DIALECT.value_to_literal(&change.value)
             )
         })
         .collect::<Vec<_>>()
