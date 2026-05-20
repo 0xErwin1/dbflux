@@ -26,7 +26,7 @@ use dbflux_core::{
     ConnectionTreeNode, ConnectionTreeNodeKind, ConstraintKind, CreateIndexRequest,
     CreateTypeRequest, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DriverCapabilities,
     DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, EventStreamTarget, IndexData,
-    IndexDirection, QueryLanguage, ReindexRequest, RelationRef, SchemaCacheKey,
+    IndexDirection, QueryLanguage, ReindexRequest, RelationRef, RoutineInfo, SchemaCacheKey,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaNodeId, SchemaNodeKind,
     SchemaSnapshot, TableInfo, TableRef, TaskId, TypeDefinition, ViewInfo,
 };
@@ -101,6 +101,13 @@ pub enum SidebarEvent {
     OpenGlobalSchemaViz {
         profile_id: Uuid,
         database: String,
+    },
+    /// Request to open a read-only code document showing a routine's definition.
+    OpenRoutineDefinition {
+        profile_id: Uuid,
+        schema: String,
+        specific_name: String,
+        title: String,
     },
     /// Pipeline connect started.
     PipelineStarted {
@@ -538,6 +545,9 @@ enum PendingAction {
     ExpandSchemaForeignKeysFolder {
         item_id: String,
     },
+    ExpandSchemaRoutinesFolder {
+        item_id: String,
+    },
     ExpandCollection {
         item_id: String,
     },
@@ -554,6 +564,7 @@ impl PendingAction {
             | Self::ExpandTypesFolder { item_id }
             | Self::ExpandSchemaIndexesFolder { item_id }
             | Self::ExpandSchemaForeignKeysFolder { item_id }
+            | Self::ExpandSchemaRoutinesFolder { item_id }
             | Self::ExpandCollection { item_id }
             | Self::OpenChildPicker { item_id } => item_id,
         }
@@ -1059,6 +1070,18 @@ impl Sidebar {
             SchemaNodeId::ScriptFile { path } => {
                 cx.emit(SidebarEvent::OpenScript {
                     path: std::path::PathBuf::from(path),
+                });
+            }
+            SchemaNodeId::Routine {
+                profile_id,
+                schema,
+                specific_name,
+            } => {
+                cx.emit(SidebarEvent::OpenRoutineDefinition {
+                    profile_id,
+                    title: specific_name.clone(),
+                    schema,
+                    specific_name,
                 });
             }
             SchemaNodeId::Database { .. } => {

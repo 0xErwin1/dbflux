@@ -1121,7 +1121,7 @@ impl DataGridPanel {
             items.push(ContextMenuItem {
                 label: "Chart this query",
                 action: Some(ContextMenuAction::ChartThisQuery),
-                icon: Some(AppIcon::Zap),
+                icon: Some(AppIcon::ChartSpline),
                 is_separator: false,
                 is_danger: false,
             });

@@ -285,7 +285,8 @@ impl DatabaseCategory {
                     | DriverCapabilities::TRIGGERS.bits()
                     | DriverCapabilities::STORED_PROCEDURES.bits()
                     | DriverCapabilities::SEQUENCES.bits()
-                    | DriverCapabilities::RETURNING.bits(),
+                    | DriverCapabilities::RETURNING.bits()
+                    | DriverCapabilities::ROUTINES.bits(),
             ),
 
             DatabaseCategory::Document | DatabaseCategory::LogStream => {
@@ -363,6 +364,11 @@ bitflags! {
 
         /// Driver supports prepared statements / parameterized queries.
         const PREPARED_STATEMENTS = 1 << 8;
+
+        /// Driver can execute a batch of multiple statements submitted as a
+        /// single query (e.g. several SQL statements separated by `;`),
+        /// producing one result set per statement.
+        const MULTI_STATEMENT = 1 << 47;
 
         // === Schema features ===
 
@@ -493,6 +499,11 @@ bitflags! {
         /// When true, the driver can execute DDL statements within a transaction,
         /// allowing dry-run schema changes via transaction rollback.
         const TRANSACTIONAL_DDL = 1 << 46;
+
+        /// Driver exposes stored routines (functions, procedures, aggregates, window
+        /// functions) through the schema_routines seam. When set, the sidebar renders
+        /// a Routines folder for each schema.
+        const ROUTINES = 1 << 47;
     }
 }
 
@@ -783,6 +794,223 @@ impl QueryLanguage {
                 | QueryLanguage::Cql
         )
     }
+
+    /// Splits a query buffer into individual executable statements.
+    ///
+    /// For SQL-family languages (`editor_mode() == "sql"`) the buffer is split
+    /// on `;`, skipping separators that appear inside single-quoted strings,
+    /// double-quoted / backtick-quoted identifiers, line comments (`--`), block
+    /// comments (`/* */`, nestable), and PostgreSQL dollar-quoted bodies
+    /// (`$tag$ ... $tag$`). Empty statements (only whitespace) are dropped.
+    ///
+    /// For every other language the trimmed buffer is returned as a single
+    /// statement, since they do not use `;`-delimited batches.
+    pub fn split_statements(&self, text: &str) -> Vec<String> {
+        if self.editor_mode() != "sql" {
+            let trimmed = text.trim();
+            return if trimmed.is_empty() {
+                Vec::new()
+            } else {
+                vec![trimmed.to_string()]
+            };
+        }
+
+        split_sql_statements(text)
+    }
+
+    /// Number of executable statements in `text`.
+    ///
+    /// See [`QueryLanguage::split_statements`] for the parsing rules.
+    pub fn statement_count(&self, text: &str) -> usize {
+        self.split_statements(text).len()
+    }
+}
+
+/// `;`-delimited SQL statement splitter that is aware of strings, identifiers,
+/// comments, and dollar-quoted bodies. See [`QueryLanguage::split_statements`].
+fn split_sql_statements(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut index = 0;
+
+    while index < len {
+        let ch = chars[index];
+
+        // Line comment: -- ... up to end of line.
+        if ch == '-' && index + 1 < len && chars[index + 1] == '-' {
+            while index < len && chars[index] != '\n' {
+                current.push(chars[index]);
+                index += 1;
+            }
+            continue;
+        }
+
+        // Block comment: /* ... */ with PostgreSQL-style nesting.
+        if ch == '/' && index + 1 < len && chars[index + 1] == '*' {
+            current.push('/');
+            current.push('*');
+            index += 2;
+
+            let mut depth = 1;
+            while index < len && depth > 0 {
+                if chars[index] == '/' && index + 1 < len && chars[index + 1] == '*' {
+                    depth += 1;
+                    current.push('/');
+                    current.push('*');
+                    index += 2;
+                } else if chars[index] == '*' && index + 1 < len && chars[index + 1] == '/' {
+                    depth -= 1;
+                    current.push('*');
+                    current.push('/');
+                    index += 2;
+                } else {
+                    current.push(chars[index]);
+                    index += 1;
+                }
+            }
+            continue;
+        }
+
+        // Single-quoted string literal ('' and backslash escapes).
+        if ch == '\'' {
+            current.push(ch);
+            index += 1;
+
+            while index < len {
+                let inner = chars[index];
+
+                if inner == '\\' && index + 1 < len {
+                    current.push(inner);
+                    current.push(chars[index + 1]);
+                    index += 2;
+                    continue;
+                }
+
+                if inner == '\'' {
+                    if index + 1 < len && chars[index + 1] == '\'' {
+                        current.push('\'');
+                        current.push('\'');
+                        index += 2;
+                        continue;
+                    }
+
+                    current.push('\'');
+                    index += 1;
+                    break;
+                }
+
+                current.push(inner);
+                index += 1;
+            }
+            continue;
+        }
+
+        // Quoted identifier: "..." (standard SQL) or `...` (MySQL).
+        if ch == '"' || ch == '`' {
+            let quote = ch;
+            current.push(ch);
+            index += 1;
+
+            while index < len {
+                let inner = chars[index];
+                current.push(inner);
+                index += 1;
+
+                if inner == quote {
+                    if index < len && chars[index] == quote {
+                        current.push(quote);
+                        index += 1;
+                        continue;
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
+
+        // Dollar-quoted string: $tag$ ... $tag$ (PostgreSQL).
+        if ch == '$'
+            && let Some(tag_end) = dollar_tag_end(&chars, index)
+        {
+            let tag: String = chars[index..=tag_end].iter().collect();
+            let tag_len = tag.chars().count();
+
+            current.push_str(&tag);
+            index = tag_end + 1;
+
+            while index < len {
+                if chars[index] == '$' && matches_tag(&chars, index, &tag) {
+                    current.push_str(&tag);
+                    index += tag_len;
+                    break;
+                }
+
+                current.push(chars[index]);
+                index += 1;
+            }
+            continue;
+        }
+
+        // Statement terminator.
+        if ch == ';' {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                statements.push(trimmed.to_string());
+            }
+            current.clear();
+            index += 1;
+            continue;
+        }
+
+        current.push(ch);
+        index += 1;
+    }
+
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        statements.push(trimmed.to_string());
+    }
+
+    statements
+}
+
+/// If `chars[start]` opens a dollar-quote tag, returns the index of the closing
+/// `$` of that opening tag. The tag identifier must be empty (`$$`) or a valid
+/// identifier (letters, digits, underscore, not starting with a digit), which
+/// also prevents misreading parameter placeholders such as `$1`.
+fn dollar_tag_end(chars: &[char], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+
+    while index < chars.len() {
+        let ch = chars[index];
+
+        if ch == '$' {
+            return Some(index);
+        }
+
+        let is_first = index == start + 1;
+        let valid = ch == '_' || ch.is_alphabetic() || (ch.is_ascii_digit() && !is_first);
+        if !valid {
+            return None;
+        }
+
+        index += 1;
+    }
+
+    None
+}
+
+/// Whether `tag` matches the characters starting at `chars[index]`.
+fn matches_tag(chars: &[char], index: usize, tag: &str) -> bool {
+    let tag_chars: Vec<char> = tag.chars().collect();
+    if index + tag_chars.len() > chars.len() {
+        return false;
+    }
+
+    chars[index..index + tag_chars.len()] == tag_chars[..]
 }
 
 // ============================================================================
@@ -1594,6 +1822,111 @@ mod tests {
     use super::*;
 
     #[test]
+    fn split_statements_single_sql() {
+        let stmts = QueryLanguage::Sql.split_statements("SELECT 1");
+        assert_eq!(stmts, vec!["SELECT 1".to_string()]);
+        assert_eq!(QueryLanguage::Sql.statement_count("SELECT 1"), 1);
+    }
+
+    #[test]
+    fn split_statements_trailing_semicolon_is_single() {
+        assert_eq!(QueryLanguage::Sql.statement_count("SELECT 1;"), 1);
+        assert_eq!(QueryLanguage::Sql.statement_count("SELECT 1;  \n  "), 1);
+    }
+
+    #[test]
+    fn split_statements_multiple_sql() {
+        let stmts = QueryLanguage::Sql.split_statements("SELECT 1; SELECT 2;");
+        assert_eq!(stmts, vec!["SELECT 1".to_string(), "SELECT 2".to_string()]);
+        assert_eq!(QueryLanguage::Sql.statement_count("SELECT 1; SELECT 2"), 2);
+    }
+
+    #[test]
+    fn split_statements_empty_segments_dropped() {
+        assert_eq!(QueryLanguage::Sql.statement_count(";;SELECT 1;;"), 1);
+        assert_eq!(QueryLanguage::Sql.statement_count("   ;  ; "), 0);
+    }
+
+    #[test]
+    fn split_statements_ignores_semicolon_in_string() {
+        let stmts = QueryLanguage::Sql.split_statements("SELECT 'a;b'; SELECT 2");
+        assert_eq!(
+            stmts,
+            vec!["SELECT 'a;b'".to_string(), "SELECT 2".to_string()]
+        );
+    }
+
+    #[test]
+    fn split_statements_ignores_escaped_quote_in_string() {
+        let stmts = QueryLanguage::Sql.split_statements("SELECT 'it''s; ok'; SELECT 2");
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[0], "SELECT 'it''s; ok'");
+    }
+
+    #[test]
+    fn split_statements_ignores_semicolon_in_identifier() {
+        let stmts = QueryLanguage::Sql.split_statements("SELECT \"a;b\" FROM t; SELECT 2");
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[0], "SELECT \"a;b\" FROM t");
+    }
+
+    #[test]
+    fn split_statements_ignores_semicolon_in_line_comment() {
+        let stmts = QueryLanguage::Sql.split_statements("SELECT 1 -- a; b\n; SELECT 2");
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[1], "SELECT 2");
+    }
+
+    #[test]
+    fn split_statements_ignores_semicolon_in_block_comment() {
+        let stmts =
+            QueryLanguage::Sql.split_statements("SELECT 1 /* a; /* nested; */ b */; SELECT 2");
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn split_statements_ignores_semicolon_in_dollar_quote() {
+        let body = "CREATE FUNCTION f() RETURNS int AS $$ BEGIN; RETURN 1; END; $$ LANGUAGE plpgsql; SELECT 2";
+        let stmts = QueryLanguage::Sql.split_statements(body);
+        assert_eq!(stmts.len(), 2);
+        assert!(stmts[0].contains("BEGIN; RETURN 1; END;"));
+        assert_eq!(stmts[1], "SELECT 2");
+    }
+
+    #[test]
+    fn split_statements_tagged_dollar_quote() {
+        let body = "SELECT $tag$ a;b $tag$; SELECT 2";
+        let stmts = QueryLanguage::Sql.split_statements(body);
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[0], "SELECT $tag$ a;b $tag$");
+    }
+
+    #[test]
+    fn split_statements_dollar_placeholder_is_not_quote() {
+        let stmts = QueryLanguage::Sql.split_statements("SELECT $1; SELECT $2");
+        assert_eq!(
+            stmts,
+            vec!["SELECT $1".to_string(), "SELECT $2".to_string()]
+        );
+    }
+
+    #[test]
+    fn split_statements_non_sql_is_single() {
+        let text = "db.coll.find({a: 1}); db.coll.find({b: 2})";
+        assert_eq!(QueryLanguage::MongoQuery.statement_count(text), 1);
+        assert_eq!(
+            QueryLanguage::RedisCommands.statement_count("GET a\nGET b"),
+            1
+        );
+    }
+
+    #[test]
+    fn split_statements_empty_is_zero() {
+        assert_eq!(QueryLanguage::Sql.statement_count("   \n  "), 0);
+        assert_eq!(QueryLanguage::MongoQuery.statement_count(""), 0);
+    }
+
+    #[test]
     fn test_category_names() {
         assert_eq!(DatabaseCategory::Relational.container_name(), "Tables");
         assert_eq!(DatabaseCategory::Document.container_name(), "Collections");
@@ -1641,6 +1974,33 @@ mod tests {
         assert_eq!(
             QueryLanguage::RedisCommands.display_name(),
             "Redis Commands"
+        );
+    }
+
+    #[test]
+    fn test_routines_capability_bit() {
+        assert_eq!(
+            DriverCapabilities::ROUTINES.bits(),
+            1u64 << 47,
+            "ROUTINES must be bit 47"
+        );
+        assert!(
+            DatabaseCategory::Relational
+                .relevant_capabilities()
+                .contains(DriverCapabilities::ROUTINES),
+            "Relational category must include ROUTINES"
+        );
+        assert!(
+            DatabaseCategory::TimeSeries
+                .relevant_capabilities()
+                .contains(DriverCapabilities::ROUTINES),
+            "TimeSeries category must include ROUTINES"
+        );
+        assert!(
+            !DatabaseCategory::KeyValue
+                .relevant_capabilities()
+                .contains(DriverCapabilities::ROUTINES),
+            "KeyValue category must NOT include ROUTINES"
         );
     }
 

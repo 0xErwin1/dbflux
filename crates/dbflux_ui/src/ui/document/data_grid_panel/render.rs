@@ -17,9 +17,7 @@ use dbflux_components::chart::{
 use dbflux_components::chart::{SourceRowRef, point_inspector_element};
 use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
-use dbflux_core::{
-    ColumnKind, DatabaseCategory, Pagination, QueryResultShape, SortDirection, Value,
-};
+use dbflux_core::{ColumnKind, Pagination, QueryResultShape, SortDirection, Value};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -117,10 +115,13 @@ impl Render for DataGridPanel {
         let exec_time = format!("{}ms", self.result.execution_time.as_millis());
 
         let is_table_view = self.source.is_table();
-        let show_data_toolbar = matches!(
-            self.source,
-            DataSource::Table { .. } | DataSource::Collection { .. }
-        );
+        // Suppress the toolbar row when it has been moved into the hosting
+        // ResultPanel's chrome row (via ViewHandle::toolbar_segments).
+        let show_data_toolbar = !self.toolbar_in_chrome_row
+            && matches!(
+                self.source,
+                DataSource::Table { .. } | DataSource::Collection { .. }
+            );
         let is_paginated = self.source.is_paginated();
         let source_name = match &self.source {
             DataSource::Table { table, .. } => table.qualified_name(),
@@ -161,14 +162,8 @@ impl Render for DataGridPanel {
         let shows_table_content = matches!(content_mode, DataGridContentMode::Table);
         let shows_content_controls = has_data || shows_table_content;
 
-        // Show result-tabs strip (Table | Chart) when the result shape is Table
-        // and chart auto-detection succeeded or the driver is TimeSeries.
-        let is_time_series_source =
-            DataGridPanel::connection_category(&self.source, &self.app_state, cx)
-                == Some(DatabaseCategory::TimeSeries);
-        let show_chart_tabs_strip = self.result.shape == QueryResultShape::Table
-            && (self.chart_available(cx) || is_time_series_source)
-            && (shows_table_content || uses_result_view);
+        // The result-tabs strip (Table | Chart) has been extracted to ResultPanel
+        // which wraps DataDocument. DataGridPanel no longer renders the strip.
 
         // Get edit state from table
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
@@ -321,7 +316,6 @@ impl Render for DataGridPanel {
             // Grid, Document, or Result View
             .child({
                 let result_view_mode = self.result_view_mode;
-                let row_count_for_strip = row_count;
 
                 div()
                     .flex_1()
@@ -336,11 +330,7 @@ impl Render for DataGridPanel {
                             }
                         }),
                     )
-                    // Result-tabs strip (Table | Chart) at the top of the content area.
-                    .when(show_chart_tabs_strip, |d| {
-                        d.child(self.render_result_tabs_strip(row_count_for_strip, &theme, cx))
-                    })
-                    // Content body — fills remaining space below the strip.
+                    // Content body — fills remaining space.
                     .child({
                         let content = div().flex_1().overflow_hidden();
 
@@ -418,6 +408,259 @@ impl Render for DataGridPanel {
                 d.child(self.document_preview_modal.clone())
             })
     }
+}
+
+/// Build the filter-bar element for use as a `ToolbarSegment` builder closure.
+///
+/// Unlike `DataGridPanel::render_toolbar`, this function captures
+/// `Entity<DataGridPanel>` instead of `&self`, making it suitable for use in
+/// a `Box<dyn Fn(&mut Window, &mut App) -> AnyElement>` closure. Event handlers
+/// call `grid.update(cx, ...)` instead of `cx.listener`.
+///
+/// Only rendered for Table and Collection sources. Returns an empty element for
+/// QueryResult sources that do not show a filter bar.
+pub(super) fn render_filter_bar_as_segment(
+    grid: &Entity<DataGridPanel>,
+    _window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let g = grid.read(cx);
+
+    let is_table_or_collection = matches!(
+        g.source,
+        DataSource::Table { .. } | DataSource::Collection { .. }
+    );
+
+    if !is_table_or_collection {
+        return div().into_any();
+    }
+
+    let (source_query_prefix, filter_keyword) =
+        DataGridPanel::filter_labels_for_source(&g.source, &g.app_state, cx);
+
+    let source_name = match &g.source {
+        DataSource::Table { table, .. } => table.qualified_name(),
+        DataSource::Collection { collection, .. } => collection.qualified_name(),
+        DataSource::QueryResult { .. } => String::new(),
+    };
+
+    let filter_input = g.filter_input.clone();
+    let filter_has_value = !g.filter_input.read(cx).value().is_empty();
+    let limit_input = g.limit_input.clone();
+    let focus_mode = g.focus_mode;
+    let toolbar_focus = g.toolbar_focus;
+    let edit_state = g.edit_state;
+    let refresh_policy = g.refresh_policy;
+    let is_runner_active = g.runner.is_primary_active();
+    let refresh_dropdown = g.refresh_dropdown.clone();
+
+    let show_toolbar_focus =
+        focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
+
+    let theme = cx.theme().clone();
+
+    let refresh_label = if refresh_policy.is_auto() {
+        refresh_policy.label()
+    } else {
+        "Refresh"
+    };
+
+    let grid_for_filter = grid.clone();
+    let grid_for_limit = grid.clone();
+    let grid_for_clear = grid.clone();
+    let grid_for_refresh = grid.clone();
+
+    // Pre-clone theme for each section that needs it in a closure.
+    let theme_filter = theme.clone();
+    let theme_limit = theme.clone();
+    let theme_refresh = theme.clone();
+
+    // NOTE: do not use `.h_full()` here. The segment is hosted inside
+    // `ResultPanel`'s chrome row which has `min_h(Heights::TOOLBAR)`. If the
+    // segment is constrained to that height, its internal `flex_wrap` rows
+    // overflow the box and get clipped — narrow widths lose the WHERE / LIMIT
+    // / Refresh row entirely.
+    //
+    // `flex_1` + `min_w_0` are REQUIRED so the segment shrinks to the chrome
+    // row's available width instead of taking its intrinsic ~880px content
+    // width. Without this, the segment overflows the chrome row horizontally
+    // and the trailing Refresh control is pushed off-screen — `flex_wrap`
+    // never triggers because from the segment's perspective its children
+    // "fit" inside its own oversized box.
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(Spacing::SM)
+        .flex_1()
+        .min_w(px(0.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::XS)
+                .child(Text::caption(source_query_prefix).primary())
+                .child(Text::label(source_name)),
+        )
+        // Filter input: hidden for drivers that don't support collection filtering.
+        .when(!filter_keyword.is_empty(), move |d| {
+            let grid_for_filter_event = grid_for_filter.clone();
+            let grid_for_clear_event = grid_for_clear.clone();
+            let theme_inner = theme_filter.clone();
+            let theme_clear = theme_filter.clone();
+            d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(Text::caption(filter_keyword).primary())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .w(px(420.0))
+                            .h(Heights::ROW_COMPACT)
+                            .rounded(Radii::SM)
+                            .when(
+                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
+                                move |d| d.border_1().border_color(theme_inner.ring),
+                            )
+                            .on_mouse_down(MouseButton::Left, {
+                                let grid = grid_for_filter_event.clone();
+                                move |_, _, cx| {
+                                    grid.update(cx, |this, cx| {
+                                        this.switching_input = true;
+                                        this.focus_mode = GridFocusMode::Toolbar;
+                                        this.toolbar_focus = ToolbarFocus::Filter;
+                                        this.edit_state = EditState::Editing;
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .child(div().flex_1().child(Input::new(&filter_input).small()))
+                            .when(filter_has_value, move |d| {
+                                let grid = grid_for_clear_event.clone();
+                                let theme_hover = theme_clear.clone();
+                                d.child(
+                                    div()
+                                        .id("clear-filter")
+                                        .w(px(20.0))
+                                        .h(px(20.0))
+                                        .mr(Spacing::XS)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(Radii::SM)
+                                        .text_size(FontSizes::SM)
+                                        .text_color(theme_clear.muted_foreground)
+                                        .cursor_pointer()
+                                        .hover(move |d| {
+                                            d.bg(theme_hover.secondary)
+                                                .text_color(theme_hover.foreground)
+                                        })
+                                        .on_click(move |_, window, cx| {
+                                            let filter_input_clone =
+                                                grid.read(cx).filter_input.clone();
+                                            filter_input_clone.update(cx, |input, cx| {
+                                                input.set_value("", window, cx);
+                                            });
+                                            grid.update(cx, |this, cx| {
+                                                this.refresh(window, cx);
+                                            });
+                                        })
+                                        .child("\u{00d7}"),
+                                )
+                            }),
+                    ),
+            )
+        })
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::XS)
+                .child(Text::caption("LIMIT").primary())
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .w(px(60.0))
+                        .h(Heights::ROW_COMPACT)
+                        .rounded(Radii::SM)
+                        .when(
+                            show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
+                            move |d| d.border_1().border_color(theme_limit.ring),
+                        )
+                        .on_mouse_down(MouseButton::Left, {
+                            let grid = grid_for_limit.clone();
+                            move |_, _, cx| {
+                                grid.update(cx, |this, cx| {
+                                    this.switching_input = true;
+                                    this.focus_mode = GridFocusMode::Toolbar;
+                                    this.toolbar_focus = ToolbarFocus::Limit;
+                                    this.edit_state = EditState::Editing;
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .child(Input::new(&limit_input).small()),
+                ),
+        )
+        .child(
+            div()
+                .id("refresh-action-btn")
+                .h(Heights::ROW_COMPACT)
+                .flex()
+                .items_center()
+                .gap_0()
+                .rounded(Radii::SM)
+                .bg(theme_refresh.background)
+                .border_1()
+                .border_color(
+                    if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
+                        theme_refresh.ring
+                    } else {
+                        theme_refresh.input
+                    },
+                )
+                .child(
+                    div()
+                        .id("refresh-action")
+                        .h_full()
+                        .px(Spacing::SM)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .cursor_pointer()
+                        .hover(move |d| d.bg(theme_refresh.accent.opacity(0.08)))
+                        .on_click(move |_, window, cx| {
+                            grid_for_refresh.update(cx, |this, cx| {
+                                if this.runner.is_primary_active() {
+                                    this.runner.cancel_primary(cx);
+                                    cx.notify();
+                                } else {
+                                    this.refresh(window, cx);
+                                    this.focus_table(window, cx);
+                                }
+                            });
+                        })
+                        .child(
+                            Icon::new(if is_runner_active {
+                                AppIcon::Loader
+                            } else if refresh_policy.is_auto() {
+                                AppIcon::Clock
+                            } else {
+                                AppIcon::RefreshCcw
+                            })
+                            .small()
+                            .color(theme.foreground),
+                        )
+                        .child(Text::body(refresh_label)),
+                )
+                .child(div().w(px(1.0)).h_full().bg(theme.input))
+                .child(div().w(px(28.0)).h_full().child(refresh_dropdown)),
+        )
+        .into_any()
 }
 
 impl DataGridPanel {
@@ -547,8 +790,8 @@ impl DataGridPanel {
             )
             .child(
                 div()
-                    .id("refresh-control")
-                    .h(Heights::BUTTON)
+                    .id("refresh-action-btn")
+                    .h(Heights::ROW_COMPACT)
                     .flex()
                     .items_center()
                     .gap_0()
@@ -1037,7 +1280,7 @@ impl DataGridPanel {
         let ctx = ChartToolbarContext {
             theme,
             chart_shell,
-            refresh_dropdown: self.refresh_dropdown.clone(),
+            refresh_dropdown: Some(self.refresh_dropdown.clone()),
             time_range_panel: self.chart_source_time_range_panel.clone(),
             row_count: self.result.row_count(),
             resolved_window,
@@ -1188,86 +1431,6 @@ impl DataGridPanel {
     }
 
     // -- Result View Renderers --
-
-    /// Render the Table / Chart tab strip that appears above the result content
-    /// area when the result is Table-shaped and chart detection succeeded (or the
-    /// driver is TimeSeries).
-    ///
-    /// Each tab switches `result_view_mode` on click. The active tab is underlined
-    /// with the theme accent and shown in full foreground weight.
-    pub(super) fn render_result_tabs_strip(
-        &self,
-        row_count: usize,
-        theme: &gpui_component::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let current_mode = self.result_view_mode;
-
-        let tabs: &[(ResultViewMode, &str)] = &[
-            (ResultViewMode::Table, "Data"),
-            (ResultViewMode::Chart, "Chart"),
-        ];
-
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(px(30.0))
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .children(tabs.iter().map(|(mode, label)| {
-                let mode = *mode;
-                let is_active = mode == current_mode;
-                let label_text: SharedString = (*label).into();
-
-                div()
-                    .id(ElementId::Name(
-                        format!("result-tab-{}", label.to_lowercase()).into(),
-                    ))
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .h_full()
-                    .px(Spacing::SM)
-                    .cursor_pointer()
-                    .border_b_2()
-                    .border_color(if is_active {
-                        theme.accent
-                    } else {
-                        gpui::transparent_black()
-                    })
-                    .text_color(if is_active {
-                        theme.foreground
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.set_result_view_mode(mode, cx);
-                        }),
-                    )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .when(is_active, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
-                            .child(label_text),
-                    )
-                    // Row-count badge on the Data tab only.
-                    .when(mode == ResultViewMode::Table, |d| {
-                        d.child(
-                            div()
-                                .text_size(px(10.0))
-                                .text_color(theme.muted_foreground)
-                                .font(font("JetBrains Mono"))
-                                .child(SharedString::from(format!("{}", row_count))),
-                        )
-                    })
-            }))
-    }
 
     pub(super) fn render_result_view(
         &mut self,
@@ -2726,8 +2889,16 @@ impl DataGridPanel {
                                 available_modes.iter().enumerate().map(|(i, mode)| {
                                     let mode = *mode;
                                     let is_active = mode == current_result_mode;
+                                    let icon_color = if is_active {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    };
                                     div()
                                         .id(ElementId::Name(format!("result-view-{}", i).into()))
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
                                         .px(Spacing::SM)
                                         .text_size(FontSizes::XS)
                                         .cursor_pointer()
@@ -2737,6 +2908,11 @@ impl DataGridPanel {
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.set_result_view_mode(mode, cx);
                                         }))
+                                        .child(
+                                            Icon::new(Self::result_mode_icon(mode))
+                                                .size(px(12.0))
+                                                .color(icon_color),
+                                        )
                                         .child(Self::result_mode_label(mode.label(), is_active))
                                 }),
                             ))
@@ -2863,6 +3039,17 @@ impl DataGridPanel {
                         Text::caption(exec_time.to_string()).color(muted)
                     }),
             )
+    }
+
+    /// Icon shown next to each result-view mode chip (Data, Chart, JSON, ...).
+    fn result_mode_icon(mode: ResultViewMode) -> AppIcon {
+        match mode {
+            ResultViewMode::Table => AppIcon::Table,
+            ResultViewMode::Chart => AppIcon::ChartSpline,
+            ResultViewMode::Json => AppIcon::Braces,
+            ResultViewMode::Text => AppIcon::ScrollText,
+            ResultViewMode::Raw => AppIcon::Code,
+        }
     }
 
     fn result_mode_label(label: &'static str, is_active: bool) -> Text {

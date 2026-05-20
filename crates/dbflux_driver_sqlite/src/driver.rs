@@ -54,7 +54,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::EXPORT_CSV.bits()
             | DriverCapabilities::EXPORT_JSON.bits()
             | DriverCapabilities::QUERY_CANCELLATION.bits()
-            | DriverCapabilities::TRANSACTIONAL_DDL.bits(),
+            | DriverCapabilities::TRANSACTIONAL_DDL.bits()
+            | DriverCapabilities::MULTI_STATEMENT.bits(),
     ),
     default_port: None,
     uri_scheme: "sqlite".into(),
@@ -655,122 +656,31 @@ impl Connection for SqliteConnection {
             .lock()
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
-        let stmt_result = conn.prepare(&req.sql);
-
-        let mut stmt = match stmt_result {
-            Ok(s) => s,
-            Err(e) => {
-                if self.cancelled.load(Ordering::SeqCst) {
-                    log::info!("[QUERY] SQLite query was interrupted");
-                    return Err(DbError::Cancelled);
-                }
-                return Err(format_sqlite_query_error(&e));
-            }
-        };
-
-        // Check if this is a SELECT, PRAGMA, or EXPLAIN statement (returns rows) or a DDL/DML statement
-        let sql_trimmed = req.sql.trim().to_uppercase();
-        let is_query = sql_trimmed.starts_with("SELECT")
-            || sql_trimmed.starts_with("PRAGMA")
-            || sql_trimmed.starts_with("EXPLAIN");
-
-        if is_query {
-            // For SELECT statements, use query() to get rows.
-            // Use Statement::columns() (requires the `column_decltype` rusqlite feature)
-            // to get declared type strings, then apply SQLite affinity heuristics to
-            // populate ColumnKind. Columns whose declared type is NULL (dynamic columns
-            // or expressions) fall back to ColumnKind::Unknown.
-            let column_count = stmt.column_count();
-            let col_meta: Vec<(String, String, ColumnKind)> = stmt
-                .columns()
-                .into_iter()
-                .map(|col| {
-                    let name = col.name().to_string();
-                    let decl = col.decl_type().unwrap_or("");
-                    let type_name = if decl.is_empty() {
-                        "TEXT".to_string()
-                    } else {
-                        decl.to_uppercase()
-                    };
-                    let kind = kind_from_decltype(col.decl_type());
-                    (name, type_name, kind)
-                })
-                .collect();
-            let columns: Vec<ColumnMeta> = col_meta
-                .into_iter()
-                .map(|(name, type_name, kind)| ColumnMeta {
-                    name,
-                    type_name,
-                    kind,
-                    nullable: true,
-                    is_primary_key: false,
-                })
-                .collect();
-
-            let mut rows: Vec<Row> = Vec::new();
-            let query_result = stmt.query([]);
-
-            let mut result_rows = match query_result {
-                Ok(r) => r,
-                Err(e) => {
-                    if self.cancelled.load(Ordering::SeqCst) {
-                        log::info!("[QUERY] SQLite query was interrupted");
-                        return Err(DbError::Cancelled);
-                    }
-                    return Err(format_sqlite_query_error(&e));
-                }
-            };
-
-            loop {
-                let next_result = result_rows.next();
-
-                match next_result {
-                    Ok(Some(row)) => {
-                        let mut values: Vec<Value> = Vec::with_capacity(column_count);
-                        for i in 0..column_count {
-                            let value = sqlite_value_to_value(row, i);
-                            values.push(value);
-                        }
-                        rows.push(values);
-
-                        if let Some(limit) = req.limit
-                            && rows.len() >= limit as usize
-                        {
-                            break;
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(e) => {
-                        if self.cancelled.load(Ordering::SeqCst) {
-                            log::info!("[QUERY] SQLite query was interrupted during iteration");
-                            return Err(DbError::Cancelled);
-                        }
-                        return Err(format_sqlite_query_error(&e));
-                    }
-                }
+        // `rusqlite::prepare` only parses the first statement of a
+        // multi-statement string and silently ignores the rest. To run a
+        // script we split it and execute each statement on its own, keeping
+        // the typed single-statement path for the common case.
+        let statements = QueryLanguage::Sql.split_statements(&req.sql);
+        if statements.len() > 1 {
+            let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
+            for statement in &statements {
+                result_sets.push(execute_one_statement(
+                    &conn,
+                    statement,
+                    req.limit,
+                    start,
+                    &self.cancelled,
+                )?);
             }
 
-            Ok(QueryResult::table(columns, rows, None, start.elapsed()))
-        } else {
-            // For DDL/DML statements (CREATE, DROP, INSERT, UPDATE, DELETE, etc.),
-            // use execute() which properly handles non-row-returning statements
-            let affected = stmt.execute([]).map_err(|e| {
-                if self.cancelled.load(Ordering::SeqCst) {
-                    log::info!("[QUERY] SQLite query was interrupted");
-                    DbError::Cancelled
-                } else {
-                    format_sqlite_query_error(&e)
-                }
-            })?;
-
-            // Return empty result for DDL/DML
-            Ok(QueryResult::table(
-                vec![],
-                vec![],
-                Some(affected as u64),
-                start.elapsed(),
-            ))
+            let mut primary = result_sets.remove(0);
+            for extra in result_sets {
+                primary.push_additional_result(extra);
+            }
+            return Ok(primary);
         }
+
+        execute_one_statement(&conn, &req.sql, req.limit, start, &self.cancelled)
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -1813,6 +1723,137 @@ impl SqliteConnection {
         }
 
         Ok(all_fks)
+    }
+}
+
+/// Executes a single SQLite statement and returns its result set.
+///
+/// SELECT/PRAGMA/EXPLAIN statements return rows; everything else reports the
+/// affected-row count. This is the per-statement unit used both for a lone
+/// query and for each statement of a multi-statement batch (a script), since
+/// `rusqlite::prepare` only parses the first statement of a string.
+fn execute_one_statement(
+    conn: &RusqliteConnection,
+    sql: &str,
+    limit: Option<u32>,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    let stmt_result = conn.prepare(sql);
+
+    let mut stmt = match stmt_result {
+        Ok(s) => s,
+        Err(e) => {
+            if cancelled.load(Ordering::SeqCst) {
+                log::info!("[QUERY] SQLite query was interrupted");
+                return Err(DbError::Cancelled);
+            }
+            return Err(format_sqlite_query_error(&e));
+        }
+    };
+
+    // Check if this is a SELECT, PRAGMA, or EXPLAIN statement (returns rows) or a DDL/DML statement
+    let sql_trimmed = sql.trim().to_uppercase();
+    let is_query = sql_trimmed.starts_with("SELECT")
+        || sql_trimmed.starts_with("PRAGMA")
+        || sql_trimmed.starts_with("EXPLAIN");
+
+    if is_query {
+        // For SELECT statements, use query() to get rows.
+        // Use Statement::columns() (requires the `column_decltype` rusqlite feature)
+        // to get declared type strings, then apply SQLite affinity heuristics to
+        // populate ColumnKind. Columns whose declared type is NULL (dynamic columns
+        // or expressions) fall back to ColumnKind::Unknown.
+        let column_count = stmt.column_count();
+        let col_meta: Vec<(String, String, ColumnKind)> = stmt
+            .columns()
+            .into_iter()
+            .map(|col| {
+                let name = col.name().to_string();
+                let decl = col.decl_type().unwrap_or("");
+                let type_name = if decl.is_empty() {
+                    "TEXT".to_string()
+                } else {
+                    decl.to_uppercase()
+                };
+                let kind = kind_from_decltype(col.decl_type());
+                (name, type_name, kind)
+            })
+            .collect();
+        let columns: Vec<ColumnMeta> = col_meta
+            .into_iter()
+            .map(|(name, type_name, kind)| ColumnMeta {
+                name,
+                type_name,
+                kind,
+                nullable: true,
+                is_primary_key: false,
+            })
+            .collect();
+
+        let mut rows: Vec<Row> = Vec::new();
+        let query_result = stmt.query([]);
+
+        let mut result_rows = match query_result {
+            Ok(r) => r,
+            Err(e) => {
+                if cancelled.load(Ordering::SeqCst) {
+                    log::info!("[QUERY] SQLite query was interrupted");
+                    return Err(DbError::Cancelled);
+                }
+                return Err(format_sqlite_query_error(&e));
+            }
+        };
+
+        loop {
+            let next_result = result_rows.next();
+
+            match next_result {
+                Ok(Some(row)) => {
+                    let mut values: Vec<Value> = Vec::with_capacity(column_count);
+                    for i in 0..column_count {
+                        let value = sqlite_value_to_value(row, i);
+                        values.push(value);
+                    }
+                    rows.push(values);
+
+                    if let Some(row_limit) = limit
+                        && rows.len() >= row_limit as usize
+                    {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    if cancelled.load(Ordering::SeqCst) {
+                        log::info!("[QUERY] SQLite query was interrupted during iteration");
+                        return Err(DbError::Cancelled);
+                    }
+                    return Err(format_sqlite_query_error(&e));
+                }
+            }
+        }
+
+        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
+    } else {
+        // For DDL/DML statements (CREATE, DROP, INSERT, UPDATE, DELETE, etc.),
+        // use execute() which properly handles non-row-returning statements
+        let affected = stmt.execute([]).map_err(|e| {
+            if cancelled.load(Ordering::SeqCst) {
+                log::info!("[QUERY] SQLite query was interrupted");
+                DbError::Cancelled
+            } else {
+                format_sqlite_query_error(&e)
+            }
+        })?;
+
+        // Return empty result for DDL/DML
+        Ok(QueryResult::table(
+            vec![],
+            vec![],
+            Some(affected as u64),
+            start.elapsed(),
+        ))
     }
 }
 

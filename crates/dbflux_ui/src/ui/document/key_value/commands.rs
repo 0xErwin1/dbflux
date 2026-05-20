@@ -2,7 +2,7 @@ use crate::keymap::Command;
 use gpui::*;
 
 use super::context_menu::KvMenuTarget;
-use super::{KeyValueDocumentEvent, KeyValueFocusMode, KvValueViewMode};
+use super::{KeyValueFocusMode, KvValueViewMode};
 
 impl super::KeyValueDocument {
     pub fn dispatch_command(

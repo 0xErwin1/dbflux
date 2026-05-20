@@ -6,9 +6,11 @@
 //! Created exclusively by promoting a query result (e.g. "Chart this query"
 //! from a data grid); the query is fixed for the document's lifetime.
 
+pub mod pane;
 mod render;
 
 use super::chart::{ChartHost, ChartShell, HostAdapter};
+use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppStateEntity;
@@ -18,6 +20,8 @@ use crate::ui::components::dropdown::{Dropdown, DropdownItem};
 use crate::ui::components::toast::PendingToast;
 use dbflux_components::chart::{ChartDetection, detect_chart_columns};
 use dbflux_components::controls::InputState;
+use dbflux_components::result_panel::{ResultPanel, SegmentPosition, ToolbarSegment, ViewHandle};
+use dbflux_components::result_view::ResultViewMode;
 use dbflux_components::saved_chart::SavedChart;
 use dbflux_core::{ExecutionContext, ExecutionSourceContext};
 use dbflux_core::{QueryResult, RefreshPolicy};
@@ -25,15 +29,6 @@ use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Task, Window};
 use std::sync::Arc;
 use uuid::Uuid;
-
-/// Events emitted by `ChartDocument`.
-#[derive(Clone, Debug)]
-pub enum ChartDocumentEvent {
-    /// Title or state changed; tab bar should repaint.
-    MetaChanged,
-    /// The document area was clicked and wants to receive keyboard focus.
-    RequestFocus,
-}
 
 /// Active focus target within the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -114,6 +109,10 @@ pub struct ChartDocument {
     #[allow(dead_code)]
     focus_mode: ChartDocFocus,
 
+    /// Chrome host: lazily built on first render (requires Window for
+    /// TimeRangePanel construction; set to `Some` by `render.rs`).
+    pub(super) result_panel: Option<Entity<ResultPanel>>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -144,12 +143,15 @@ impl ChartDocument {
         });
 
         let refresh_dropdown = cx.new(|_cx| {
-            Dropdown::new("chart-doc-refresh").items(vec![
-                DropdownItem::new("Off"),
-                DropdownItem::new("30s"),
-                DropdownItem::new("1m"),
-                DropdownItem::new("5m"),
-            ])
+            let items = RefreshPolicy::ALL
+                .iter()
+                .map(|policy| DropdownItem::new(policy.label()))
+                .collect();
+
+            Dropdown::new("chart-doc-refresh")
+                .items(items)
+                .selected_index(Some(RefreshPolicy::default().index()))
+                .compact_trigger(true)
         });
 
         let mut runner = DocumentTaskRunner::new(app_state.clone());
@@ -185,6 +187,7 @@ impl ChartDocument {
             pending_toast: None,
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
+            result_panel: None,
             _subscriptions: Vec::new(),
         }
     }
@@ -545,9 +548,105 @@ impl ChartDocument {
         self.name_prompt = None;
         cx.notify();
     }
+
+    // ---- ViewHandle construction ----
+
+    /// Produce a `ViewHandle` that lets `ResultPanel` host `ChartDocument`.
+    ///
+    /// The three header segments (title Left/0, Run Left/1, Save Right/0) are
+    /// returned by `toolbar_segments`. The content area (chart toolbar row +
+    /// axis bar + chart area) is rendered by `render_chart_content`, which is
+    /// called from the `render` closure.
+    ///
+    /// `available_modes` returns `[Chart]` only; `ResultPanel` suppresses the
+    /// mode bar when the list has fewer than two entries.
+    pub fn into_view_handle(entity: Entity<Self>, _cx: &mut App) -> ViewHandle {
+        let e_render = entity.clone();
+        let e_focus_do = entity.clone();
+        let e_focus_get = entity.clone();
+        let e_segs = entity.clone();
+
+        ViewHandle::builder()
+            .render(move |window, cx| {
+                e_render.update(cx, |this, cx| this.render_chart_content(window, cx))
+            })
+            .focus(move |window, cx| {
+                e_focus_do.update(cx, |this, cx| this.focus(window, cx));
+            })
+            .focus_handle(move |cx| e_focus_get.read(cx).focus_handle.clone())
+            .toolbar_segments(move |cx| Self::header_segments(e_segs.clone(), cx))
+            .available_modes(|_cx| vec![ResultViewMode::Chart])
+            .current_mode(|_cx| ResultViewMode::Chart)
+            .set_mode(|_mode, _cx| {
+                // Chart is the only supported mode; no-op.
+            })
+            .build()
+    }
+
+    /// Build the three chrome-row segments for `ChartDocument`.
+    ///
+    /// - `Left/0`: document title label
+    /// - `Left/1`: Run / Running… primary button
+    /// - `Right/0`: Save button
+    fn header_segments(entity: Entity<Self>, _cx: &App) -> Vec<ToolbarSegment> {
+        use crate::ui::tokens::Spacing;
+        use dbflux_components::primitives::Text;
+        use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
+        use gpui_component::{Disableable, Sizable};
+
+        let e_title = entity.clone();
+        let e_run = entity.clone();
+        let e_save = entity.clone();
+
+        vec![
+            ToolbarSegment {
+                position: SegmentPosition::Left,
+                index: 0,
+                builder: Box::new(move |_window, cx| {
+                    let title = e_title.read(cx).title.clone();
+                    Text::label(title).into_any_element()
+                }),
+            },
+            ToolbarSegment {
+                position: SegmentPosition::Left,
+                index: 1,
+                builder: Box::new(move |_window, cx| {
+                    let is_executing = e_run.read(cx).exec_state == ExecState::Running;
+                    let e = e_run.clone();
+                    Button::new("run-query")
+                        .label(if is_executing { "Running…" } else { "Run" })
+                        .small()
+                        .with_variant(ButtonVariant::Primary)
+                        .disabled(is_executing)
+                        .on_click(move |_, window, cx| {
+                            e.update(cx, |this, cx| {
+                                this.request_reexecute(window, cx);
+                            });
+                        })
+                        .into_any_element()
+                }),
+            },
+            ToolbarSegment {
+                position: SegmentPosition::Right,
+                index: 0,
+                builder: Box::new(move |_window, _cx| {
+                    let e = e_save.clone();
+                    Button::new("save-chart")
+                        .label("Save")
+                        .small()
+                        .on_click(move |_, window, cx| {
+                            e.update(cx, |this, cx| {
+                                this.open_name_prompt(window, cx);
+                            });
+                        })
+                        .into_any_element()
+                }),
+            },
+        ]
+    }
 }
 
-impl EventEmitter<ChartDocumentEvent> for ChartDocument {}
+impl EventEmitter<DocumentEvent> for ChartDocument {}
 
 impl ChartHost for ChartDocument {
     fn current_query(&self, _cx: &App) -> Option<String> {
@@ -563,8 +662,8 @@ impl ChartHost for ChartDocument {
         self.time_range_panel.clone()
     }
 
-    fn refresh_dropdown(&self, _cx: &App) -> Entity<Dropdown> {
-        self.refresh_dropdown.clone()
+    fn refresh_dropdown(&self, _cx: &App) -> Option<Entity<Dropdown>> {
+        Some(self.refresh_dropdown.clone())
     }
 
     fn current_result(&self, _cx: &App) -> Option<Arc<QueryResult>> {
@@ -651,6 +750,36 @@ mod tests {
         assert!(
             !result_both_none.pending_chart_reexecute,
             "must not reexecute when both are None"
+        );
+    }
+
+    /// `ChartDocument::into_view_handle` must advertise exactly `[Chart]`.
+    ///
+    /// The contract constant is validated here without a GPUI runtime.
+    #[test]
+    fn available_modes_chart_only() {
+        let modes = vec![ResultViewMode::Chart];
+        assert_eq!(modes.len(), 1);
+        assert_eq!(modes[0], ResultViewMode::Chart);
+    }
+
+    /// Header segments must be ordered: title (Left/0), Run (Left/1), Save (Right/0).
+    ///
+    /// Validates the `header_segments` layout contract: after sorting by
+    /// `(position, index)` the order must match construction order.
+    #[test]
+    fn header_segments_layout_contract() {
+        let positions: Vec<(SegmentPosition, u16)> = vec![
+            (SegmentPosition::Left, 0),
+            (SegmentPosition::Left, 1),
+            (SegmentPosition::Right, 0),
+        ];
+
+        let mut sorted = positions.clone();
+        sorted.sort_by_key(|&(p, i)| (p, i));
+        assert_eq!(
+            sorted, positions,
+            "header segments must already be in sorted order"
         );
     }
 

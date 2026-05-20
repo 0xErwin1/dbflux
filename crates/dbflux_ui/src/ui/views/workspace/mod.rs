@@ -20,9 +20,7 @@ use crate::keymap::{
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::components::toast::{ToastGlobal, ToastHost};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
-use crate::ui::document::{
-    CodeDocument, DataDocument, DocumentHandle, TabBar, TabBarEvent, TabManager,
-};
+use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager};
 
 #[cfg(feature = "mcp")]
 use crate::ui::document::McpApprovalsView;
@@ -238,6 +236,15 @@ pub(super) struct PendingOpenScript {
     pub exec_ctx: ExecutionContext,
 }
 
+/// Deferred routine-definition open (needs `Window` access for CodeDocument creation).
+pub(super) struct PendingOpenRoutine {
+    pub profile_id: uuid::Uuid,
+    pub schema: String,
+    pub specific_name: String,
+    pub title: String,
+    pub body: String,
+}
+
 pub struct Workspace {
     app_state: Entity<AppStateEntity>,
     sidebar: Entity<Sidebar>,
@@ -274,6 +281,7 @@ pub struct Workspace {
     pending_sql: Option<String>,
     pending_focus: Option<FocusTarget>,
     pending_open_script: Option<PendingOpenScript>,
+    pending_open_routine: Option<PendingOpenRoutine>,
     needs_focus_restore: bool,
 
     /// Active pipeline progress watcher for pipeline-enabled connects.
@@ -450,13 +458,15 @@ impl Workspace {
                     UnsavedChangesOutcome::SaveSelected(ids) => {
                         let ids = ids.clone();
                         for id in &ids {
-                            if let Some(doc) = this.tab_manager.read(cx).document(*id).cloned() {
-                                doc.dispatch_command(
-                                    crate::keymap::Command::SaveFileAs,
-                                    window,
-                                    cx,
-                                );
-                            }
+                            this.tab_manager.update(cx, |mgr, cx| {
+                                if let Some(tab) = mgr.document(*id) {
+                                    tab.dispatch_command(
+                                        crate::keymap::Command::SaveFileAs,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            });
                         }
                     }
                     UnsavedChangesOutcome::Cancelled => {}
@@ -735,6 +745,20 @@ impl Workspace {
                         modal.open(req, window, cx);
                     });
                 }
+                SidebarEvent::OpenRoutineDefinition {
+                    profile_id,
+                    schema,
+                    specific_name,
+                    title,
+                } => {
+                    this.open_routine_definition(
+                        *profile_id,
+                        schema.clone(),
+                        specific_name.clone(),
+                        title.clone(),
+                        cx,
+                    );
+                }
                 SidebarEvent::RequestTunnelAuth {
                     tunnel_id,
                     tunnel_name,
@@ -914,16 +938,20 @@ impl Workspace {
                         });
                     }
                     TabManagerEvent::Activated(new_id) => {
-                        let docs: Vec<_> = this
+                        let doc_ids: Vec<_> = this
                             .tab_manager
                             .read(cx)
                             .documents()
                             .iter()
-                            .map(|d| (d.clone(), d.id() == *new_id))
+                            .map(|d| (d.id(), d.id() == *new_id))
                             .collect();
 
-                        for (doc, is_active) in docs {
-                            doc.set_active_tab(is_active, cx);
+                        for (id, is_active) in doc_ids {
+                            this.tab_manager.update(cx, |mgr, cx| {
+                                if let Some(tab) = mgr.document(id) {
+                                    tab.set_active_tab(is_active, cx);
+                                }
+                            });
                         }
 
                         this.write_session_manifest(cx);
@@ -975,6 +1003,7 @@ impl Workspace {
             pending_sql: None,
             pending_focus: None,
             pending_open_script: None,
+            pending_open_routine: None,
             needs_focus_restore: false,
             pipeline_progress: None,
             _pipeline_subscription: None,
@@ -1264,9 +1293,9 @@ impl Workspace {
 
         // When focused on document area, delegate context to the active document
         if self.focus_target == FocusTarget::Document
-            && let Some(doc) = self.tab_manager.read(cx).active_document()
+            && let Some(tab) = self.tab_manager.read(cx).active_tab()
         {
-            return doc.active_context(cx);
+            return tab.active_context(cx);
         }
 
         self.focus_target.to_context()
@@ -1290,10 +1319,9 @@ impl Workspace {
             self.focus_handle.focus(window, cx);
         }
 
-        if target == FocusTarget::Document
-            && let Some(doc) = self.tab_manager.read(cx).active_document().cloned()
-        {
-            doc.focus(window, cx);
+        if target == FocusTarget::Document {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.focus_active(window, cx));
         }
 
         cx.notify();

@@ -18,7 +18,6 @@ use crate::ui::components::data_table::{
 use crate::ui::components::document_tree::{DocumentTree, DocumentTreeEvent, DocumentTreeState};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::PendingToast;
-use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::overlays::cell_editor_modal::{
     CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
 };
@@ -152,6 +151,10 @@ pub enum DataGridEvent {
         query: String,
         connection_id: Option<Uuid>,
     },
+    /// The grid reset its refresh policy internally (e.g. when a new query
+    /// result arrives, the policy resets to Manual). The container document
+    /// should sync the `ResultPanel`'s dropdown to reflect this.
+    RefreshPolicyReset(RefreshPolicy),
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render
@@ -329,6 +332,11 @@ pub struct DataGridPanel {
     // Async state
     runner: DocumentTaskRunner,
     refresh_policy: RefreshPolicy,
+    /// Refresh-policy dropdown, created at construction time.
+    ///
+    /// Rendered in the filter bar segment (as the chevron half of the split
+    /// button) and also in the chart toolbar. The dropdown's change events are
+    /// handled internally via a subscription set up in `new_internal`.
     refresh_dropdown: Entity<Dropdown>,
     _refresh_timer: Option<Task<()>>,
     _refresh_subscriptions: Vec<Subscription>,
@@ -386,6 +394,14 @@ pub struct DataGridPanel {
     row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
 
     export_menu_open: bool,
+
+    /// When `true`, the filter/limit/refresh-button toolbar row is suppressed
+    /// from `DataGridPanel::render` because it has been moved into the hosting
+    /// `ResultPanel`'s chrome row as a `Center` toolbar segment via `ViewHandle`.
+    ///
+    /// Set by `DataGridPanel::into_view_handle` after the `ViewHandle` is
+    /// built. Defaults to `false` (grid renders its own toolbar).
+    toolbar_in_chrome_row: bool,
 
     // Chart subsystem
     /// Lazily-created chart shell entity. Created the first time the result
@@ -692,11 +708,6 @@ impl DataGridPanel {
         let view_config = super::data_view::DataViewConfig::for_source(&source);
         let result_view_mode = ResultViewMode::Table;
 
-        let supports_auto_refresh = matches!(
-            &source,
-            DataSource::Table { .. } | DataSource::Collection { .. }
-        );
-
         let connection_id = match &source {
             DataSource::Table { profile_id, .. } => Some(*profile_id),
             DataSource::Collection { profile_id, .. } => Some(*profile_id),
@@ -708,8 +719,13 @@ impl DataGridPanel {
             .effective_settings_for_connection(connection_id)
             .resolve_refresh_policy();
 
+        let supports_auto_refresh = matches!(
+            source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        );
+
         let refresh_dropdown = cx.new(|_cx| {
-            let items = RefreshPolicy::ALL
+            let items: Vec<DropdownItem> = RefreshPolicy::ALL
                 .iter()
                 .map(|policy| DropdownItem::new(policy.label()))
                 .collect();
@@ -731,9 +747,11 @@ impl DataGridPanel {
                     this.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
-                    Toast::warning("Auto-refresh not available for query results")
-                        .meta_right(now_hms())
-                        .push(cx);
+                    crate::ui::components::toast::Toast::warning(
+                        "Auto-refresh not available for query results",
+                    )
+                    .meta_right(crate::ui::components::toast::now_hms())
+                    .push(cx);
                     return;
                 }
 
@@ -807,6 +825,7 @@ impl DataGridPanel {
             pending_document_preview: None,
             row_inspector_content: None,
             export_menu_open: false,
+            toolbar_in_chrome_row: false,
             chart_shell: None,
             chart_source_time_range_panel: None,
             pending_collection_chart_save: None,
@@ -970,6 +989,38 @@ impl DataGridPanel {
 
     pub fn result_view_mode(&self) -> ResultViewMode {
         self.result_view_mode
+    }
+
+    /// The mode currently displayed in the result view. Alias of
+    /// `result_view_mode` used by `ResultPanel` wiring in `DataDocument`.
+    pub fn current_result_view_mode(&self) -> ResultViewMode {
+        self.result_view_mode
+    }
+
+    /// Modes available for the current result shape and connection category.
+    ///
+    /// Returns an empty slice for non-QueryResult sources (table/collection
+    /// browses have no alternative views). For QueryResult sources, returns
+    /// the modes available for the shape, plus Chart when chart detection
+    /// succeeded. Independent of the currently active mode — switching to
+    /// Chart and back must not change which modes are offered.
+    pub fn available_result_view_modes(&self, cx: &App) -> Vec<ResultViewMode> {
+        if !matches!(self.source, DataSource::QueryResult { .. }) {
+            return vec![];
+        }
+
+        let mut modes = ResultViewMode::available_for_shape(&self.result.shape);
+
+        if self.chart_available(cx) && !modes.contains(&ResultViewMode::Chart) {
+            // Insert Chart after Table when chart detection succeeded.
+            if let Some(pos) = modes.iter().position(|m| *m == ResultViewMode::Table) {
+                modes.insert(pos + 1, ResultViewMode::Chart);
+            } else {
+                modes.insert(0, ResultViewMode::Chart);
+            }
+        }
+
+        modes
     }
 
     pub fn set_result_view_mode(&mut self, mode: ResultViewMode, cx: &mut Context<Self>) {
@@ -1306,9 +1357,12 @@ impl DataGridPanel {
     ) {
         self.refresh_policy = RefreshPolicy::Manual;
         self._refresh_timer = None;
+
         self.refresh_dropdown.update(cx, |dd, cx| {
             dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
         });
+
+        cx.emit(DataGridEvent::RefreshPolicyReset(RefreshPolicy::Manual));
 
         self.source = DataSource::QueryResult {
             result: result.clone(),
@@ -1853,8 +1907,12 @@ impl DataGridPanel {
     }
 
     /// Returns the refresh-policy dropdown entity.
-    pub(crate) fn chart_host_refresh_dropdown(&self, _cx: &App) -> Entity<Dropdown> {
-        self.refresh_dropdown.clone()
+    ///
+    /// The dropdown is created at construction time and lives here for the
+    /// panel's lifetime. The chart toolbar uses it so the user can change the
+    /// policy while viewing a chart.
+    pub(crate) fn chart_host_refresh_dropdown(&self, _cx: &App) -> Option<Entity<Dropdown>> {
+        Some(self.refresh_dropdown.clone())
     }
 
     /// Returns the current result as a shared `Arc<QueryResult>`.
@@ -1921,6 +1979,78 @@ impl DataGridPanel {
         if let Some(table_state) = &self.table_state {
             table_state.read(cx).scroll_to_row(row_idx);
         }
+    }
+
+    /// Build a `ViewHandle` that erases the concrete `DataGridPanel` type for
+    /// use inside a `ResultPanel`.
+    ///
+    /// After calling this method, `self.toolbar_in_chrome_row` is set to `true`
+    /// on the entity, which suppresses `DataGridPanel::render`'s own toolbar row.
+    /// The filter bar is instead exposed as a `Center/0` toolbar segment in the
+    /// returned `ViewHandle::toolbar_segments` closure.
+    ///
+    /// The returned `ViewHandle` captures a clone of `entity`. The entity must
+    /// already exist (this is called from `DataDocument::new_with_grid` after
+    /// `cx.new(|cx| DataGridPanel::new_for_table(...))`).
+    pub fn into_view_handle(
+        entity: Entity<Self>,
+        cx: &mut App,
+    ) -> dbflux_components::result_panel::ViewHandle {
+        use dbflux_components::result_panel::{SegmentPosition, ToolbarSegment, ViewHandle};
+        use render::render_filter_bar_as_segment;
+
+        // Suppress the grid's own toolbar — it moves to the chrome row.
+        entity.update(cx, |this, _| {
+            this.toolbar_in_chrome_row = true;
+        });
+
+        let e_render = entity.clone();
+        let e_focus_get = entity.clone();
+        let e_focus_do = entity.clone();
+        let e_segs = entity.clone();
+        let e_modes = entity.clone();
+        let e_current = entity.clone();
+        let e_set_mode = entity.clone();
+
+        ViewHandle::builder()
+            .render(move |_window, _cx| {
+                // Render via the GPUI AnyView path: entity.clone().into_any()
+                // produces an AnyElement that delegates to DataGridPanel::render.
+                AnyView::from(e_render.clone()).into_any()
+            })
+            .focus({
+                move |window, cx| {
+                    e_focus_do.update(cx, |grid, cx| {
+                        grid.focus_table(window, cx);
+                    });
+                }
+            })
+            .focus_handle(move |cx| e_focus_get.read(cx).focus_handle.clone())
+            .toolbar_segments(move |cx| {
+                let is_table_or_collection = matches!(
+                    e_segs.read(cx).source,
+                    DataSource::Table { .. } | DataSource::Collection { .. }
+                );
+
+                if !is_table_or_collection {
+                    return vec![];
+                }
+
+                let grid = e_segs.clone();
+                vec![ToolbarSegment {
+                    position: SegmentPosition::Center,
+                    index: 0,
+                    builder: Box::new(move |window, cx| {
+                        render_filter_bar_as_segment(&grid, window, cx)
+                    }),
+                }]
+            })
+            .available_modes(move |cx| e_modes.read(cx).available_result_view_modes(cx))
+            .current_mode(move |cx| e_current.read(cx).current_result_view_mode())
+            .set_mode(move |mode, cx| {
+                e_set_mode.update(cx, |grid, cx| grid.set_result_view_mode(mode, cx));
+            })
+            .build()
     }
 }
 

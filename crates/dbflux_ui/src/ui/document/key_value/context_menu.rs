@@ -3,7 +3,7 @@ use crate::ui::icons::AppIcon;
 use crate::ui::tokens::Heights;
 use gpui::*;
 
-use super::{KeyValueDocumentEvent, KeyValueFocusMode};
+use super::KeyValueFocusMode;
 
 pub(super) struct KvContextMenu {
     pub target: KvMenuTarget,
