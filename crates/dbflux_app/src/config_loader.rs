@@ -1815,7 +1815,8 @@ mod tests {
             save_secret: false,
         };
 
-        save_ssh_tunnels(&runtime, std::slice::from_ref(&ssh_tunnel)).expect("save ssh tunnel profile");
+        save_ssh_tunnels(&runtime, std::slice::from_ref(&ssh_tunnel))
+            .expect("save ssh tunnel profile");
 
         let mut profile = ConnectionProfile::new("pg-with-ssh", DbConfig::default_postgres());
         profile.access_kind = Some(AccessKind::Ssh {

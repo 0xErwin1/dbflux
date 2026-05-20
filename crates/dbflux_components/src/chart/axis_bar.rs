@@ -581,8 +581,10 @@ mod tests {
 
     #[test]
     fn y_label_single_column() {
-        let cols = [make_col("ts", ColumnKind::Timestamp),
-            make_col("cpu", ColumnKind::Float)];
+        let cols = [
+            make_col("ts", ColumnKind::Timestamp),
+            make_col("cpu", ColumnKind::Float),
+        ];
         let bindings = BindingSpec {
             x: 0,
             y: vec![1],
@@ -612,10 +614,12 @@ mod tests {
 
     #[test]
     fn y_label_multi_column_shows_plus_n() {
-        let cols = [make_col("ts", ColumnKind::Timestamp),
+        let cols = [
+            make_col("ts", ColumnKind::Timestamp),
             make_col("cpu", ColumnKind::Float),
             make_col("mem", ColumnKind::Float),
-            make_col("disk", ColumnKind::Float)];
+            make_col("disk", ColumnKind::Float),
+        ];
         let bindings = BindingSpec {
             x: 0,
             y: vec![1, 2, 3],
@@ -694,10 +698,12 @@ mod tests {
 
     #[test]
     fn x_candidates_include_only_numeric_and_timestamp() {
-        let cols = [make_col("ts", ColumnKind::Timestamp),
+        let cols = [
+            make_col("ts", ColumnKind::Timestamp),
             make_col("cpu", ColumnKind::Float),
             make_col("host", ColumnKind::Text),
-            make_col("seq", ColumnKind::Integer)];
+            make_col("seq", ColumnKind::Integer),
+        ];
 
         let candidates: Vec<usize> = cols
             .iter()
@@ -717,10 +723,12 @@ mod tests {
 
     #[test]
     fn y_candidates_include_only_numeric() {
-        let cols = [make_col("ts", ColumnKind::Timestamp),
+        let cols = [
+            make_col("ts", ColumnKind::Timestamp),
             make_col("cpu", ColumnKind::Float),
             make_col("host", ColumnKind::Text),
-            make_col("count", ColumnKind::Integer)];
+            make_col("count", ColumnKind::Integer),
+        ];
 
         let candidates: Vec<usize> = cols
             .iter()

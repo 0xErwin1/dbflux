@@ -1066,11 +1066,17 @@ mod tests {
         ))
         .unwrap_or_else(|error| panic!("failed to read command_palette.rs: {error}"));
 
-        source
-            .rsplit("impl Render for CommandPalette")
-            .next()
-            .map(|render_impl| format!("impl Render for CommandPalette{render_impl}"))
-            .expect("command_palette.rs should contain a render implementation")
+        // Extract only the `impl Render` body. The marker is anchored on the
+        // ` {` brace so it matches the real implementation and not the string
+        // literals inside this helper, and the slice stops at the test module
+        // so the assertions never inspect their own source text.
+        let impl_start = source
+            .find("impl Render for CommandPalette {")
+            .expect("command_palette.rs should contain a render implementation");
+        let after_impl = &source[impl_start..];
+        let render_end = after_impl.find("#[cfg(test)]").unwrap_or(after_impl.len());
+
+        after_impl[..render_end].to_string()
     }
 
     fn command_palette_overlay_source() -> String {
