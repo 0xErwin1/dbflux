@@ -85,10 +85,18 @@ impl Render for ModalDeleteConnection {
                     .gap(Spacing::SM)
                     .child(Icon::new(AppIcon::TriangleAlert).size(px(16.0)).color(theme.danger))
                     .child(
-                        Text::body(
-                            "You're about to delete the following connection. This can't be undone.",
-                        )
-                        .into_any_element(),
+                        // flex_1 + min_w_0 lets the description wrap to the
+                        // modal's width instead of overflowing past the
+                        // card edge (same pattern as the toast/banner fix).
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                Text::body(
+                                    "You're about to delete the following connection. This can't be undone.",
+                                )
+                                .into_any_element(),
+                            ),
                     ),
             )
             .child(

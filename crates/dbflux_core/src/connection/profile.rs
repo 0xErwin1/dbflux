@@ -22,6 +22,7 @@ pub enum DbKind {
     DynamoDB,
     CloudWatchLogs,
     InfluxDB,
+    SqlServer,
 }
 
 impl DbKind {
@@ -36,6 +37,7 @@ impl DbKind {
             DbKind::DynamoDB => "DynamoDB",
             DbKind::CloudWatchLogs => "CloudWatch Logs",
             DbKind::InfluxDB => "InfluxDB",
+            DbKind::SqlServer => "SQL Server",
         }
     }
 }
@@ -479,6 +481,40 @@ pub enum DbConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_timeout_seconds: Option<u64>,
     },
+    SqlServer {
+        #[serde(default)]
+        use_uri: bool,
+        #[serde(default)]
+        uri: Option<String>,
+        host: String,
+        port: u16,
+        user: String,
+        #[serde(default)]
+        database: Option<String>,
+        /// Optional named SQL Server instance (e.g. `"SQLEXPRESS"`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
+        /// SQL Server encryption mode id: `"off"`, `"on"`, or `"required"`.
+        ///
+        /// Maps to tiberius `EncryptionLevel::Off`, `EncryptionLevel::On`, and
+        /// `EncryptionLevel::Required`.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_ssl_mode_option"
+        )]
+        ssl_mode: Option<String>,
+        /// When true, the server certificate is accepted without validation
+        /// (equivalent to SqlServer's `TrustServerCertificate=true`).
+        #[serde(default)]
+        trust_server_certificate: bool,
+        /// Path to a root CA certificate (PEM/DER) for certificate validation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_root_cert_path: Option<String>,
+        ssh_tunnel: Option<SshTunnelConfig>,
+        #[serde(default)]
+        ssh_tunnel_profile_id: Option<Uuid>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -502,6 +538,7 @@ impl DbConfig {
             DbConfig::DynamoDB { .. } => DbKind::DynamoDB,
             DbConfig::CloudWatchLogs { .. } => DbKind::CloudWatchLogs,
             DbConfig::InfluxDB { .. } => DbKind::InfluxDB,
+            DbConfig::SqlServer { .. } => DbKind::SqlServer,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -612,12 +649,30 @@ impl DbConfig {
         }
     }
 
+    pub fn default_sqlserver() -> Self {
+        DbConfig::SqlServer {
+            use_uri: false,
+            uri: None,
+            host: "localhost".to_string(),
+            port: 1433,
+            user: "sa".to_string(),
+            database: None,
+            instance: None,
+            ssl_mode: Some("on".to_string()),
+            trust_server_certificate: true,
+            ssl_root_cert_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
             | DbConfig::MySQL { ssh_tunnel, .. }
             | DbConfig::MongoDB { ssh_tunnel, .. }
-            | DbConfig::Redis { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
+            | DbConfig::Redis { ssh_tunnel, .. }
+            | DbConfig::SqlServer { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
@@ -642,6 +697,10 @@ impl DbConfig {
                 ..
             }
             | DbConfig::Redis {
+                ssh_tunnel_profile_id,
+                ..
+            }
+            | DbConfig::SqlServer {
                 ssh_tunnel_profile_id,
                 ..
             } => *ssh_tunnel_profile_id,
@@ -675,6 +734,11 @@ impl DbConfig {
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
+            }
+            | DbConfig::SqlServer {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
             } => ssh_tunnel.is_some() || ssh_tunnel_profile_id.is_some(),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
@@ -690,7 +754,8 @@ impl DbConfig {
             DbConfig::Postgres { host, port, .. }
             | DbConfig::MySQL { host, port, .. }
             | DbConfig::MongoDB { host, port, .. }
-            | DbConfig::Redis { host, port, .. } => Some((host, *port)),
+            | DbConfig::Redis { host, port, .. }
+            | DbConfig::SqlServer { host, port, .. } => Some((host, *port)),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
@@ -725,6 +790,12 @@ impl DbConfig {
                 port,
                 use_uri,
                 ..
+            }
+            | DbConfig::SqlServer {
+                host,
+                port,
+                use_uri,
+                ..
             } => {
                 *host = "127.0.0.1".to_string();
                 *port = tunnel_port;
@@ -747,7 +818,8 @@ impl DbConfig {
             DbConfig::Postgres { use_uri, uri, .. }
             | DbConfig::MySQL { use_uri, uri, .. }
             | DbConfig::MongoDB { use_uri, uri, .. }
-            | DbConfig::Redis { use_uri, uri, .. } => (use_uri, uri),
+            | DbConfig::Redis { use_uri, uri, .. }
+            | DbConfig::SqlServer { use_uri, uri, .. } => (use_uri, uri),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
@@ -780,6 +852,7 @@ impl DbConfig {
             DbConfig::MySQL { database, .. } => database.clone(),
             DbConfig::MongoDB { database, .. } => database.clone(),
             DbConfig::Redis { database, .. } => database.map(|d| d.to_string()),
+            DbConfig::SqlServer { database, .. } => database.clone(),
             DbConfig::SQLite { .. } => Some("main".to_string()),
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
@@ -908,6 +981,33 @@ impl DbConfig {
                     ssh_tunnel_profile_id,
                 })
             }
+            DbConfig::SqlServer {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                instance,
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => Ok(DbConfig::SqlServer {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database: Some(database.to_string()),
+                instance,
+                ssl_mode,
+                trust_server_certificate,
+                ssl_root_cert_path,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+            }),
             _ => Err("Changing database is not supported for this database type".to_string()),
         }
     }
@@ -1194,6 +1294,7 @@ impl ConnectionProfile {
             DbKind::DynamoDB => "dynamodb",
             DbKind::CloudWatchLogs => "cloudwatch",
             DbKind::InfluxDB => "influxdb",
+            DbKind::SqlServer => "mssql",
         }
     }
 
@@ -1252,6 +1353,10 @@ impl ConnectionProfile {
                 ..
             }
             | DbConfig::Redis {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            }
+            | DbConfig::SqlServer {
                 ssh_tunnel_profile_id: Some(id),
                 ..
             } => AccessKind::Ssh {

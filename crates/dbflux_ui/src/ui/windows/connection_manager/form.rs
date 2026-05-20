@@ -308,7 +308,8 @@ impl ConnectionManagerWindow {
                 DbConfig::Postgres { ssl_mode, .. }
                 | DbConfig::MySQL { ssl_mode, .. }
                 | DbConfig::MongoDB { ssl_mode, .. }
-                | DbConfig::Redis { ssl_mode, .. } => {
+                | DbConfig::Redis { ssl_mode, .. }
+                | DbConfig::SqlServer { ssl_mode, .. } => {
                     *ssl_mode = Some(selected);
                 }
                 _ => {}
@@ -385,6 +386,11 @@ impl ConnectionManagerWindow {
                 ..
             }
             | DbConfig::Redis {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            }
+            | DbConfig::SqlServer {
                 ssh_tunnel: tunnel,
                 ssh_tunnel_profile_id: profile_id,
                 ..
@@ -680,18 +686,22 @@ impl ConnectionManagerWindow {
             })
         } else {
             let password = self.input_password.read(cx).value().to_string();
-            let _password_opt = if password.is_empty() {
+            let password_opt = if password.is_empty() {
                 None
             } else {
                 Some(SecretString::from(password))
             };
 
-            let _ssh_secret = self.get_ssh_secret(cx).map(SecretString::from);
+            let ssh_secret = self.get_ssh_secret(cx).map(SecretString::from);
 
             cx.background_executor().spawn(async move {
                 let start = std::time::Instant::now();
                 let rich = driver
-                    .test_connection_rich(&profile)
+                    .test_connection_rich_with_secrets(
+                        &profile,
+                        password_opt.as_ref(),
+                        ssh_secret.as_ref(),
+                    )
                     .map(|mut result| {
                         // Fill in RTT from wall time if the driver didn't supply it.
                         if result.rtt_ms.is_none() {

@@ -317,6 +317,144 @@ impl MySqlFixtures {
     }
 }
 
+pub struct SqlServerFixtures;
+
+impl SqlServerFixtures {
+    pub fn table_identity_pk() -> DdlTestTable {
+        DdlTestTable {
+            name: "users".to_string(),
+            create_sql: "CREATE TABLE users (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                username NVARCHAR(50) NOT NULL,
+                email NVARCHAR(100) NOT NULL,
+                created_at DATETIME2 DEFAULT SYSUTCDATETIME()
+            )"
+            .to_string(),
+        }
+    }
+
+    pub fn table_composite_pk() -> DdlTestTable {
+        DdlTestTable {
+            name: "order_items".to_string(),
+            create_sql: "CREATE TABLE order_items (
+                order_id INT NOT NULL,
+                product_id INT NOT NULL,
+                quantity INT NOT NULL DEFAULT 1,
+                price DECIMAL(10, 2) NOT NULL,
+                PRIMARY KEY (order_id, product_id)
+            )"
+            .to_string(),
+        }
+    }
+
+    pub fn table_with_fk() -> DdlTestTable {
+        DdlTestTable {
+            name: "orders".to_string(),
+            create_sql: "CREATE TABLE orders (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                user_id INT NOT NULL,
+                total DECIMAL(10, 2) NOT NULL,
+                status NVARCHAR(20) DEFAULT 'pending',
+                CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )"
+            .to_string(),
+        }
+    }
+
+    pub fn table_with_check() -> DdlTestTable {
+        DdlTestTable {
+            name: "products".to_string(),
+            create_sql: "CREATE TABLE products (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                name NVARCHAR(100) NOT NULL,
+                price DECIMAL(10, 2) NOT NULL,
+                stock INT NOT NULL DEFAULT 0,
+                CONSTRAINT positive_price CHECK (price > 0),
+                CONSTRAINT non_negative_stock CHECK (stock >= 0)
+            )"
+            .to_string(),
+        }
+    }
+
+    pub fn table_with_unique() -> DdlTestTable {
+        DdlTestTable {
+            name: "accounts".to_string(),
+            create_sql: "CREATE TABLE accounts (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                email NVARCHAR(100) NOT NULL UNIQUE,
+                username NVARCHAR(50) NOT NULL,
+                CONSTRAINT unique_username UNIQUE (username)
+            )"
+            .to_string(),
+        }
+    }
+
+    pub fn index_single_column() -> DdlTestIndex {
+        DdlTestIndex {
+            name: "idx_users_email".to_string(),
+            table: "users".to_string(),
+            create_sql: "CREATE INDEX idx_users_email ON users(email)".to_string(),
+        }
+    }
+
+    pub fn index_unique() -> DdlTestIndex {
+        DdlTestIndex {
+            name: "idx_users_username_unique".to_string(),
+            table: "users".to_string(),
+            create_sql: "CREATE UNIQUE INDEX idx_users_username_unique ON users(username)"
+                .to_string(),
+        }
+    }
+
+    pub fn index_composite() -> DdlTestIndex {
+        DdlTestIndex {
+            name: "idx_orders_user_status".to_string(),
+            table: "orders".to_string(),
+            create_sql: "CREATE INDEX idx_orders_user_status ON orders(user_id, status)"
+                .to_string(),
+        }
+    }
+
+    pub fn view_simple() -> DdlTestView {
+        DdlTestView {
+            name: "active_users".to_string(),
+            create_sql: "CREATE VIEW active_users AS
+                SELECT id, username, email
+                FROM users
+                WHERE created_at > DATEADD(DAY, -30, SYSUTCDATETIME())"
+                .to_string(),
+        }
+    }
+
+    pub fn alter_add_column() -> DdlTestScenario {
+        DdlTestScenario {
+            name: "add_column".to_string(),
+            setup_sql: vec![
+                "CREATE TABLE alter_test (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50))"
+                    .to_string(),
+            ],
+            test_sql: "ALTER TABLE alter_test ADD age INT".to_string(),
+            cleanup_sql: vec!["DROP TABLE IF EXISTS alter_test".to_string()],
+        }
+    }
+
+    pub fn alter_drop_column() -> DdlTestScenario {
+        DdlTestScenario {
+            name: "drop_column".to_string(),
+            setup_sql: vec![
+                "CREATE TABLE alter_test (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(50), age INT)"
+                    .to_string(),
+            ],
+            test_sql: "ALTER TABLE alter_test DROP COLUMN age".to_string(),
+            cleanup_sql: vec!["DROP TABLE IF EXISTS alter_test".to_string()],
+        }
+    }
+
+    // Note: no `alter_rename_column` fixture — SQL Server's rename path is
+    // `sp_rename` rather than a true `ALTER` statement, and the mssql driver
+    // declares `supports_rename_column: false` to reflect that.
+}
+
 pub struct SqliteFixtures;
 
 impl SqliteFixtures {

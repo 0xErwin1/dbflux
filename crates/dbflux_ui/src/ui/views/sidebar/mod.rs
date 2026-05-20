@@ -696,6 +696,12 @@ struct DeleteConfirmState {
     /// (each routed through `execute_delete`). `item_id`/`item_name` describe
     /// the anchor item used as the modal's primary subject for messaging.
     multi_item_ids: Vec<String>,
+    /// When true, a dedicated overlay (e.g. `ModalDeleteConnection` for
+    /// profiles, `ModalDropTable` for tables) owns the user-facing UI;
+    /// the sidebar still stores this state so `confirm_modal_delete` knows
+    /// what to delete when that overlay emits `Confirmed`, but the generic
+    /// inline confirm popup must NOT render alongside it.
+    delegated_to_modal: bool,
 }
 
 /// Borrowed snapshot of the delete confirmation modal state, used by the

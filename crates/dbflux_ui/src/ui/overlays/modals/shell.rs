@@ -154,15 +154,16 @@ impl RenderOnce for ModalShell {
 
         let close_for_overlay = close_handler.clone();
 
-        // Scrim / overlay backdrop.
+        // Scrim / overlay backdrop. Center the card on both axes so it
+        // sits in the middle of the viewport instead of anchored to the
+        // top (which made it feel off-screen on tall windows).
         div()
             .absolute()
             .inset_0()
             .bg(overlay_bg(theme))
             .flex()
             .justify_center()
-            .items_start()
-            .pt(px(80.0))
+            .items_center()
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 if let Some(ref handler) = close_for_overlay {
                     (handler)(window, cx);

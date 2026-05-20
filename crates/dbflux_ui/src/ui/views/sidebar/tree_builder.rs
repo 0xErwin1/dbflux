@@ -851,10 +851,11 @@ impl Sidebar {
                 .tables
                 .iter()
                 .map(|table| {
+                    let item_schema = table.schema.as_deref().unwrap_or(schema_name);
                     Self::build_table_item(
                         profile_id,
                         target_database,
-                        schema_name,
+                        item_schema,
                         table,
                         table_details,
                         dependents_cache,
@@ -881,11 +882,12 @@ impl Sidebar {
                 .views
                 .iter()
                 .map(|view| {
+                    let item_schema = view.schema.as_deref().unwrap_or(schema_name);
                     TreeItem::new(
                         SchemaNodeId::View {
                             profile_id,
                             database: target_database.map(str::to_string),
-                            schema: schema_name.to_string(),
+                            schema: item_schema.to_string(),
                             name: view.name.clone(),
                         }
                         .to_string(),
@@ -927,7 +929,10 @@ impl Sidebar {
             if !types.is_empty() {
                 let type_children: Vec<TreeItem> = types
                     .iter()
-                    .map(|t| Self::build_custom_type_item(profile_id, schema_name, t))
+                    .map(|t| {
+                        let item_schema = t.schema.as_deref().unwrap_or(schema_name);
+                        Self::build_custom_type_item(profile_id, item_schema, t)
+                    })
                     .collect();
 
                 content.push(
@@ -1509,7 +1514,8 @@ fn format_collection_index_label(idx: &CollectionIndexInfo) -> String {
 mod tests {
     use super::Sidebar;
     use dbflux_core::{
-        CollectionChildInfo, CollectionChildrenCache, CollectionPresentation, FieldInfo, TableInfo,
+        CollectionChildInfo, CollectionChildrenCache, CollectionPresentation, CustomTypeInfo,
+        FieldInfo, TableInfo,
     };
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -1687,5 +1693,135 @@ mod tests {
 
         let result = Sidebar::build_time_series_db_content(profile_id, "empty_bucket", &schema);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn build_db_schema_content_uses_per_table_schema_when_present() {
+        use dbflux_core::{CustomTypeKind, DbSchemaInfo, SchemaNodeId, SchemaNodeKind, ViewInfo};
+
+        let profile_id = Uuid::new_v4();
+        let db_schema = DbSchemaInfo {
+            name: "dbflux_test".to_string(),
+            tables: vec![
+                TableInfo {
+                    name: "customers".to_string(),
+                    schema: Some("sales".to_string()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                },
+                TableInfo {
+                    name: "employees".to_string(),
+                    schema: Some("hr".to_string()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                },
+                TableInfo {
+                    name: "fallback".to_string(),
+                    schema: None,
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                },
+            ],
+            views: vec![ViewInfo {
+                name: "active_customers".to_string(),
+                schema: Some("sales".to_string()),
+            }],
+            custom_types: Some(vec![
+                CustomTypeInfo {
+                    name: "address".to_string(),
+                    schema: Some("sales".to_string()),
+                    kind: CustomTypeKind::Composite,
+                    enum_values: None,
+                    base_type: None,
+                },
+                CustomTypeInfo {
+                    name: "tier".to_string(),
+                    schema: None,
+                    kind: CustomTypeKind::Domain,
+                    enum_values: None,
+                    base_type: Some("varchar(32)".to_string()),
+                },
+            ]),
+        };
+
+        let content = Sidebar::build_db_schema_content(
+            profile_id,
+            "dbflux_test",
+            Some("dbflux_test"),
+            &db_schema,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+
+        let tables_folder = content
+            .iter()
+            .find(|item| item.label.as_ref().starts_with("Tables"))
+            .expect("Tables folder present");
+        assert_eq!(tables_folder.children.len(), 3);
+
+        let expected_schemas = ["sales", "hr", "dbflux_test"];
+        for (child, want) in tables_folder.children.iter().zip(expected_schemas.iter()) {
+            let id: SchemaNodeId = child.id.as_ref().parse().expect("table id parses");
+            assert_eq!(id.kind(), SchemaNodeKind::Table);
+            match id {
+                SchemaNodeId::Table { schema, .. } => assert_eq!(schema, *want),
+                _ => unreachable!(),
+            }
+        }
+
+        let views_folder = content
+            .iter()
+            .find(|item| item.label.as_ref().starts_with("Views"))
+            .expect("Views folder present");
+        assert_eq!(views_folder.children.len(), 1);
+        let view_id: SchemaNodeId = views_folder.children[0]
+            .id
+            .as_ref()
+            .parse()
+            .expect("view id parses");
+        match view_id {
+            SchemaNodeId::View { schema, name, .. } => {
+                assert_eq!(schema, "sales");
+                assert_eq!(name, "active_customers");
+            }
+            _ => panic!("expected View variant"),
+        }
+
+        let types_folder = content
+            .iter()
+            .find(|item| item.label.as_ref().starts_with("Data Types"))
+            .expect("Data Types folder present");
+        assert_eq!(types_folder.children.len(), 2);
+
+        let expected_type_schemas = ["sales", "dbflux_test"];
+        for (child, want) in types_folder
+            .children
+            .iter()
+            .zip(expected_type_schemas.iter())
+        {
+            let id: SchemaNodeId = child.id.as_ref().parse().expect("type id parses");
+            match id {
+                SchemaNodeId::CustomType { schema, .. } => assert_eq!(schema, *want),
+                _ => panic!("expected CustomType variant"),
+            }
+        }
     }
 }
