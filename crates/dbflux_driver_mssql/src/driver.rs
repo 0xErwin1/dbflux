@@ -51,7 +51,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::TRANSACTIONAL_DDL.bits()
-            | DriverCapabilities::ROUTINES.bits(),
+            | DriverCapabilities::ROUTINES.bits()
+            | DriverCapabilities::MULTI_STATEMENT.bits(),
     ),
     default_port: Some(1433),
     uri_scheme: "sqlserver".into(),

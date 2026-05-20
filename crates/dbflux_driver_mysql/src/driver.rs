@@ -44,7 +44,8 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::FOREIGN_KEYS.bits()
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
-            | DriverCapabilities::ROUTINES.bits(),
+            | DriverCapabilities::ROUTINES.bits()
+            | DriverCapabilities::MULTI_STATEMENT.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
@@ -194,7 +195,8 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::FOREIGN_KEYS.bits()
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
-            | DriverCapabilities::ROUTINES.bits(),
+            | DriverCapabilities::ROUTINES.bits()
+            | DriverCapabilities::MULTI_STATEMENT.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mariadb".into(),
@@ -1687,89 +1689,31 @@ impl Connection for MysqlConnection {
             state.current_database = Some(db.clone());
         }
 
-        // Prepare the statement to get column metadata
-        let stmt = state
-            .conn
-            .prep(&req.sql)
-            .map_err(|e| format_mysql_query_error(&e))?;
-
-        // Extract column metadata from the prepared statement
-        let columns: Vec<ColumnMeta> = stmt
-            .columns()
-            .iter()
-            .map(|col| ColumnMeta {
-                name: col.name_str().to_string(),
-                type_name: mysql_type_to_sql_label(col),
-                kind: mysql_type_to_kind(col.column_type()),
-                nullable: true,
-                is_primary_key: false,
-            })
-            .collect();
-
-        // Execute the prepared statement
-        let result: Result<Vec<mysql::Row>, mysql::Error> = state.conn.exec(&stmt, ());
-
-        let query_time = start.elapsed();
-
-        match result {
-            Ok(rows) => {
-                if rows.is_empty() {
-                    // Check if it was a SELECT that returned 0 rows vs an INSERT/UPDATE
-                    let sql_upper = req.sql.trim().to_uppercase();
-                    if sql_upper.starts_with("SELECT")
-                        || sql_upper.starts_with("SHOW")
-                        || sql_upper.starts_with("DESCRIBE")
-                    {
-                        log::debug!(
-                            "[QUERY] Completed in {:.2}ms, 0 rows",
-                            query_time.as_secs_f64() * 1000.0
-                        );
-                        return Ok(QueryResult::table(columns, Vec::new(), None, query_time));
-                    } else {
-                        // Non-SELECT query, get affected rows from conn
-                        let affected = state.conn.affected_rows();
-                        log::debug!(
-                            "[QUERY] Completed in {:.2}ms, {} rows affected",
-                            query_time.as_secs_f64() * 1000.0,
-                            affected
-                        );
-                        return Ok(QueryResult::table(
-                            columns,
-                            Vec::new(),
-                            Some(affected),
-                            query_time,
-                        ));
-                    }
-                }
-
-                // Convert rows
-                let result_rows: Vec<Row> = rows
-                    .iter()
-                    .map(|row| {
-                        let row_cols = row.columns_ref();
-                        row_cols
-                            .iter()
-                            .enumerate()
-                            .map(|(i, col)| mysql_value_to_value(row, i, col))
-                            .collect()
-                    })
-                    .collect();
-
-                log::debug!(
-                    "[QUERY] Completed in {:.2}ms, {} rows",
-                    query_time.as_secs_f64() * 1000.0,
-                    result_rows.len()
-                );
-
-                Ok(QueryResult::table(columns, result_rows, None, query_time))
+        // The mysql prepared-statement protocol rejects a batch with more than
+        // one command, so a script must be split and run statement by
+        // statement, each through the typed prepared path. Each statement
+        // becomes a result set; the first is primary and the rest are attached
+        // as additional results.
+        let statements = QueryLanguage::Sql.split_statements(&req.sql);
+        if statements.len() > 1 {
+            let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
+            for statement in &statements {
+                result_sets.push(mysql_execute_one_statement(
+                    &mut state.conn,
+                    statement,
+                    start,
+                    &self.cancelled,
+                )?);
             }
-            Err(e) => {
-                if self.cancelled.load(Ordering::SeqCst) {
-                    return Err(DbError::Cancelled);
-                }
-                Err(format_mysql_query_error(&e))
+
+            let mut primary = result_sets.remove(0);
+            for extra in result_sets {
+                primary.push_additional_result(extra);
             }
+            return Ok(primary);
         }
+
+        mysql_execute_one_statement(&mut state.conn, &req.sql, start, &self.cancelled)
     }
 
     fn cancel_active(&self) -> Result<(), DbError> {
@@ -2610,6 +2554,100 @@ impl ConnectionExt for MysqlConnection {
 
     fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
         None
+    }
+}
+
+/// Executes a single MySQL statement and returns its result set.
+///
+/// SELECT/SHOW/DESCRIBE statements return rows; everything else reports the
+/// affected-row count. This is the per-statement unit used both for a lone
+/// query and for each statement of a multi-statement batch (a script), since
+/// the prepared-statement protocol rejects multi-command batches.
+fn mysql_execute_one_statement(
+    conn: &mut Conn,
+    sql: &str,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    // Prepare the statement to get column metadata
+    let stmt = conn.prep(sql).map_err(|e| format_mysql_query_error(&e))?;
+
+    // Extract column metadata from the prepared statement
+    let columns: Vec<ColumnMeta> = stmt
+        .columns()
+        .iter()
+        .map(|col| ColumnMeta {
+            name: col.name_str().to_string(),
+            type_name: mysql_type_to_sql_label(col),
+            kind: mysql_type_to_kind(col.column_type()),
+            nullable: true,
+            is_primary_key: false,
+        })
+        .collect();
+
+    // Execute the prepared statement
+    let result: Result<Vec<mysql::Row>, mysql::Error> = conn.exec(&stmt, ());
+
+    let query_time = start.elapsed();
+
+    match result {
+        Ok(rows) => {
+            if rows.is_empty() {
+                // Check if it was a SELECT that returned 0 rows vs an INSERT/UPDATE
+                let sql_upper = sql.trim().to_uppercase();
+                if sql_upper.starts_with("SELECT")
+                    || sql_upper.starts_with("SHOW")
+                    || sql_upper.starts_with("DESCRIBE")
+                {
+                    log::debug!(
+                        "[QUERY] Completed in {:.2}ms, 0 rows",
+                        query_time.as_secs_f64() * 1000.0
+                    );
+                    return Ok(QueryResult::table(columns, Vec::new(), None, query_time));
+                } else {
+                    // Non-SELECT query, get affected rows from conn
+                    let affected = conn.affected_rows();
+                    log::debug!(
+                        "[QUERY] Completed in {:.2}ms, {} rows affected",
+                        query_time.as_secs_f64() * 1000.0,
+                        affected
+                    );
+                    return Ok(QueryResult::table(
+                        columns,
+                        Vec::new(),
+                        Some(affected),
+                        query_time,
+                    ));
+                }
+            }
+
+            // Convert rows
+            let result_rows: Vec<Row> = rows
+                .iter()
+                .map(|row| {
+                    let row_cols = row.columns_ref();
+                    row_cols
+                        .iter()
+                        .enumerate()
+                        .map(|(i, col)| mysql_value_to_value(row, i, col))
+                        .collect()
+                })
+                .collect();
+
+            log::debug!(
+                "[QUERY] Completed in {:.2}ms, {} rows",
+                query_time.as_secs_f64() * 1000.0,
+                result_rows.len()
+            );
+
+            Ok(QueryResult::table(columns, result_rows, None, query_time))
+        }
+        Err(e) => {
+            if cancelled.load(Ordering::SeqCst) {
+                return Err(DbError::Cancelled);
+            }
+            Err(format_mysql_query_error(&e))
+        }
     }
 }
 

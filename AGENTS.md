@@ -14,16 +14,16 @@ For the branching model, version rules, tag flow, and release procedure, use `do
 
 ```bash
 cargo check --workspace              # Fast type checking
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,aws  # Debug build
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,aws --release  # Release build
-cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,aws    # Run app
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,mssql,aws  # Debug build
+cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,mssql,aws --release  # Release build
+cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,mssql,aws    # Run app
 
 # MCP server (AI integration) - included by default
 cargo build -p dbflux  # MCP included in default features
 ./target/debug/dbflux mcp --client-id test-client
 
 # Build without MCP support (smaller binary, no AI integration)
-cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,lua,aws
+cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,mssql,lua,aws
 
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint
@@ -495,6 +495,7 @@ MCP provides a preview-before-execute workflow for schema changes:
 - PostgreSQL: All DDL is transactional (except `CREATE INDEX CONCURRENTLY`)
 - MySQL: DDL is NOT transactional; rewrites entire table for most `ALTER TABLE` ops
 - SQLite: Limited `ALTER TABLE` support (only `ADD COLUMN`, `RENAME`); `DROP COLUMN` requires table recreation
+- SQL Server (MSSQL): DDL is transactional (can run inside a transaction and roll back)
 
 **Reference**: See `crates/dbflux_mcp_server/docs/DDL_SAFETY.md` for complete safety guide with classification matrix.
 
