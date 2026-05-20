@@ -32,6 +32,29 @@ fn parse_source_datetime_input(value: &str) -> Option<i64> {
         .map(|dt| dt.timestamp_millis())
 }
 
+/// Resolve which query-mode value the Syntax dropdown should show when the
+/// context bar re-syncs, preserving a user's in-progress choice.
+///
+/// Precedence: a mode committed in the execution context, then the mode
+/// currently shown in the dropdown, then the spec default. The preferred value
+/// is only kept when the current spec still offers it (`available`); otherwise
+/// it falls back to the spec default. This is what prevents an `AppStateChanged`
+/// event from resetting a freshly-picked Flux selection back to the spec default
+/// (InfluxQL on InfluxDB v2).
+fn resolve_query_mode_selection(
+    committed: Option<&str>,
+    current_dropdown: Option<&str>,
+    available: &[String],
+    spec_default: Option<&str>,
+) -> Option<String> {
+    let preferred = committed.or(current_dropdown);
+
+    preferred
+        .filter(|mode| available.iter().any(|candidate| candidate == mode))
+        .map(|mode| mode.to_string())
+        .or_else(|| spec_default.map(|mode| mode.to_string()))
+}
+
 impl CodeDocument {
     // === Context dropdown creation ===
 
@@ -96,19 +119,26 @@ impl CodeDocument {
         })
     }
 
-    fn update_completion_provider(&mut self, cx: &mut Context<Self>) {
+    /// Re-bind the editor to the effective query language: completion provider
+    /// and syntax highlighter. Called whenever the language can change (Syntax
+    /// dropdown, connection change), so switching to e.g. Flux drops the SQL
+    /// grammar (and, via run_diagnostics, the SQL squiggles) instead of keeping
+    /// the document's initial language.
+    fn sync_editor_language(&mut self, cx: &mut Context<Self>) {
         let connection_id = self
             .connection_id
             .filter(|id| self.app_state.read(cx).connections().contains_key(id));
 
         let query_language = self.effective_query_language(cx);
+        let editor_mode = query_language.editor_mode();
 
         let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
             QueryCompletionProvider::new(query_language, self.app_state.clone(), connection_id),
         );
 
-        self.input_state.update(cx, |state, _cx| {
+        self.input_state.update(cx, |state, cx| {
             state.lsp.completion_provider = Some(completion_provider);
+            state.set_highlighter(editor_mode, cx);
         });
     }
 
@@ -136,7 +166,7 @@ impl CodeDocument {
             .or_else(|| spec.query_modes.first().map(|mode| mode.value.clone()))
     }
 
-    fn effective_query_language(&self, cx: &App) -> QueryLanguage {
+    pub(super) fn effective_query_language(&self, cx: &App) -> QueryLanguage {
         let Some(spec) = self.current_source_context_spec(cx) else {
             return self.query_language.clone();
         };
@@ -241,13 +271,17 @@ impl CodeDocument {
         let start_blank = self.source_start_input.read(cx).value().trim().is_empty();
         let end_blank = self.source_end_input.read(cx).value().trim().is_empty();
 
-        if start_blank
-            && end_blank
-            && matches!(
-                self.exec_ctx.source,
-                Some(ExecutionSourceContext::CollectionWindow { .. })
-            )
-        {
+        if start_blank && end_blank {
+            // Time bounds not entered yet: keep any existing window, but sync its
+            // query_mode with the dropdown so switching syntax (e.g. to Flux) is
+            // not lost while waiting for a time range. Without this, the stored
+            // mode stays stale and the query is routed with the old language.
+            let mode = self.current_source_query_mode_value(cx);
+            if let Some(ExecutionSourceContext::CollectionWindow { query_mode, .. }) =
+                self.exec_ctx.source.as_mut()
+            {
+                *query_mode = mode;
+            }
             return;
         }
 
@@ -287,18 +321,36 @@ impl CodeDocument {
             })
             .unwrap_or_default();
 
-        let selected_query_mode = match self.exec_ctx.source.as_ref() {
-            Some(ExecutionSourceContext::CollectionWindow { query_mode, .. }) => {
-                query_mode.clone().or_else(|| {
-                    source_spec
-                        .as_ref()
-                        .and_then(|spec| spec.default_query_mode.clone())
-                })
-            }
-            None => source_spec
-                .as_ref()
-                .and_then(|spec| spec.default_query_mode.clone()),
+        // Preserve the syntax the user already picked. An AppStateChanged event
+        // (schema reload, another connection changing state, etc.) must not
+        // silently reset the dropdown to the spec default — which is what
+        // happened to Flux on InfluxDB v2, whose default mode is InfluxQL.
+        let current_dropdown_mode = self
+            .source_query_mode_dropdown
+            .read(cx)
+            .selected_value()
+            .map(|value| value.to_string());
+
+        let committed_mode = match self.exec_ctx.source.as_ref() {
+            Some(ExecutionSourceContext::CollectionWindow { query_mode, .. }) => query_mode.clone(),
+            None => None,
         };
+
+        let available_modes: Vec<String> = query_mode_items
+            .iter()
+            .map(|item| item.value.to_string())
+            .collect();
+
+        let spec_default = source_spec
+            .as_ref()
+            .and_then(|spec| spec.default_query_mode.clone());
+
+        let selected_query_mode = resolve_query_mode_selection(
+            committed_mode.as_deref(),
+            current_dropdown_mode.as_deref(),
+            &available_modes,
+            spec_default.as_deref(),
+        );
 
         let selected_query_mode_index = selected_query_mode.as_ref().and_then(|selected| {
             query_mode_items
@@ -343,7 +395,7 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) {
         self.sync_source_exec_context(cx);
-        self.update_completion_provider(cx);
+        self.sync_editor_language(cx);
         self.schedule_diagnostic_refresh(cx);
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
@@ -516,7 +568,7 @@ impl CodeDocument {
         }
 
         self.sync_source_controls(cx);
-        self.update_completion_provider(cx);
+        self.sync_editor_language(cx);
 
         if did_change {
             cx.emit(DocumentEvent::MetaChanged);
@@ -1438,9 +1490,51 @@ mod tests {
     use super::{
         ContextBarSlot, SqlQueryFocus, build_source_window_context, context_dropdown_min_width,
         context_slot_is_keyboard_focused, parse_source_datetime_input,
+        resolve_query_mode_selection,
     };
     use dbflux_core::ExecutionSourceContext;
     use gpui::px;
+
+    #[test]
+    fn query_mode_selection_prefers_committed_then_dropdown() {
+        let available = vec!["influxql".to_string(), "flux".to_string()];
+
+        // A committed mode wins over the dropdown and the default.
+        assert_eq!(
+            resolve_query_mode_selection(
+                Some("flux"),
+                Some("influxql"),
+                &available,
+                Some("influxql")
+            ),
+            Some("flux".to_string())
+        );
+
+        // No committed mode: the current dropdown choice is preserved over the
+        // default — this is the AppStateChanged reset the fix prevents.
+        assert_eq!(
+            resolve_query_mode_selection(None, Some("flux"), &available, Some("influxql")),
+            Some("flux".to_string())
+        );
+    }
+
+    #[test]
+    fn query_mode_selection_falls_back_to_default() {
+        let available = vec!["influxql".to_string(), "flux".to_string()];
+
+        // Nothing committed and nothing in the dropdown: use the spec default.
+        assert_eq!(
+            resolve_query_mode_selection(None, None, &available, Some("influxql")),
+            Some("influxql".to_string())
+        );
+
+        // A preferred mode the current spec no longer offers falls back to the
+        // default rather than selecting an absent value.
+        assert_eq!(
+            resolve_query_mode_selection(Some("sql"), None, &available, Some("influxql")),
+            Some("influxql".to_string())
+        );
+    }
 
     #[test]
     fn connection_dropdown_keeps_widest_shell() {
