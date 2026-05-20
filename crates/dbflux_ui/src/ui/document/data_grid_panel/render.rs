@@ -1275,6 +1275,7 @@ impl DataGridPanel {
 
         // Capture clones for the handlers before borrowing self mutably.
         let shell_for_stats = chart_shell.clone();
+        let shell_for_kind = chart_shell.clone();
         let time_range_panel_for_preset = self.chart_source_time_range_panel.clone();
 
         let ctx = ChartToolbarContext {
@@ -1326,6 +1327,9 @@ impl DataGridPanel {
                         this.open_collection_chart_save(window, cx);
                     });
                 }
+            }),
+            on_select_chart_kind: Arc::new(move |kind, _window, cx| {
+                shell_for_kind.update(cx, |s, cx| s.set_chart_kind(kind, cx));
             }),
         };
 

@@ -3,10 +3,8 @@
 use dbflux_core::ColumnKind;
 use serde::{Deserialize, Serialize};
 
-/// Extension seam for chart kinds.
-///
-/// Only `Line` is fully implemented in v0.6. `Bar` and `Scatter` are declared
-/// here so the next change is purely additive.
+/// Chart rendering kinds. `Line`, `Bar`, and `Scatter` are all fully
+/// implemented and share the same kind-agnostic render model.
 ///
 /// `#[serde(default)]` on the containing `ChartSpec.kind` field ensures that
 /// existing serialized `ChartSpec` JSON without a `kind` key deserializes to
@@ -17,6 +15,17 @@ pub enum ChartKind {
     Line,
     Bar,
     Scatter,
+    /// Filled line chart: the area between the series line and the baseline is
+    /// shaded. Shares all of Line's geometry and hover behaviour.
+    Area,
+    /// Stacked vertical bars: each X position shows one bar per series,
+    /// stacked cumulatively rather than grouped side-by-side. The Y axis is
+    /// re-scaled at render time to the maximum stack sum, since the precomputed
+    /// `RenderModel.y_max` reflects individual-series maxima only.
+    StackedBar,
+    /// Pie chart: no X/Y axes; each visible series becomes one wedge sized by
+    /// the sum of that series' Y values. Focus by angle from the pie centre.
+    Pie,
 }
 
 /// Axis classification used to pick the appropriate tick and label format.
@@ -389,16 +398,34 @@ mod tests {
         assert_eq!(b.aggregation, AggKind::None);
     }
 
-    // Seam preservation: these references ensure ChartKind::Bar, ChartKind::Scatter,
-    // and AggKind remain reachable and cannot silently disappear.
+    // Seam preservation: these references ensure ChartKind variants remain
+    // reachable and cannot silently disappear across refactors.
     #[test]
-    fn seam_chart_kind_bar_and_scatter_are_reachable() {
-        // This test exists solely so the compiler will catch removal of these variants.
+    fn seam_chart_kind_all_variants_are_reachable() {
+        // This test exists solely so the compiler will catch removal of variants.
         let _bar = ChartKind::Bar;
         let _scatter = ChartKind::Scatter;
+        let _area = ChartKind::Area;
+        let _stacked = ChartKind::StackedBar;
+        let _pie = ChartKind::Pie;
         assert_ne!(ChartKind::Bar, ChartKind::Line);
         assert_ne!(ChartKind::Scatter, ChartKind::Line);
+        assert_ne!(ChartKind::Area, ChartKind::Line);
+        assert_ne!(ChartKind::StackedBar, ChartKind::Line);
+        assert_ne!(ChartKind::Pie, ChartKind::Line);
         assert_ne!(ChartKind::Bar, ChartKind::Scatter);
+    }
+
+    #[test]
+    fn chart_kind_serde_round_trip_new_variants() {
+        // Verify that StackedBar and Pie survive a JSON round-trip so persisted
+        // ChartSpec documents can be read back after these variants are added.
+        let kinds = [ChartKind::Area, ChartKind::StackedBar, ChartKind::Pie];
+        for kind in kinds {
+            let json = serde_json::to_string(&kind).expect("serialize");
+            let back: ChartKind = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(kind, back, "round-trip failed for {:?}", kind);
+        }
     }
 
     // ---------------------------------------------------------------------------
