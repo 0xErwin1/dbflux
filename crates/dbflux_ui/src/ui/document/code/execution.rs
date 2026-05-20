@@ -123,6 +123,9 @@ impl CodeDocument {
     }
 
     pub fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         if !self.query_language.supports_connection_context() {
             self.run_script(window, cx);
             return;
@@ -1226,6 +1229,9 @@ impl CodeDocument {
     }
 
     pub fn run_query_in_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         if !self.query_language.supports_connection_context() {
             self.run_script(window, cx);
             return;

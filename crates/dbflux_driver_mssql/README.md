@@ -72,6 +72,10 @@ Microsoft SQL Server driver for DBFlux, built on the
 - User-defined types (`sys.types where is_user_defined = 1`) classified as
   `Domain` (alias types) or `Composite` (table types).
 - `view_details()` verifies the view exists in the requested database.
+- **Routines:** stored procedures (`P`), scalar functions (`FN`), inline
+  table-valued functions (`IF`), multi-statement table-valued functions (`TF`),
+  and CLR aggregates (`AF`) are listed per schema via `sys.objects`. Source
+  definitions are fetched with `OBJECT_DEFINITION(object_id)`.
 
 ### CRUD with OUTPUT
 
@@ -200,3 +204,11 @@ Microsoft SQL Server driver for DBFlux, built on the
 - Schema introspection uses the `sys.*` catalog views; users without the
   default `VIEW DEFINITION` permission will see partial metadata. SQL
   Server's metadata visibility rules apply.
+- CLR routines (CLR scalar functions, CLR table-valued functions, CLR stored
+  procedures) and any routine created with `ENCRYPTION` return `NULL` from
+  `OBJECT_DEFINITION`, in which case the driver surfaces a short fallback
+  message rather than an error.
+- `parameter_types` is not populated for routines; `sys.parameters` is not
+  queried in this implementation.
+- SQL Server has no `Window` function kind in the `sys.objects.type` taxonomy;
+  `RoutineKind::Window` is never emitted by this driver.

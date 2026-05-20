@@ -7,12 +7,16 @@
 - Supports authentication, SSL, SSH tunneling, and URI/manual connection modes.
 - Supports query cancellation through a dedicated cancel path (`KILL QUERY` flow).
 - Includes SQL/code generation for CRUD, indexes, foreign keys, and table DDL operations.
+- Routine discovery: lists stored procedures and user-defined functions from `information_schema.ROUTINES` including parameter types and return type hints (Functions only).
+- Routine definition: retrieves the full `CREATE FUNCTION` or `CREATE PROCEDURE` body via `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` (read-only; definition is not editable or executable in the viewer).
 
 ## Limitations
 
 - SQL-only driver; it does not expose document or key-value APIs.
 - Cancellation depends on server permissions and connection state when `KILL QUERY` is issued.
 - Code generation is scoped to supported MySQL/MariaDB constructs; unsupported generator IDs return `NotSupported`.
+- Routine listing covers only FUNCTION and PROCEDURE types. MySQL aggregate functions (registered via `CREATE AGGREGATE FUNCTION` UDF plugin) and window functions are not surfaced in `information_schema.ROUTINES` and are therefore not listed.
+- `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` requires the `SHOW_ROUTINE` privilege (MySQL 8.0+) or ownership of the routine; without sufficient privileges the definition column returns `NULL` and the viewer displays a notice instead of the source.
 
 ## DDL Capabilities
 

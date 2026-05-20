@@ -19,14 +19,14 @@ use dbflux_core::{
     IndexInfo, IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn,
     POSTGRES_FORM, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
     QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    ReindexRequest, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
-    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
-    TableInfo, TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator,
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
-    sanitize_uri,
+    ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
+    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
+    SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, TypeDefinition, Value,
+    ViewInfo, WhereOperator, generate_create_table, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    render_semantic_filter_sql, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -55,7 +55,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
             | DriverCapabilities::CUSTOM_TYPES.bits()
             | DriverCapabilities::RETURNING.bits()
-            | DriverCapabilities::TRANSACTIONAL_DDL.bits(),
+            | DriverCapabilities::TRANSACTIONAL_DDL.bits()
+            | DriverCapabilities::ROUTINES.bits(),
     ),
     default_port: Some(5432),
     uri_scheme: "postgresql".into(),
@@ -1657,6 +1658,7 @@ impl Connection for PostgresConnection {
             | SchemaFeatures::CHECK_CONSTRAINTS
             | SchemaFeatures::UNIQUE_CONSTRAINTS
             | SchemaFeatures::CUSTOM_TYPES
+            | SchemaFeatures::FUNCTIONS
     }
 
     fn schema_types(
@@ -1702,6 +1704,106 @@ impl Connection for PostgresConnection {
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
         get_schema_foreign_keys(&mut client, schema_name)
+    }
+
+    fn schema_routines(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<RoutineInfo>, DbError> {
+        let schema_name = schema.unwrap_or("public");
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+        get_schema_routines(&mut client, schema_name)
+    }
+
+    fn routine_definition(
+        &self,
+        _database: &str,
+        schema: &str,
+        specific_name: &str,
+    ) -> Result<String, DbError> {
+        // Parse out the bare name and the identity arguments from specific_name.
+        // specific_name is formatted as "name(identity_args)", e.g. "add(integer, integer)".
+        let (bare_name, identity_args) = if let Some(paren_pos) = specific_name.find('(') {
+            let name = &specific_name[..paren_pos];
+            let args = specific_name
+                .get(paren_pos + 1..specific_name.len().saturating_sub(1))
+                .unwrap_or("");
+            (name, args)
+        } else {
+            (specific_name, "")
+        };
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+        // First look up the prokind so we can synthesize a body for aggregates/windows
+        // instead of calling pg_get_functiondef (which errors for those kinds).
+        let kind_rows = client
+            .query(
+                r#"
+                SELECT p.prokind::char AS prokind
+                FROM pg_catalog.pg_proc p
+                JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = $1
+                  AND p.proname = $2
+                  AND pg_catalog.pg_get_function_identity_arguments(p.oid) = $3
+                "#,
+                &[&schema, &bare_name, &identity_args],
+            )
+            .map_err(|e| format_pg_query_error(&e))?;
+
+        let prokind_char = kind_rows
+            .first()
+            .and_then(|r| {
+                let s: &str = r.get("prokind");
+                s.chars().next()
+            })
+            .unwrap_or('f');
+
+        // Aggregate and window functions cannot be described via pg_get_functiondef.
+        if prokind_char == 'a' || prokind_char == 'w' {
+            let kind_label = if prokind_char == 'a' {
+                "aggregate"
+            } else {
+                "window"
+            };
+            return Ok(format!(
+                "-- {} {}\n-- Source definition not available via pg_get_functiondef for {} functions.\n",
+                kind_label, specific_name, kind_label,
+            ));
+        }
+
+        let def_rows = client
+            .query(
+                r#"
+                SELECT pg_catalog.pg_get_functiondef(p.oid) AS definition
+                FROM pg_catalog.pg_proc p
+                JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = $1
+                  AND p.proname = $2
+                  AND pg_catalog.pg_get_function_identity_arguments(p.oid) = $3
+                "#,
+                &[&schema, &bare_name, &identity_args],
+            )
+            .map_err(|e| format_pg_query_error(&e))?;
+
+        if let Some(row) = def_rows.first() {
+            let definition: String = row.get("definition");
+            Ok(definition)
+        } else {
+            Ok(format!(
+                "-- Routine {} not found in schema {}.\n",
+                specific_name, schema
+            ))
+        }
     }
 
     fn fetch_dependents(
@@ -3811,11 +3913,81 @@ pub fn fetch_dependents(
     Ok(deps)
 }
 
+/// Map PostgreSQL `pg_proc.prokind` to `RoutineKind`.
+///
+/// Returns `None` for prokind values that are excluded from the routines folder
+/// (e.g. trigger functions with prokind = 't').
+fn prokind_to_routine_kind(prokind: char) -> Option<RoutineKind> {
+    match prokind {
+        'f' => Some(RoutineKind::Function),
+        'p' => Some(RoutineKind::Procedure),
+        'a' => Some(RoutineKind::Aggregate),
+        'w' => Some(RoutineKind::Window),
+        _ => None,
+    }
+}
+
+fn get_schema_routines(
+    client: &mut postgres::Client,
+    schema: &str,
+) -> Result<Vec<RoutineInfo>, DbError> {
+    let rows = client
+        .query(
+            r#"
+            SELECT
+                p.proname AS name,
+                p.prokind::char AS prokind,
+                pg_catalog.pg_get_function_identity_arguments(p.oid) AS identity_args,
+                pg_catalog.pg_get_function_result(p.oid) AS return_type
+            FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = $1
+              AND p.prokind IN ('f','p','a','w')
+            ORDER BY p.proname, identity_args
+            "#,
+            &[&schema],
+        )
+        .map_err(|e| format_pg_query_error(&e))?;
+
+    let mut routines = Vec::with_capacity(rows.len());
+
+    for row in &rows {
+        let name: String = row.get("name");
+        let prokind_str: &str = row.get("prokind");
+        let identity_args: String = row.get("identity_args");
+        let return_type: Option<String> = row.get("return_type");
+
+        let prokind_char = prokind_str.chars().next().unwrap_or('f');
+        let Some(kind) = prokind_to_routine_kind(prokind_char) else {
+            continue;
+        };
+
+        let specific_name = format!("{}({})", name, identity_args);
+
+        let parameter_types: Vec<String> = if identity_args.is_empty() {
+            Vec::new()
+        } else {
+            vec![identity_args.clone()]
+        };
+
+        routines.push(RoutineInfo {
+            name,
+            kind,
+            specific_name,
+            parameter_types,
+            return_type_hint: return_type,
+        });
+    }
+
+    Ok(routines)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         PgUriSslMode, PostgresCodeGenerator, PostgresDialect, PostgresDriver,
         inject_password_into_pg_uri, parse_pg_uri_sslmode, plan_postgres_semantic_request,
+        prokind_to_routine_kind,
     };
     use dbflux_core::{
         CodeGenerator, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
@@ -4262,5 +4434,28 @@ mod tests {
         // lets the server validate the element type.
         let sql = format_pg_array_literal(&Value::Text("solo".into()), "text");
         assert_eq!(sql, "ARRAY['solo']::text[]");
+    }
+
+    #[test]
+    fn prokind_to_routine_kind_mapping() {
+        use dbflux_core::RoutineKind;
+
+        assert_eq!(prokind_to_routine_kind('f'), Some(RoutineKind::Function));
+        assert_eq!(prokind_to_routine_kind('p'), Some(RoutineKind::Procedure));
+        assert_eq!(prokind_to_routine_kind('a'), Some(RoutineKind::Aggregate));
+        assert_eq!(prokind_to_routine_kind('w'), Some(RoutineKind::Window));
+        // Trigger functions are excluded
+        assert_eq!(prokind_to_routine_kind('t'), None);
+        // Unknown characters are excluded
+        assert_eq!(prokind_to_routine_kind('x'), None);
+    }
+
+    #[test]
+    #[ignore = "requires live Postgres connection"]
+    fn live_schema_routines_returns_results() {
+        // This test requires a live Postgres fixture. Run with:
+        //   cargo nextest run -p dbflux_driver_postgres --run-ignored
+        // Skipped in normal CI.
+        let _ = "placeholder for live integration test";
     }
 }

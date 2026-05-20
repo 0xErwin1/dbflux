@@ -16,11 +16,11 @@ use dbflux_core::{
     IndexInfo, IsolationLevel, KeyValueConnection, MYSQL_FORM, MutationCapabilities, OrderByColumn,
     PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
     QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity,
-    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
-    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo,
-    TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
+    RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert,
+    RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
+    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
+    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
     generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
     generate_update_template, render_semantic_filter_sql, sanitize_uri,
 };
@@ -43,7 +43,8 @@ pub static MYSQL_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::FOREIGN_KEYS.bits()
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
-            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits(),
+            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
+            | DriverCapabilities::ROUTINES.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mysql".into(),
@@ -192,7 +193,8 @@ pub static MARIADB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::FOREIGN_KEYS.bits()
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
-            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits(),
+            | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
+            | DriverCapabilities::ROUTINES.bits(),
     ),
     default_port: Some(3306),
     uri_scheme: "mariadb".into(),
@@ -2009,6 +2011,13 @@ impl Connection for MysqlConnection {
             .and_then(|state| state.current_database.clone())
     }
 
+    fn schema_features(&self) -> SchemaFeatures {
+        SchemaFeatures::FOREIGN_KEYS
+            | SchemaFeatures::CHECK_CONSTRAINTS
+            | SchemaFeatures::UNIQUE_CONSTRAINTS
+            | SchemaFeatures::FUNCTIONS
+    }
+
     fn schema_indexes(
         &self,
         database: &str,
@@ -2033,6 +2042,98 @@ impl Connection for MysqlConnection {
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         fetch_schema_foreign_keys(&mut conn, database)
+    }
+
+    fn schema_routines(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<RoutineInfo>, DbError> {
+        let mut conn = self
+            .catalog_conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        fetch_schema_routines(&mut conn, database)
+    }
+
+    fn routine_definition(
+        &self,
+        _database: &str,
+        schema: &str,
+        specific_name: &str,
+    ) -> Result<String, DbError> {
+        // specific_name in MySQL equals the routine name (no overloading).
+        // Look up ROUTINE_TYPE first so we can choose the correct SHOW CREATE statement.
+        let mut conn = self
+            .catalog_conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let type_rows: Vec<mysql::Row> = conn
+            .exec(
+                r"SELECT ROUTINE_TYPE FROM information_schema.ROUTINES
+                  WHERE ROUTINE_SCHEMA = ? AND SPECIFIC_NAME = ?",
+                (schema, specific_name),
+            )
+            .map_err(|e| format_mysql_query_error(&e))?;
+
+        let routine_type: Option<String> =
+            type_rows.first().and_then(|row| row.get("ROUTINE_TYPE"));
+
+        let Some(routine_type) = routine_type else {
+            return Ok(format!(
+                "-- Routine `{}` not found in schema `{}`.\n",
+                specific_name, schema
+            ));
+        };
+
+        // Build `SHOW CREATE FUNCTION \`schema\`.\`name\`` or `SHOW CREATE PROCEDURE ...`.
+        // We use a format string here because SHOW CREATE does not support ? placeholders for
+        // identifiers; backtick-escaping prevents SQL injection via identifier names.
+        let escaped_schema = schema.replace('`', "``");
+        let escaped_name = specific_name.replace('`', "``");
+
+        let show_sql = if routine_type == "FUNCTION" {
+            format!(
+                "SHOW CREATE FUNCTION `{}`.`{}`",
+                escaped_schema, escaped_name
+            )
+        } else {
+            format!(
+                "SHOW CREATE PROCEDURE `{}`.`{}`",
+                escaped_schema, escaped_name
+            )
+        };
+
+        let def_rows: Vec<mysql::Row> = conn
+            .query(&show_sql)
+            .map_err(|e| format_mysql_query_error(&e))?;
+
+        if let Some(row) = def_rows.first() {
+            // SHOW CREATE FUNCTION returns: Function, sql_mode, Create Function, ...
+            // SHOW CREATE PROCEDURE returns: Procedure, sql_mode, Create Procedure, ...
+            let col_name = if routine_type == "FUNCTION" {
+                "Create Function"
+            } else {
+                "Create Procedure"
+            };
+
+            let definition: Option<String> = row.get_opt(col_name).and_then(|r| r.ok());
+
+            match definition {
+                Some(def) => Ok(def),
+                None => Ok(format!(
+                    "-- Definition for `{}` could not be retrieved (insufficient privileges?).\n",
+                    specific_name
+                )),
+            }
+        } else {
+            Ok(format!(
+                "-- Routine `{}` not found in schema `{}`.\n",
+                specific_name, schema
+            ))
+        }
     }
 
     fn update_row(&self, patch: &RowPatch) -> Result<CrudResult, DbError> {
@@ -3202,6 +3303,98 @@ fn fetch_schema_foreign_keys(
     Ok(builder.build())
 }
 
+/// Fetch all routines (stored procedures and user-defined functions) for `database`
+/// from `information_schema.ROUTINES`.
+///
+/// In MySQL the schema IS the database; `ROUTINE_SCHEMA` holds the database name.
+/// MySQL's `information_schema.ROUTINES` only contains FUNCTION and PROCEDURE rows —
+/// aggregate and window functions are not listed (they exist in MySQL 8.0+ via
+/// `CREATE AGGREGATE FUNCTION` but that uses a UDF plugin mechanism not surfaced in
+/// `information_schema.ROUTINES`).
+///
+/// Parameters are fetched from `information_schema.PARAMETERS` for each routine
+/// (ORDINAL_POSITION > 0 excludes the implicit return-type row for functions).
+fn fetch_schema_routines(conn: &mut Conn, database: &str) -> Result<Vec<RoutineInfo>, DbError> {
+    let routines_query = r"
+        SELECT
+            ROUTINE_NAME,
+            ROUTINE_TYPE,
+            DTD_IDENTIFIER,
+            SPECIFIC_NAME
+        FROM information_schema.ROUTINES
+        WHERE ROUTINE_SCHEMA = ?
+        ORDER BY ROUTINE_NAME
+    ";
+
+    let routine_rows: Vec<mysql::Row> = conn
+        .exec(routines_query, (database,))
+        .map_err(|e| format_mysql_query_error(&e))?;
+
+    let params_query = r"
+        SELECT
+            SPECIFIC_NAME,
+            DTD_IDENTIFIER
+        FROM information_schema.PARAMETERS
+        WHERE SPECIFIC_CATALOG = 'def'
+          AND SPECIFIC_SCHEMA = ?
+          AND ORDINAL_POSITION > 0
+        ORDER BY SPECIFIC_NAME, ORDINAL_POSITION
+    ";
+
+    let param_rows: Vec<mysql::Row> = conn
+        .exec(params_query, (database,))
+        .map_err(|e| format_mysql_query_error(&e))?;
+
+    // Build a map from SPECIFIC_NAME -> Vec<parameter DTD_IDENTIFIER>.
+    let mut params_map: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for row in param_rows {
+        let specific_name: String = row.get("SPECIFIC_NAME").unwrap_or_default();
+        let dtd: String = row.get("DTD_IDENTIFIER").unwrap_or_default();
+        params_map.entry(specific_name).or_default().push(dtd);
+    }
+
+    let mut routines = Vec::with_capacity(routine_rows.len());
+
+    for row in routine_rows {
+        let name: String = row.get("ROUTINE_NAME").unwrap_or_default();
+        let routine_type: String = row.get("ROUTINE_TYPE").unwrap_or_default();
+        let dtd_identifier: Option<String> = row.get_opt("DTD_IDENTIFIER").and_then(|r| r.ok());
+        let specific_name: String = row.get("SPECIFIC_NAME").unwrap_or_default();
+
+        let kind = mysql_routine_type_to_kind(&routine_type);
+
+        let parameter_types = params_map.get(&specific_name).cloned().unwrap_or_default();
+
+        // DTD_IDENTIFIER holds the return type for FUNCTION rows; it is NULL for PROCEDUREs.
+        let return_type_hint = match kind {
+            RoutineKind::Function => dtd_identifier,
+            _ => None,
+        };
+
+        routines.push(RoutineInfo {
+            name,
+            kind,
+            specific_name,
+            parameter_types,
+            return_type_hint,
+        });
+    }
+
+    Ok(routines)
+}
+
+/// Map a MySQL `information_schema.ROUTINES.ROUTINE_TYPE` string to `RoutineKind`.
+///
+/// MySQL only surfaces FUNCTION and PROCEDURE in `information_schema.ROUTINES`.
+/// Any other value is mapped to `RoutineKind::Procedure` as a safe fallback.
+fn mysql_routine_type_to_kind(routine_type: &str) -> RoutineKind {
+    match routine_type {
+        "FUNCTION" => RoutineKind::Function,
+        _ => RoutineKind::Procedure,
+    }
+}
+
 // =============================================================================
 // Dependents introspection (stub — not yet wired into ConnectedProfile cache)
 // =============================================================================
@@ -3282,13 +3475,13 @@ pub fn fetch_dependents(
 #[cfg(test)]
 mod tests {
     use super::{
-        MysqlDialect, MysqlDriver, inject_password_into_mysql_uri, normalize_mysql_tcp_host,
-        plan_mysql_semantic_request,
+        MysqlDialect, MysqlDriver, inject_password_into_mysql_uri, mysql_routine_type_to_kind,
+        normalize_mysql_tcp_host, plan_mysql_semantic_request,
     };
     use dbflux_core::{
         DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, FormValues, MutationRequest,
-        OrderByColumn, QueryLanguage, RowInsert, SemanticRequest, SqlDialect, TableBrowseRequest,
-        TableRef, Value,
+        OrderByColumn, QueryLanguage, RoutineKind, RowInsert, SemanticRequest, SqlDialect,
+        TableBrowseRequest, TableRef, Value,
     };
 
     #[test]
@@ -3505,5 +3698,39 @@ mod tests {
 
         assert!(!mysql.form_definition().tabs.is_empty());
         assert!(!mariadb.form_definition().tabs.is_empty());
+
+        // Both MySQL and MariaDB declare the ROUTINES capability.
+        use dbflux_core::DriverCapabilities;
+        assert!(
+            mysql
+                .metadata()
+                .capabilities
+                .contains(DriverCapabilities::ROUTINES),
+            "MySQL metadata must declare ROUTINES capability"
+        );
+        assert!(
+            mariadb
+                .metadata()
+                .capabilities
+                .contains(DriverCapabilities::ROUTINES),
+            "MariaDB metadata must declare ROUTINES capability"
+        );
+    }
+
+    #[test]
+    fn mysql_routine_type_to_kind_mapping() {
+        assert_eq!(
+            mysql_routine_type_to_kind("FUNCTION"),
+            RoutineKind::Function
+        );
+        assert_eq!(
+            mysql_routine_type_to_kind("PROCEDURE"),
+            RoutineKind::Procedure
+        );
+        // Any unknown value falls back to Procedure.
+        assert_eq!(
+            mysql_routine_type_to_kind("UNKNOWN"),
+            RoutineKind::Procedure
+        );
     }
 }

@@ -16,13 +16,14 @@ use dbflux_core::{
     FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
     MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
     QueryCapabilities, QueryErrorFormatter, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RecordIdentity, RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SQLSERVER_FORM, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
-    SchemaIndexBuilder, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection,
-    SqlDialect, SqlMutationGenerator, SshTunnelConfig, SyntaxInfo, TableBrowseRequest,
-    TableCountRequest, TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri,
+    RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
+    RowDelete, RowInsert, RowPatch, SQLSERVER_FORM, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SortDirection, SqlDialect, SqlMutationGenerator, SshTunnelConfig, SyntaxInfo,
+    TableBrowseRequest, TableCountRequest, TableInfo, TransactionCapabilities, Value, ViewInfo,
+    WhereOperator, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
@@ -49,7 +50,8 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::FOREIGN_KEYS.bits()
             | DriverCapabilities::CHECK_CONSTRAINTS.bits()
             | DriverCapabilities::UNIQUE_CONSTRAINTS.bits()
-            | DriverCapabilities::TRANSACTIONAL_DDL.bits(),
+            | DriverCapabilities::TRANSACTIONAL_DDL.bits()
+            | DriverCapabilities::ROUTINES.bits(),
     ),
     default_port: Some(1433),
     uri_scheme: "sqlserver".into(),
@@ -1747,6 +1749,7 @@ impl Connection for MssqlConnection {
             | SchemaFeatures::CHECK_CONSTRAINTS
             | SchemaFeatures::UNIQUE_CONSTRAINTS
             | SchemaFeatures::CUSTOM_TYPES
+            | SchemaFeatures::FUNCTIONS
     }
 
     fn schema_types(
@@ -1774,6 +1777,51 @@ impl Connection for MssqlConnection {
     ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
         let schema_name = schema.unwrap_or("dbo");
         self.fetch_schema_foreign_keys(database, schema_name)
+    }
+
+    fn schema_routines(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<RoutineInfo>, DbError> {
+        let schema_name = schema.unwrap_or("dbo");
+        get_schema_routines(self, database, schema_name)
+    }
+
+    fn routine_definition(
+        &self,
+        _database: &str,
+        _schema: &str,
+        specific_name: &str,
+    ) -> Result<String, DbError> {
+        // specific_name is the object_id serialized as a decimal string.
+        // Parse and validate it to prevent any SQL injection before embedding
+        // it into the query string.
+        let object_id: i64 = specific_name.trim().parse().map_err(|_| {
+            DbError::query_failed(format!(
+                "Invalid routine specific_name (expected object_id): {}",
+                specific_name
+            ))
+        })?;
+
+        let sql = format!("SELECT OBJECT_DEFINITION({}) AS definition", object_id);
+        let rows = self.execute_simple(&sql)?;
+
+        let definition = rows.rows.into_iter().next().and_then(|row| {
+            row.into_iter().next().and_then(|v| match v {
+                Value::Text(s) => Some(s),
+                _ => None,
+            })
+        });
+
+        match definition {
+            Some(def) => Ok(def),
+            None => Ok(format!(
+                "-- Definition not available for this routine (object_id: {}).\n\
+                 -- CLR routines, encrypted objects, and CLR aggregates have no T-SQL definition.\n",
+                object_id
+            )),
+        }
     }
 
     fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
@@ -2747,6 +2795,79 @@ mod indexmap_for_indexes {
     pub(super) use indexmap::IndexMap;
 }
 
+/// Map an MSSQL `sys.objects.type` code (trimmed) to a `RoutineKind`.
+///
+/// SQL Server stores the type as `char(2)` with trailing spaces; callers must
+/// trim before passing.  Returns `None` for codes that are not exposed in the
+/// routines folder (e.g. table-valued assembly objects other than AF).
+fn mssql_type_to_routine_kind(type_code: &str) -> Option<RoutineKind> {
+    match type_code {
+        "P" => Some(RoutineKind::Procedure),
+        "FN" | "IF" | "TF" => Some(RoutineKind::Function),
+        "AF" => Some(RoutineKind::Aggregate),
+        _ => None,
+    }
+}
+
+fn get_schema_routines(
+    conn: &MssqlConnection,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<RoutineInfo>, DbError> {
+    let escaped_db = database.replace(']', "]]");
+    let qualified_db = format!("[{}]", escaped_db);
+    let escaped_schema = schema.replace('\'', "''");
+
+    // Join sys.objects with sys.schemas to enumerate stored procedures,
+    // scalar functions (FN), inline table-valued functions (IF),
+    // multi-statement table-valued functions (TF), and CLR aggregates (AF).
+    // object_id serves as the stable identity used to fetch the definition.
+    let sql = format!(
+        "SELECT o.name, RTRIM(o.type) AS type_code, CAST(o.object_id AS VARCHAR(20)) AS object_id \
+         FROM {qualified_db}.sys.objects o \
+         JOIN {qualified_db}.sys.schemas s ON s.schema_id = o.schema_id \
+         WHERE s.name = '{escaped_schema}' \
+           AND o.type IN ('P ', 'FN', 'IF', 'TF', 'AF') \
+         ORDER BY o.name",
+    );
+
+    let rows = conn.execute_simple(&sql)?;
+    let mut routines = Vec::with_capacity(rows.rows.len());
+
+    for row in rows.rows {
+        let mut iter = row.into_iter();
+
+        let name = match iter.next() {
+            Some(Value::Text(s)) => s,
+            _ => continue,
+        };
+        let type_code = match iter.next() {
+            Some(Value::Text(s)) => s,
+            _ => continue,
+        };
+        let object_id_str = match iter.next() {
+            Some(Value::Text(s)) => s,
+            _ => continue,
+        };
+
+        let Some(kind) = mssql_type_to_routine_kind(type_code.trim()) else {
+            continue;
+        };
+
+        routines.push(RoutineInfo {
+            name: name.clone(),
+            kind,
+            // Use object_id as specific_name — it is the stable numeric
+            // identity used in routine_definition to call OBJECT_DEFINITION().
+            specific_name: object_id_str,
+            parameter_types: Vec::new(),
+            return_type_hint: None,
+        });
+    }
+
+    Ok(routines)
+}
+
 fn normalize_fk_action(action: &str) -> String {
     // Convert tiberius/sys.foreign_keys descriptors ("NO_ACTION", "CASCADE",
     // "SET_NULL", "SET_DEFAULT") into the canonical SQL clause form.
@@ -3389,6 +3510,41 @@ fn format_mssql_uri_error(e: &tiberius::error::Error, uri: &str) -> DbError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mssql_type_to_routine_kind_mapping() {
+        use dbflux_core::RoutineKind;
+
+        assert_eq!(
+            mssql_type_to_routine_kind("P"),
+            Some(RoutineKind::Procedure)
+        );
+        assert_eq!(
+            mssql_type_to_routine_kind("FN"),
+            Some(RoutineKind::Function)
+        );
+        assert_eq!(
+            mssql_type_to_routine_kind("IF"),
+            Some(RoutineKind::Function)
+        );
+        assert_eq!(
+            mssql_type_to_routine_kind("TF"),
+            Some(RoutineKind::Function)
+        );
+        assert_eq!(
+            mssql_type_to_routine_kind("AF"),
+            Some(RoutineKind::Aggregate)
+        );
+
+        // Codes that are not exposed in the routines folder.
+        assert_eq!(mssql_type_to_routine_kind("TR"), None);
+        assert_eq!(mssql_type_to_routine_kind("V"), None);
+        assert_eq!(mssql_type_to_routine_kind(""), None);
+
+        // Untrimmed codes (callers must trim; function does not trim itself).
+        assert_eq!(mssql_type_to_routine_kind("P "), None);
+        assert_eq!(mssql_type_to_routine_kind(" FN"), None);
+    }
 
     #[test]
     fn quote_identifier_brackets_and_escapes() {

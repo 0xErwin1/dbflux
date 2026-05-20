@@ -42,10 +42,11 @@ pub use manager::{
     ConnectionManager, ConnectionResolutionError, DatabaseConnection,
     FetchCollectionChildrenParams, FetchCollectionChildrenResult, FetchDatabaseSchemaParams,
     FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
-    FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaTypesParams,
-    FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
-    OwnedCacheEntry, PendingOperation, PrepareConnectError, RedisKeyCache, RedisKeyCacheEntry,
-    ResolvedProxy, SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
+    FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaRoutinesParams,
+    FetchSchemaRoutinesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
+    FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext, OwnedCacheEntry,
+    PendingOperation, PrepareConnectError, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
+    SchemaCacheKey, SwitchDatabaseParams, SwitchDatabaseResult,
 };
 #[allow(deprecated)]
 pub use profile::{

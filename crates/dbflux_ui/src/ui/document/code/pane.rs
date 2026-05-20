@@ -117,6 +117,13 @@ impl CodeDocument {
                         DocumentKey::File { path } => {
                             d.path().map(|p| p.as_path()) == Some(path.as_path())
                         }
+                        DocumentKey::Routine {
+                            profile_id,
+                            schema,
+                            specific_name,
+                        } => d.routine_dedup.as_ref().is_some_and(|(pid, s, sn)| {
+                            pid == profile_id && s == schema && sn == specific_name
+                        }),
                         _ => false,
                     }
                 })
@@ -145,11 +152,37 @@ impl CodeDocument {
         });
 
         // Populate optional helper: session manifest serialization data.
-        // Returns `None` for unsaved scratch tabs (no path or scratch_path).
+        // Returns `None` for unsaved scratch tabs (no path or scratch_path), unless
+        // this is a routine document, which is always persisted as `"Routine"` kind
+        // so it can be reconstructed on next launch without a file backing.
         handle.session_tab_snapshot = Some({
             let e = entity.clone();
             Box::new(move |cx| {
                 let d = e.read(cx);
+
+                // Routine documents: persisted with their descriptor encoded in
+                // exec_ctx (connection_id=profile_id, schema, container=specific_name).
+                if let Some((profile_id, schema, specific_name)) = d.routine_dedup.as_ref() {
+                    use dbflux_core::ExecutionContext;
+
+                    let exec_ctx = ExecutionContext {
+                        connection_id: Some(*profile_id),
+                        schema: Some(schema.clone()),
+                        container: Some(specific_name.clone()),
+                        ..d.exec_ctx().clone()
+                    };
+
+                    return Some(CodeSessionTabSnapshot {
+                        kind: "Routine",
+                        id: d.id(),
+                        title: d.title(),
+                        language: d.query_language(),
+                        exec_ctx,
+                        file_path: None,
+                        scratch_path: None,
+                        shadow_path: None,
+                    });
+                }
 
                 let kind = if d.path().is_some() {
                     "FileBacked"
