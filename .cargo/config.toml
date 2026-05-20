@@ -1,0 +1,15 @@
+# Build linker configuration for the Linux x86_64 host triple.
+#
+# Requires `mold` on PATH. The Nix dev shell (`nix develop`) provides it, and
+# CI installs it (tests.yml, style.yml, release.yml build-linux). For non-Nix
+# local setups, install it via your system package manager (e.g. `mold`).
+#
+# IMPORTANT: this applies to ALL builds for this triple, including
+# `cargo build --release`. Linux x86_64 release artifacts are therefore linked
+# with mold (functionally equivalent binary). Other triples — Windows (msvc),
+# macOS, and Linux aarch64 — are unaffected and keep their default linker.
+
+[target.x86_64-unknown-linux-gnu]
+# Use the mold linker through the default cc driver. Drastically reduces link
+# time and peak memory when linking the 60+ workspace crates.
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

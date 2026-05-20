@@ -37,6 +37,10 @@ let
     cmake
     makeWrapper
     openssl.dev
+    # Required by .cargo/config.toml, which links the x86_64-unknown-linux-gnu
+    # target with -fuse-ld=mold. Needed by every cargo invocation over this tree
+    # (package builds and dev shells), so it lives here and is inherited.
+    mold
   ];
 
   # Library path for runtime
@@ -217,6 +221,9 @@ in
         ++ [
           pkgs.rust-analyzer
           pkgs.python3
+          # Faster, process-isolated test runner: `cargo nextest run`.
+          # (mold is already provided via nativeBuildInputs above.)
+          pkgs.cargo-nextest
         ];
 
       inherit buildInputs;

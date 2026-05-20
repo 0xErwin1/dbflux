@@ -32,11 +32,22 @@ cargo test --workspace test_name     # Single test
 cargo test -p dbflux_core            # Tests in specific crate
 cargo test -p dbflux_driver_dynamodb --test live_integration -- --ignored  # Docker-backed live tests
 
+# Faster test runner (provided by the Nix dev shell). Does NOT run doctests.
+cargo nextest run --workspace        # All tests (unit + integration)
+cargo test --doc --workspace         # Doctests (run separately)
+cargo nextest run -p dbflux_driver_sqlite --run-ignored all  # Include #[ignore]d live tests
+
 # Nix
 nix develop                          # Enter dev shell
 nix build                            # Build package
 nix run                              # Run directly
 ```
+
+**Linux build requirement**: `.cargo/config.toml` links the
+`x86_64-unknown-linux-gnu` target with `-fuse-ld=mold`, so the `mold` linker
+must be on `PATH` for any local `cargo build`/`test`/`check`. The Nix dev shell
+and CI provide it; non-Nix Linux setups must install `mold` via their package
+manager. Windows and macOS use their default linker and are unaffected.
 
 ## Rust Guidelines
 
