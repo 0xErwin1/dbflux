@@ -119,19 +119,26 @@ impl CodeDocument {
         })
     }
 
-    fn update_completion_provider(&mut self, cx: &mut Context<Self>) {
+    /// Re-bind the editor to the effective query language: completion provider
+    /// and syntax highlighter. Called whenever the language can change (Syntax
+    /// dropdown, connection change), so switching to e.g. Flux drops the SQL
+    /// grammar (and, via run_diagnostics, the SQL squiggles) instead of keeping
+    /// the document's initial language.
+    fn sync_editor_language(&mut self, cx: &mut Context<Self>) {
         let connection_id = self
             .connection_id
             .filter(|id| self.app_state.read(cx).connections().contains_key(id));
 
         let query_language = self.effective_query_language(cx);
+        let editor_mode = query_language.editor_mode();
 
         let completion_provider: Rc<dyn CompletionProvider> = Rc::new(
             QueryCompletionProvider::new(query_language, self.app_state.clone(), connection_id),
         );
 
-        self.input_state.update(cx, |state, _cx| {
+        self.input_state.update(cx, |state, cx| {
             state.lsp.completion_provider = Some(completion_provider);
+            state.set_highlighter(editor_mode, cx);
         });
     }
 
@@ -159,7 +166,7 @@ impl CodeDocument {
             .or_else(|| spec.query_modes.first().map(|mode| mode.value.clone()))
     }
 
-    fn effective_query_language(&self, cx: &App) -> QueryLanguage {
+    pub(super) fn effective_query_language(&self, cx: &App) -> QueryLanguage {
         let Some(spec) = self.current_source_context_spec(cx) else {
             return self.query_language.clone();
         };
@@ -388,7 +395,7 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) {
         self.sync_source_exec_context(cx);
-        self.update_completion_provider(cx);
+        self.sync_editor_language(cx);
         self.schedule_diagnostic_refresh(cx);
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
@@ -561,7 +568,7 @@ impl CodeDocument {
         }
 
         self.sync_source_controls(cx);
-        self.update_completion_provider(cx);
+        self.sync_editor_language(cx);
 
         if did_change {
             cx.emit(DocumentEvent::MetaChanged);
@@ -1482,7 +1489,8 @@ impl CodeDocument {
 mod tests {
     use super::{
         ContextBarSlot, SqlQueryFocus, build_source_window_context, context_dropdown_min_width,
-        context_slot_is_keyboard_focused, parse_source_datetime_input, resolve_query_mode_selection,
+        context_slot_is_keyboard_focused, parse_source_datetime_input,
+        resolve_query_mode_selection,
     };
     use dbflux_core::ExecutionSourceContext;
     use gpui::px;
@@ -1493,7 +1501,12 @@ mod tests {
 
         // A committed mode wins over the dropdown and the default.
         assert_eq!(
-            resolve_query_mode_selection(Some("flux"), Some("influxql"), &available, Some("influxql")),
+            resolve_query_mode_selection(
+                Some("flux"),
+                Some("influxql"),
+                &available,
+                Some("influxql")
+            ),
             Some("flux".to_string())
         );
 

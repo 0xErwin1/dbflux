@@ -690,10 +690,7 @@ impl ChartView {
         // StackedBar: full-width single bars per x slot. Find the x column
         // under the cursor, then pick the series whose stacked segment the
         // cursor's Y falls inside for the most precise focus.
-        if matches!(
-            self.spec.kind,
-            crate::chart::spec::ChartKind::StackedBar
-        ) {
+        if matches!(self.spec.kind, crate::chart::spec::ChartKind::StackedBar) {
             let visible: Vec<usize> = (0..self.render_model.decimated.len())
                 .filter(|i| !self.hidden.contains(i))
                 .collect();
@@ -727,8 +724,7 @@ impl ChartView {
             let stacked_y_max = self.stacked_y_max();
             let y_range_local = (stacked_y_max - y_min).max(1.0);
             let data_to_screen_y = |dy: f64| -> f32 {
-                plot_y0 + plot_h
-                    - ((dy - y_min) / y_range_local * plot_h as f64) as f32
+                plot_y0 + plot_h - ((dy - y_min) / y_range_local * plot_h as f64) as f32
             };
 
             // Use the first visible series as x-position anchor.
@@ -736,9 +732,7 @@ impl ChartView {
             for pt_idx in 0..self.render_model.decimated[anchor].len() {
                 let (x, _) = self.render_model.decimated[anchor][pt_idx];
                 let bar_center = data_to_screen_x(x);
-                if cursor_sx < bar_center - bar_w / 2.0
-                    || cursor_sx > bar_center + bar_w / 2.0
-                {
+                if cursor_sx < bar_center - bar_w / 2.0 || cursor_sx > bar_center + bar_w / 2.0 {
                     continue;
                 }
 
@@ -752,8 +746,7 @@ impl ChartView {
                 let mut cumulative = baseline;
 
                 for &s_idx in &visible {
-                    let Some(&(_, y)) = self.render_model.decimated[s_idx].get(pt_idx)
-                    else {
+                    let Some(&(_, y)) = self.render_model.decimated[s_idx].get(pt_idx) else {
                         break;
                     };
                     let seg_bottom_sy = data_to_screen_y(cumulative);
@@ -1006,10 +999,7 @@ impl Render for ChartView {
 
         // For StackedBar, override the Y ticks with the stacked-range ticks so
         // both the gridlines and tick labels reflect the true stacked ceiling.
-        let effective_y_ticks = stacked_y_ticks
-            .as_ref()
-            .unwrap_or(&model.y_ticks)
-            .clone();
+        let effective_y_ticks = stacked_y_ticks.as_ref().unwrap_or(&model.y_ticks).clone();
 
         // Tick label strings for in-canvas painting (Y data order; painting handles positioning).
         let y_tick_labels: Vec<(f64, SharedString)> = effective_y_ticks
@@ -1264,8 +1254,7 @@ impl Render for ChartView {
 
                                         // Pass 2 — focused series at 2.2 px on top.
                                         if !hidden_canvas.contains(&focused_idx)
-                                            && let Some(pts) =
-                                                decimated_canvas.get(focused_idx)
+                                            && let Some(pts) = decimated_canvas.get(focused_idx)
                                         {
                                             let color = palette_canvas
                                                 .get(focused_idx)
@@ -1587,12 +1576,7 @@ fn paint_bars<FX, FY>(
         .collect();
     let num_visible = visible.len().max(1);
 
-    let max_points = decimated
-        .iter()
-        .map(|s| s.len())
-        .max()
-        .unwrap_or(1)
-        .max(1);
+    let max_points = decimated.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
 
     let slot_w = plot_w / max_points as f32;
     let group_w = slot_w * 0.8;
@@ -1678,12 +1662,7 @@ fn paint_stacked_bars<FX, FY>(
 
     // Bar width: one slot per X position (single full-width column per x,
     // since the series stack rather than sit side-by-side).
-    let max_points = decimated
-        .iter()
-        .map(|s| s.len())
-        .max()
-        .unwrap_or(1)
-        .max(1);
+    let max_points = decimated.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
 
     let slot_w = plot_w / max_points as f32;
     let bar_w = (slot_w * 0.8).max(1.0);
@@ -2010,20 +1989,14 @@ fn paint_area<FX, FY>(
                 let (xn, _) = pts[pts.len() - 1];
 
                 let mut builder = PathBuilder::fill();
-                builder.move_to(point(
-                    gpui::px(data_to_screen_x(x0)),
-                    gpui::px(baseline_sy),
-                ));
+                builder.move_to(point(gpui::px(data_to_screen_x(x0)), gpui::px(baseline_sy)));
                 for &(x, y) in pts {
                     builder.line_to(point(
                         gpui::px(data_to_screen_x(x)),
                         gpui::px(data_to_screen_y(y)),
                     ));
                 }
-                builder.line_to(point(
-                    gpui::px(data_to_screen_x(xn)),
-                    gpui::px(baseline_sy),
-                ));
+                builder.line_to(point(gpui::px(data_to_screen_x(xn)), gpui::px(baseline_sy)));
                 builder.close();
                 if let Ok(path) = builder.build() {
                     window.paint_path(path, fill_color);
@@ -2041,8 +2014,7 @@ fn paint_area<FX, FY>(
             } else {
                 1.0_f32
             };
-            let stroke_color =
-                gpui::hsla(base_color.h, base_color.s, base_color.l, stroke_alpha);
+            let stroke_color = gpui::hsla(base_color.h, base_color.s, base_color.l, stroke_alpha);
 
             if pts.len() == 1 {
                 // Single-point fallback: a square marker, same as the Line arm.
@@ -2965,10 +2937,7 @@ mod tests {
 
         let view =
             ChartView::build(&result, spec).expect("build with StackedBar kind must not fail");
-        assert_eq!(
-            view.kind(),
-            crate::chart::spec::ChartKind::StackedBar
-        );
+        assert_eq!(view.kind(), crate::chart::spec::ChartKind::StackedBar);
     }
 
     /// `ChartView::build` with `ChartKind::Pie` must not panic.
