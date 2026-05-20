@@ -3,11 +3,8 @@
 use dbflux_core::ColumnKind;
 use serde::{Deserialize, Serialize};
 
-/// Extension seam for chart kinds.
-///
-/// `Line` and `Bar` are fully implemented; `Scatter` is declared here and still
-/// renders a placeholder frame until its paint arm lands, so adding it is purely
-/// additive.
+/// Chart rendering kinds. `Line`, `Bar`, and `Scatter` are all fully
+/// implemented and share the same kind-agnostic render model.
 ///
 /// `#[serde(default)]` on the containing `ChartSpec.kind` field ensures that
 /// existing serialized `ChartSpec` JSON without a `kind` key deserializes to

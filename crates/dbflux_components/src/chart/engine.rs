@@ -650,6 +650,45 @@ impl ChartView {
             return;
         }
 
+        // Scatter charts focus by the nearest discrete point (2D distance),
+        // since there is no connecting line to project onto. Focus only switches
+        // when a point is within a small pixel tolerance of the cursor.
+        if matches!(self.spec.kind, crate::chart::spec::ChartKind::Scatter) {
+            let data_to_screen_x =
+                |dx: f64| -> f32 { plot_x0 + ((dx - x_min) / x_range * plot_w as f64) as f32 };
+            let data_to_screen_y = |dy: f64| -> f32 {
+                plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32
+            };
+
+            let cursor_sx = f32::from(hover_x);
+            let cursor_sy = f32::from(hover_y);
+
+            const FOCUS_TOLERANCE_PX: f32 = 18.0;
+            let mut best: Option<(usize, f32)> = None;
+
+            for (s_idx, pts) in self.render_model.decimated.iter().enumerate() {
+                if self.hidden.contains(&s_idx) {
+                    continue;
+                }
+                for &(x, y) in pts {
+                    let dx = data_to_screen_x(x) - cursor_sx;
+                    let dy = data_to_screen_y(y) - cursor_sy;
+                    let dist_sq = dx * dx + dy * dy;
+                    if best.is_none_or(|(_, b)| dist_sq < b) {
+                        best = Some((s_idx, dist_sq));
+                    }
+                }
+            }
+
+            if let Some((idx, dist_sq)) = best
+                && dist_sq <= FOCUS_TOLERANCE_PX * FOCUS_TOLERANCE_PX
+            {
+                self.focused_series_idx = idx;
+            }
+
+            return;
+        }
+
         let data_to_screen_y =
             |dy: f64| -> f32 { plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32 };
 
@@ -710,33 +749,8 @@ impl Render for ChartView {
 
         let kind = self.spec.kind;
 
-        // `Line` and `Bar` share the same plot frame (axes, gridlines, ticks)
-        // and only differ in how each series is painted. `Scatter` still renders
-        // a placeholder frame until its paint arm lands. This branch must never
-        // panic.
-        let is_placeholder = match kind {
-            ChartKind::Line | ChartKind::Bar => false,
-            ChartKind::Scatter => true,
-        };
-
-        if is_placeholder {
-            let label = match kind {
-                ChartKind::Scatter => "Scatter chart coming soon",
-                ChartKind::Line | ChartKind::Bar => unreachable!(),
-            };
-            return div()
-                .flex()
-                .flex_col()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .border_1()
-                .border_color(gpui::hsla(0.0, 0.0, 0.5, 0.4))
-                .rounded(gpui::px(4.0))
-                .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                .text_size(FontSizes::SM)
-                .child(label);
-        }
+        // Line, Bar, and Scatter all share the same plot frame (axes, gridlines,
+        // ticks) and differ only in how each series is painted further below.
 
         let model = &self.render_model;
         let spec = &self.spec;
@@ -1052,9 +1066,17 @@ impl Render for ChartView {
                                             &data_to_screen_y,
                                         );
                                     }
-                                    // Scatter renders the placeholder frame above and
-                                    // never reaches this paint closure.
-                                    ChartKind::Scatter => {}
+                                    ChartKind::Scatter => {
+                                        paint_scatter(
+                                            window,
+                                            &decimated_canvas,
+                                            &palette_canvas,
+                                            &hidden_canvas,
+                                            focused_idx,
+                                            &data_to_screen_x,
+                                            &data_to_screen_y,
+                                        );
+                                    }
                                 }
 
                                 // --- Crosshair (dashed, amber #FFB454 at 0.7 opacity) ---
@@ -1079,7 +1101,7 @@ impl Render for ChartView {
                                             + ((sx - plot_x0) as f64 / plot_w as f64) * x_range;
 
                                         for (s_idx, pts) in decimated_canvas.iter().enumerate() {
-                                            if matches!(kind_canvas, ChartKind::Bar) {
+                                            if !matches!(kind_canvas, ChartKind::Line) {
                                                 break;
                                             }
                                             if hidden_canvas.contains(&s_idx) {
@@ -1325,6 +1347,68 @@ fn paint_bars<FX, FY>(
                 },
                 color,
             ));
+        }
+    }
+}
+
+/// Paint a filled disk at `(cx, cy)` with radius `r`.
+///
+/// GPUI's `PathBuilder` has no first-class circle, so the disk is built from two
+/// half-arcs (top and bottom semicircles).
+fn paint_filled_circle(window: &mut Window, cx: f32, cy: f32, r: f32, color: Hsla) {
+    let radii = point(gpui::px(r), gpui::px(r));
+    let right = point(gpui::px(cx + r), gpui::px(cy));
+    let left = point(gpui::px(cx - r), gpui::px(cy));
+
+    let mut builder = PathBuilder::fill();
+    builder.move_to(right);
+    builder.arc_to(radii, gpui::px(0.0), false, true, left);
+    builder.arc_to(radii, gpui::px(0.0), false, true, right);
+    builder.close();
+
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+}
+
+/// Paint every visible series as a cloud of discrete points (no connecting
+/// line). The focused series is drawn at full opacity with a slightly larger
+/// radius; non-focused series are dimmed and smaller, mirroring the emphasis
+/// the Line and Bar arms give the focused series.
+fn paint_scatter<FX, FY>(
+    window: &mut Window,
+    decimated: &[Vec<(f64, f64)>],
+    palette: &[Hsla],
+    hidden: &HashSet<usize>,
+    focused_idx: usize,
+    data_to_screen_x: &FX,
+    data_to_screen_y: &FY,
+) where
+    FX: Fn(f64) -> f32,
+    FY: Fn(f64) -> f32,
+{
+    let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
+
+    let visible: Vec<usize> = (0..decimated.len())
+        .filter(|i| !hidden.contains(i))
+        .collect();
+    let num_visible = visible.len();
+
+    for &s_idx in &visible {
+        let base_color = palette.get(s_idx).copied().unwrap_or(fallback);
+        let (color, radius) = if num_visible > 1 && s_idx != focused_idx {
+            (
+                gpui::hsla(base_color.h, base_color.s, base_color.l, 0.45),
+                2.5_f32,
+            )
+        } else {
+            (base_color, 3.5_f32)
+        };
+
+        for &(x, y) in &decimated[s_idx] {
+            let sx = data_to_screen_x(x);
+            let sy = data_to_screen_y(y);
+            paint_filled_circle(window, sx, sy, radius, color);
         }
     }
 }
