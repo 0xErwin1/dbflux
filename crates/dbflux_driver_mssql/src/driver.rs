@@ -3109,7 +3109,10 @@ fn classify_mssql_code(code: u32) -> Option<MssqlErrorClass> {
         // 515: Cannot insert NULL into column (NOT NULL violation)
         // 8152: String or binary data would be truncated
         // 245: Conversion failed (often constraint-shaped failure)
-        547 | 2627 | 2601 | 515 | 8152 | 245 => Some(MssqlErrorClass::Constraint),
+        // 334: Target table has enabled triggers; OUTPUT clause requires INTO.
+        //      Raised when CRUD with `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`
+        //      targets a table (or updateable view) with `INSTEAD OF` triggers.
+        547 | 2627 | 2601 | 515 | 8152 | 245 | 334 => Some(MssqlErrorClass::Constraint),
 
         // Syntax / batch parsing
         // 102: Incorrect syntax near
@@ -3451,6 +3454,7 @@ mod tests {
         assert_eq!(classify_mssql_code(18456), Some(MssqlErrorClass::Auth));
         assert_eq!(classify_mssql_code(547), Some(MssqlErrorClass::Constraint));
         assert_eq!(classify_mssql_code(2627), Some(MssqlErrorClass::Constraint));
+        assert_eq!(classify_mssql_code(334), Some(MssqlErrorClass::Constraint));
         assert_eq!(classify_mssql_code(208), Some(MssqlErrorClass::NotFound));
         assert_eq!(classify_mssql_code(229), Some(MssqlErrorClass::Permission));
         assert_eq!(classify_mssql_code(102), Some(MssqlErrorClass::Syntax));

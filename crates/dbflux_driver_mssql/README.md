@@ -113,7 +113,7 @@ Microsoft SQL Server driver for DBFlux, built on the
   | 4060, 18450, 18452, 18456, 18486, 18487, 18488 | `AuthFailed`            |
   | 229, 230, 262, 297, 916                       | `PermissionDenied`      |
   | 207, 208, 2812, 4902                          | `ObjectNotFound`        |
-  | 515, 547, 2601, 2627, 8152, 245               | `ConstraintViolation`   |
+  | 245, 334, 515, 547, 2601, 2627, 8152          | `ConstraintViolation`   |
   | 102, 156, 8180                                | `SyntaxError`           |
 
 - Constraint-violation messages are parsed to populate `ErrorLocation`
@@ -155,6 +155,12 @@ Microsoft SQL Server driver for DBFlux, built on the
 
 ## Limitations
 
+- CRUD on tables (or updateable views) with `INSTEAD OF` triggers is not
+  supported. The driver returns the post-mutation row via
+  `OUTPUT INSERTED.*` / `OUTPUT DELETED.*` without an `INTO` clause, which
+  SQL Server rejects with error 334 ("the target table cannot have any
+  enabled triggers if the statement contains an OUTPUT clause without
+  INTO"). The error is surfaced as `ConstraintViolation`.
 - SQL-only driver; it does not expose document or key-value APIs.
 - Cancellation kills the underlying session and transparently reconnects;
   it is not the surgical TDS-Attention cancel that SSMS uses (tiberius does
