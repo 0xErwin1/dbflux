@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 env:
-  FEATURES: "sqlite,postgres,mysql,mongodb,redis"
+  FEATURES: "sqlite,postgres,mysql,mongodb,redis,influxdb"
 
 jobs:
   tests:
@@ -60,6 +60,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            mold \
             pkg-config \
             libssl-dev \
             libdbus-1-dev \
@@ -173,8 +174,8 @@ jobs:
           convert resources/icon.svg -resize 128x128 packaging/icons/128x128/apps/dbflux.png
           convert resources/icon.svg -resize 64x64 packaging/icons/64x64/apps/dbflux.png
           convert resources/icon.svg -resize 48x48 packaging/icons/48x48/apps/dbflux.png
-          convert resources/icons/dbflux-32.svg -resize 32x32 packaging/icons/32x32/apps/dbflux.png
-          convert resources/icons/dbflux-16.svg -resize 16x16 packaging/icons/16x16/apps/dbflux.png
+          convert resources/icon-small.svg -resize 32x32 packaging/icons/32x32/apps/dbflux.png
+          convert resources/icon-small.svg -resize 16x16 packaging/icons/16x16/apps/dbflux.png
 
       - name: Install Go
         uses: actions/setup-go@v5
@@ -293,8 +294,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Build the x86_64 target on the Apple Silicon runner via cross
+          # compilation. GitHub's Intel macOS runner is ~5x slower; arm64 ->
+          # x86_64 is a trivial same-OS cross (universal SDK, shared linker),
+          # so this cuts the Intel build from ~1h to the arm64 build's time.
           - arch: amd64
-            runs_on: macos-15-intel
+            runs_on: macos-14
             target: x86_64-apple-darwin
           - arch: arm64
             runs_on: macos-14
@@ -319,7 +324,11 @@ jobs:
           cache-on-failure: true
 
       - name: Build DBFlux
-        run: cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
+        # vendored-openssl makes ssh2/libssh2 compile OpenSSL from source for the
+        # target instead of linking the runner's system OpenSSL. Required to
+        # cross-compile x86_64 on the Apple Silicon runner (no x86_64 OpenSSL is
+        # present), and keeps both macOS binaries self-contained at runtime.
+        run: cargo build --release --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }}
 
       - name: Create app bundle
         run: |

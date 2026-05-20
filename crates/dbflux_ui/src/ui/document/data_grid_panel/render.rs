@@ -1,17 +1,35 @@
-use super::{DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus};
+use super::{
+    ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
+};
+use crate::ui::common::time_range::view::TimeRangePanel;
 use crate::ui::components::data_table::SortState as TableSortState;
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::controls::Input;
-use dbflux_components::controls::InputState;
-use dbflux_components::primitives::{Icon, Text, surface_raised};
-use dbflux_core::{Pagination, SortDirection, Value};
+use dbflux_components::chart::legend::legend_element;
+use dbflux_components::chart::{
+    CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, ChartDetection, ManualChartSelection, SeriesSpec,
+    SeriesStats, count_columns_for_why, format_resolution, format_span, format_x_value,
+    format_y_value,
+};
+use dbflux_components::chart::{SourceRowRef, point_inspector_element};
+use dbflux_components::controls::{Checkbox, Input, InputState};
+use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
+use dbflux_core::{
+    ColumnKind, DatabaseCategory, Pagination, QueryResultShape, SortDirection, Value,
+};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+
+// Save-row shortcut hint: matches the SaveRow binding in the data-table
+// component (`secondary-enter` — Cmd+Enter on macOS, Ctrl+Enter elsewhere).
+#[cfg(target_os = "macos")]
+const SAVE_ROW_SHORTCUT_HINT: &str = "Cmd+↵";
+#[cfg(not(target_os = "macos"))]
+const SAVE_ROW_SHORTCUT_HINT: &str = "Ctrl+↵";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DataGridContentMode {
@@ -109,11 +127,8 @@ impl Render for DataGridPanel {
             DataSource::Collection { collection, .. } => collection.qualified_name(),
             DataSource::QueryResult { .. } => String::new(),
         };
-        let source_query_prefix = if self.source.is_collection() {
-            "find"
-        } else {
-            "SELECT * FROM"
-        };
+        let (source_query_prefix, filter_keyword) =
+            DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
         let filter_input = self.filter_input.clone();
         let filter_has_value = !self.filter_input.read(cx).value().is_empty();
         let limit_input = self.limit_input.clone();
@@ -145,6 +160,15 @@ impl Render for DataGridPanel {
             content_mode_for_result(uses_result_view, view_mode, has_columns, has_data);
         let shows_table_content = matches!(content_mode, DataGridContentMode::Table);
         let shows_content_controls = has_data || shows_table_content;
+
+        // Show result-tabs strip (Table | Chart) when the result shape is Table
+        // and chart auto-detection succeeded or the driver is TimeSeries.
+        let is_time_series_source =
+            DataGridPanel::connection_category(&self.source, &self.app_state, cx)
+                == Some(DatabaseCategory::TimeSeries);
+        let show_chart_tabs_strip = self.result.shape == QueryResultShape::Table
+            && (self.chart_available(cx) || is_time_series_source)
+            && (shows_table_content || uses_result_view);
 
         // Get edit state from table
         let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
@@ -196,6 +220,7 @@ impl Render for DataGridPanel {
             .when(show_data_toolbar, |d| {
                 d.child(self.render_toolbar(
                     source_query_prefix,
+                    filter_keyword,
                     &source_name,
                     &filter_input,
                     filter_has_value,
@@ -296,9 +321,12 @@ impl Render for DataGridPanel {
             // Grid, Document, or Result View
             .child({
                 let result_view_mode = self.result_view_mode;
+                let row_count_for_strip = row_count;
 
                 div()
                     .flex_1()
+                    .flex()
+                    .flex_col()
                     .overflow_hidden()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -308,38 +336,53 @@ impl Render for DataGridPanel {
                             }
                         }),
                     )
-                    .when(
-                        matches!(content_mode, DataGridContentMode::EmptyFallback),
-                        |d| {
-                            d.flex()
-                                .items_center()
-                                .justify_center()
-                                .child(if is_loading {
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::SM)
-                                        .child(
-                                            Icon::new(AppIcon::Loader)
-                                                .size(px(12.0))
-                                                .color(theme.muted_foreground),
-                                        )
-                                        .child(Text::muted("Loading…"))
-                                        .into_any_element()
-                                } else {
-                                    Text::muted("No data").into_any_element()
-                                })
-                        },
-                    )
-                    .when(
-                        matches!(content_mode, DataGridContentMode::ResultView),
-                        |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
-                    )
-                    .when(matches!(content_mode, DataGridContentMode::Document), |d| {
-                        d.child(self.render_document_view(&theme, cx))
+                    // Result-tabs strip (Table | Chart) at the top of the content area.
+                    .when(show_chart_tabs_strip, |d| {
+                        d.child(self.render_result_tabs_strip(row_count_for_strip, &theme, cx))
                     })
-                    .when(matches!(content_mode, DataGridContentMode::Table), |d| {
-                        d.when_some(self.data_table.clone(), |d, data_table| d.child(data_table))
+                    // Content body — fills remaining space below the strip.
+                    .child({
+                        let content = div().flex_1().overflow_hidden();
+
+                        let content = content.when(
+                            matches!(content_mode, DataGridContentMode::EmptyFallback),
+                            |d| {
+                                d.flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(if is_loading {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::SM)
+                                            .child(
+                                                Icon::new(AppIcon::Loader)
+                                                    .size(px(12.0))
+                                                    .color(theme.muted_foreground),
+                                            )
+                                            .child(Text::muted("Loading…"))
+                                            .into_any_element()
+                                    } else {
+                                        Text::muted("No data").into_any_element()
+                                    })
+                            },
+                        );
+
+                        let content = content.when(
+                            matches!(content_mode, DataGridContentMode::ResultView),
+                            |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
+                        );
+
+                        let content = content
+                            .when(matches!(content_mode, DataGridContentMode::Document), |d| {
+                                d.child(self.render_document_view(&theme, cx))
+                            });
+
+                        content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
+                            d.when_some(self.data_table.clone(), |d, data_table| {
+                                d.child(data_table)
+                            })
+                        })
                     })
             })
             // Status bar
@@ -382,6 +425,7 @@ impl DataGridPanel {
     pub(super) fn render_toolbar(
         &self,
         source_query_prefix: &str,
+        filter_keyword: &str,
         source_name: &str,
         filter_input: &Entity<InputState>,
         filter_has_value: bool,
@@ -415,61 +459,65 @@ impl DataGridPanel {
                     .child(Text::caption(source_query_prefix.to_string()).primary())
                     .child(Text::label(source_name.to_string())),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .child(Text::caption("WHERE").primary())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .w(px(420.0))
-                            .rounded(Radii::SM)
-                            .when(
-                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
-                                |d| d.border_1().border_color(theme.ring),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.switching_input = true;
-                                    this.focus_mode = GridFocusMode::Toolbar;
-                                    this.toolbar_focus = ToolbarFocus::Filter;
-                                    this.edit_state = EditState::Editing;
-                                    cx.notify();
-                                }),
-                            )
-                            .child(div().flex_1().child(Input::new(filter_input).small()))
-                            .when(filter_has_value, |d| {
-                                d.child(
-                                    div()
-                                        .id("clear-filter")
-                                        .w(px(20.0))
-                                        .h(px(20.0))
-                                        .mr(Spacing::XS)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(Radii::SM)
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme.muted_foreground)
-                                        .cursor_pointer()
-                                        .hover(|d| {
-                                            d.bg(theme.secondary).text_color(theme.foreground)
-                                        })
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.filter_input.update(cx, |input, cx| {
-                                                input.set_value("", window, cx);
-                                            });
-                                            this.refresh(window, cx);
-                                        }))
-                                        .child("\u{00d7}"),
+            // Filter input: hidden for drivers that don't support collection filtering
+            // (e.g. TimeSeries/InfluxDB where browse_collection ignores the filter).
+            .when(!filter_keyword.is_empty(), |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .child(Text::caption(filter_keyword.to_string()).primary())
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .w(px(420.0))
+                                .rounded(Radii::SM)
+                                .when(
+                                    show_toolbar_focus && toolbar_focus == ToolbarFocus::Filter,
+                                    |d| d.border_1().border_color(theme.ring),
                                 )
-                            }),
-                    ),
-            )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.switching_input = true;
+                                        this.focus_mode = GridFocusMode::Toolbar;
+                                        this.toolbar_focus = ToolbarFocus::Filter;
+                                        this.edit_state = EditState::Editing;
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(div().flex_1().child(Input::new(filter_input).small()))
+                                .when(filter_has_value, |d| {
+                                    d.child(
+                                        div()
+                                            .id("clear-filter")
+                                            .w(px(20.0))
+                                            .h(px(20.0))
+                                            .mr(Spacing::XS)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(Radii::SM)
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.muted_foreground)
+                                            .cursor_pointer()
+                                            .hover(|d| {
+                                                d.bg(theme.secondary).text_color(theme.foreground)
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.filter_input.update(cx, |input, cx| {
+                                                    input.set_value("", window, cx);
+                                                });
+                                                this.refresh(window, cx);
+                                            }))
+                                            .child("\u{00d7}"),
+                                    )
+                                }),
+                        ),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -746,7 +794,7 @@ impl DataGridPanel {
                             } else {
                                 theme.muted_foreground
                             }))
-                            .child(Text::caption("Ctrl+↵").color(if has_changes {
+                            .child(Text::caption(SAVE_ROW_SHORTCUT_HINT).color(if has_changes {
                                 theme.primary_foreground.opacity(0.7)
                             } else {
                                 theme.muted_foreground.opacity(0.5)
@@ -953,7 +1001,273 @@ impl DataGridPanel {
         }
     }
 
+    // -- Chart Toolbar --
+
+    /// Render the chart toolbar that sits between the result-tabs strip and the
+    /// canvas + rail row.
+    ///
+    /// Delegates the toolbar row to the shared `render_chart_toolbar` function
+    /// and assembles the AxisBar row below it. The AxisBar row is kept here and
+    /// is not part of the shared toolbar.
+    pub(super) fn render_chart_toolbar(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use crate::ui::document::chart::toolbar::{
+            ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar,
+        };
+        use std::sync::Arc;
+
+        // The shell is required for chart mode; fall back gracefully if absent.
+        let Some(chart_shell) = self.chart_shell.clone() else {
+            return div().into_any_element();
+        };
+
+        let resolved_window = self
+            .result
+            .resolved_window
+            .as_ref()
+            .map(|rw| (rw.start_ms, rw.end_ms));
+
+        // Capture clones for the handlers before borrowing self mutably.
+        let shell_for_stats = chart_shell.clone();
+        let time_range_panel_for_preset = self.chart_source_time_range_panel.clone();
+
+        let ctx = ChartToolbarContext {
+            theme,
+            chart_shell,
+            refresh_dropdown: self.refresh_dropdown.clone(),
+            time_range_panel: self.chart_source_time_range_panel.clone(),
+            row_count: self.result.row_count(),
+            resolved_window,
+            source_supports_save: true,
+        };
+
+        let weak_panel = cx.weak_entity();
+        let weak_panel_for_save = cx.weak_entity();
+
+        let handlers = ChartToolbarHandlers {
+            on_select_range_preset: Arc::new(move |i, _window, cx| {
+                if let Some(ref panel) = time_range_panel_for_preset {
+                    panel.update(cx, |p, cx| p.select_preset(i, cx));
+                }
+            }),
+            on_toggle_stats_rail: Arc::new(move |_window, cx| {
+                shell_for_stats.update(cx, |s, cx| {
+                    if s.chart_rail_open && s.chart_rail_tab == ChartRailTab::Stats {
+                        s.chart_rail_open = false;
+                    } else {
+                        s.chart_rail_open = true;
+                        s.chart_rail_tab = ChartRailTab::Stats;
+                    }
+                    cx.notify();
+                });
+            }),
+            on_png_export: Arc::new(move |_window, cx| {
+                if let Some(panel) = weak_panel.upgrade() {
+                    panel.update(cx, |this, _cx| {
+                        this.pending_toast = Some(crate::ui::components::toast::PendingToast {
+                            message: format!(
+                                "PNG export coming in v0.7 — {}",
+                                crate::ui::components::toast::now_hms()
+                            ),
+                            is_error: false,
+                        });
+                    });
+                }
+            }),
+            on_save_chart: Arc::new(move |window, cx| {
+                if let Some(panel) = weak_panel_for_save.upgrade() {
+                    panel.update(cx, |this, cx| {
+                        this.open_collection_chart_save(window, cx);
+                    });
+                }
+            }),
+        };
+
+        let toolbar_row = render_chart_toolbar(ctx, handlers, cx);
+
+        // AxisBar row: shown below the main toolbar when a chart view is live.
+        // Reads bindings and open-pill state from the shell.
+        let (bindings, open_pill, columns) = self
+            .chart_shell
+            .as_ref()
+            .map(|s| {
+                let shell = s.read(cx);
+                (
+                    shell.active_bindings(),
+                    shell.axis_open_pill,
+                    self.result.columns.clone(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    dbflux_components::chart::BindingSpec::default(),
+                    None,
+                    Vec::new(),
+                )
+            });
+
+        let shell_for_pill = self.chart_shell.clone();
+        let shell_for_x = self.chart_shell.clone();
+        let shell_for_y = self.chart_shell.clone();
+        let shell_for_group = self.chart_shell.clone();
+        let shell_for_agg = self.chart_shell.clone();
+
+        let axis_row = dbflux_components::chart::axis_bar_element(
+            &bindings,
+            &columns,
+            open_pill,
+            move |pill, _window, cx| {
+                if let Some(shell) = &shell_for_pill {
+                    shell.update(cx, |s, cx| s.toggle_axis_pill(pill, cx));
+                }
+            },
+            move |col_idx, _window, cx| {
+                if let Some(shell) = &shell_for_x {
+                    shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        b.x = col_idx;
+                        s.apply_bindings(b, cx);
+                    });
+                }
+            },
+            move |col_idx, checked, _window, cx| {
+                if let Some(shell) = &shell_for_y {
+                    shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        if checked {
+                            if !b.y.contains(&col_idx) {
+                                b.y.push(col_idx);
+                            }
+                        } else {
+                            b.y.retain(|&i| i != col_idx);
+                        }
+                        s.apply_bindings(b, cx);
+                    });
+                }
+            },
+            move |group_col, _window, cx| {
+                if let Some(shell) = &shell_for_group {
+                    shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        b.group_by = group_col;
+                        s.apply_bindings(b, cx);
+                    });
+                }
+            },
+            move |agg, _window, cx| {
+                if let Some(shell) = &shell_for_agg {
+                    shell.update(cx, |s, cx| {
+                        let mut b = s.active_bindings();
+                        b.aggregation = agg;
+                        s.apply_bindings(b, cx);
+                    });
+                }
+            },
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(toolbar_row)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .h(px(28.0))
+                    .px(Spacing::SM)
+                    .bg(theme.tab_bar)
+                    .child(axis_row),
+            )
+            .into_any_element()
+    }
+
     // -- Result View Renderers --
+
+    /// Render the Table / Chart tab strip that appears above the result content
+    /// area when the result is Table-shaped and chart detection succeeded (or the
+    /// driver is TimeSeries).
+    ///
+    /// Each tab switches `result_view_mode` on click. The active tab is underlined
+    /// with the theme accent and shown in full foreground weight.
+    pub(super) fn render_result_tabs_strip(
+        &self,
+        row_count: usize,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let current_mode = self.result_view_mode;
+
+        let tabs: &[(ResultViewMode, &str)] = &[
+            (ResultViewMode::Table, "Data"),
+            (ResultViewMode::Chart, "Chart"),
+        ];
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(px(30.0))
+            .px(Spacing::SM)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .children(tabs.iter().map(|(mode, label)| {
+                let mode = *mode;
+                let is_active = mode == current_mode;
+                let label_text: SharedString = (*label).into();
+
+                div()
+                    .id(ElementId::Name(
+                        format!("result-tab-{}", label.to_lowercase()).into(),
+                    ))
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .h_full()
+                    .px(Spacing::SM)
+                    .cursor_pointer()
+                    .border_b_2()
+                    .border_color(if is_active {
+                        theme.accent
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .text_color(if is_active {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_result_view_mode(mode, cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .when(is_active, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
+                            .child(label_text),
+                    )
+                    // Row-count badge on the Data tab only.
+                    .when(mode == ResultViewMode::Table, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(theme.muted_foreground)
+                                .font(font("JetBrains Mono"))
+                                .child(SharedString::from(format!("{}", row_count))),
+                        )
+                    })
+            }))
+    }
 
     pub(super) fn render_result_view(
         &mut self,
@@ -966,6 +1280,97 @@ impl DataGridPanel {
         match mode {
             ResultViewMode::Table => {
                 container = container.when_some(self.data_table.clone(), |d, dt| d.child(dt));
+            }
+            ResultViewMode::Chart => {
+                // Build chart_view on first render before checking whether it exists.
+                let _ = self.ensure_chart_view(cx);
+
+                let (has_chart_view, rail_open, chart_view_entity, hovered_point) = self
+                    .chart_shell
+                    .as_ref()
+                    .map_or((false, false, None, None), |s| {
+                        let shell = s.read(cx);
+                        let point = shell.hovered_data_point(cx);
+                        (
+                            shell.chart_view().is_some(),
+                            shell.chart_rail_open,
+                            shell.chart_view().cloned(),
+                            point,
+                        )
+                    });
+
+                let hovered_source =
+                    hovered_point.and_then(|point| self.chart_host_source_for_point(point, cx));
+
+                // The chart occupies 100% of the area regardless of whether the rail
+                // is open. The rail floats as an absolute-positioned overlay on the
+                // right edge so opening it does not resize the canvas.
+                let chart_area = if let Some(chart_entity) = chart_view_entity {
+                    div().size_full().child(chart_entity).into_any_element()
+                } else {
+                    div()
+                        .size_full()
+                        .child(self.render_chart_degraded(cx))
+                        .into_any_element()
+                };
+
+                let chart_row = div()
+                    .flex_grow()
+                    .size_full()
+                    .pt(px(12.0))
+                    .pb(px(8.0))
+                    .pl(px(8.0))
+                    .pr(px(12.0))
+                    .child(chart_area);
+
+                let body = div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_grow()
+                    .min_h_0()
+                    .child(chart_row)
+                    .when(has_chart_view, |d| {
+                        d.child(self.render_chart_legend_row(theme, cx))
+                    })
+                    .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
+
+                // PointInspector right dock — only visible when the host has a back-link
+                // to the source row (DataDocument with track_source_indices=true).
+                // CodeDocument-backed charts always get None here and the dock stays hidden.
+                let inspector_dock =
+                    hovered_source.map(|source| self.render_point_inspector(source, cx));
+
+                let chart_with_inspector = div()
+                    .flex()
+                    .flex_row()
+                    .size_full()
+                    .min_h_0()
+                    .child(body)
+                    .when_some(inspector_dock, |row, dock| row.child(dock));
+
+                // Name-prompt overlay for "Save chart" on Collection sources.
+                // Build the overlay outside of a closure to avoid borrow conflicts.
+                let save_overlay: Option<AnyElement> =
+                    if self.pending_collection_chart_save.is_some() {
+                        Some(
+                            self.render_collection_chart_save_overlay(theme, cx)
+                                .into_any_element(),
+                        )
+                    } else {
+                        None
+                    };
+
+                let col = div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .child(self.render_chart_toolbar(theme, cx))
+                    .child(chart_with_inspector)
+                    .when_some(save_overlay, |el, overlay| el.child(overlay));
+
+                container = container.child(col);
             }
             ResultViewMode::Text => {
                 let text = self.derived_text().to_string();
@@ -988,6 +1393,1188 @@ impl DataGridPanel {
         }
 
         container
+    }
+
+    /// Render the PointInspector right-dock for the given source row.
+    ///
+    /// Builds the row-value list from the `QueryResult` columns and the raw row
+    /// at `source.row_idx`, then delegates to `point_inspector_element`. Wires
+    /// "Show in tree" via an element ID pattern: the caller listens for mousedown
+    /// on the action button's element ID and calls `chart_host_scroll_to_row`.
+    fn render_point_inspector(
+        &mut self,
+        source: SourceRowRef,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let row_idx = source.row_idx;
+        let row = self.result.rows.get(row_idx);
+
+        let row_values: Vec<(String, String)> = if let Some(row) = row {
+            self.result
+                .columns
+                .iter()
+                .zip(row.iter())
+                .map(|(col, val)| {
+                    use dbflux_core::Value as V;
+                    let display = match val {
+                        V::Null => "null".to_string(),
+                        V::Bool(b) => b.to_string(),
+                        V::Int(i) => i.to_string(),
+                        V::Float(f) => format!("{:.3}", f),
+                        V::Text(s) | V::Json(s) | V::Decimal(s) | V::ObjectId(s) => s.clone(),
+                        V::Bytes(b) => format!("<{} bytes>", b.len()),
+                        V::DateTime(dt) => dt.to_rfc3339(),
+                        V::Date(d) => d.to_string(),
+                        V::Time(t) => t.to_string(),
+                        V::Array(a) => format!("[{} items]", a.len()),
+                        V::Document(o) => format!("{{...{} keys}}", o.len()),
+                        V::Unsupported(s) => format!("<unsupported: {}>", s),
+                    };
+                    (col.name.clone(), display)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        let focused_series_idx = self
+            .chart_shell
+            .as_ref()
+            .map_or(0, |s| s.read(cx).chart_focused_series_idx);
+
+        let series_name = self
+            .chart_shell
+            .as_ref()
+            .and_then(|s| s.read(cx).chart_view().cloned())
+            .map(|cv| cv.read(cx).series_label(focused_series_idx).to_string())
+            .unwrap_or_default();
+
+        let (hovered_x, hovered_y) = self
+            .chart_shell
+            .as_ref()
+            .and_then(|s| {
+                let shell = s.read(cx);
+                let chart_entity = shell.chart_view()?.clone();
+                let chart = chart_entity.read(cx);
+                let x = chart.hover_data_x()?;
+                let series_idx = chart.focused_series_idx();
+                let x_is_time = chart.x_is_time();
+                let x_str = dbflux_components::chart::format_x_value(x, x_is_time);
+                // Resolve Y from the nearest decimated point.
+                let y_str = chart
+                    .nearest_point_idx(series_idx, x)
+                    .and_then(|pi| {
+                        // Read the Y value from the decimated point directly.
+                        let pts = chart.render_model_decimated_series(series_idx)?;
+                        Some(dbflux_components::chart::format_y_value(pts.get(pi)?.1))
+                    })
+                    .unwrap_or_default();
+                Some((x_str, y_str))
+            })
+            .unwrap_or_default();
+
+        div()
+            .h_full()
+            .flex_shrink_0()
+            .child(point_inspector_element(
+                source,
+                &row_values,
+                &series_name,
+                &hovered_x,
+                &hovered_y,
+                None,
+                None,
+            ))
+            // Overlay listener: catch mousedown events bubbling up from the
+            // "Show in tree" button and scroll the table to the source row.
+            // The action button's element ID encodes the row index; the mousedown
+            // target check is coarse (any click in the inspector dock scrolls to
+            // the hovered source row). Precise per-button wiring would require
+            // element hit-test support that GPUI does not expose in listeners.
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                    this.chart_host_scroll_to_row(row_idx, cx);
+                    cx.notify();
+                }),
+            )
+    }
+
+    /// Render the legend row below the chart canvas.
+    ///
+    /// Reads series specs, palette colours, and stats from the `ChartView` entity,
+    /// then delegates to `legend_element` with a toggle callback that calls
+    /// `toggle_chart_series_hidden` on this panel.
+    pub(super) fn render_chart_legend_row(
+        &mut self,
+        _theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let Some(shell_entity) = self.chart_shell.as_ref() else {
+            return div().into_any_element();
+        };
+
+        let shell = shell_entity.read(cx);
+        let Some(chart_entity) = shell.chart_view().cloned() else {
+            return div().into_any_element();
+        };
+
+        let cv = chart_entity.read(cx);
+        let series = cv.spec_series().to_vec();
+        let palette = cv.palette_colors().to_vec();
+        let stats = cv.series_stats().to_vec();
+        let focused_idx = cv.focused_series_idx();
+
+        let hidden = shell.chart_hidden_series.clone();
+        let panel_entity = cx.entity().clone();
+
+        let on_toggle = move |idx: usize, _window: &mut Window, cx: &mut App| {
+            panel_entity.update(cx, |this, cx| {
+                this.toggle_chart_series_hidden(idx, cx);
+            });
+        };
+
+        legend_element(
+            &series,
+            &palette,
+            &stats,
+            &hidden,
+            focused_idx,
+            Some(on_toggle),
+        )
+        .into_any_element()
+    }
+
+    /// Render the degraded-state chart panel when `ensure_chart_view` returned `None`.
+    ///
+    /// Shows a card frame with an icon, title, body text, a result-shape preview,
+    /// Render the name-prompt overlay for "Save chart" on a Collection source.
+    ///
+    /// Reads the name input from `pending_collection_chart_save`. Must only be
+    /// called when `pending_collection_chart_save.is_some()`.
+    fn render_collection_chart_save_overlay(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use dbflux_components::controls::Input;
+        use dbflux_components::primitives::Text;
+        use gpui_component::Sizable;
+        use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
+
+        let name_input = self
+            .pending_collection_chart_save
+            .as_ref()
+            .expect("render_collection_chart_save_overlay called when state is None")
+            .name_input
+            .clone();
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.background.opacity(0.6))
+            .child(
+                div()
+                    .bg(theme.secondary)
+                    .border_1()
+                    .border_color(theme.border)
+                    .p(px(16.0))
+                    .w(px(360.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(Text::label("Save chart"))
+                    .child(Input::new(&name_input).placeholder("Chart name"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(6.0))
+                            .justify_end()
+                            .child(
+                                Button::new("cancel-collection-chart-save")
+                                    .label("Cancel")
+                                    .small()
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.cancel_collection_chart_save(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("confirm-collection-chart-save")
+                                    .label("Save")
+                                    .small()
+                                    .with_variant(ButtonVariant::Primary)
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.confirm_collection_chart_save(cx);
+                                    })),
+                            ),
+                    ),
+            )
+    }
+
+    /// and two action buttons:
+    /// - "Open Table tab" — switches back to Table mode.
+    /// - "Pick time column…" — toggles `chart_picker_overlay_open`.
+    ///
+    /// When the picker overlay is open, `render_chart_picker_overlay` is shown below
+    /// the card.
+    fn render_chart_degraded(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (detection, picker_open) = self
+            .chart_shell
+            .as_ref()
+            .map(|s| {
+                let shell = s.read(cx);
+                (
+                    shell.chart_detection.clone(),
+                    shell.chart_picker_overlay_open,
+                )
+            })
+            .unwrap_or((None, false));
+
+        let (title, body, can_pick) = match &detection {
+            Some(ChartDetection::NoTimeColumn) | None => (
+                "No time column detected",
+                "This result has no Timestamp column. Pick a column to use as the time axis.",
+                true,
+            ),
+            Some(ChartDetection::NoNumericSeries) => (
+                "No numeric series",
+                "This result has no Float or Integer columns to plot as series.",
+                true,
+            ),
+            Some(ChartDetection::EmptyResult) => (
+                "No data yet",
+                "Run the query to populate the chart view.",
+                false,
+            ),
+            Some(ChartDetection::Ok { .. }) => (
+                "Chart build failed",
+                "The query result has chartable columns but the chart could not be built.",
+                false,
+            ),
+        };
+
+        // Column shape preview chips.
+        let row_count = self.result.row_count();
+        let col_count = self.result.columns.len();
+        let shape_label: SharedString =
+            format!("{} rows × {} columns", row_count, col_count).into();
+
+        let col_chips: Vec<AnyElement> = self
+            .result
+            .columns
+            .iter()
+            .take(12)
+            .map(|c| {
+                let kind_label = match c.kind {
+                    ColumnKind::Timestamp => "ts",
+                    ColumnKind::Float => "f64",
+                    ColumnKind::Integer => "i64",
+                    ColumnKind::Text => "str",
+                    ColumnKind::Unknown | _ => "?",
+                };
+                let chip_label: SharedString = format!("{} · {}", c.name, kind_label).into();
+                div()
+                    .px(Spacing::XS)
+                    .py(px(2.0))
+                    .rounded(Radii::SM)
+                    .text_size(px(10.0))
+                    .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                    .bg(gpui::hsla(0.0, 0.0, 0.5, 0.1))
+                    .child(chip_label)
+                    .into_any_element()
+            })
+            .collect();
+
+        // Card frame.
+        let card = div()
+            .max_w(px(520.0))
+            .p(px(24.0))
+            .rounded(Radii::LG)
+            .border_1()
+            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.1))
+            .bg(gpui::hsla(0.0, 0.0, 0.12, 1.0))
+            .flex()
+            .flex_col()
+            .gap(Spacing::MD)
+            // Icon + title row
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .child(
+                        Icon::new(AppIcon::CircleAlert)
+                            .size(px(20.0))
+                            .color(gpui::hsla(0.097, 1.0, 0.666, 0.8)),
+                    )
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(SharedString::from(title)),
+                    ),
+            )
+            // Body text
+            .child(
+                div()
+                    .text_size(FontSizes::SM)
+                    .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                    .child(SharedString::from(body)),
+            )
+            // Shape preview
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XS)
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+                            .child(shape_label),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(Spacing::XS)
+                            .children(col_chips),
+                    ),
+            )
+            // Action row
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    // "Open Table tab" ghost button
+                    .child(
+                        div()
+                            .id("cd-open-table")
+                            .px(Spacing::SM)
+                            .py(Spacing::XS)
+                            .rounded(Radii::SM)
+                            .text_size(FontSizes::SM)
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.15))
+                            .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                            .hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.set_result_view_mode(ResultViewMode::Table, cx);
+                                }),
+                            )
+                            .child("Open Table tab"),
+                    )
+                    // "Pick time column…" primary button (only when picker makes sense)
+                    .when(can_pick, |d| {
+                        let label = if picker_open {
+                            "Hide picker"
+                        } else {
+                            "Pick time column…"
+                        };
+                        d.child(
+                            div()
+                                .id("cd-pick-column")
+                                .px(Spacing::SM)
+                                .py(Spacing::XS)
+                                .rounded(Radii::SM)
+                                .text_size(FontSizes::SM)
+                                .cursor_pointer()
+                                .bg(CHART_ACCENT_PRIMARY.opacity(0.9))
+                                .text_color(gpui::black())
+                                .hover(|d| d.bg(CHART_ACCENT_PRIMARY))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        if let Some(shell) = &this.chart_shell {
+                                            shell.update(cx, |s, _| {
+                                                s.chart_picker_overlay_open =
+                                                    !s.chart_picker_overlay_open;
+                                            });
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(label),
+                        )
+                    }),
+            );
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_start()
+            .p(Spacing::LG)
+            .gap(Spacing::MD)
+            .child(card)
+            // Picker overlay below the card when open.
+            .when(picker_open && can_pick, |d| {
+                d.child(self.render_chart_picker_overlay(cx))
+            })
+    }
+
+    /// Render the manual column picker as an overlay below the degraded card.
+    ///
+    /// Contains the X-axis column selector, Y-axis checkboxes, and Apply button.
+    /// Extracted from the old inline degraded view so the card action button can toggle it.
+    fn render_chart_picker_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let y_candidates: Vec<(usize, String)> = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, c)| (i, c.name.clone()))
+            .collect();
+
+        let x_candidates: Vec<(usize, String)> = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Timestamp | ColumnKind::Text | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, c)| (i, c.name.clone()))
+            .collect();
+
+        let (selected_x_col, y_checked) = self
+            .chart_shell
+            .as_ref()
+            .map(|s| {
+                let shell = s.read(cx);
+                (
+                    shell.chart_picker_x_col,
+                    shell.chart_picker_y_checked.clone(),
+                )
+            })
+            .unwrap_or((0, Vec::new()));
+        let any_y_checked = y_checked.iter().any(|&c| c);
+
+        let x_selected_candidate_idx = x_candidates
+            .iter()
+            .position(|(col_idx, _)| *col_idx == selected_x_col)
+            .unwrap_or(0);
+
+        let mut picker = div()
+            .max_w(px(520.0))
+            .p(px(20.0))
+            .rounded(Radii::LG)
+            .border_1()
+            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.08))
+            .bg(gpui::hsla(0.0, 0.0, 0.10, 1.0))
+            .flex()
+            .flex_col()
+            .gap(Spacing::MD);
+
+        if !x_candidates.is_empty() {
+            let x_row =
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XS)
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .child(Text::body("X axis (time / label column)")),
+                    )
+                    .child(div().flex().flex_wrap().gap(Spacing::XS).children(
+                        x_candidates.iter().enumerate().map(
+                            |(candidate_idx, (col_idx, col_name))| {
+                                let col_idx = *col_idx;
+                                let is_selected = candidate_idx == x_selected_candidate_idx;
+                                let label = col_name.clone();
+                                div()
+                                    .id(ElementId::Name(format!("chart-x-col-{}", col_idx).into()))
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .text_size(FontSizes::SM)
+                                    .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2)))
+                                    .when(!is_selected, |d| {
+                                        d.hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)))
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            if let Some(shell) = &this.chart_shell {
+                                                shell.update(cx, |s, _| {
+                                                    s.chart_picker_x_col = col_idx;
+                                                });
+                                            }
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(label)
+                            },
+                        ),
+                    ));
+
+            picker = picker.child(x_row);
+        }
+
+        if !y_candidates.is_empty() {
+            let y_row = div()
+                .flex()
+                .flex_col()
+                .gap(Spacing::XS)
+                .child(
+                    div()
+                        .text_size(FontSizes::SM)
+                        .child(Text::body("Y axis (numeric columns)")),
+                )
+                .child(
+                    div().flex().flex_col().gap(Spacing::XS).children(
+                        y_candidates
+                            .iter()
+                            .enumerate()
+                            .map(|(candidate_idx, (_, col_name))| {
+                                let checked =
+                                    y_checked.get(candidate_idx).copied().unwrap_or(false);
+                                let label = col_name.clone();
+                                Checkbox::new(ElementId::Name(
+                                    format!("chart-y-col-{}", candidate_idx).into(),
+                                ))
+                                .checked(checked)
+                                .label(label)
+                                .on_click(cx.listener(
+                                    move |this, &new_checked, _, cx| {
+                                        if let Some(shell) = &this.chart_shell {
+                                            shell.update(cx, |s, _| {
+                                                if let Some(slot) =
+                                                    s.chart_picker_y_checked.get_mut(candidate_idx)
+                                                {
+                                                    *slot = new_checked;
+                                                }
+                                            });
+                                        }
+                                        cx.notify();
+                                    },
+                                ))
+                            }),
+                    ),
+                );
+
+            picker = picker.child(y_row);
+        }
+
+        // Apply button — enabled only when at least one Y column is checked.
+        let x_col_snapshot = selected_x_col;
+        let y_col_indices: Vec<usize> = y_candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(candidate_idx, (col_idx, _))| {
+                if y_checked.get(candidate_idx).copied().unwrap_or(false) {
+                    Some(*col_idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let apply_btn = div()
+            .id("chart-picker-apply")
+            .px(Spacing::MD)
+            .py(Spacing::SM)
+            .rounded(Radii::SM)
+            .text_size(FontSizes::SM)
+            .when(any_y_checked, |d| {
+                d.cursor_pointer()
+                    .bg(CHART_ACCENT_PRIMARY.opacity(0.9))
+                    .text_color(gpui::black())
+                    .hover(|d| d.bg(CHART_ACCENT_PRIMARY))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            if let Some(shell) = &this.chart_shell {
+                                let selection = ManualChartSelection {
+                                    x_col: x_col_snapshot,
+                                    y_cols: y_col_indices.clone(),
+                                };
+                                shell.update(cx, |s, _| {
+                                    s.chart_manual_selection = Some(selection);
+                                    s.chart_view = None;
+                                    s.chart_view_observer = None;
+                                    s.chart_picker_overlay_open = false;
+                                });
+                            }
+                            cx.notify();
+                        }),
+                    )
+            })
+            .when(!any_y_checked, |d| {
+                d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.3))
+                    .text_color(gpui::hsla(0.0, 0.0, 0.5, 0.7))
+            })
+            .child("Apply");
+
+        picker.child(apply_btn)
+    }
+
+    /// Render the 320px Stats rail shown when `chart_rail_open` is true.
+    ///
+    /// The Configure tab was removed in Phase E (replaced by AxisBar pills).
+    /// Only the Stats tab remains accessible via the Stats toolbar button.
+    fn render_chart_rail(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let body = self.render_rail_stats_tab(theme, cx).into_any_element();
+
+        div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .bottom_0()
+            .w(gpui::px(320.0))
+            .flex()
+            .flex_col()
+            .border_l_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
+            .occlude()
+            .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
+    }
+
+    /// Section container helper for the right dock panels.
+    fn dock_section(
+        content: impl IntoElement,
+        theme: &gpui_component::theme::Theme,
+    ) -> impl IntoElement {
+        div()
+            .px(px(14.0))
+            .py(px(12.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(content)
+    }
+
+    /// Section header label for the right dock panels.
+    /// Renders uppercase tracked muted 10px text, optionally prefixed by an icon.
+    fn dock_header(label: &str) -> impl IntoElement {
+        div()
+            .text_size(px(10.0))
+            .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+            .font_weight(gpui::FontWeight::BOLD)
+            .mb(px(6.0))
+            .child(SharedString::from(label.to_uppercase()))
+    }
+
+    /// Key/value row for the right dock panels.
+    /// `k` is shown muted at 10px, `v` is the value element at 11px.
+    fn dock_kv_row(k: &str, v: impl IntoElement) -> impl IntoElement {
+        div()
+            .flex()
+            .items_start()
+            .gap(px(8.0))
+            .py(px(2.0))
+            .child(
+                div()
+                    .w(px(96.0))
+                    .flex_shrink_0()
+                    .text_size(px(10.0))
+                    .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+                    .child(SharedString::from(k.to_string())),
+            )
+            .child(div().flex_1().text_size(px(11.0)).child(v))
+    }
+
+    #[allow(dead_code)]
+    /// Configure tab body: WHY paragraph, X-column selector, Y-column
+    /// checkboxes with inline avg/last, AXIS & STACKING read-only markers,
+    /// and Reset-to-auto + Apply footer buttons.
+    ///
+    /// Preserved for reference only. Replaced by `AxisBar` as of Phase E.
+    fn render_rail_configure_tab(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use dbflux_core::ColumnKind;
+
+        let columns = &self.result.columns;
+        let (num_numeric, num_ts) = count_columns_for_why(columns);
+
+        let x_candidates: Vec<(usize, String)> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Timestamp | ColumnKind::Text | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, c)| (i, c.name.clone()))
+            .collect();
+
+        let y_candidates: Vec<(usize, String)> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    ColumnKind::Float | ColumnKind::Integer | ColumnKind::Unknown
+                )
+            })
+            .map(|(i, c)| (i, c.name.clone()))
+            .collect();
+
+        let (selected_x, y_checked, stats, active_y_cols, detection_ok, has_manual) =
+            self.chart_shell.as_ref().map_or_else(
+                || (0usize, vec![], vec![], vec![], false, false),
+                |s| {
+                    let shell = s.read(cx);
+                    let stats: Vec<Option<SeriesStats>> = shell
+                        .chart_view()
+                        .map(|cv| cv.read(cx).series_stats().to_vec())
+                        .unwrap_or_default();
+
+                    let active_y_cols: Vec<usize> =
+                        if let Some(manual) = &shell.chart_manual_selection {
+                            manual.y_cols.clone()
+                        } else if let Some(ChartDetection::Ok { numeric_cols, .. }) =
+                            &shell.chart_detection
+                        {
+                            numeric_cols.clone()
+                        } else {
+                            vec![]
+                        };
+
+                    let detection_ok =
+                        matches!(&shell.chart_detection, Some(ChartDetection::Ok { .. }));
+                    let has_manual = shell.chart_manual_selection.is_some();
+
+                    (
+                        shell.chart_rail_picker_x_col,
+                        shell.chart_rail_picker_y_checked.clone(),
+                        stats,
+                        active_y_cols,
+                        detection_ok,
+                        has_manual,
+                    )
+                },
+            );
+
+        let any_y_checked = y_checked.iter().any(|&c| c);
+        let reset_enabled = detection_ok || has_manual;
+
+        let why_text = format!(
+            "The result has {} numeric column{} and {} timestamp-like column{}. \
+             Pick which one is the time axis and which series to plot.",
+            num_numeric,
+            if num_numeric == 1 { "" } else { "s" },
+            num_ts,
+            if num_ts == 1 { "" } else { "s" },
+        );
+
+        div()
+            .id("rail-configure-scroll")
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            // WHY THIS PANEL section
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(Self::dock_header("Why this panel"))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground)
+                            .child(SharedString::from(why_text)),
+                    ),
+                theme,
+            ))
+            // TIME COLUMN section
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(Self::dock_header("Time column"))
+                    .children(x_candidates.iter().enumerate().map(
+                        |(cand_idx, (col_idx, col_name))| {
+                            let col_idx = *col_idx;
+                            let is_selected = cand_idx == selected_x;
+                            let label = col_name.clone();
+                            div()
+                                .id(ElementId::Name(format!("rail-x-col-{}", col_idx).into()))
+                                .px(px(8.0))
+                                .py(px(3.0))
+                                .rounded(Radii::SM)
+                                .cursor_pointer()
+                                .text_size(px(11.0))
+                                .when(is_selected, |d| {
+                                    d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.18))
+                                        .text_color(theme.foreground)
+                                })
+                                .when(!is_selected, |d| {
+                                    d.text_color(theme.muted_foreground)
+                                        .hover(|d| d.bg(theme.secondary))
+                                })
+                                .on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        if let Some(shell) = &this.chart_shell {
+                                            shell.update(cx, |s, _| {
+                                                s.chart_rail_picker_x_col = cand_idx;
+                                            });
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(label)
+                        },
+                    )),
+                theme,
+            ))
+            // SERIES section
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(Self::dock_header("Series"))
+                    .children(y_candidates.iter().enumerate().map(
+                        |(cand_idx, (col_idx, col_name))| {
+                            let col_idx = *col_idx;
+                            let checked = y_checked.get(cand_idx).copied().unwrap_or(false);
+                            let label = col_name.clone();
+
+                            // Find this column's series index in active_y_cols.
+                            let series_idx_opt = active_y_cols.iter().position(|&ci| ci == col_idx);
+                            let stat_label = series_idx_opt
+                                .and_then(|si| stats.get(si).copied().flatten())
+                                .map(|s| {
+                                    format!(
+                                        "avg {} · last {}",
+                                        format_y_value(s.avg),
+                                        format_y_value(s.last)
+                                    )
+                                })
+                                .unwrap_or_else(|| "—".to_string());
+
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    Checkbox::new(ElementId::Name(
+                                        format!("rail-y-col-{}", cand_idx).into(),
+                                    ))
+                                    .checked(checked)
+                                    .label(label)
+                                    .on_click(cx.listener(
+                                        move |this, &new_checked, _, cx| {
+                                            if let Some(shell) = &this.chart_shell {
+                                                shell.update(cx, |s, _| {
+                                                    if let Some(slot) = s
+                                                        .chart_rail_picker_y_checked
+                                                        .get_mut(cand_idx)
+                                                    {
+                                                        *slot = new_checked;
+                                                    }
+                                                });
+                                            }
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    div()
+                                        .pl(px(20.0))
+                                        .text_size(FontSizes::XS)
+                                        .text_color(theme.muted_foreground)
+                                        .child(stat_label),
+                                )
+                        },
+                    )),
+                theme,
+            ))
+            // AXIS & STACKING section (read-only, v0.6 placeholders)
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(Self::dock_header("Axis & Stacking"))
+                    .child(Self::dock_kv_row(
+                        "y-axis",
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.foreground)
+                            .child("linear · 0 → auto"),
+                    ))
+                    .child(Self::dock_kv_row(
+                        "stack",
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground)
+                            .child("off (v0.6.0)"),
+                    ))
+                    .child(Self::dock_kv_row(
+                        "interpolation",
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.foreground)
+                            .child("linear"),
+                    )),
+                theme,
+            ))
+            // Footer: Reset + Apply
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .px(px(14.0))
+                    .py(px(10.0))
+                    // Reset-to-auto button
+                    .child(
+                        div()
+                            .id("rail-reset-btn")
+                            .px(Spacing::SM)
+                            .py(gpui::px(3.0))
+                            .rounded(Radii::SM)
+                            .text_size(FontSizes::XS)
+                            .when(reset_enabled, |d| {
+                                d.cursor_pointer()
+                                    .text_color(theme.foreground)
+                                    .hover(|d| d.bg(theme.secondary))
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.reset_chart_rail_to_auto(cx);
+                                        }),
+                                    )
+                            })
+                            .when(!reset_enabled, |d| {
+                                d.text_color(theme.muted_foreground).opacity(0.4)
+                            })
+                            .child("Reset"),
+                    )
+                    // Apply button
+                    .child(
+                        div()
+                            .id("rail-apply-btn")
+                            .px(Spacing::SM)
+                            .py(gpui::px(3.0))
+                            .rounded(Radii::SM)
+                            .text_size(FontSizes::XS)
+                            .when(any_y_checked, |d| {
+                                d.cursor_pointer()
+                                    .bg(gpui::hsla(0.6, 0.7, 0.55, 1.0))
+                                    .text_color(gpui::white())
+                                    .hover(|d| d.bg(gpui::hsla(0.6, 0.7, 0.50, 1.0)))
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.apply_chart_rail_selection(cx);
+                                        }),
+                                    )
+                            })
+                            .when(!any_y_checked, |d| {
+                                d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.3))
+                                    .text_color(gpui::hsla(0.0, 0.0, 0.5, 0.7))
+                            })
+                            .child("Apply"),
+                    ),
+            )
+    }
+
+    /// Stats tab body: focused-series descriptive statistics, window summary,
+    /// and a SOURCE placeholder section for future driver-provided metadata.
+    fn render_rail_stats_tab(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        // Read focus from the live ChartView so hover-driven focus changes
+        // (which only mutate the chart entity's state) update the Stats tab
+        // on the next render. Falling back to the shell's cached index when
+        // the chart entity is not yet built keeps the Reset/rebuild path
+        // working without flicker.
+        let (focused_idx, chart_view_opt) = self
+            .chart_shell
+            .as_ref()
+            .map(|s| {
+                let shell = s.read(cx);
+                let cv = shell.chart_view().cloned();
+                let fi = cv
+                    .as_ref()
+                    .map(|cv| cv.read(cx).focused_series_idx())
+                    .unwrap_or(shell.chart_focused_series_idx);
+                (fi, cv)
+            })
+            .unwrap_or((0, None));
+
+        let (stats_opt, label, color, x_min, x_max, x_is_time) = if let Some(cv) = &chart_view_opt {
+            let view = cv.read(cx);
+            let s = view.series_stats().get(focused_idx).copied().flatten();
+            let label = view.series_label(focused_idx).to_string();
+            let color = view.series_color(focused_idx);
+            let (x_min, x_max) = view.data_x_bounds();
+            let x_is_time = view.x_is_time();
+            (s, label, color, x_min, x_max, x_is_time)
+        } else {
+            // Rail may briefly be open while chart_view is None (e.g. during
+            // rebuild after Apply). Render an empty state.
+            return div()
+                .p_2()
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child("Rebuilding chart…")
+                .into_any_element();
+        };
+
+        let Some(stats) = stats_opt else {
+            return div()
+                .p_2()
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child("No stats available for this series.")
+                .into_any_element();
+        };
+
+        let span_ms = x_max - x_min;
+        let start_label = format_x_value(x_min, x_is_time);
+        let end_label = format_x_value(x_max, x_is_time);
+        let span_label = format_span(span_ms);
+        let points_count = self.result.rows.len();
+
+        // Value color per stat:
+        //   min, max, avg  → CHART_ACCENT_CYAN  (#95E6CB)
+        //   p99            → CHART_ACCENT_PRIMARY (#FFB454 / theme primary)
+        //   others         → theme.foreground
+        let cyan_val = |v: f64| -> gpui::AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(CHART_ACCENT_CYAN)
+                .child(SharedString::from(format_y_value(v)))
+                .into_any_element()
+        };
+        let primary_val = |v: f64| -> gpui::AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(CHART_ACCENT_PRIMARY)
+                .child(SharedString::from(format_y_value(v)))
+                .into_any_element()
+        };
+        let fg_val = |v: f64| -> gpui::AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.foreground)
+                .child(SharedString::from(format_y_value(v)))
+                .into_any_element()
+        };
+        let str_val = |s: String| -> gpui::AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.foreground)
+                .child(SharedString::from(s))
+                .into_any_element()
+        };
+        let unavail_val = || -> gpui::AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.muted_foreground)
+                .italic()
+                .child("unavailable")
+                .into_any_element()
+        };
+
+        div()
+            .id("rail-stats-scroll")
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            // SERIES header
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(div().w(px(10.0)).h(px(10.0)).rounded_sm().bg(color))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(theme.foreground)
+                            .child(SharedString::from(label)),
+                    ),
+                theme,
+            ))
+            // STATS section
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(Self::dock_header("Stats"))
+                    .child(Self::dock_kv_row("min", cyan_val(stats.min)))
+                    .child(Self::dock_kv_row("max", cyan_val(stats.max)))
+                    .child(Self::dock_kv_row("avg", cyan_val(stats.avg)))
+                    .child(Self::dock_kv_row("p50", fg_val(stats.p50)))
+                    .child(Self::dock_kv_row("p95", fg_val(stats.p95)))
+                    .child(Self::dock_kv_row("p99", primary_val(stats.p99)))
+                    .child(Self::dock_kv_row("last", fg_val(stats.last))),
+                theme,
+            ))
+            // WINDOW section
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(Self::dock_header("Window"))
+                    .child(Self::dock_kv_row("start", str_val(start_label)))
+                    .child(Self::dock_kv_row("end", str_val(end_label)))
+                    .child(Self::dock_kv_row("span", str_val(span_label)))
+                    .child(Self::dock_kv_row(
+                        "points",
+                        str_val(format!("{}", points_count)),
+                    )),
+                theme,
+            ))
+            // SOURCE section — placeholder until drivers populate QueryResult.metadata
+            // TODO(v0.7): wire driver-provided metadata via QueryResult.metadata
+            .child(Self::dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(Self::dock_header("Source"))
+                    .child(Self::dock_kv_row("measurement", unavail_val()))
+                    .child(Self::dock_kv_row("field", unavail_val()))
+                    .child(Self::dock_kv_row("host", unavail_val()))
+                    .child(Self::dock_kv_row("region", unavail_val())),
+                theme,
+            ))
+            .into_any_element()
     }
 
     fn render_text_view(
@@ -1088,6 +2675,17 @@ impl DataGridPanel {
             None
         };
 
+        // Chart toggling for Table-shaped results is now handled by the
+        // result-tabs strip rendered at the top of the content area (T12).
+        // The status-bar pill row must NOT include Chart for Table-shaped results
+        // to avoid duplicating the control.
+        //
+        // For non-Table shapes (Json / Text / Binary), the pill row remains the
+        // only mode selector and Chart is never eligible there.
+        // Chart toggling for Table-shaped results is now handled by the
+        // result-tabs strip rendered at the top of the content area (T12).
+        // The status-bar pills never include Chart — for non-Table shapes,
+        // `available_for_shape` never returns Chart anyway.
         let available_modes = if uses_result_view {
             ResultViewMode::available_for_shape(&self.result.shape)
         } else {
@@ -1121,27 +2719,29 @@ impl DataGridPanel {
                             .color(theme.warning),
                         )
                     })
-                    // Result view mode selector (for non-Table shapes)
-                    .when(available_modes.len() > 1, |d| {
-                        d.child(div().flex().items_center().gap_0().children(
-                            available_modes.iter().enumerate().map(|(i, mode)| {
-                                let mode = *mode;
-                                let is_active = mode == current_result_mode;
-                                div()
-                                    .id(ElementId::Name(format!("result-view-{}", i).into()))
-                                    .px(Spacing::SM)
-                                    .text_size(FontSizes::XS)
-                                    .cursor_pointer()
-                                    .rounded(Radii::SM)
-                                    .when(is_active, |d| d.bg(theme.accent.opacity(0.15)))
-                                    .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.set_result_view_mode(mode, cx);
-                                    }))
-                                    .child(Self::result_mode_label(mode.label(), is_active))
-                            }),
-                        ))
-                    })
+                    .when(
+                        available_modes.len() > 1 && current_result_mode != ResultViewMode::Chart,
+                        |d| {
+                            d.child(div().flex().items_center().gap_0().children(
+                                available_modes.iter().enumerate().map(|(i, mode)| {
+                                    let mode = *mode;
+                                    let is_active = mode == current_result_mode;
+                                    div()
+                                        .id(ElementId::Name(format!("result-view-{}", i).into()))
+                                        .px(Spacing::SM)
+                                        .text_size(FontSizes::XS)
+                                        .cursor_pointer()
+                                        .rounded(Radii::SM)
+                                        .when(is_active, |d| d.bg(theme.accent.opacity(0.15)))
+                                        .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.set_result_view_mode(mode, cx);
+                                        }))
+                                        .child(Self::result_mode_label(mode.label(), is_active))
+                                }),
+                            ))
+                        },
+                    )
                     // Shape badge
                     .when_some(result_shape_label, |d, shape| {
                         let label = match &shape {
@@ -1372,33 +2972,6 @@ impl DataGridPanel {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::DataGridContentMode;
-    use crate::ui::document::data_view::DataViewMode;
-
-    #[test]
-    fn table_mode_with_columns_and_zero_rows_prefers_table_content() {
-        let mode = super::content_mode_for_result(false, DataViewMode::Table, true, false);
-
-        assert_eq!(mode, DataGridContentMode::Table);
-    }
-
-    #[test]
-    fn table_mode_without_columns_uses_empty_fallback() {
-        let mode = super::content_mode_for_result(false, DataViewMode::Table, false, false);
-
-        assert_eq!(mode, DataGridContentMode::EmptyFallback);
-    }
-
-    #[test]
-    fn document_mode_with_columns_and_zero_rows_keeps_empty_fallback() {
-        let mode = super::content_mode_for_result(false, DataViewMode::Document, true, false);
-
-        assert_eq!(mode, DataGridContentMode::EmptyFallback);
-    }
-}
-
 fn format_hex_dump(data: &[u8]) -> String {
     const BYTES_PER_LINE: usize = 16;
 
@@ -1449,5 +3022,32 @@ fn format_hex_dump(data: &[u8]) -> String {
         "(empty)".to_string()
     } else {
         lines.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DataGridContentMode;
+    use crate::ui::document::data_view::DataViewMode;
+
+    #[test]
+    fn table_mode_with_columns_and_zero_rows_prefers_table_content() {
+        let mode = super::content_mode_for_result(false, DataViewMode::Table, true, false);
+
+        assert_eq!(mode, DataGridContentMode::Table);
+    }
+
+    #[test]
+    fn table_mode_without_columns_uses_empty_fallback() {
+        let mode = super::content_mode_for_result(false, DataViewMode::Table, false, false);
+
+        assert_eq!(mode, DataGridContentMode::EmptyFallback);
+    }
+
+    #[test]
+    fn document_mode_with_columns_and_zero_rows_keeps_empty_fallback() {
+        let mode = super::content_mode_for_result(false, DataViewMode::Document, true, false);
+
+        assert_eq!(mode, DataGridContentMode::EmptyFallback);
     }
 }

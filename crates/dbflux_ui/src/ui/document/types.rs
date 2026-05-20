@@ -38,6 +38,8 @@ pub enum DocumentKind {
     Audit,
     // Schema relationship diagram
     SchemaViz,
+    // Standalone chart document
+    Chart,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -64,6 +66,7 @@ pub enum DocumentIcon {
     Collection,
     Audit,
     SchemaViz,
+    Chart,
 }
 
 impl DocumentIcon {
@@ -79,6 +82,7 @@ impl DocumentIcon {
             Self::Collection => "folder",
             Self::Audit => "shield",
             Self::SchemaViz => "git-branch",
+            Self::Chart => "bar-chart-2",
         }
     }
 }

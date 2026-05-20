@@ -10,11 +10,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
+use crate::ui::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::filter_bar::{FilterBarItem, FilterBarMode, FilterBarState};
 use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
 use crate::ui::components::toast::{PendingToast, flush_pending_toast};
-use crate::ui::document::audit::filters::{format_timestamp_ms, validate_custom_range_parts};
+use crate::ui::document::audit::filters::format_timestamp_ms;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::controls::{
@@ -154,6 +155,13 @@ pub struct AuditDocument {
     pending_toast: Option<PendingToast>,
     export_menu_open: bool,
     search_input: Entity<InputState>,
+    /// Owns the time-range dropdown, date picker, and hour/minute dropdowns.
+    /// The audit document reads sub-entities from it for rendering and
+    /// subscribes to `TimeRangeChanged` for filter updates.
+    time_range_panel: Entity<TimeRangePanel>,
+    // Entity handles extracted from `time_range_panel` at construction.
+    // Kept here so rendering and `FilterBarItem` wiring can access them
+    // without needing `cx` on every render path.
     custom_date_range_picker: Entity<DatePickerState>,
     custom_start_hour_dropdown: Entity<Dropdown>,
     custom_start_minute_dropdown: Entity<Dropdown>,
@@ -243,32 +251,6 @@ impl AuditDocument {
         let focus_handle = cx.focus_handle();
 
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder));
-        let custom_date_range_picker =
-            cx.new(|cx| DatePickerState::range(window, cx).date_format("%Y-%m-%d"));
-        let custom_start_hour_dropdown = cx.new(|_cx| {
-            Dropdown::new("audit-custom-start-hour")
-                .placeholder("HH")
-                .items(Self::hour_items())
-                .selected_index(Some(0))
-        });
-        let custom_start_minute_dropdown = cx.new(|_cx| {
-            Dropdown::new("audit-custom-start-minute")
-                .placeholder("MM")
-                .items(Self::minute_items())
-                .selected_index(Some(0))
-        });
-        let custom_end_hour_dropdown = cx.new(|_cx| {
-            Dropdown::new("audit-custom-end-hour")
-                .placeholder("HH")
-                .items(Self::hour_items())
-                .selected_index(Some(23))
-        });
-        let custom_end_minute_dropdown = cx.new(|_cx| {
-            Dropdown::new("audit-custom-end-minute")
-                .placeholder("MM")
-                .items(Self::minute_items())
-                .selected_index(Some(59))
-        });
 
         let initial_time_range = Self::initial_time_range(&source);
         let time_range_placeholder =
@@ -278,13 +260,30 @@ impl AuditDocument {
                 "Last 12 h"
             };
 
-        let dropdown_time_range = cx.new(|_cx| {
-            Dropdown::new("audit-time-range")
-                .placeholder(time_range_placeholder)
-                .items(Self::time_range_items())
-                .selected_index(initial_time_range)
-                .toolbar_style(true)
-        });
+        // Construct the reusable time-range panel.  Sub-entities are extracted
+        // below so rendering and FilterBarItem wiring can reference them
+        // without going through cx on every access.
+        let time_range_panel = cx
+            .new(|cx| TimeRangePanel::new(time_range_placeholder, initial_time_range, window, cx));
+
+        let (
+            custom_date_range_picker,
+            custom_start_hour_dropdown,
+            custom_start_minute_dropdown,
+            custom_end_hour_dropdown,
+            custom_end_minute_dropdown,
+            dropdown_time_range,
+        ) = {
+            let panel = time_range_panel.read(cx);
+            (
+                panel.custom_date_range_picker.clone(),
+                panel.custom_start_hour_dropdown.clone(),
+                panel.custom_start_minute_dropdown.clone(),
+                panel.custom_end_hour_dropdown.clone(),
+                panel.custom_end_minute_dropdown.clone(),
+                panel.dropdown_time_range.clone(),
+            )
+        };
 
         let dropdown_timestamp_mode = cx.new(|_cx| {
             Dropdown::new("audit-timestamp-mode")
@@ -331,61 +330,22 @@ impl AuditDocument {
             }
         });
 
-        let custom_date_range_sub = cx.subscribe(
-            &custom_date_range_picker,
-            |this, _, _event: &DatePickerEvent, cx| {
-                this.status_message = None;
-                cx.notify();
-            },
-        );
-
-        let custom_start_hour_sub = cx.subscribe(
-            &custom_start_hour_dropdown,
-            |this, _, _event: &DropdownSelectionChanged, cx| {
-                this.status_message = None;
-                cx.notify();
-            },
-        );
-        let custom_start_minute_sub = cx.subscribe(
-            &custom_start_minute_dropdown,
-            |this, _, _event: &DropdownSelectionChanged, cx| {
-                this.status_message = None;
-                cx.notify();
-            },
-        );
-        let custom_end_hour_sub = cx.subscribe(
-            &custom_end_hour_dropdown,
-            |this, _, _event: &DropdownSelectionChanged, cx| {
-                this.status_message = None;
-                cx.notify();
-            },
-        );
-        let custom_end_minute_sub = cx.subscribe(
-            &custom_end_minute_dropdown,
-            |this, _, _event: &DropdownSelectionChanged, cx| {
-                this.status_message = None;
-                cx.notify();
-            },
-        );
-
+        // Single subscription replaces the six individual time-range
+        // subscriptions (date picker, four hour/minute dropdowns, preset
+        // dropdown).  The panel emits TimeRangeChanged only when the
+        // effective window actually changes (preset or custom apply).
         let time_range_sub = cx.subscribe(
-            &dropdown_time_range,
-            |this, _, event: &DropdownSelectionChanged, cx| {
-                if let Some(range) = Self::time_range_for_index(event.index) {
-                    this.selected_time_range = Some(range);
-                    this.refresh_filter_bar_items();
+            &time_range_panel,
+            |this, panel, event: &TimeRangeChanged, cx| {
+                let selected = panel.read(cx).selected_time_range;
+                this.selected_time_range = selected;
+                this.status_message = None;
+                this.refresh_filter_bar_items();
 
-                    if range == TimeRange::Custom {
-                        cx.notify();
-                        return;
-                    }
-
-                    let (start_ms, end_ms) = range.to_filter_values();
-                    this.filters.start_ms = start_ms;
-                    this.filters.end_ms = end_ms;
-                    this.reset_pagination();
-                    this.load_events(cx);
-                }
+                this.filters.start_ms = event.start_ms;
+                this.filters.end_ms = event.end_ms;
+                this.reset_pagination();
+                this.load_events(cx);
             },
         );
 
@@ -538,6 +498,7 @@ impl AuditDocument {
             pending_toast: None,
             export_menu_open: false,
             search_input,
+            time_range_panel,
             custom_date_range_picker,
             custom_start_hour_dropdown,
             custom_start_minute_dropdown,
@@ -556,11 +517,6 @@ impl AuditDocument {
             _refresh_timer: None,
             _subscriptions: vec![
                 search_sub,
-                custom_date_range_sub,
-                custom_start_hour_sub,
-                custom_start_minute_sub,
-                custom_end_hour_sub,
-                custom_end_minute_sub,
                 time_range_sub,
                 timestamp_mode_sub,
                 level_sub,
@@ -801,7 +757,8 @@ impl AuditDocument {
     fn initial_time_range(source: &AuditDocumentSource) -> Option<usize> {
         match source {
             AuditDocumentSource::ExternalEventStream { .. } => None,
-            AuditDocumentSource::Internal { .. } => Some(4),
+            // Index 3 = Last24Hours in the new preset mapping.
+            AuditDocumentSource::Internal { .. } => Some(3),
         }
     }
 
@@ -809,7 +766,7 @@ impl AuditDocument {
         let mut filters = AuditFilters::default();
 
         if !matches!(source, AuditDocumentSource::ExternalEventStream { .. }) {
-            let (start_ms, end_ms) = TimeRange::Last12Hours.to_filter_values();
+            let (start_ms, end_ms) = TimeRange::Last24Hours.to_filter_values();
             filters.start_ms = start_ms;
             filters.end_ms = end_ms;
         }
@@ -1182,23 +1139,17 @@ impl AuditDocument {
     }
 
     fn apply_custom_time_range(&mut self, cx: &mut Context<Self>) {
-        let Some((start_date, end_date)) = self.custom_date_range(cx) else {
-            return;
-        };
-        let Some((start_hour, start_minute, end_hour, end_minute)) = self.custom_time_parts(cx)
-        else {
-            return;
-        };
+        // Sync the panel's timestamp_mode before delegating so the panel
+        // validates using the same timezone the audit doc is displaying.
+        let timestamp_mode = self.timestamp_mode;
+        self.time_range_panel.update(cx, |panel, _cx| {
+            panel.timestamp_mode = timestamp_mode;
+        });
 
-        match validate_custom_range_parts(
-            start_date,
-            start_hour,
-            start_minute,
-            end_date,
-            end_hour,
-            end_minute,
-            self.timestamp_mode,
-        ) {
+        match self
+            .time_range_panel
+            .update(cx, |panel, cx| panel.apply_custom_range(cx))
+        {
             Ok((start_ms, end_ms)) => {
                 self.filters.start_ms = Some(start_ms);
                 self.filters.end_ms = Some(end_ms);
@@ -1225,7 +1176,11 @@ impl AuditDocument {
 
         self.suppress_load = true;
         let selected_time_range = Self::initial_time_range(&self.source);
-        self.selected_time_range = selected_time_range.and_then(Self::time_range_for_index);
+        let selected_range_variant = selected_time_range.and_then(Self::time_range_for_index);
+        self.selected_time_range = selected_range_variant;
+        self.time_range_panel.update(cx, |panel, _cx| {
+            panel.selected_time_range = selected_range_variant;
+        });
         self.dropdown_time_range.update(cx, |dropdown, cx| {
             dropdown.set_selected_index(selected_time_range, cx)
         });
@@ -1413,24 +1368,13 @@ impl AuditDocument {
         self.do_export(format.to_string(), cx);
     }
 
-    fn time_range_items() -> Vec<DropdownItem> {
-        vec![
-            DropdownItem::new("Last 5 min"),
-            DropdownItem::new("Last 30 min"),
-            DropdownItem::new("Last 1 h"),
-            DropdownItem::new("Last 3 h"),
-            DropdownItem::new("Last 12 h"),
-            DropdownItem::new("Custom"),
-        ]
-    }
-
     fn time_range_for_index(index: usize) -> Option<TimeRange> {
         match index {
-            0 => Some(TimeRange::Last5min),
-            1 => Some(TimeRange::Last30min),
-            2 => Some(TimeRange::LastHour),
-            3 => Some(TimeRange::Last3Hours),
-            4 => Some(TimeRange::Last12Hours),
+            0 => Some(TimeRange::Last15min),
+            1 => Some(TimeRange::LastHour),
+            2 => Some(TimeRange::Last6Hours),
+            3 => Some(TimeRange::Last24Hours),
+            4 => Some(TimeRange::Last7Days),
             5 => Some(TimeRange::Custom),
             _ => None,
         }
@@ -1446,24 +1390,6 @@ impl AuditDocument {
             1 => Some(TimestampDisplayMode::Utc),
             _ => None,
         }
-    }
-
-    fn hour_items() -> Vec<DropdownItem> {
-        (0..24)
-            .map(|hour| {
-                let value = format!("{hour:02}");
-                DropdownItem::with_value(value.clone(), value)
-            })
-            .collect()
-    }
-
-    fn minute_items() -> Vec<DropdownItem> {
-        (0..60)
-            .map(|minute| {
-                let value = format!("{minute:02}");
-                DropdownItem::with_value(value.clone(), value)
-            })
-            .collect()
     }
 
     fn level_items() -> Vec<DropdownItem> {

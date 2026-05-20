@@ -181,7 +181,7 @@ git clone https://github.com/0xErwin1/dbflux.git
 cd dbflux
 
 # Recommended: build with the full default feature set
-cargo build --release --features sqlite,postgres,mysql,mongodb,redis,dynamodb,cloudwatch,lua,aws,mcp
+cargo build --release --features sqlite,postgres,mysql,mongodb,redis,dynamodb,cloudwatch,influxdb,lua,aws,mcp
 
 # Minimal build (relational drivers only, no AI/MCP, no Lua)
 cargo build --release --no-default-features --features sqlite,postgres,mysql
@@ -254,19 +254,26 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 
 ### Prerequisites
 
+On Linux, the `mold` linker is **required** for local builds: the repo's
+`.cargo/config.toml` links the `x86_64-unknown-linux-gnu` target with
+`-fuse-ld=mold` to cut link time and memory across the 60+ workspace crates.
+The Nix dev shell provides it automatically; for non-Nix setups install it via
+your package manager (included below). Windows and macOS use their default
+linker and are unaffected.
+
 **Ubuntu/Debian:**
 ```bash
-sudo apt install pkg-config libssl-dev libdbus-1-dev libxkbcommon-dev
+sudo apt install pkg-config libssl-dev libdbus-1-dev libxkbcommon-dev mold
 ```
 
 **Fedora:**
 ```bash
-sudo dnf install pkg-config openssl-devel dbus-devel libxkbcommon-devel
+sudo dnf install pkg-config openssl-devel dbus-devel libxkbcommon-devel mold
 ```
 
 **Arch:**
 ```bash
-sudo pacman -S pkg-config openssl dbus libxkbcommon
+sudo pacman -S pkg-config openssl dbus libxkbcommon mold
 ```
 
 **macOS:**
@@ -300,6 +307,24 @@ cargo check --workspace                    # Type checking
 cargo clippy --workspace -- -D warnings    # Lint
 cargo fmt --all                            # Format
 cargo test --workspace                     # Tests
+```
+
+### Faster tests with nextest
+
+[`cargo-nextest`](https://nexte.st) is the recommended test runner for this
+workspace: it runs each test in its own process across a global pool, which is
+noticeably faster than `cargo test` on a workspace this size. The Nix dev shell
+provides it; otherwise install it from <https://nexte.st/docs/installation>.
+
+```bash
+cargo nextest run --workspace              # unit + integration tests
+cargo test --doc --workspace               # doctests (nextest does not run these)
+```
+
+Live integration tests (normally `#[ignore]`d) use a different flag under nextest:
+
+```bash
+cargo nextest run -p dbflux_driver_sqlite --run-ignored all
 ```
 
 ### Nix Development Shell

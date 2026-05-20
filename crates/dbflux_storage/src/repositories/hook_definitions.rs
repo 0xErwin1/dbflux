@@ -428,6 +428,7 @@ mod tests {
             "Command".to_string(),
         );
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = HookDefinitionRepository::new(Arc::new(conn));
         repo.insert(&dto).expect("should insert");
 

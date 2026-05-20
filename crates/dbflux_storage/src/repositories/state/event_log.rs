@@ -274,6 +274,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = EventLogRepository::new(Arc::new(conn));
 
         let dto = EventLogDto {
@@ -305,6 +306,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = EventLogRepository::new(Arc::new(conn));
 
         let dto1 = EventLogDto {
@@ -349,6 +351,7 @@ mod tests {
         MigrationRegistry::new()
             .run_all(&conn)
             .expect("migration should run");
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = EventLogRepository::new(Arc::new(conn));
 
         assert_eq!(repo.count().expect("count"), 0);

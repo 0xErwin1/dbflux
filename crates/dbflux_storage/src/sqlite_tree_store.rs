@@ -31,6 +31,7 @@ impl SqliteTreeStore {
     {
         #[allow(clippy::arc_with_non_send_sync)]
         let conn = sqlite::open_database(&self.config_db_path)?;
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = ConnectionFoldersRepository::new(std::sync::Arc::new(conn));
         f(repo)
     }

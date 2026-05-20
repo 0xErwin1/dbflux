@@ -210,6 +210,7 @@ mod tests {
             .expect("migration should run");
 
         let service = ServiceDto::new("test-socket".to_string());
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let service_repo = ServiceRepository::new(conn_arc.clone());
         service_repo
@@ -251,6 +252,7 @@ mod tests {
             .expect("migration should run");
 
         let service = ServiceDto::new("test-socket".to_string());
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let service_repo = ServiceRepository::new(conn_arc.clone());
         service_repo

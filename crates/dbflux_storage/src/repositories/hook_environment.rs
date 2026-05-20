@@ -211,6 +211,7 @@ mod tests {
             "Test Hook".to_string(),
             "Blocking".to_string(),
         );
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let hook_repo = HookDefinitionRepository::new(conn_arc.clone());
         hook_repo.insert(&hook).expect("should insert hook");
@@ -249,6 +250,7 @@ mod tests {
             "Test Hook".to_string(),
             "Blocking".to_string(),
         );
+        #[allow(clippy::arc_with_non_send_sync)]
         let conn_arc = Arc::new(conn);
         let hook_repo = HookDefinitionRepository::new(conn_arc.clone());
         hook_repo.insert(&hook).expect("should insert hook");

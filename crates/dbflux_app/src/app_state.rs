@@ -51,6 +51,12 @@ use dbflux_driver_dynamodb::DynamoDriver;
 #[cfg(feature = "cloudwatch")]
 use dbflux_driver_cloudwatch::CloudWatchDriver;
 
+#[cfg(feature = "influxdb")]
+use dbflux_driver_influxdb::InfluxDriver;
+
+#[cfg(feature = "mssql")]
+use dbflux_driver_mssql::MssqlDriver;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -822,6 +828,16 @@ impl AppState {
             drivers.insert("cloudwatch".to_string(), Arc::new(CloudWatchDriver::new()));
         }
 
+        #[cfg(feature = "influxdb")]
+        {
+            drivers.insert("influxdb".to_string(), Arc::new(InfluxDriver::new()));
+        }
+
+        #[cfg(feature = "mssql")]
+        {
+            drivers.insert("mssql".to_string(), Arc::new(MssqlDriver::new()));
+        }
+
         drivers
     }
 
@@ -1440,6 +1456,11 @@ impl AppState {
             format!("Created connection profile '{}'", profile_name),
             None,
         );
+
+        // Persist the new profile to disk. The in-memory ProfileManager is
+        // constructed with `None` for its JsonStore, so its `save()` is a
+        // no-op; the app drives persistence through `save_profiles()`.
+        self.save_profiles();
     }
 
     pub fn remove_profile(&mut self, idx: usize) -> Option<ConnectionProfile> {
@@ -1453,6 +1474,18 @@ impl AppState {
             format!("Deleted connection profile '{}'", removed.name),
             None,
         );
+
+        // Delete the row from SQLite. `save_profiles()` is upsert-only over
+        // the *remaining* in-memory profiles — it will not remove a row
+        // whose profile is no longer in memory, so without this explicit
+        // delete the deleted profile reappears on next launch.
+        if let Err(e) = self
+            .storage_runtime
+            .connection_profiles()
+            .delete(&removed.id.to_string())
+        {
+            log::error!("Failed to delete profile from storage: {}", e);
+        }
 
         Some(removed)
     }
@@ -1470,6 +1503,12 @@ impl AppState {
             format!("Updated connection profile '{}'", profile_name),
             None,
         );
+
+        // Persist the edit to disk. Previously this only worked as a side
+        // effect of `persist_mcp_governance()` after the form save; if MCP
+        // was disabled or the call path skipped that step, the edit would
+        // not survive a restart.
+        self.save_profiles();
     }
 
     pub fn save_profiles(&self) {
@@ -3452,5 +3491,26 @@ mod tests {
             .external_driver_diagnostic("missing.sock")
             .expect("app diagnostic");
         assert_eq!(diagnostic.summary, "Probe failed");
+    }
+
+    /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain
+    /// a driver whose `driver_key()` is `"builtin:influxdb"`.
+    #[test]
+    #[cfg(feature = "influxdb")]
+    fn influxdb_registration_present_when_feature_enabled() {
+        let drivers = AppState::build_builtin_drivers();
+        assert!(
+            drivers.contains_key("influxdb"),
+            "driver map must contain the 'influxdb' key when the influxdb feature is enabled"
+        );
+
+        let driver = drivers
+            .get("influxdb")
+            .expect("influxdb driver must be registered");
+        let key: String = driver.driver_key();
+        assert_eq!(
+            key, "builtin:influxdb",
+            "driver_key() must be 'builtin:influxdb'"
+        );
     }
 }

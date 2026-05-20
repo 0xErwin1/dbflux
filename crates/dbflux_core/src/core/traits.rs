@@ -104,6 +104,9 @@ pub struct SourceQueryMode {
 pub struct SourceContextSpec {
     pub targets_label: String,
     pub targets_placeholder: String,
+    /// Pre-selected target shown on first load (e.g. the connected bucket/database).
+    /// When `Some`, the UI auto-selects this value if no target is currently selected.
+    pub default_target: Option<String>,
     pub start_label: String,
     pub end_label: String,
     pub query_mode_label: Option<String>,
@@ -349,6 +352,16 @@ pub trait DbDriver: Send + Sync {
         self.supports(DriverCapabilities::AUTHENTICATION)
     }
 
+    /// Optional label override for the canonical secret input rendered by the
+    /// connection manager. Default returns `None`, which keeps the generic
+    /// "Password" label. Drivers whose secret is conceptually something other
+    /// than a password (e.g. an API token) can return a more accurate label.
+    /// Receives the current form values so the override can depend on toggles
+    /// such as a version selector.
+    fn secret_field_label(&self, _values: &FormValues) -> Option<String> {
+        None
+    }
+
     /// Create a connection without providing a password.
     ///
     /// Delegates to `connect_with_password(profile, None)`.
@@ -410,6 +423,23 @@ pub trait DbDriver: Send + Sync {
     ) -> Result<crate::TestConnectionResult, DbError> {
         self.test_connection(profile)
             .map(|()| crate::TestConnectionResult::default())
+    }
+
+    /// Test the connection using credentials supplied directly by the caller
+    /// (e.g. the password and SSH passphrase the user just typed in the
+    /// "Test Connection" UI), rather than reading from the keyring.
+    ///
+    /// The default implementation opens a connection via `connect_with_secrets`
+    /// and drops it immediately. Drivers that need richer telemetry can
+    /// override.
+    fn test_connection_rich_with_secrets(
+        &self,
+        profile: &ConnectionProfile,
+        password: Option<&SecretString>,
+        ssh_secret: Option<&SecretString>,
+    ) -> Result<crate::TestConnectionResult, DbError> {
+        let _conn = self.connect_with_secrets(profile, password, ssh_secret)?;
+        Ok(crate::TestConnectionResult::default())
     }
 }
 

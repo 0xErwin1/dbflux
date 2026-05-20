@@ -157,26 +157,53 @@ Sanity check: every non-release commit on `release/vX.Y` since branch-off should
 
 ### CHANGELOG sync on cherry-pick (MANDATORY)
 
-When a cherry-picked commit carries a `CHANGELOG.md` entry, the cherry-pick is incomplete until you also **remove that entry from main's `[Unreleased]` block**. Rationale: once the fix is on a release branch heading for `vX.Y.(Z+1)`, it is no longer "unreleased" in main's history — leaving the entry in `[Unreleased]` causes main's changelog to drift into a duplicate of what already shipped (the exact bug seen between v0.5.0 → v0.5.1, where the Esc-focus fix and Logger-init feature stayed in main's `[Unreleased]` after shipping in v0.5.1).
+When a cherry-picked commit carries a `CHANGELOG.md` entry, the cherry-pick is incomplete until you also sync main's CHANGELOG in **two** complementary ways. Rationale: leaving the entry in `[Unreleased]` causes main's changelog to drift into a duplicate of what already shipped (the v0.5.0 → v0.5.1 bug); but only deleting it leaves main with no record of the patch existing, so the v0.5.2..v0.5.5 sections never appear in main's history (the v0.5.5 bug). Both moves are needed.
 
-Procedure for a fix `<sha>` whose changelog entry was committed to `main`:
+The invariant after a stable patch `vX.Y.Z` ships:
+
+1. No item present in the release branch's `[X.Y.Z]` section remains in main's `[Unreleased]`.
+2. Main's `CHANGELOG.md` contains a `## [X.Y.Z] - YYYY-MM-DD` section, byte-identical to the one on the release branch, inserted in semver-descending order.
+
+Procedure when tagging `vX.Y.Z` on a release branch (run after the tag is pushed):
 
 ```bash
-# 1) Cherry-pick into the release branch.
-git checkout release/vX.Y
-git cherry-pick -x <sha>
-git push
+# A) On the release branch — already done as part of the release commit:
+#    CHANGELOG.md has the [X.Y.Z] section with bullets describing the patch.
 
-# 2) Back on main, remove the now-released entry from [Unreleased].
+# B) Sync main.
 git checkout main
-# edit CHANGELOG.md: delete the matching bullet(s) under [Unreleased]
-git commit -am "chore(changelog): move <short summary> to vX.Y.(Z+1)"
+git pull
+```
+
+Then edit `CHANGELOG.md` on main to do BOTH:
+
+- **Remove** every bullet from `[Unreleased]` that is now covered by `[X.Y.Z]`.
+- **Insert** the full `## [X.Y.Z] - YYYY-MM-DD` section (copy verbatim from the release branch) into main, in semver-descending order. For a `0.5.Z` patch shipped while main carries `0.6.0-dev.N`, the section goes **between** `[0.6.0-dev.N]` and the next-highest existing `[0.5.*]` entry.
+
+Commit and push:
+
+```bash
+git commit -am "chore(changelog): sync v$X.Y.Z to main"
 git push
 ```
 
-If a release ships multiple cherry-picked entries, batch the cleanup into a single commit on `main` once the release branch is tagged. Either way, the rule is invariant: when `vX.Y.Z` is published, no item present in its `[X.Y.Z]` section should remain in main's `[Unreleased]`.
+Helper to copy the section verbatim from the release branch (avoid hand-retyping bullets):
 
-A passive way to audit: after a stable release, the union of entries across `[X.Y.Z]` (on the release branch) and the historical entries on main should be empty intersected with main's `[Unreleased]`.
+```bash
+git show release/vX.Y:CHANGELOG.md \
+  | sed -n "/^## \[X.Y.Z\]/,/^## \[/p" \
+  | sed '$d'
+```
+
+If a release ships multiple cherry-picked entries, batch both moves into a single commit on `main` once the release branch is tagged.
+
+**Audit after each stable patch:**
+
+- `git diff main release/vX.Y -- CHANGELOG.md` shows no differences in the `[X.Y.Z]` section (modulo surrounding context).
+- `grep '^## \[' CHANGELOG.md` on main is monotonically descending in semver and includes every shipped `X.Y.Z`.
+- The bullets under `[X.Y.Z]` on the release branch do not appear under `[Unreleased]` on main.
+
+Common failure mode to refuse: a release that adds the section to the release branch only and never propagates back to main. The skill MUST perform step B before considering the release complete.
 
 ## Nix Bump
 
@@ -252,11 +279,13 @@ Mark this as TODO in the skill until the package is upstreamed; do not invent th
 
 ## Post-Release Channels (what to do after the GitHub release publishes)
 
-| Tag kind          | GitHub Release | AUR              | Nix flake (this repo) | nixpkgs (future)  |
-|-------------------|----------------|------------------|-----------------------|-------------------|
-| `-dev.N` (main)   | prerelease     | skip             | skip                  | skip              |
-| `-rc.N` (release) | prerelease     | skip             | skip                  | skip              |
-| Stable `vX.Y.Z`   | published      | bump + push      | bump `release-info`   | bump + PR         |
+| Tag kind          | GitHub Release | Main CHANGELOG sync       | AUR              | Nix flake (this repo) | nixpkgs (future)  |
+|-------------------|----------------|---------------------------|------------------|-----------------------|-------------------|
+| `-dev.N` (main)   | prerelease     | n/a (tag is on main)      | skip             | skip                  | skip              |
+| `-rc.N` (release) | prerelease     | skip                      | skip             | skip                  | skip              |
+| Stable `vX.Y.Z`   | published      | **mandatory** (see below) | bump + push      | bump `release-info`   | bump + PR         |
+
+For stable `vX.Y.Z` from a release branch, "Main CHANGELOG sync" means both removing the now-released bullets from main's `[Unreleased]` AND inserting the `[X.Y.Z]` section into main in semver-descending order — see "CHANGELOG sync on cherry-pick (MANDATORY)" above. Skipping this step is a failure mode that has shipped twice; do not complete a stable release without it.
 
 ## Anti-Patterns (explicit refusals)
 
@@ -269,7 +298,7 @@ Refuse, with a clear message, if any of these are requested:
 - Bumping minor or major version inside a `release/*` branch.
 - Pushing a tag without the working tree being clean.
 - Pushing the AUR bump with `pkgver` containing a hyphen.
-- Cherry-picking a commit with a `CHANGELOG.md` entry into a release branch **without** also removing that entry from main's `[Unreleased]` block in a follow-up commit on `main`.
+- Cherry-picking a commit with a `CHANGELOG.md` entry into a release branch **without** also (a) removing that entry from main's `[Unreleased]` block AND (b) inserting the corresponding `[X.Y.Z]` section into main once `vX.Y.Z` is tagged. Both moves are required; doing only one is the recurring bug this skill exists to prevent.
 - Cutting a `release/vX.Y` branch from a `main` HEAD where `.github/workflows/release.yml` is missing the `Classify release` step (any stable tag on that branch will publish as draft).
 
 ## Local Validation Commands

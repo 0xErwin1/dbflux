@@ -75,6 +75,7 @@ pub enum Command {
     ResultsAddRow,
     ResultsDuplicateRow,
     ResultsCopyRow,
+    ResultsCopyCell,
     ResultsSetNull,
     // Context menu
     OpenContextMenu,
@@ -104,6 +105,10 @@ pub enum Command {
     OpenMcpApprovals,
     #[cfg(feature = "mcp")]
     RefreshMcpGovernance,
+
+    // === Charts ===
+    /// Open the saved-chart fuzzy overlay (lists all SavedCharts for the current profile).
+    OpenSavedChart,
 }
 
 impl Command {
@@ -139,6 +144,7 @@ impl Command {
             "open_mcp_approvals" => Some(Command::OpenMcpApprovals),
             #[cfg(feature = "mcp")]
             "refresh_mcp_governance" => Some(Command::RefreshMcpGovernance),
+            "open_saved_chart" => Some(Command::OpenSavedChart),
             _ => None,
         }
     }
@@ -208,6 +214,7 @@ impl Command {
             Command::ResultsAddRow => "Add Row",
             Command::ResultsDuplicateRow => "Duplicate Row",
             Command::ResultsCopyRow => "Copy Row",
+            Command::ResultsCopyCell => "Copy Cell",
             Command::ResultsSetNull => "Set Cell to NULL",
             Command::OpenContextMenu => "Open Context Menu",
             Command::MenuUp => "Menu Up",
@@ -234,6 +241,7 @@ impl Command {
             Command::OpenMcpApprovals => "Open MCP Approvals",
             #[cfg(feature = "mcp")]
             Command::RefreshMcpGovernance => "Refresh MCP Governance",
+            Command::OpenSavedChart => "Open Chart...",
         }
     }
 
@@ -299,6 +307,7 @@ impl Command {
             | Command::ResultsAddRow
             | Command::ResultsDuplicateRow
             | Command::ResultsCopyRow
+            | Command::ResultsCopyCell
             | Command::ResultsSetNull
             | Command::OpenContextMenu
             | Command::MenuUp
@@ -325,6 +334,8 @@ impl Command {
 
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals | Command::RefreshMcpGovernance => "View",
+
+            Command::OpenSavedChart => "Charts",
         }
     }
 

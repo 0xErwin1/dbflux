@@ -16,6 +16,7 @@ members = [
     "crates/dbflux_driver_redis",
     "crates/dbflux_driver_dynamodb",
     "crates/dbflux_driver_cloudwatch",
+    "crates/dbflux_driver_mssql",
     "crates/dbflux_ssh",
     "crates/dbflux_proxy",
     "crates/dbflux_tunnel_core",
@@ -30,13 +31,14 @@ members = [
     "crates/dbflux_audit",
     "crates/dbflux_storage",
     "crates/dbflux_schema_viz",
+    "crates/dbflux_driver_influxdb",
 ]
 default-members = ["crates/dbflux"]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.6.0-dev.0"
+version = "0.6.0-dev.5"
 authors = ["Ignacio Perez <ignacio@feuer.me>"]
 description = "A fast, keyboard-first database client"
 repository = "https://github.com/0xErwin1/dbflux"
@@ -55,6 +57,7 @@ dbflux_driver_mongodb = { path = "crates/dbflux_driver_mongodb" }
 dbflux_driver_redis = { path = "crates/dbflux_driver_redis" }
 dbflux_driver_dynamodb = { path = "crates/dbflux_driver_dynamodb" }
 dbflux_driver_cloudwatch = { path = "crates/dbflux_driver_cloudwatch" }
+dbflux_driver_mssql = { path = "crates/dbflux_driver_mssql" }
 dbflux_ssh = { path = "crates/dbflux_ssh" }
 dbflux_proxy = { path = "crates/dbflux_proxy" }
 dbflux_export = { path = "crates/dbflux_export" }
@@ -69,6 +72,7 @@ dbflux_approval = { path = "crates/dbflux_approval" }
 dbflux_audit = { path = "crates/dbflux_audit" }
 dbflux_storage = { path = "crates/dbflux_storage" }
 dbflux_schema_viz = { path = "crates/dbflux_schema_viz" }
+dbflux_driver_influxdb = { path = "crates/dbflux_driver_influxdb" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
 dbflux_ui = { path = "crates/dbflux_ui" }
@@ -95,6 +99,11 @@ log = "0.4"
 env_logger = "0.11"
 fuzzy-matcher = "0.3"
 regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip", "json"] }
+csv = "1"
+chrono = { version = "0.4", features = ["serde"] }
+urlencoding = "2"
+base64 = "0.22"
 hex = "0.4"
 sha2 = "0.10"
 interprocess = "2.4"
@@ -124,3 +133,15 @@ gpui = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-tex
 gpui_platform = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
 gpui_web = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
 gpui_macros = { git = "https://github.com/0xErwin1/zed", branch = "feature/53306-07-text-raster-subpixel-regressions" }
+
+# Development build profile tuned for memory and link speed.
+# Full debug info (debug = 2) is the main driver of peak RAM and disk usage
+# when linking this many crates; line tables keep backtraces usable at a
+# fraction of the cost.
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies rarely need debugging; dropping their debug info entirely is a
+# large reduction in target/ size and link-time memory.
+[profile.dev.package."*"]
+debug = false

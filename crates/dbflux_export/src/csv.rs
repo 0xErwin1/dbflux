@@ -84,6 +84,7 @@ mod tests {
                 .map(|name| ColumnMeta {
                     name: name.to_string(),
                     type_name: "text".to_string(),
+                    kind: dbflux_core::ColumnKind::Unknown,
                     nullable: true,
                     is_primary_key: false,
                 })
@@ -179,7 +180,7 @@ mod tests {
             vec![vec![
                 Value::Bool(true),
                 Value::Int(42),
-                Value::Float(3.14),
+                Value::Float(2.5),
                 Value::Text("hello".to_string()),
                 Value::Bytes(vec![0xDE, 0xAD, 0xBE, 0xEF]),
             ]],
@@ -191,7 +192,7 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("true"));
         assert!(output.contains("42"));
-        assert!(output.contains("3.14"));
+        assert!(output.contains("2.5"));
         assert!(output.contains("hello"));
         assert!(output.contains("\\xdeadbeef"));
     }

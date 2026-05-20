@@ -6,11 +6,12 @@
 //! - `upsert_record`: Insert or update on conflict
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use dbflux_core::{
-    DatabaseCategory, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowInsert,
-    SemanticRequest, SqlUpdateRequest, SqlUpsertRequest, TableRef, Value,
-    parse_semantic_filter_json,
+    ColumnAssignment, Connection, DatabaseCategory, DocumentFilter, DocumentInsert, DocumentUpdate,
+    MutationRequest, RowInsert, SemanticRequest, SqlUpdateRequest, SqlUpsertRequest, TableRef,
+    Value, parse_semantic_filter_json,
 };
 use rmcp::{
     ErrorData,
@@ -221,6 +222,70 @@ impl DbFluxServer {
             .await
     }
 
+    /// Resolve a `column_name → driver_type_name` map for the target table.
+    ///
+    /// Uses [`Connection::describe_table`] (a cheap, table-scoped query —
+    /// not a full schema snapshot) and parses the result. Returns an empty
+    /// map if the driver doesn't support the operation or the lookup fails;
+    /// callers should treat that as "no type info available" and emit
+    /// untyped literals.
+    ///
+    /// Without this lookup, mutations against typed columns (e.g. Postgres
+    /// `text[]`) emit `::jsonb` literals and fail at the server. With it,
+    /// the dialect can pick `ARRAY[...]::text[]` and the insert/update
+    /// succeeds.
+    async fn resolve_column_types(
+        connection: Arc<dyn Connection>,
+        table_ref: &TableRef,
+    ) -> BTreeMap<String, String> {
+        use dbflux_core::DescribeRequest;
+
+        let request = DescribeRequest::new(table_ref.clone());
+
+        let result = Self::execute_connection_blocking(connection, move |conn| {
+            conn.describe_table(&request)
+                .map_err(|e| format!("describe_table failed: {}", e))
+        })
+        .await;
+
+        let Ok(query_result) = result else {
+            return BTreeMap::new();
+        };
+
+        // Find the indices of the column-name and type-name columns. Driver
+        // implementations of describe_table return different result shapes
+        // (Postgres uses `column_name`/`data_type`, MySQL uses `Field`/`Type`,
+        // SQLite uses `name`/`type`), so try the known synonyms.
+        let name_idx = query_result
+            .columns
+            .iter()
+            .position(|c| matches!(c.name.as_str(), "column_name" | "Field" | "name"));
+        let type_idx = query_result
+            .columns
+            .iter()
+            .position(|c| matches!(c.name.as_str(), "data_type" | "Type" | "type"));
+
+        let (Some(name_idx), Some(type_idx)) = (name_idx, type_idx) else {
+            return BTreeMap::new();
+        };
+
+        query_result
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let name = match row.get(name_idx)? {
+                    Value::Text(s) => s.clone(),
+                    _ => return None,
+                };
+                let type_name = match row.get(type_idx)? {
+                    Value::Text(s) => s.clone(),
+                    _ => return None,
+                };
+                Some((name, type_name))
+            })
+            .collect()
+    }
+
     async fn insert_record_impl(
         state: ServerState,
         connection_id: &str,
@@ -254,22 +319,25 @@ impl DbFluxServer {
         }
 
         let table_ref = TableRef::from_qualified(table);
+        let column_types = Self::resolve_column_types(connection.clone(), &table_ref).await;
 
         let mut inserted_count = 0;
         let mut returned_records = Vec::new();
 
         for record in records {
-            let columns: Vec<String> = record.keys().cloned().collect();
-            let values: Vec<Value> = record
-                .values()
-                .map(|v| json_to_db_value(v.clone()))
+            let assignments: Vec<ColumnAssignment> = record
+                .iter()
+                .map(|(name, value)| ColumnAssignment {
+                    name: name.clone(),
+                    value: json_to_db_value(value.clone()),
+                    type_name: column_types.get(name).cloned(),
+                })
                 .collect();
 
-            let row_insert = RowInsert::new(
+            let row_insert = RowInsert::with_typed_assignments(
                 table_ref.name.clone(),
                 table_ref.schema.clone(),
-                columns,
-                values,
+                assignments,
             );
 
             let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
@@ -323,7 +391,15 @@ impl DbFluxServer {
             }));
         }
 
-        let mutation = Self::build_relational_update_mutation(table, filter, set, returning)?;
+        let table_ref = TableRef::from_qualified(table);
+        let column_types = Self::resolve_column_types(connection.clone(), &table_ref).await;
+        let mutation = Self::build_relational_update_mutation(
+            table_ref,
+            filter,
+            set,
+            returning,
+            &column_types,
+        )?;
         let result = Self::execute_connection_blocking(connection.clone(), move |connection| {
             connection
                 .execute_semantic_request(&SemanticRequest::Mutation(mutation))
@@ -339,10 +415,11 @@ impl DbFluxServer {
     }
 
     fn build_relational_update_mutation(
-        table: &str,
+        table_ref: TableRef,
         filter: &serde_json::Value,
         set: &serde_json::Value,
         returning: Option<&[String]>,
+        column_types: &BTreeMap<String, String>,
     ) -> Result<MutationRequest, String> {
         let semantic_filter = parse_semantic_filter_json(filter)?
             .ok_or_else(|| UpdateRecordsParams::UPDATE_WHERE_REQUIRED_ERROR.to_string())?;
@@ -351,15 +428,21 @@ impl DbFluxServer {
             .as_object()
             .ok_or_else(|| "SET must be a JSON object".to_string())?;
 
-        let changes: Vec<(String, Value)> = set_obj
+        let changes: Vec<ColumnAssignment> = set_obj
             .iter()
-            .map(|(col, val)| (col.clone(), json_to_db_value(val.clone())))
+            .map(|(col, val)| ColumnAssignment {
+                name: col.clone(),
+                value: json_to_db_value(val.clone()),
+                type_name: column_types.get(col).cloned(),
+            })
             .collect();
 
-        let table_ref = TableRef::from_qualified(table);
-
-        let mut update =
-            SqlUpdateRequest::new(table_ref.name, table_ref.schema, semantic_filter, changes);
+        let mut update = SqlUpdateRequest::with_typed_changes(
+            table_ref.name,
+            table_ref.schema,
+            semantic_filter,
+            changes,
+        );
 
         if let Some(returning) = returning
             && !returning.is_empty()
@@ -417,12 +500,17 @@ impl DbFluxServer {
                 conflict_columns,
                 update_on_conflict,
             )?,
-            DatabaseCategory::Relational => Self::build_relational_upsert_mutation(
-                table,
-                record,
-                conflict_columns,
-                update_on_conflict,
-            )?,
+            DatabaseCategory::Relational => {
+                let table_ref = TableRef::from_qualified(table);
+                let column_types = Self::resolve_column_types(connection.clone(), &table_ref).await;
+                Self::build_relational_upsert_mutation(
+                    table_ref,
+                    record,
+                    conflict_columns,
+                    update_on_conflict,
+                    &column_types,
+                )?
+            }
             _ => {
                 return Err(format!(
                     "Upsert is not supported for {:?} databases",
@@ -442,10 +530,11 @@ impl DbFluxServer {
     }
 
     fn build_relational_upsert_mutation(
-        table: &str,
+        table_ref: TableRef,
         record: &serde_json::Value,
         conflict_columns: &[String],
         update_on_conflict: Option<&serde_json::Value>,
+        column_types: &BTreeMap<String, String>,
     ) -> Result<MutationRequest, String> {
         let obj = record
             .as_object()
@@ -464,25 +553,31 @@ impl DbFluxServer {
             }
         }
 
-        let columns: Vec<String> = obj.keys().cloned().collect();
-        let values: Vec<Value> = obj
-            .values()
-            .map(|value| json_to_db_value(value.clone()))
+        let assignments: Vec<ColumnAssignment> = obj
+            .iter()
+            .map(|(name, value)| ColumnAssignment {
+                name: name.clone(),
+                value: json_to_db_value(value.clone()),
+                type_name: column_types.get(name).cloned(),
+            })
             .collect();
 
-        let update_assignments =
-            Self::parse_upsert_assignments(obj, conflict_columns, update_on_conflict)?;
+        let update_assignments = Self::parse_upsert_assignments(
+            obj,
+            conflict_columns,
+            update_on_conflict,
+            column_types,
+        )?;
 
-        let table_ref = TableRef::from_qualified(table);
-
-        Ok(MutationRequest::sql_upsert(SqlUpsertRequest::new(
-            table_ref.name,
-            table_ref.schema,
-            columns,
-            values,
-            conflict_columns.to_vec(),
-            update_assignments,
-        )))
+        Ok(MutationRequest::sql_upsert(
+            SqlUpsertRequest::with_typed_assignments(
+                table_ref.name,
+                table_ref.schema,
+                assignments,
+                conflict_columns.to_vec(),
+                update_assignments,
+            ),
+        ))
     }
 
     fn build_document_upsert_mutation(
@@ -536,13 +631,18 @@ impl DbFluxServer {
         record: &serde_json::Map<String, serde_json::Value>,
         conflict_columns: &[String],
         update_on_conflict: Option<&serde_json::Value>,
-    ) -> Result<Vec<(String, Value)>, String> {
+        column_types: &BTreeMap<String, String>,
+    ) -> Result<Vec<ColumnAssignment>, String> {
         let assignment_json =
             Self::parse_upsert_assignment_json(record, conflict_columns, update_on_conflict)?;
 
         Ok(assignment_json
             .into_iter()
-            .map(|(column, value)| (column, json_to_db_value(value)))
+            .map(|(column, value)| ColumnAssignment {
+                type_name: column_types.get(&column).cloned(),
+                name: column,
+                value: json_to_db_value(value),
+            })
             .collect())
     }
 
@@ -651,10 +751,11 @@ mod tests {
     #[test]
     fn test_build_relational_update_mutation_uses_semantic_filter_and_returning() {
         let mutation = DbFluxServer::build_relational_update_mutation(
-            "public.users",
+            TableRef::from_qualified("public.users"),
             &serde_json::json!({"status": "active"}),
             &serde_json::json!({"archived": true}),
             Some(&["id".to_string(), "archived".to_string()]),
+            &BTreeMap::new(),
         )
         .expect("relational update mutation should build");
 
@@ -674,10 +775,11 @@ mod tests {
     #[test]
     fn test_build_relational_upsert_mutation_preserves_custom_update_values() {
         let mutation = DbFluxServer::build_relational_upsert_mutation(
-            "public.users",
+            TableRef::from_qualified("public.users"),
             &serde_json::json!({"id": 1, "name": "Ada", "visits": 3}),
             &["id".to_string()],
             Some(&serde_json::json!({"name": "Grace", "visits": 4})),
+            &BTreeMap::new(),
         )
         .expect("relational upsert mutation should build");
 
@@ -692,12 +794,14 @@ mod tests {
         assert!(
             upsert
                 .update_assignments
-                .contains(&("name".to_string(), Value::Text("Grace".to_string())))
+                .iter()
+                .any(|a| a.name == "name" && a.value == Value::Text("Grace".to_string()))
         );
         assert!(
             upsert
                 .update_assignments
-                .contains(&("visits".to_string(), Value::Int(4)))
+                .iter()
+                .any(|a| a.name == "visits" && a.value == Value::Int(4))
         );
     }
 

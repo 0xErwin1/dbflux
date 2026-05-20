@@ -83,6 +83,7 @@ impl ConnectionManagerWindow {
         focus_frame(focused, Some(ring_color), child, cx)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_password_field(
         &self,
         show_focus: bool,
@@ -90,6 +91,7 @@ impl ConnectionManagerWindow {
         save_password: bool,
         ring_color: Hsla,
         help_text: Option<String>,
+        label: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme().clone();
@@ -209,7 +211,7 @@ impl ConnectionManagerWindow {
                 )
             });
 
-        Self::field_row_cm("Password", false, controls, None::<&str>, cx).into_any_element()
+        Self::field_row_cm(label.to_string(), false, controls, None::<&str>, cx).into_any_element()
     }
 
     pub(super) fn render_readonly_row(

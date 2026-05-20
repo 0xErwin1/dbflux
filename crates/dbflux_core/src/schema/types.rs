@@ -567,6 +567,14 @@ impl SchemaSnapshot {
             _ => &[],
         }
     }
+
+    /// Get measurements (time-series only).
+    pub fn measurements(&self) -> &[MeasurementInfo] {
+        match &self.structure {
+            DataStructure::TimeSeries(s) => &s.measurements,
+            _ => &[],
+        }
+    }
 }
 
 /// Table metadata.
@@ -993,5 +1001,48 @@ impl ContainerInfo {
             Self::Collection(c) => Some(c),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measurements_returns_slice_for_time_series_schema() {
+        let schema = SchemaSnapshot::time_series(TimeSeriesSchema {
+            databases: Vec::new(),
+            current_database: None,
+            measurements: vec![
+                MeasurementInfo {
+                    name: "cpu".to_string(),
+                    tags: vec!["host".to_string()],
+                    fields: vec![],
+                },
+                MeasurementInfo {
+                    name: "mem".to_string(),
+                    tags: vec![],
+                    fields: vec![],
+                },
+            ],
+            retention_policies: Vec::new(),
+        });
+
+        let result = schema.measurements();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "cpu");
+        assert_eq!(result[1].name, "mem");
+    }
+
+    #[test]
+    fn measurements_returns_empty_for_non_time_series_schemas() {
+        let relational = SchemaSnapshot::relational(RelationalSchema::default());
+        assert!(relational.measurements().is_empty());
+
+        let document = SchemaSnapshot::document(DocumentSchema::default());
+        assert!(document.measurements().is_empty());
+
+        let key_value = SchemaSnapshot::key_value(KeyValueSchema::default());
+        assert!(key_value.measurements().is_empty());
     }
 }

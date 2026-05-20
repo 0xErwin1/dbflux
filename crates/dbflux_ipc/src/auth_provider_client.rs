@@ -829,7 +829,7 @@ mod tests {
             "non-secret dep should be included"
         );
         assert!(
-            deps.get("api_key").is_none(),
+            !deps.contains_key("api_key"),
             "password dep must be stripped when opt-in is false"
         );
     }
@@ -934,7 +934,7 @@ mod tests {
             "api_key is in depends_on so must be included when opted in"
         );
         assert!(
-            deps.get("other_secret").is_none(),
+            !deps.contains_key("other_secret"),
             "other_secret is a Password field not in depends_on — must be stripped even when opted in"
         );
     }

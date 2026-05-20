@@ -6,7 +6,9 @@ mod render;
 pub mod row_inspector;
 mod utils;
 
-use super::result_view::ResultViewMode;
+use super::result_view::{
+    ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
+};
 use super::task_runner::DocumentTaskRunner;
 use crate::app::AppStateEntity;
 use crate::ui::components::data_table::{
@@ -24,10 +26,13 @@ use crate::ui::overlays::document_preview_modal::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
 use crate::ui::overlays::sql_preview_modal::SqlPreviewContext;
+use dbflux_components::chart::{
+    ChartDetection, ChartView, DataPointRef, SourceRowRef, detect_chart_columns,
+};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
-    CollectionRef, OrderByColumn, Pagination, QueryResult, RefreshPolicy, SortDirection, TableRef,
-    Value,
+    CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
+    SortDirection, TableRef, Value,
 };
 use gpui::*;
 use gpui_component::Sizable;
@@ -59,6 +64,11 @@ pub enum DataSource {
         result: Arc<QueryResult>,
         #[allow(dead_code)]
         original_query: String,
+        /// Backing connection profile, when the result came from a host
+        /// (CodeDocument, ScriptDocument) that knows which connection was
+        /// targeted. Used by category-driven UI gates such as the chart
+        /// toggle. `None` for ad-hoc results without an associated connection.
+        profile_id: Option<Uuid>,
     },
 }
 
@@ -137,7 +147,16 @@ pub enum DataGridEvent {
         title: SharedString,
         content: AnyView,
     },
+    /// User requested "Chart this query" from the context menu.
+    ChartThisQuery {
+        query: String,
+        connection_id: Option<Uuid>,
+    },
 }
+
+// Re-export the rail tab enum from the chart module so DataGridPanel's render
+// code can reference it without a long path.
+pub(super) use crate::ui::document::chart::shell::ChartRailTab;
 
 /// Internal state for grid loading/ready/error.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -367,6 +386,35 @@ pub struct DataGridPanel {
     row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
 
     export_menu_open: bool,
+
+    // Chart subsystem
+    /// Lazily-created chart shell entity. Created the first time the result
+    /// passes chart detection (or when the user is already in chart mode).
+    /// `None` for sources that have never produced a chartable result.
+    chart_shell: Option<Entity<crate::ui::document::chart::ChartShell>>,
+
+    /// Time-range panel from the source-context bar, set by CodeDocument after
+    /// the panel is built. Used by the chart toolbar RANGE chips to read/write
+    /// the active preset. `None` for non-TimeSeries sources or before the panel
+    /// has been created.
+    chart_source_time_range_panel:
+        Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>>,
+
+    /// Pending "Save chart from collection" state.
+    ///
+    /// Present when the user clicked "Save chart" from a Collection-source
+    /// DataDocument in chart mode. Holds the input state for the name prompt
+    /// overlay. On confirm, the chart is upserted via `app_state.saved_charts`.
+    pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
+}
+
+/// State held while the "Save chart" name-prompt overlay is visible for a
+/// Collection-source DataDocument.
+pub(super) struct CollectionChartSaveState {
+    pub(super) name_input: Entity<dbflux_components::controls::InputState>,
+    pub(super) chart_spec: dbflux_components::chart::ChartSpec,
+    pub(super) bindings: dbflux_components::chart::BindingSpec,
+    pub(super) _subscription: gpui::Subscription,
 }
 
 impl DataGridPanel {
@@ -527,6 +575,7 @@ impl DataGridPanel {
     pub fn new_for_result(
         result: Arc<QueryResult>,
         original_query: String,
+        profile_id: Option<Uuid>,
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -534,6 +583,7 @@ impl DataGridPanel {
         let source = DataSource::QueryResult {
             result: result.clone(),
             original_query,
+            profile_id,
         };
 
         // Query results are not editable (no PK info)
@@ -549,11 +599,7 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter_placeholder = if source.is_collection() {
-            r#"e.g. {"name": {"$regex": "test"}}"#
-        } else {
-            "e.g. id > 10 AND name LIKE '%test%'"
-        };
+        let filter_placeholder = Self::filter_placeholder_for_source(&source, &app_state, cx);
 
         let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(filter_placeholder));
 
@@ -761,6 +807,9 @@ impl DataGridPanel {
             pending_document_preview: None,
             row_inspector_content: None,
             export_menu_open: false,
+            chart_shell: None,
+            chart_source_time_range_panel: None,
+            pending_collection_chart_save: None,
         }
     }
 
@@ -769,6 +818,124 @@ impl DataGridPanel {
     pub fn with_panel_controls(mut self) -> Self {
         self.show_panel_controls = true;
         self
+    }
+
+    // ---- Collection chart save flow ----
+
+    /// Open the name-prompt overlay for saving a chart from a Collection or
+    /// QueryResult source.
+    ///
+    /// Captures the current chart spec and bindings from the shell. No-op when
+    /// no chart shell exists or the source has no associated profile.
+    pub fn open_collection_chart_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(
+            &self.source,
+            DataSource::Collection { .. } | DataSource::QueryResult { .. }
+        ) {
+            return;
+        }
+
+        let Some(shell) = &self.chart_shell else {
+            return;
+        };
+
+        let columns = self.result.columns.clone();
+        let spec = shell.read(cx).current_chart_spec(&columns);
+        let bindings = shell.read(cx).active_bindings();
+
+        let name_input = cx.new(|cx| {
+            dbflux_components::controls::InputState::new(window, cx).placeholder("Chart name")
+        });
+
+        let sub = cx.subscribe_in(
+            &name_input,
+            window,
+            |_this: &mut Self,
+             _input: &Entity<dbflux_components::controls::InputState>,
+             _event: &dbflux_components::controls::InputEvent,
+             _window,
+             _cx| {},
+        );
+
+        self.pending_collection_chart_save = Some(CollectionChartSaveState {
+            name_input,
+            chart_spec: spec,
+            bindings,
+            _subscription: sub,
+        });
+
+        cx.notify();
+    }
+
+    /// Confirm the collection-chart name prompt and persist the chart.
+    pub fn confirm_collection_chart_save(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.pending_collection_chart_save.take() else {
+            return;
+        };
+
+        let name = state.name_input.read(cx).value().trim().to_string();
+        if name.is_empty() {
+            // Put it back — user must enter a name.
+            self.pending_collection_chart_save = Some(state);
+            return;
+        }
+
+        let chart = match &self.source {
+            DataSource::Collection {
+                profile_id,
+                collection,
+                ..
+            } => {
+                let time_window = self.result.resolved_window.clone();
+                dbflux_components::saved_chart::SavedChart::new_collection(
+                    name.clone(),
+                    *profile_id,
+                    collection.clone(),
+                    time_window,
+                    state.chart_spec,
+                    state.bindings,
+                )
+            }
+            DataSource::QueryResult {
+                profile_id,
+                original_query,
+                ..
+            } => {
+                let Some(profile_id) = profile_id else {
+                    self.pending_toast = Some(crate::ui::components::toast::PendingToast {
+                        message: "Cannot save chart: query has no profile binding".into(),
+                        is_error: true,
+                    });
+                    cx.notify();
+                    return;
+                };
+                dbflux_components::saved_chart::SavedChart::new_query(
+                    name.clone(),
+                    *profile_id,
+                    original_query.clone(),
+                    state.chart_spec,
+                    state.bindings,
+                )
+            }
+            _ => return,
+        };
+
+        self.app_state.update(cx, |app, _cx| {
+            app.saved_charts.upsert(chart);
+        });
+
+        self.pending_toast = Some(crate::ui::components::toast::PendingToast {
+            message: format!("Chart \"{}\" saved", name),
+            is_error: false,
+        });
+
+        cx.notify();
+    }
+
+    /// Cancel the collection-chart name prompt without saving.
+    pub fn cancel_collection_chart_save(&mut self, cx: &mut Context<Self>) {
+        self.pending_collection_chart_save = None;
+        cx.notify();
     }
 
     /// Update the maximized state (called by parent).
@@ -801,6 +968,10 @@ impl DataGridPanel {
         super::data_view::DataViewMode::available_for(&self.source).len() > 1
     }
 
+    pub fn result_view_mode(&self) -> ResultViewMode {
+        self.result_view_mode
+    }
+
     pub fn set_result_view_mode(&mut self, mode: ResultViewMode, cx: &mut Context<Self>) {
         if self.result_view_mode == mode {
             return;
@@ -812,6 +983,94 @@ impl DataGridPanel {
 
     fn uses_result_view(&self) -> bool {
         matches!(self.source, DataSource::QueryResult { .. }) && !self.result_view_mode.is_table()
+    }
+
+    /// Returns `true` when the current result has a `Timestamp` column and at
+    /// least one numeric column — i.e., chart mode is available.
+    pub(super) fn chart_available(&self, cx: &App) -> bool {
+        self.chart_shell
+            .as_ref()
+            .is_some_and(|s| s.read(cx).chart_available())
+    }
+
+    /// Build or return the existing `ChartView` entity for the current result.
+    ///
+    /// Delegates to `ChartShell::ensure_chart_view`. Returns `None` when no
+    /// shell exists or when detection failed.
+    pub(super) fn ensure_chart_view(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<ChartView>> {
+        let result = self.result.clone();
+        self.chart_shell
+            .as_ref()?
+            .update(cx, |shell, cx| shell.ensure_chart_view(&result, cx))
+    }
+
+    /// Toggle the hidden state of a series by index.
+    ///
+    /// Delegates to `ChartShell::toggle_chart_series_hidden`.
+    pub(super) fn toggle_chart_series_hidden(&mut self, idx: usize, cx: &mut Context<Self>) {
+        if let Some(shell) = &self.chart_shell {
+            shell.update(cx, |s, cx| s.toggle_chart_series_hidden(idx, cx));
+        }
+    }
+
+    /// Wire the source-context time-range panel into this chart panel.
+    ///
+    /// Called by `CodeDocument` after it lazily creates the `TimeRangePanel`.
+    /// The chart toolbar reads and writes the panel to drive RANGE chip selection.
+    pub fn set_chart_time_range_panel(
+        &mut self,
+        panel: Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart_source_time_range_panel = panel;
+
+        let enabled = self.supports_auto_refresh();
+        self.refresh_dropdown.update(cx, |dd, cx| {
+            dd.set_disabled(!enabled, cx);
+        });
+
+        cx.notify();
+    }
+
+    /// Prime the rail Configure picker from the current chart spec.
+    ///
+    /// Called when the rail is toggled open so the controls reflect what is
+    /// currently rendered (either auto-detected or manual).
+    ///
+    /// Only invoked from the (now-dead) Configure rail tab.
+    #[allow(dead_code)]
+    pub(super) fn prime_chart_rail_picker_from_spec(&mut self, cx: &mut Context<Self>) {
+        let result = self.result.clone();
+        if let Some(shell) = &self.chart_shell {
+            shell.update(cx, |s, _cx| s.prime_rail_picker_from_spec(&result));
+        }
+    }
+
+    /// Apply the current rail Configure picker state as a `ManualChartSelection`.
+    ///
+    /// Clears the existing `chart_view` so the next render triggers a rebuild.
+    /// Only invoked from the (now-dead) Configure rail tab.
+    #[allow(dead_code)]
+    pub(super) fn apply_chart_rail_selection(&mut self, cx: &mut Context<Self>) {
+        let result = self.result.clone();
+        if let Some(shell) = &self.chart_shell {
+            shell.update(cx, |s, cx| s.apply_rail_selection(&result, cx));
+        }
+    }
+
+    /// Reset chart selection to auto-detection, clearing any manual override.
+    ///
+    /// Disabled (no-op) when detection did not produce an `Ok` result.
+    /// Only invoked from the (now-dead) Configure rail tab.
+    #[allow(dead_code)]
+    pub(super) fn reset_chart_rail_to_auto(&mut self, cx: &mut Context<Self>) {
+        let result = self.result.clone();
+        if let Some(shell) = &self.chart_shell {
+            shell.update(cx, |s, cx| s.reset_rail_to_auto(&result, cx));
+        }
     }
 
     pub(super) fn derived_text(&mut self) -> &str {
@@ -894,7 +1153,8 @@ impl DataGridPanel {
         matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
-        )
+        ) || matches!(self.source, DataSource::QueryResult { .. })
+            && self.chart_source_time_range_panel.is_some()
     }
 
     pub fn set_active_tab(&mut self, active: bool) {
@@ -953,8 +1213,14 @@ impl DataGridPanel {
                             return;
                         }
 
-                        panel.pending_refresh = true;
-                        cx.notify();
+                        if matches!(panel.source, DataSource::QueryResult { .. }) {
+                            if let Some(trp) = panel.chart_source_time_range_panel.clone() {
+                                trp.update(cx, |p, cx| p.emit_initial(cx));
+                            }
+                        } else {
+                            panel.pending_refresh = true;
+                            cx.notify();
+                        }
                     });
                 });
             }
@@ -963,10 +1229,67 @@ impl DataGridPanel {
 
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+        let was_chart_mode = matches!(self.result_view_mode, ResultViewMode::Chart);
+
         self.view_config = super::data_view::DataViewConfig::for_source(&self.source);
-        self.result_view_mode = ResultViewMode::default_for_shape(&result.shape);
         self.derived_json = None;
         self.derived_text = None;
+
+        let detection = detect_chart_columns(&result);
+        let detection_ok = matches!(detection, ChartDetection::Ok { .. });
+
+        // Auto-select Chart for TimeSeries Collection sources: fires on every fresh
+        // result when detection passes, regardless of previous mode. Non-TimeSeries
+        // and non-Collection sources follow the existing was_chart_mode preservation path.
+        let is_time_series_collection = matches!(self.source, DataSource::Collection { .. })
+            && Self::connection_category(&self.source, &self.app_state, cx)
+                == Some(DatabaseCategory::TimeSeries);
+
+        let auto_chart = (is_time_series_collection
+            && should_auto_select_chart_for_time_series(&detection))
+            || (was_chart_mode && detection_ok);
+
+        self.result_view_mode = if auto_chart {
+            ResultViewMode::Chart
+        } else {
+            ResultViewMode::default_for_shape(&result.shape)
+        };
+
+        // Update or create the chart shell for this result.
+        if detection_ok || self.chart_shell.is_some() {
+            if let Some(shell) = &self.chart_shell {
+                let was_chart = was_chart_mode;
+                shell.update(cx, |s, cx| s.set_result(&result, was_chart, cx));
+            } else {
+                // Create the shell for the first chartable result.
+                let host = crate::ui::document::chart::HostAdapter::DataGrid(cx.entity().clone());
+                let shell = cx.new(|cx| {
+                    let mut shell = crate::ui::document::chart::ChartShell::new(host, cx);
+                    shell.set_result(&result, false, cx);
+                    shell
+                });
+                self.chart_shell = Some(shell);
+            }
+
+            // Pre-populate bindings for the first TimeSeries Collection result so the
+            // AxisBar shows sensible defaults (time, first numeric, first Text tag).
+            // Only applied on the initial load (!was_chart_mode) to avoid clobbering
+            // user adjustments made during a refresh.
+            if is_time_series_collection
+                && !was_chart_mode
+                && let ChartDetection::Ok {
+                    time_col,
+                    ref numeric_cols,
+                } = detection
+            {
+                let bindings =
+                    default_bindings_for_time_series(time_col, numeric_cols, &result.columns);
+                if let Some(shell) = &self.chart_shell {
+                    shell.update(cx, |s, cx| s.apply_bindings(bindings, cx));
+                }
+            }
+        }
+
         self.result = result;
         self.rebuild_table(None, cx);
         self.state = GridState::Ready;
@@ -978,6 +1301,7 @@ impl DataGridPanel {
         &mut self,
         result: Arc<QueryResult>,
         query: String,
+        profile_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) {
         self.refresh_policy = RefreshPolicy::Manual;
@@ -989,6 +1313,7 @@ impl DataGridPanel {
         self.source = DataSource::QueryResult {
             result: result.clone(),
             original_query: query,
+            profile_id,
         };
         self.local_sort_state = None;
         self.original_row_order = None;
@@ -1419,6 +1744,184 @@ impl DataGridPanel {
             ))
         }
     }
+
+    // === Filter bar presentation helpers ===
+
+    /// Resolve the database category for the connection backing this data source.
+    ///
+    /// `QueryResult` sources carry an optional `profile_id` because the host
+    /// (CodeDocument, ScriptDocument) knows which connection produced the
+    /// result; this is what allows category-driven UI gates (chart toggle,
+    /// filter labels) to work on query results. Returns `None` when the
+    /// profile is unknown or no longer registered.
+    pub(super) fn connection_category(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> Option<DatabaseCategory> {
+        let profile_id = match source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            DataSource::Collection { profile_id, .. } => *profile_id,
+            DataSource::QueryResult { profile_id, .. } => (*profile_id)?,
+        };
+
+        app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|connected| connected.connection.metadata().category)
+    }
+
+    /// Filter verb and filter keyword ("SELECT * FROM" / "find" / "FROM") shown
+    /// in the toolbar to the left of the source name and to the left of the filter
+    /// input, respectively.
+    ///
+    /// Derived purely from `DatabaseCategory` — no driver-id branching.
+    pub(super) fn filter_labels_for_source(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> (&'static str, &'static str) {
+        if source.is_table() {
+            return ("SELECT * FROM", "WHERE");
+        }
+
+        match Self::connection_category(source, app_state, cx) {
+            Some(DatabaseCategory::Document) => ("find", "WHERE"),
+            Some(DatabaseCategory::TimeSeries) => ("SELECT * FROM", "WHERE"),
+            _ => ("SELECT * FROM", "WHERE"),
+        }
+    }
+
+    /// Filter input placeholder text, derived from `DatabaseCategory`.
+    ///
+    /// Returns an empty string for `TimeSeries` sources because `browse_collection`
+    /// on InfluxDB ignores the filter field — showing a misleading placeholder
+    /// would lie to the user.
+    fn filter_placeholder_for_source(
+        source: &DataSource,
+        app_state: &Entity<AppStateEntity>,
+        cx: &App,
+    ) -> &'static str {
+        if source.is_table() {
+            return "e.g. id > 10 AND name LIKE '%test%'";
+        }
+
+        match Self::connection_category(source, app_state, cx) {
+            Some(DatabaseCategory::Document) => r#"e.g. {"name": {"$regex": "test"}}"#,
+            Some(DatabaseCategory::TimeSeries) => "",
+            _ => "e.g. id > 10 AND name LIKE '%test%'",
+        }
+    }
+
+    // ---- ChartHost delegation methods ----
+    // These are called by `HostAdapter::DataGrid` to implement `ChartHost`
+    // without requiring a mutable self-borrow in read contexts.
+
+    /// Returns the original query text for the current `QueryResult` source.
+    ///
+    /// Returns `None` for `Table` and `Collection` sources that do not expose
+    /// a user-authored query string.
+    pub(crate) fn chart_host_current_query(&self, _cx: &App) -> Option<String> {
+        match &self.source {
+            DataSource::QueryResult { original_query, .. } => {
+                if original_query.is_empty() {
+                    None
+                } else {
+                    Some(original_query.clone())
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns the profile ID for the current source, if any.
+    pub(crate) fn chart_host_connection_id(&self, _cx: &App) -> Option<Uuid> {
+        match &self.source {
+            DataSource::Table { profile_id, .. } => Some(*profile_id),
+            DataSource::Collection { profile_id, .. } => Some(*profile_id),
+            DataSource::QueryResult { profile_id, .. } => *profile_id,
+        }
+    }
+
+    /// Returns the time-range panel wired in by the parent document.
+    pub(crate) fn chart_host_time_range_panel(
+        &self,
+        _cx: &App,
+    ) -> Option<Entity<crate::ui::common::time_range::view::TimeRangePanel>> {
+        self.chart_source_time_range_panel.clone()
+    }
+
+    /// Returns the refresh-policy dropdown entity.
+    pub(crate) fn chart_host_refresh_dropdown(&self, _cx: &App) -> Entity<Dropdown> {
+        self.refresh_dropdown.clone()
+    }
+
+    /// Returns the current result as a shared `Arc<QueryResult>`.
+    ///
+    /// For `QueryResult` sources the result is already `Arc`-wrapped in the
+    /// source; for other sources we wrap the live `result` field in a new
+    /// `Arc` (shallow clone, no data copy).
+    pub(crate) fn chart_host_current_result(&self, _cx: &App) -> Option<Arc<QueryResult>> {
+        match &self.source {
+            DataSource::QueryResult { result, .. } => Some(result.clone()),
+            DataSource::Table { .. } | DataSource::Collection { .. } => {
+                Some(Arc::new(self.result.clone()))
+            }
+        }
+    }
+
+    /// Trigger a re-execution of the current query.
+    ///
+    /// For `QueryResult` sources this emits the time-range panel's initial
+    /// event, which causes `CodeDocument` to re-run the query. For table /
+    /// collection sources this calls `refresh`.
+    pub(crate) fn chart_host_request_reexecute(&mut self, cx: &mut Context<Self>) {
+        match &self.source {
+            DataSource::QueryResult { .. } => {
+                if let Some(trp) = self.chart_source_time_range_panel.clone() {
+                    trp.update(cx, |p, cx| p.emit_initial(cx));
+                }
+            }
+            _ => {
+                self.pending_refresh = true;
+                cx.notify();
+            }
+        }
+    }
+
+    /// Look up the source row for a decimated chart point.
+    ///
+    /// Consults the `RenderModel.source_indices` built by `ChartView::build`
+    /// when `ChartSpec.track_source_indices` was enabled. Returns `None` when
+    /// source tracking is disabled (e.g. CodeDocument-backed charts) or when
+    /// the index is out of range.
+    pub(crate) fn chart_host_source_for_point(
+        &self,
+        point: DataPointRef,
+        cx: &App,
+    ) -> Option<SourceRowRef> {
+        let shell = self.chart_shell.as_ref()?.read(cx);
+        let chart_entity = shell.chart_view()?.clone();
+        let chart = chart_entity.read(cx);
+
+        let src_indices = chart.source_indices()?;
+        let series_indices = src_indices.get(point.series_idx)?;
+        let row_idx = *series_indices.get(point.point_idx_in_series)?;
+
+        Some(SourceRowRef { row_idx })
+    }
+
+    /// Scroll the underlying table view to the given row index.
+    ///
+    /// Uses `DataTableState::scroll_to_row` when the table state is available.
+    /// For document-tree sources this is a no-op (document tree manages its own
+    /// scroll via `DocumentTreeState`).
+    pub(crate) fn chart_host_scroll_to_row(&self, row_idx: usize, cx: &App) {
+        if let Some(table_state) = &self.table_state {
+            table_state.read(cx).scroll_to_row(row_idx);
+        }
+    }
 }
 
 impl EventEmitter<DataGridEvent> for DataGridPanel {}
@@ -1429,7 +1932,7 @@ mod tests {
     use crate::app_state_entity::AppStateEntity;
     use crate::ui::components::toast::{ToastGlobal, ToastHost};
     use crate::ui::theme;
-    use dbflux_core::{CollectionRef, ColumnMeta, Pagination, QueryResult, TableRef};
+    use dbflux_core::{CollectionRef, ColumnKind, ColumnMeta, Pagination, QueryResult, TableRef};
     use dbflux_storage::bootstrap::StorageRuntime;
     use gpui::{AppContext, TestAppContext};
     use gpui_component::Root;
@@ -1454,12 +1957,14 @@ mod tests {
             ColumnMeta {
                 name: "id".to_string(),
                 type_name: "int4".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: false,
                 is_primary_key: true,
             },
             ColumnMeta {
                 name: "name".to_string(),
                 type_name: "text".to_string(),
+                kind: ColumnKind::Unknown,
                 nullable: true,
                 is_primary_key: false,
             },
@@ -1539,6 +2044,7 @@ mod tests {
                 std::time::Duration::ZERO,
             )),
             original_query: "PING".to_string(),
+            profile_id: None,
         };
 
         assert!(!source.is_table());

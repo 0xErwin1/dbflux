@@ -2,10 +2,10 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CLOUDWATCH_FORM, Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig,
     DbDriver, DbError, DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits,
-    DriverMetadata, FormValues, Icon, MONGODB_FORM, MYSQL_FORM, MutationCapabilities,
-    POSTGRES_FORM, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    REDIS_FORM, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService,
-    SyntaxInfo, TransactionCapabilities,
+    DriverMetadata, FormValues, INFLUXDB_FORM, Icon, MONGODB_FORM, MYSQL_FORM,
+    MutationCapabilities, POSTGRES_FORM, QueryCapabilities, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, REDIS_FORM, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot,
+    SqlDialect, SqlLanguageService, SyntaxInfo, TransactionCapabilities,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
 use dbflux_driver_redis::RedisLanguageService;
@@ -16,16 +16,21 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuar
 
 #[derive(Debug, Clone)]
 pub enum FakeQueryOutcome {
-    Success(QueryResult),
+    // Box to keep all variants at a similar size; QueryResult grew with metadata_extra.
+    Success(Box<QueryResult>),
     Error(String),
     Timeout,
     Cancelled,
 }
 
 impl FakeQueryOutcome {
+    pub fn success(result: QueryResult) -> Self {
+        Self::Success(Box::new(result))
+    }
+
     fn to_result(&self) -> Result<QueryResult, Box<DbError>> {
         match self {
-            Self::Success(result) => Ok(result.clone()),
+            Self::Success(result) => Ok(*result.clone()),
             Self::Error(message) => Err(Box::new(DbError::query_failed(message.clone()))),
             Self::Timeout => Err(Box::new(DbError::Timeout)),
             Self::Cancelled => Err(Box::new(DbError::Cancelled)),
@@ -78,7 +83,7 @@ impl FakeDriver {
 
     pub fn with_query_result(self, sql: impl Into<String>, result: QueryResult) -> Self {
         rwlock_write(&self.state.query_outcomes)
-            .insert(sql.into(), FakeQueryOutcome::Success(result));
+            .insert(sql.into(), FakeQueryOutcome::success(result));
         self
     }
 
@@ -89,7 +94,7 @@ impl FakeDriver {
     }
 
     pub fn with_default_result(self, result: QueryResult) -> Self {
-        *rwlock_write(&self.state.default_outcome) = Some(FakeQueryOutcome::Success(result));
+        *rwlock_write(&self.state.default_outcome) = Some(FakeQueryOutcome::success(result));
         self
     }
 
@@ -228,6 +233,30 @@ impl DbDriver for FakeDriver {
                 profile: get_optional_string(values, "profile"),
                 endpoint: get_optional_string(values, "endpoint"),
             },
+            DbKind::InfluxDB => DbConfig::InfluxDB {
+                version: dbflux_core::InfluxVersion::V2,
+                url: get_string(values, "url", "http://localhost:8086"),
+                org: get_optional_string(values, "org"),
+                default_bucket: get_optional_string(values, "default_bucket")
+                    .or_else(|| get_optional_string(values, "bucket_or_database")),
+                retention_policy: get_optional_string(values, "retention_policy"),
+                user: get_optional_string(values, "user"),
+                request_timeout_seconds: None,
+            },
+            DbKind::SqlServer => DbConfig::SqlServer {
+                use_uri: false,
+                uri: None,
+                host: get_string(values, "host", "localhost"),
+                port: get_u16(values, "port", 1433),
+                user: get_string(values, "user", "sa"),
+                database: get_optional_string(values, "database"),
+                instance: get_optional_string(values, "instance"),
+                ssl_mode: Some("on".to_string()),
+                trust_server_certificate: true,
+                ssl_root_cert_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
         };
 
         Ok(config)
@@ -315,6 +344,38 @@ impl DbDriver for FakeDriver {
                 values.insert("region".to_string(), region.clone());
                 values.insert("profile".to_string(), profile.clone().unwrap_or_default());
                 values.insert("endpoint".to_string(), endpoint.clone().unwrap_or_default());
+            }
+            DbConfig::InfluxDB {
+                url,
+                org,
+                default_bucket,
+                retention_policy,
+                ..
+            } => {
+                values.insert("url".to_string(), url.clone());
+                values.insert("org".to_string(), org.clone().unwrap_or_default());
+                values.insert(
+                    "default_bucket".to_string(),
+                    default_bucket.clone().unwrap_or_default(),
+                );
+                values.insert(
+                    "retention_policy".to_string(),
+                    retention_policy.clone().unwrap_or_default(),
+                );
+            }
+            DbConfig::SqlServer {
+                host,
+                port,
+                user,
+                database,
+                instance,
+                ..
+            } => {
+                values.insert("host".to_string(), host.clone());
+                values.insert("port".to_string(), port.to_string());
+                values.insert("user".to_string(), user.clone());
+                values.insert("database".to_string(), database.clone().unwrap_or_default());
+                values.insert("instance".to_string(), instance.clone().unwrap_or_default());
             }
             DbConfig::External { values: vals, .. } => {
                 values.extend(vals.clone());
@@ -453,12 +514,16 @@ impl Connection for FakeConnection {
 
     fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
         match self.kind {
-            DbKind::MySQL | DbKind::MariaDB => SchemaLoadingStrategy::LazyPerDatabase,
+            DbKind::MySQL | DbKind::MariaDB | DbKind::SqlServer => {
+                SchemaLoadingStrategy::LazyPerDatabase
+            }
             DbKind::Postgres => SchemaLoadingStrategy::ConnectionPerDatabase,
             DbKind::SQLite | DbKind::MongoDB | DbKind::Redis => {
                 SchemaLoadingStrategy::SingleDatabase
             }
-            DbKind::DynamoDB | DbKind::CloudWatchLogs => SchemaLoadingStrategy::SingleDatabase,
+            DbKind::DynamoDB | DbKind::CloudWatchLogs | DbKind::InfluxDB => {
+                SchemaLoadingStrategy::SingleDatabase
+            }
         }
     }
 
@@ -483,6 +548,8 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::Redis { database, .. } => database.map(|value| value.to_string()),
         DbConfig::DynamoDB { table, .. } => table.clone(),
         DbConfig::CloudWatchLogs { .. } => None,
+        DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
+        DbConfig::SqlServer { database, .. } => database.clone(),
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
@@ -497,6 +564,9 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::Redis => &FAKE_REDIS_METADATA,
         DbKind::DynamoDB => &FAKE_DYNAMODB_METADATA,
         DbKind::CloudWatchLogs => &FAKE_CLOUDWATCH_METADATA,
+        DbKind::InfluxDB => &FAKE_INFLUXDB_METADATA,
+        // Tests treat SQL Server like a relational driver — reuse postgres metadata.
+        DbKind::SqlServer => &FAKE_POSTGRES_METADATA,
     }
 }
 
@@ -509,6 +579,8 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::Redis => &REDIS_FORM,
         DbKind::DynamoDB => &DYNAMODB_FORM,
         DbKind::CloudWatchLogs => &CLOUDWATCH_FORM,
+        DbKind::InfluxDB => &INFLUXDB_FORM,
+        DbKind::SqlServer => &dbflux_core::SQLSERVER_FORM,
     }
 }
 
@@ -907,6 +979,36 @@ static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Dri
     classification_override: None,
 });
 
+static FAKE_INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-influxdb".into(),
+    display_name: "Fake InfluxDB".into(),
+    description: "Deterministic fake driver for tests".into(),
+    category: dbflux_core::DatabaseCategory::TimeSeries,
+    deployment_class: None,
+    query_language: QueryLanguage::Flux,
+    capabilities: DriverCapabilities::AUTHENTICATION,
+    default_port: Some(8086),
+    uri_scheme: "http".into(),
+    icon: Icon::Influxdb,
+    syntax: None,
+    query: None,
+    mutation: None,
+    ddl: None,
+    transactions: Some(TransactionCapabilities {
+        supports_transactions: false,
+        supported_isolation_levels: vec![],
+        default_isolation_level: None,
+        supports_savepoints: false,
+        supports_nested_transactions: false,
+        supports_read_only: false,
+        supports_deferrable: false,
+    }),
+    limits: None,
+    ssl_modes: None,
+    ssl_cert_fields: None,
+    classification_override: None,
+});
+
 #[cfg(test)]
 mod tests {
     use super::{FakeDriver, FakeQueryOutcome};
@@ -934,7 +1036,7 @@ mod tests {
 
         driver.set_query_outcome(
             "SELECT 1",
-            FakeQueryOutcome::Success(dbflux_core::QueryResult::table(
+            FakeQueryOutcome::success(dbflux_core::QueryResult::table(
                 vec![],
                 vec![],
                 None,
@@ -1050,6 +1152,7 @@ mod tests {
                 DbKind::CloudWatchLogs,
                 SchemaLoadingStrategy::SingleDatabase,
             ),
+            (DbKind::SqlServer, SchemaLoadingStrategy::LazyPerDatabase),
         ];
 
         for (kind, expected_strategy) in cases {
@@ -1079,6 +1182,8 @@ mod tests {
                 DbKind::Redis => DbConfig::default_redis(),
                 DbKind::DynamoDB => DbConfig::default_dynamodb(),
                 DbKind::CloudWatchLogs => DbConfig::default_cloudwatch_logs(),
+                DbKind::InfluxDB => DbConfig::default_influxdb(),
+                DbKind::SqlServer => DbConfig::default_sqlserver(),
             };
 
             let profile = ConnectionProfile::new("fake", config);

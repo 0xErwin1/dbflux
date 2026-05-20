@@ -360,6 +360,7 @@ mod tests {
 
         let dto = AuthProfileDto::new(Uuid::new_v4(), "AWS SSO".to_string(), "aws-sso".to_string());
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = AuthProfileRepository::new(Arc::new(conn));
         repo.insert(&dto).expect("should insert");
 

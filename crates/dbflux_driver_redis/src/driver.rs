@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DefaultSqlDialect, DeploymentClass, Diagnostic, DiagnosticSeverity,
     DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
@@ -1751,12 +1751,14 @@ fn redis_array_to_result(
             ColumnMeta {
                 name: "#".to_string(),
                 type_name: "int".to_string(),
+                kind: ColumnKind::Integer,
                 nullable: false,
                 is_primary_key: false,
             },
             ColumnMeta {
                 name: "value".to_string(),
                 type_name: "redis".to_string(),
+                kind: ColumnKind::Text,
                 nullable: true,
                 is_primary_key: false,
             },

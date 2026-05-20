@@ -9,6 +9,7 @@ pub use capabilities::{
 };
 pub use form::{
     CLOUDWATCH_FORM, DYNAMODB_FORM, DriverFormDef, FormFieldDef, FormFieldKind, FormSection,
-    FormTab, FormValues, MONGODB_FORM, MYSQL_FORM, POSTGRES_FORM, REDIS_FORM, RefreshTrigger,
-    SQLITE_FORM, SelectOption, field_file_path, field_password, field_use_uri, ssh_tab,
+    FormTab, FormValues, INFLUXDB_FORM, MONGODB_FORM, MYSQL_FORM, POSTGRES_FORM, REDIS_FORM,
+    RefreshTrigger, SQLITE_FORM, SQLSERVER_FORM, SelectOption, field_file_path, field_password,
+    field_use_uri, ssh_tab,
 };

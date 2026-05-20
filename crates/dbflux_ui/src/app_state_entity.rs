@@ -4,6 +4,7 @@
 //! and adds GPUI-specific state (like the settings window handle) and event types.
 
 use dbflux_app::AppState;
+use dbflux_components::SavedChartManager;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
@@ -49,6 +50,9 @@ pub struct AppStateEntity {
     /// Handle to the settings window, if one is open.
     /// Used to focus/reuse an existing settings window rather than opening multiple.
     pub settings_window: Option<WindowHandle<Root>>,
+
+    /// Saved-chart manager — load once at startup, mutated via `upsert`/`remove`.
+    pub saved_charts: SavedChartManager,
 }
 
 impl AppStateEntity {
@@ -57,6 +61,7 @@ impl AppStateEntity {
         Self {
             inner: AppState::new(),
             settings_window: None,
+            saved_charts: SavedChartManager::load(),
         }
     }
 
@@ -65,6 +70,7 @@ impl AppStateEntity {
         Self {
             inner: AppState::new_with_storage_runtime(storage_runtime),
             settings_window: None,
+            saved_charts: SavedChartManager::load(),
         }
     }
 }

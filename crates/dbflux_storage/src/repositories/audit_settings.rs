@@ -179,16 +179,17 @@ mod tests {
             .run_all(&conn)
             .expect("migration should run");
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = AuditSettingsRepository::new(Arc::new(conn));
 
         let dto = AuditSettingsDto::default();
         repo.upsert(&dto).expect("should upsert audit settings");
 
         let fetched = repo.get().expect("should get").expect("should exist");
-        assert_eq!(fetched.enabled, true);
+        assert!(fetched.enabled);
         assert_eq!(fetched.retention_days, 30);
-        assert_eq!(fetched.capture_query_text, false);
-        assert_eq!(fetched.redact_sensitive_values, true);
+        assert!(!fetched.capture_query_text);
+        assert!(fetched.redact_sensitive_values);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -201,18 +202,21 @@ mod tests {
             .run_all(&conn)
             .expect("migration should run");
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let repo = AuditSettingsRepository::new(Arc::new(conn));
 
-        let mut dto = AuditSettingsDto::default();
-        dto.retention_days = 60;
-        dto.capture_query_text = true;
-        dto.background_purge_interval_minutes = 720;
+        let dto = AuditSettingsDto {
+            retention_days: 60,
+            capture_query_text: true,
+            background_purge_interval_minutes: 720,
+            ..Default::default()
+        };
 
         repo.upsert(&dto).expect("should upsert");
 
         let fetched = repo.get().expect("should get").expect("should exist");
         assert_eq!(fetched.retention_days, 60);
-        assert_eq!(fetched.capture_query_text, true);
+        assert!(fetched.capture_query_text);
         assert_eq!(fetched.background_purge_interval_minutes, 720);
 
         let _ = std::fs::remove_file(&path);
