@@ -97,6 +97,14 @@ pub enum AppIcon {
     // Generic non-database data sources
     Logs,
 
+    // Charts
+    ChartSpline,
+    ChartArea,
+    ChartColumnBig,
+    ChartBar,
+    ChartPie,
+    ChartNetwork,
+
     // Database brands (SimpleIcons)
     BrandPostgres,
     BrandMysql,
@@ -188,6 +196,12 @@ impl AppIcon {
             Self::SquareTerminal => "icons/ui/square-terminal.svg",
             Self::Database => "icons/ui/database.svg",
             Self::Logs => "icons/ui/logs.svg",
+            Self::ChartSpline => "icons/ui/chart-spline.svg",
+            Self::ChartArea => "icons/ui/chart-area.svg",
+            Self::ChartColumnBig => "icons/ui/chart-column-big.svg",
+            Self::ChartBar => "icons/ui/chart-bar.svg",
+            Self::ChartPie => "icons/ui/chart-pie.svg",
+            Self::ChartNetwork => "icons/ui/chart-network.svg",
             Self::BrandPostgres => "icons/brand/postgresql.svg",
             Self::BrandMysql => "icons/brand/mysql.svg",
             Self::BrandMariadb => "icons/brand/mariadb.svg",
@@ -305,6 +319,18 @@ impl AppIcon {
             }
             Self::Database => include_bytes!("../../../../../resources/icons/ui/database.svg"),
             Self::Logs => include_bytes!("../../../../../resources/icons/ui/logs.svg"),
+            Self::ChartSpline => {
+                include_bytes!("../../../../../resources/icons/ui/chart-spline.svg")
+            }
+            Self::ChartArea => include_bytes!("../../../../../resources/icons/ui/chart-area.svg"),
+            Self::ChartColumnBig => {
+                include_bytes!("../../../../../resources/icons/ui/chart-column-big.svg")
+            }
+            Self::ChartBar => include_bytes!("../../../../../resources/icons/ui/chart-bar.svg"),
+            Self::ChartPie => include_bytes!("../../../../../resources/icons/ui/chart-pie.svg"),
+            Self::ChartNetwork => {
+                include_bytes!("../../../../../resources/icons/ui/chart-network.svg")
+            }
             Self::BrandPostgres => {
                 include_bytes!("../../../../../resources/icons/brand/postgresql.svg")
             }
@@ -356,6 +382,19 @@ impl AppIcon {
             | QueryLanguage::Cql => Self::Database,
             QueryLanguage::Cypher => Self::Database,
             QueryLanguage::Custom(_) => Self::FileCode,
+        }
+    }
+
+    /// Returns the icon that best represents a given chart kind.
+    ///
+    /// Used for chart tabs and any chart-kind-specific affordance so the UI
+    /// stays agnostic to the concrete `ChartKind` variants.
+    pub const fn for_chart_kind(kind: dbflux_components::chart::ChartKind) -> Self {
+        use dbflux_components::chart::ChartKind;
+        match kind {
+            ChartKind::Line => Self::ChartSpline,
+            ChartKind::Bar => Self::ChartColumnBig,
+            ChartKind::Scatter => Self::ChartNetwork,
         }
     }
 
@@ -446,6 +485,12 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::SquareTerminal,
     AppIcon::Database,
     AppIcon::Logs,
+    AppIcon::ChartSpline,
+    AppIcon::ChartArea,
+    AppIcon::ChartColumnBig,
+    AppIcon::ChartBar,
+    AppIcon::ChartPie,
+    AppIcon::ChartNetwork,
     AppIcon::BrainCircuit,
     AppIcon::Bot,
     AppIcon::BrandPostgres,

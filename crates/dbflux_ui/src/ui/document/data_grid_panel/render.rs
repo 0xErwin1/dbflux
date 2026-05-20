@@ -2889,8 +2889,16 @@ impl DataGridPanel {
                                 available_modes.iter().enumerate().map(|(i, mode)| {
                                     let mode = *mode;
                                     let is_active = mode == current_result_mode;
+                                    let icon_color = if is_active {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    };
                                     div()
                                         .id(ElementId::Name(format!("result-view-{}", i).into()))
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
                                         .px(Spacing::SM)
                                         .text_size(FontSizes::XS)
                                         .cursor_pointer()
@@ -2900,6 +2908,11 @@ impl DataGridPanel {
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.set_result_view_mode(mode, cx);
                                         }))
+                                        .child(
+                                            Icon::new(Self::result_mode_icon(mode))
+                                                .size(px(12.0))
+                                                .color(icon_color),
+                                        )
                                         .child(Self::result_mode_label(mode.label(), is_active))
                                 }),
                             ))
@@ -3026,6 +3039,17 @@ impl DataGridPanel {
                         Text::caption(exec_time.to_string()).color(muted)
                     }),
             )
+    }
+
+    /// Icon shown next to each result-view mode chip (Data, Chart, JSON, ...).
+    fn result_mode_icon(mode: ResultViewMode) -> AppIcon {
+        match mode {
+            ResultViewMode::Table => AppIcon::Table,
+            ResultViewMode::Chart => AppIcon::ChartSpline,
+            ResultViewMode::Json => AppIcon::Braces,
+            ResultViewMode::Text => AppIcon::ScrollText,
+            ResultViewMode::Raw => AppIcon::Code,
+        }
     }
 
     fn result_mode_label(label: &'static str, is_active: bool) -> Text {

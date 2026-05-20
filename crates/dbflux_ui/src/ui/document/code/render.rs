@@ -316,7 +316,7 @@ impl CodeDocument {
                     .tooltip(|window, cx| {
                         Tooltip::new("Open current query in a chart document").build(window, cx)
                     })
-                    .child(Icon::new(AppIcon::Zap).size(px(12.0)).color(fg)),
+                    .child(Icon::new(AppIcon::ChartSpline).size(px(12.0)).color(fg)),
             )
     }
 
