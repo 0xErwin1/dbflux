@@ -353,7 +353,7 @@ impl Workspace {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| match result {
+            cx.update(|cx| match result {
                 Ok(schema) => {
                     app_state.update(cx, |state, cx| {
                         if let Some(connected) = state.connections_mut().get_mut(&profile_id) {
@@ -365,12 +365,7 @@ impl Workspace {
                 Err(e) => {
                     log::error!("Failed to refresh schema: {:?}", e);
                 }
-            }) {
-                log::warn!(
-                    "Failed to apply refreshed schema to workspace state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
 
@@ -623,6 +618,118 @@ impl Workspace {
         });
     }
 
+    /// Opens a schema visualization document for a table.
+    pub(super) fn open_schema_viz_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        database: Option<String>,
+        schema: Option<String>,
+        table: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::DocumentKey;
+        use crate::ui::document::schema_viz::{SchemaVizDocument, SchemaVizMode};
+
+        // Deduplication: one focused diagram per (profile_id, database, schema, table).
+        let existing_id = self.tab_manager.read(cx).find_by_key(
+            &DocumentKey::SchemaViz {
+                profile_id,
+                database: database.clone(),
+                schema: schema.clone(),
+                table: Some(table.clone()),
+            },
+            cx,
+        );
+
+        if let Some(existing_id) = existing_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(existing_id, cx);
+            });
+            return;
+        }
+
+        // Create new document
+        let mode = SchemaVizMode::Focused {
+            table: table.clone(),
+            schema: schema.clone(),
+        };
+
+        let doc = cx.new(|cx| {
+            SchemaVizDocument::new(
+                profile_id,
+                database.clone(),
+                mode,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+
+        let pane = SchemaVizDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        log::info!(
+            "Opened schema viz document: {} (profile={}, db={:?}, schema={:?})",
+            table,
+            profile_id,
+            database.as_deref(),
+            schema.as_deref()
+        );
+    }
+
+    pub(super) fn open_global_schema_viz_document(
+        &mut self,
+        profile_id: uuid::Uuid,
+        database: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::DocumentKey;
+        use crate::ui::document::schema_viz::{SchemaVizDocument, SchemaVizMode};
+
+        // Deduplication: one Global diagram per (profile_id, database).
+        let existing_id = self.tab_manager.read(cx).find_by_key(
+            &DocumentKey::SchemaViz {
+                profile_id,
+                database: Some(database.clone()),
+                schema: None,
+                table: None,
+            },
+            cx,
+        );
+
+        if let Some(existing_id) = existing_id {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.activate(existing_id, cx));
+            return;
+        }
+
+        let doc = cx.new(|cx| {
+            SchemaVizDocument::new(
+                profile_id,
+                Some(database.clone()),
+                SchemaVizMode::Global,
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+
+        let pane = SchemaVizDocument::into_pane(doc, cx);
+        self.tab_manager
+            .update(cx, |mgr, cx| mgr.open(Tab::Pane(Box::new(pane)), cx));
+
+        log::info!(
+            "Opened global schema viz for profile={} db={}",
+            profile_id,
+            database
+        );
+    }
+
     pub(super) fn open_key_value_document(
         &mut self,
         profile_id: uuid::Uuid,
@@ -799,30 +906,19 @@ impl Workspace {
             let path = handle.path().to_path_buf();
 
             // Check if this file is already open
-            let already_open = match cx.update(|cx| {
+            let already_open = cx.update(|cx| {
                 tab_manager.read(cx).find_by_key(
                     &crate::ui::document::DocumentKey::File { path: path.clone() },
                     cx,
                 )
-            }) {
-                Ok(value) => value,
-                Err(error) => {
-                    log::warn!(
-                        "Failed to inspect open tabs while opening script: {:?}",
-                        error
-                    );
-                    None
-                }
-            };
+            });
 
             if let Some(id) = already_open {
-                if let Err(error) = cx.update(|cx| {
+                cx.update(|cx| {
                     tab_manager.update(cx, |mgr, cx| {
                         mgr.activate(id, cx);
                     });
-                }) {
-                    log::warn!("Failed to activate already-open script tab: {:?}", error);
-                }
+                });
                 return;
             }
 
@@ -841,7 +937,7 @@ impl Workspace {
                 }
             };
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |ws, cx| {
                     ws.open_script_with_content(path, content, cx);
                 })
@@ -851,12 +947,7 @@ impl Workspace {
                         inner_error
                     );
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply selected script content to workspace: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }
@@ -893,7 +984,7 @@ impl Workspace {
                 }
             };
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |ws, cx| {
                     ws.open_script_with_content(path, content, cx);
                 })
@@ -903,12 +994,7 @@ impl Workspace {
                         inner_error
                     );
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply script content from explicit path to workspace: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }
@@ -988,8 +1074,7 @@ impl Workspace {
                     cx.notify();
                 })
                 .ok();
-            })
-            .ok();
+            });
         })
         .detach();
     }

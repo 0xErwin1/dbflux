@@ -8,7 +8,7 @@ use dbflux_components::controls::InputState;
 use dbflux_core::{RpcServiceKind, ServiceConfig};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::AlertDialog;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum ServiceFocus {
@@ -358,7 +358,7 @@ impl FormSection for ServicesSection {
 }
 
 impl Render for ServicesSection {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let show_svc_delete = self.pending_delete_svc_idx.is_some();
         let svc_delete_name = self
             .pending_delete_svc_idx
@@ -374,7 +374,7 @@ impl Render for ServicesSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(window, cx)
+                    AlertDialog::new(cx)
                         .title("Delete Service")
                         .confirm()
                         .on_ok(move |_, window, cx| {

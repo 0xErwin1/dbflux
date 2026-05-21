@@ -322,7 +322,7 @@ impl SshTunnelsSection {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(()) => {
@@ -336,12 +336,7 @@ impl SshTunnelsSection {
                     }
                     cx.notify();
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply SSH tunnel test result to UI state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }
@@ -408,18 +403,13 @@ impl SshTunnelsSection {
         cx.spawn(async move |_this, cx| {
             let path = task.await;
 
-            if let Some(path) = path
-                && let Err(error) = cx.update(|cx| {
+            if let Some(path) = path {
+                cx.update(|cx| {
                     this.update(cx, |this, cx| {
                         this.pending_ssh_key_path = Some(path.to_string_lossy().to_string());
                         cx.notify();
                     });
-                })
-            {
-                log::warn!(
-                    "Failed to apply selected SSH key path to settings state: {:?}",
-                    error
-                );
+                });
             }
         })
         .detach();

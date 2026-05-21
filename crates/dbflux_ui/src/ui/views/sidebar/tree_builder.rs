@@ -292,7 +292,7 @@ impl Sidebar {
                                 Self::build_db_schema_content(
                                     profile_id,
                                     &db.name,
-                                    None,
+                                    Some(&db.name),
                                     db_schema,
                                     &connected.table_details,
                                     &connected.schema_types,
@@ -428,17 +428,24 @@ impl Sidebar {
                     );
                 }
             } else {
-                // No databases defined - use active_database or first schema as fallback
+                // No databases defined - use active_database or first schema as fallback.
+                // Wrap in a Database node so "View Schema Diagram" appears in the context menu.
                 let database_name = connected
                     .active_database
                     .as_deref()
                     .or_else(|| schema.schemas().first().map(|s| s.name.as_str()))
                     .unwrap_or("default");
 
-                profile_children = Self::build_schema_children(
+                let is_expanded = if uses_lazy_loading {
+                    connected.active_database.as_deref() == Some(database_name)
+                } else {
+                    true
+                };
+
+                let db_children = Self::build_schema_children(
                     profile_id,
                     database_name,
-                    None,
+                    Some("main"),
                     schema,
                     &connected.table_details,
                     &connected.schema_types,
@@ -447,6 +454,19 @@ impl Sidebar {
                     &connected.schema_routines,
                     supports_routines,
                     &connected.dependents_cache,
+                );
+
+                profile_children.push(
+                    TreeItem::new(
+                        SchemaNodeId::Database {
+                            profile_id,
+                            name: database_name.to_string(),
+                        }
+                        .to_string(),
+                        database_name.to_string(),
+                    )
+                    .expanded(is_expanded)
+                    .children(db_children),
                 );
             }
 

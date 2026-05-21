@@ -86,7 +86,7 @@ impl SsoWizard {
         self.visible = true;
         self.step = WizardStep::Start;
         self.status = None;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -198,7 +198,7 @@ impl SsoWizard {
 
         cx.spawn(async move |_entity, cx| {
             let result = task.await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.accounts_loading = false;
                     match result {
@@ -251,7 +251,7 @@ impl SsoWizard {
 
         cx.spawn(async move |_entity, cx| {
             let result = task.await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.roles_loading = false;
                     match result {

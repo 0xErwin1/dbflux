@@ -69,7 +69,7 @@ impl DocumentPreviewModal {
             state.focus(window, cx);
         });
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

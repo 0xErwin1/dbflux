@@ -1,0 +1,3028 @@
+pub mod inspector;
+pub mod pane;
+
+use gpui::prelude::*;
+use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::scroll::{Scrollable, ScrollableElement};
+
+use dbflux_core::observability::actions as audit_actions;
+use dbflux_core::observability::{
+    AuditAction, EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
+};
+use dbflux_core::{CancelToken, Connection, DbSchemaInfo, TableInfo, TaskKind, TaskTarget};
+use dbflux_schema_viz::{
+    graph::SchemaGraph,
+    layout::{
+        LayoutFormat, LayoutResult, NODE_BODY_TOP_PX, NODE_HEADER_PX, NODE_INDEX_HEADER_PX,
+        NODE_INDEX_ROW_PX, NODE_ROW_PX, NodeLayout,
+    },
+};
+use petgraph::graph::NodeIndex;
+use std::collections::HashSet;
+use std::sync::Arc;
+use uuid::Uuid;
+
+use crate::app::AppStateEntity;
+use crate::keymap::{Command, ContextId};
+use crate::ui::components::toast::{PendingToast, flush_pending_toast};
+use crate::ui::document::handle::DocumentEvent;
+use crate::ui::document::types::{DocumentId, DocumentState};
+use crate::ui::icons::AppIcon;
+use crate::ui::tokens::{FontSizes, Spacing};
+
+/// Direction for spatial selection navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// Actions for the schema viz context menu.
+#[derive(Debug, Clone)]
+enum SchemaVizMenuAction {
+    Separator,
+    ZoomIn,
+    ZoomOut,
+    LayoutSubmenu,
+    CopyAsSubmenu,
+    FocusOnTable,
+    InspectTable,
+    // Submenu actions
+    LayoutLeftRight,
+    LayoutSnowflake,
+    LayoutCompact,
+    CopyAsDbml,
+    CopyAsSql,
+}
+
+/// Context menu state following the app's standard pattern (see sidebar::ContextMenuState).
+struct SchemaVizContextMenuState {
+    selected_index: usize,
+    actions: Vec<SchemaVizMenuAction>,
+    parent_stack: Vec<(Vec<SchemaVizMenuAction>, usize)>,
+    position: Point<Pixels>,
+}
+
+impl SchemaVizMenuAction {
+    /// Converts this action to a MenuItem for rendering.
+    fn to_menu_item(&self) -> crate::ui::components::context_menu::MenuItem {
+        use crate::ui::components::context_menu::MenuItem;
+
+        match self {
+            SchemaVizMenuAction::Separator => MenuItem::separator(),
+            SchemaVizMenuAction::ZoomIn => MenuItem::new("Zoom In").icon(AppIcon::ZoomIn),
+            SchemaVizMenuAction::ZoomOut => MenuItem::new("Zoom Out").icon(AppIcon::ZoomOut),
+            SchemaVizMenuAction::LayoutSubmenu => {
+                MenuItem::new("Layout").icon(AppIcon::Layers).submenu()
+            }
+            SchemaVizMenuAction::CopyAsSubmenu => {
+                MenuItem::new("Copy as").icon(AppIcon::Database).submenu()
+            }
+            SchemaVizMenuAction::FocusOnTable => {
+                MenuItem::new("Focus on this table").icon(AppIcon::Maximize2)
+            }
+            SchemaVizMenuAction::InspectTable => {
+                MenuItem::new("Inspect schema").icon(AppIcon::Table)
+            }
+            SchemaVizMenuAction::LayoutLeftRight => {
+                MenuItem::new("Left-Right").icon(AppIcon::ArrowLeftRight)
+            }
+            SchemaVizMenuAction::LayoutSnowflake => {
+                MenuItem::new("Snowflake").icon(AppIcon::Snowflake)
+            }
+            SchemaVizMenuAction::LayoutCompact => MenuItem::new("Compact").icon(AppIcon::Grid3x3),
+            SchemaVizMenuAction::CopyAsDbml => MenuItem::new("Copy as DBML").icon(AppIcon::Copy),
+            SchemaVizMenuAction::CopyAsSql => MenuItem::new("Copy as SQL").icon(AppIcon::Code),
+        }
+    }
+
+    /// Builds the MenuItem list from an action list (1:1 mapping).
+    fn to_menu_items(actions: &[Self]) -> Vec<crate::ui::components::context_menu::MenuItem> {
+        actions.iter().map(|a| a.to_menu_item()).collect()
+    }
+}
+
+impl SchemaVizContextMenuState {
+    fn new(position: Point<Pixels>, has_selected_node: bool) -> Self {
+        let actions = Self::build_main_actions(has_selected_node);
+        Self {
+            selected_index: 0,
+            actions,
+            parent_stack: Vec::new(),
+            position,
+        }
+    }
+
+    fn build_main_actions(has_selected_node: bool) -> Vec<SchemaVizMenuAction> {
+        let mut actions = vec![
+            SchemaVizMenuAction::ZoomIn,
+            SchemaVizMenuAction::ZoomOut,
+            SchemaVizMenuAction::Separator,
+            SchemaVizMenuAction::LayoutSubmenu,
+            SchemaVizMenuAction::CopyAsSubmenu,
+        ];
+
+        if has_selected_node {
+            actions.push(SchemaVizMenuAction::Separator);
+            actions.push(SchemaVizMenuAction::InspectTable);
+            actions.push(SchemaVizMenuAction::FocusOnTable);
+        }
+
+        actions
+    }
+
+    fn build_layout_actions() -> Vec<SchemaVizMenuAction> {
+        vec![
+            SchemaVizMenuAction::LayoutLeftRight,
+            SchemaVizMenuAction::LayoutSnowflake,
+            SchemaVizMenuAction::LayoutCompact,
+        ]
+    }
+
+    fn build_copy_as_actions() -> Vec<SchemaVizMenuAction> {
+        vec![
+            SchemaVizMenuAction::CopyAsDbml,
+            SchemaVizMenuAction::CopyAsSql,
+        ]
+    }
+
+    /// Returns rendered menu items for the current level.
+    fn menu_items(&self) -> Vec<crate::ui::components::context_menu::MenuItem> {
+        SchemaVizMenuAction::to_menu_items(&self.actions)
+    }
+
+    /// Returns rendered menu items for the parent level (if in submenu).
+    fn parent_menu_items(&self) -> Option<Vec<crate::ui::components::context_menu::MenuItem>> {
+        self.parent_stack
+            .last()
+            .map(|(actions, _)| SchemaVizMenuAction::to_menu_items(actions))
+    }
+
+    fn navigate_up(&mut self) -> bool {
+        let count = self.actions.len();
+        if count == 0 {
+            return false;
+        }
+        for _ in 0..count {
+            if self.selected_index > 0 {
+                self.selected_index -= 1;
+            } else {
+                self.selected_index = count - 1;
+            }
+            if !matches!(
+                self.actions[self.selected_index],
+                SchemaVizMenuAction::Separator
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn navigate_down(&mut self) -> bool {
+        let count = self.actions.len();
+        if count == 0 {
+            return false;
+        }
+        for _ in 0..count {
+            if self.selected_index < count - 1 {
+                self.selected_index += 1;
+            } else {
+                self.selected_index = 0;
+            }
+            if !matches!(
+                self.actions[self.selected_index],
+                SchemaVizMenuAction::Separator
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn go_into_submenu(&mut self) -> bool {
+        let action = match self.actions.get(self.selected_index) {
+            Some(a) => a.clone(),
+            None => return false,
+        };
+
+        let sub_actions = match action {
+            SchemaVizMenuAction::LayoutSubmenu => Self::build_layout_actions(),
+            SchemaVizMenuAction::CopyAsSubmenu => Self::build_copy_as_actions(),
+            _ => return false,
+        };
+
+        let current_actions = std::mem::take(&mut self.actions);
+        let current_index = self.selected_index;
+
+        self.parent_stack.push((current_actions, current_index));
+        self.actions = sub_actions;
+        self.selected_index = 0;
+        true
+    }
+
+    fn go_back(&mut self) -> bool {
+        if let Some((parent_actions, parent_index)) = self.parent_stack.pop() {
+            self.actions = parent_actions;
+            self.selected_index = parent_index;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+// Node layout constants are imported from dbflux_schema_viz::layout so that
+// render_node, render_edges_overlay, and the layout engine always agree on anchor
+// positions without duplicating magic numbers.
+
+/// Display mode for the schema diagram.
+#[derive(Clone)]
+pub enum SchemaVizMode {
+    /// Focused view: one table + immediate FK neighbors.
+    Focused {
+        table: String,
+        schema: Option<String>,
+    },
+    /// Global view: all tables in the schema (Phase 2, not yet implemented).
+    Global,
+}
+
+/// Loading status for the schema diagram.
+#[derive(Clone, PartialEq)]
+pub enum LoadStatus {
+    Loading,
+    Ready,
+    Error(String),
+    NotSupported,
+}
+
+pub struct SchemaVizDocument {
+    id: DocumentId,
+    pub profile_id: Uuid,
+    pub database: Option<String>,
+    pub mode: SchemaVizMode,
+    pub tables: Vec<TableInfo>,
+    pub graph: Option<SchemaGraph>,
+    pub layout: Option<LayoutResult>,
+    pub load_status: LoadStatus,
+    pub scroll_offset: Point<Pixels>,
+    pub zoom: f32,
+    pub focus_handle: FocusHandle,
+    _subscriptions: Vec<Subscription>,
+    // Dependencies
+    app_state: Entity<AppStateEntity>,
+    // Pan state
+    is_panning: bool,
+    pan_start: Point<Pixels>,
+    pan_offset: Point<Pixels>,
+    // Node interaction
+    selected_node: Option<petgraph::graph::NodeIndex>,
+    pending_details_panel: Option<petgraph::graph::NodeIndex>,
+    // Drag state for node repositioning
+    dragging_node: Option<petgraph::graph::NodeIndex>,
+    drag_offset: Point<Pixels>,
+    node_position_overrides: std::collections::HashMap<petgraph::graph::NodeIndex, Point<f32>>,
+    // Layout
+    pub layout_format: LayoutFormat,
+    pub show_types: bool,
+    pub show_indexes: bool,
+    pub table_cap_warning: bool,
+    // Cancellation
+    cancel_token: Option<Arc<CancelToken>>,
+    // Pending toast notification (set from sync context, flushed in render)
+    pending_toast: Option<PendingToast>,
+    // Toolbar dropdowns
+    layout_menu_open: bool,
+    export_menu_open: bool,
+    // Context menu (using app's standard component pattern)
+    context_menu: Option<SchemaVizContextMenuState>,
+    // When true, focus_handle.focus(window) is called at the start of the next render
+    pending_focus_restore: bool,
+    // Last mouse position for keyboard-opened menus (window-absolute)
+    last_mouse_position: Point<Pixels>,
+    // Absolute position of the document panel's top-left corner in window
+    // coordinates. Updated each frame via a canvas element. Used to convert
+    // event.position (window-absolute) to panel-local coordinates for context
+    // menu placement. Same pattern as DataGridPanel and AuditDocument.
+    panel_origin: Point<Pixels>,
+    // Absolute bounds of the graph viewport in window coordinates. Mouse and
+    // scroll event positions are window-absolute, while pan/zoom math is
+    // viewport-local.
+    viewport_origin: Point<Pixels>,
+    viewport_size: Size<Pixels>,
+    // Schema inspector content reused across opens.
+    schema_inspector_content: Option<Entity<inspector::SchemaInspector>>,
+}
+
+impl SchemaVizDocument {
+    /// Returns the table name if in focused mode.
+    pub fn table_name(&self) -> Option<&str> {
+        match &self.mode {
+            SchemaVizMode::Focused { table, .. } => Some(table.as_str()),
+            SchemaVizMode::Global => None,
+        }
+    }
+
+    /// Creates a new SchemaVizDocument and starts async loading.
+    /// NOTE: This must be called from within a `cx.new(|cx| ...)` closure
+    /// where `cx` is `Context<Self>`. The caller is responsible for wrapping
+    /// this with `cx.new(|cx| SchemaVizDocument::new(..., cx))`.
+    pub fn new(
+        profile_id: Uuid,
+        database: Option<String>,
+        mode: SchemaVizMode,
+        app_state: Entity<AppStateEntity>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let focus_handle = cx.focus_handle();
+        let id = DocumentId::new();
+
+        // Get the correct per-database connection using TaskTarget.
+        // This is critical for ConnectionPerDatabase drivers (e.g., PostgreSQL) where
+        // multiple databases exist on the same host and the primary connection may be
+        // on a different database than the one the user selected.
+        let task_target = TaskTarget {
+            profile_id,
+            database: database.clone(),
+        };
+        let connection = app_state
+            .read(cx)
+            .facade
+            .connections
+            .connection_for_task_target(&task_target);
+
+        let entity = cx.entity().clone();
+
+        let mut doc = Self {
+            id,
+            profile_id,
+            database: database.clone(),
+            mode: mode.clone(),
+            tables: Vec::new(),
+            graph: None,
+            layout: None,
+            load_status: LoadStatus::Loading,
+            scroll_offset: Point::default(),
+            zoom: 1.0,
+            focus_handle,
+            _subscriptions: Vec::new(),
+            app_state: app_state.clone(),
+            is_panning: false,
+            pan_start: Point::default(),
+            pan_offset: Point::default(),
+            selected_node: None,
+            pending_details_panel: None,
+            dragging_node: None,
+            drag_offset: Point::default(),
+            node_position_overrides: std::collections::HashMap::new(),
+            layout_format: LayoutFormat::LeftRight,
+            show_types: true,
+            show_indexes: false,
+            table_cap_warning: false,
+            cancel_token: None,
+            pending_toast: None,
+            layout_menu_open: false,
+            export_menu_open: false,
+            context_menu: None,
+            pending_focus_restore: false,
+            last_mouse_position: Point::default(),
+            panel_origin: Point::default(),
+            viewport_origin: Point::default(),
+            viewport_size: Size::default(),
+            schema_inspector_content: None,
+        };
+
+        // Spawn async loading task with the correct per-database connection
+        doc.spawn_loading(profile_id, database, mode, connection, entity, cx);
+
+        doc
+    }
+
+    /// Cancels any in-progress schema loading.
+    pub fn cancel_loading(&mut self, cx: &App) {
+        if let Some(ref cancel_token) = self.cancel_token {
+            cancel_token.cancel();
+        }
+
+        let mode_str = match &self.mode {
+            SchemaVizMode::Focused { .. } => "focused",
+            SchemaVizMode::Global => "global",
+        };
+        let tables_loaded = self.tables.len();
+        // Estimate total tables based on current state
+        let tables_total = if self.load_status == LoadStatus::Ready {
+            tables_loaded
+        } else {
+            0
+        };
+
+        let details = serde_json::json!({
+            "mode": mode_str,
+            "database": self.database,
+            "tables_loaded": tables_loaded,
+            "tables_total": tables_total,
+        });
+        self.emit_audit_event(
+            EventSeverity::Warn,
+            EventOutcome::Cancelled,
+            audit_actions::SCHEMA_VIZ_CANCEL,
+            "Schema diagram loading cancelled",
+            details,
+            cx,
+        );
+    }
+
+    /// Emits an audit event for schema visualization operations.
+    fn emit_audit_event(
+        &self,
+        severity: EventSeverity,
+        outcome: EventOutcome,
+        action: AuditAction,
+        summary: &str,
+        details: serde_json::Value,
+        cx: &App,
+    ) {
+        let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+        let object_id = self
+            .database
+            .as_ref()
+            .map(|d| format!("{}/{}", self.profile_id, d))
+            .unwrap_or_else(|| self.profile_id.to_string());
+
+        let event = EventRecord::new(now_ms, severity, EventCategory::Config, outcome)
+            .with_summary(summary)
+            .with_typed_action(action)
+            .with_origin(EventOrigin::local())
+            .with_actor_id("local")
+            .with_connection_context(
+                self.profile_id.to_string(),
+                self.database.as_deref().unwrap_or(""),
+                "",
+            )
+            .with_object_ref("schema_diagram", object_id);
+
+        let event = event.with_details_json(details.to_string());
+
+        if let Err(e) = self.app_state.read(cx).audit_service().record(event) {
+            log::error!("CRITICAL: schema_viz audit event failed to record: {}", e);
+        }
+    }
+
+    /// Spawns the background loading task for schema data.
+    fn spawn_loading(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        mode: SchemaVizMode,
+        connection: Option<Arc<dyn Connection>>,
+        entity: Entity<Self>,
+        cx: &mut Context<Self>,
+    ) {
+        // Register the task with the TasksPanel before spawning
+        let (task_id, cancel_token) = {
+            let database_label = database.as_deref().unwrap_or("global");
+            let description = format!("Schema diagram: {}", database_label);
+            let target = TaskTarget {
+                profile_id,
+                database: database.clone(),
+            };
+            self.app_state.update(cx, |state, _cx| {
+                state.start_task_for_target(TaskKind::LoadSchema, description, Some(target))
+            })
+        };
+
+        // Store cancel token so it can be triggered from cancel_loading()
+        let cancel_token = Arc::new(cancel_token);
+        self.cancel_token = Some(cancel_token.clone());
+
+        let task = cx.background_executor().spawn(async move {
+            Self::load_focused_schema_blocking(database, mode, connection, cancel_token)
+        });
+
+        let entity = entity.clone();
+        let app_state = self.app_state.clone();
+        cx.spawn(async move |_entity, cx| {
+            let load_result = task.await;
+
+            // Determine if cancelled by checking if error message is "Cancelled"
+            let is_cancelled = load_result
+                .as_ref()
+                .err()
+                .map(|e| e == "Cancelled")
+                .unwrap_or(false);
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    match load_result {
+                        Ok((tables, graph, layout, capped, tables_loaded)) => {
+                            let (focal_table, focal_schema) = match &doc.mode {
+                                SchemaVizMode::Focused { table, schema } => {
+                                    (table.clone(), schema.clone())
+                                }
+                                SchemaVizMode::Global => ("".to_string(), None),
+                            };
+                            let mode_str = match &doc.mode {
+                                SchemaVizMode::Focused { .. } => "focused",
+                                SchemaVizMode::Global => "global",
+                            };
+                            let table_count = tables.len();
+                            let edge_count = graph.edge_count();
+                            let layout_format = format!("{:?}", doc.layout_format);
+
+                            let details = serde_json::json!({
+                                "mode": mode_str,
+                                "table": focal_table,
+                                "schema": focal_schema,
+                                "database": doc.database,
+                                "table_count": table_count,
+                                "edge_count": edge_count,
+                                "layout_format": layout_format,
+                                "tables_loaded": tables_loaded,
+                            });
+                            doc.emit_audit_event(
+                                EventSeverity::Info,
+                                EventOutcome::Success,
+                                audit_actions::SCHEMA_VIZ_OPEN,
+                                "Opened schema diagram",
+                                details,
+                                cx,
+                            );
+
+                            // Complete the task in the TasksPanel
+                            app_state.update(cx, |state, cx| {
+                                state.complete_task(task_id);
+                                cx.emit(crate::app::AppStateChanged);
+                            });
+
+                            let viewport_width = 800.0;
+                            let viewport_height = 600.0;
+                            let initial_pan = if let Some(focal_node) =
+                                graph.nodes().find(|(_, n)| {
+                                    n.id.name == focal_table
+                                        && n.id.schema.as_ref() == focal_schema.as_ref()
+                                }) {
+                                if let Some(focal_layout) = layout.nodes.get(&focal_node.0) {
+                                    let focal_center_x = focal_layout.x + focal_layout.width / 2.0;
+                                    let focal_center_y = focal_layout.y + focal_layout.height / 2.0;
+                                    let viewport_center_x = viewport_width / 2.0;
+                                    let viewport_center_y = viewport_height / 2.0;
+                                    Some(Point::new(
+                                        px(viewport_center_x - focal_center_x * doc.zoom),
+                                        px(viewport_center_y - focal_center_y * doc.zoom),
+                                    ))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            doc.tables = tables;
+                            doc.graph = Some(graph);
+                            doc.layout = Some(layout);
+                            doc.load_status = LoadStatus::Ready;
+                            doc.table_cap_warning = capped;
+                            if let Some(pan) = initial_pan {
+                                doc.pan_offset = pan;
+                            }
+                        }
+                        Err(msg) => {
+                            let mode_str = match &doc.mode {
+                                SchemaVizMode::Focused { .. } => "focused",
+                                SchemaVizMode::Global => "global",
+                            };
+
+                            // Emit cancel or error audit event
+                            if is_cancelled {
+                                let details = serde_json::json!({
+                                    "mode": mode_str,
+                                    "database": doc.database,
+                                    "reason": "cancelled",
+                                });
+                                doc.emit_audit_event(
+                                    EventSeverity::Warn,
+                                    EventOutcome::Failure,
+                                    audit_actions::SCHEMA_VIZ_CANCEL,
+                                    "Schema diagram loading cancelled",
+                                    details,
+                                    cx,
+                                );
+
+                                // Cancel the task in the TasksPanel
+                                app_state.update(cx, |state, cx| {
+                                    state.cancel_task(task_id);
+                                    cx.emit(crate::app::AppStateChanged);
+                                });
+                            } else {
+                                let details = serde_json::json!({
+                                    "mode": mode_str,
+                                    "error": msg,
+                                    "database": doc.database,
+                                });
+                                doc.emit_audit_event(
+                                    EventSeverity::Error,
+                                    EventOutcome::Failure,
+                                    audit_actions::SCHEMA_VIZ_ERROR,
+                                    "Schema diagram load error",
+                                    details,
+                                    cx,
+                                );
+
+                                // Fail the task in the TasksPanel
+                                app_state.update(cx, |state, cx| {
+                                    state.fail_task(task_id, msg.clone());
+                                    cx.emit(crate::app::AppStateChanged);
+                                });
+                            }
+                            doc.load_status = LoadStatus::Error(msg);
+                        }
+                    }
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
+    /// Loads schema data (blocking, runs on background executor).
+    /// The connection must be the correct per-database connection (obtained via
+    /// `connection_for_task_target` in `SchemaVizDocument::new`), not the primary connection.
+    ///
+    /// The `cancel_token` is checked at key points to allow cancellation.
+    /// Returns `(tables, graph, layout, capped, tables_loaded)` where `tables_loaded`
+    /// is the count of successfully loaded tables (useful for audit events on cancel).
+    #[allow(clippy::collapsible_if)]
+    fn load_focused_schema_blocking(
+        database: Option<String>,
+        mode: SchemaVizMode,
+        connection: Option<Arc<dyn Connection>>,
+        cancel_token: Arc<CancelToken>,
+    ) -> Result<(Vec<TableInfo>, SchemaGraph, LayoutResult, bool, usize), String> {
+        let connection =
+            connection.ok_or_else(|| "Connection not found or not active".to_string())?;
+
+        let db_name = database.ok_or_else(|| "No database specified".to_string())?;
+
+        match mode {
+            SchemaVizMode::Focused { table, schema } => {
+                let metadata = connection.metadata();
+                if !metadata
+                    .capabilities
+                    .contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
+                {
+                    return Err("Foreign keys not supported by this driver".to_string());
+                }
+
+                if cancel_token.is_cancelled() {
+                    return Err("Cancelled".into());
+                }
+
+                let focal_table = connection
+                    .table_details(&db_name, schema.as_deref(), &table)
+                    .map_err(|e| format!("Failed to fetch table details: {}", e))?;
+
+                if cancel_token.is_cancelled() {
+                    return Err("Cancelled".into());
+                }
+
+                let mut all_table_names: HashSet<(Option<String>, String)> = HashSet::new();
+                all_table_names.insert((schema.clone(), table.clone()));
+
+                if let Some(ref fks) = focal_table.foreign_keys {
+                    for fk in fks {
+                        all_table_names
+                            .insert((fk.referenced_schema.clone(), fk.referenced_table.clone()));
+                    }
+                }
+
+                let mut all_tables = Vec::with_capacity(all_table_names.len());
+                all_tables.push(focal_table.clone());
+                let mut tables_loaded = 1; // focal table already loaded
+
+                for (tbl_schema, tbl_name) in &all_table_names {
+                    if tbl_name == &table && tbl_schema.as_deref() == schema.as_deref() {
+                        continue;
+                    }
+
+                    if cancel_token.is_cancelled() {
+                        return Err("Cancelled".into());
+                    }
+
+                    match connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name) {
+                        Ok(details) => {
+                            tables_loaded += 1;
+                            all_tables.push(details);
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to fetch details for table {}.{:?}: {}",
+                                tbl_schema.as_deref().unwrap_or("<default>"),
+                                tbl_name,
+                                e
+                            );
+                        }
+                    }
+                }
+
+                let inbound_neighbors =
+                    Self::find_inbound_references(&all_tables, schema.as_deref(), &table);
+
+                for (s, n) in inbound_neighbors {
+                    all_table_names.insert((Some(s), n));
+                }
+
+                for (tbl_schema, tbl_name) in &all_table_names {
+                    if !all_tables.iter().any(|t| {
+                        t.name == *tbl_name && t.schema.as_deref() == tbl_schema.as_deref()
+                    }) {
+                        if cancel_token.is_cancelled() {
+                            return Err("Cancelled".into());
+                        }
+
+                        if let Ok(details) =
+                            connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name)
+                        {
+                            tables_loaded += 1;
+                            all_tables.push(details);
+                        }
+                    }
+                }
+
+                let graph = SchemaGraph::build(&all_tables);
+                let focused_graph = graph.neighborhood(&table, schema.as_deref(), 1);
+                let layout = dbflux_schema_viz::layout::compute_layout(
+                    &focused_graph,
+                    LayoutFormat::LeftRight,
+                    Some((table.as_str(), schema.as_deref())),
+                    true,
+                    false,
+                );
+
+                Ok((all_tables, focused_graph, layout, false, tables_loaded))
+            }
+            SchemaVizMode::Global => {
+                let metadata = connection.metadata();
+                if !metadata
+                    .capabilities
+                    .contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
+                {
+                    return Err("Foreign keys not supported by this driver".to_string());
+                }
+
+                // Load ALL tables in the database
+                let schema_info = connection
+                    .schema_for_database(&db_name)
+                    .map_err(|e| format!("Failed to list tables: {}", e))?;
+
+                if cancel_token.is_cancelled() {
+                    return Err("Cancelled".into());
+                }
+
+                const TABLE_CAP: usize = 100;
+                let capped = schema_info.tables.len() > TABLE_CAP;
+                let tables_to_load: Vec<_> =
+                    schema_info.tables.into_iter().take(TABLE_CAP).collect();
+
+                let mut all_table_details = Vec::with_capacity(tables_to_load.len());
+                let mut tables_loaded = 0;
+
+                for tbl in &tables_to_load {
+                    if cancel_token.is_cancelled() {
+                        return Err("Cancelled".into());
+                    }
+
+                    match connection.table_details(&db_name, tbl.schema.as_deref(), &tbl.name) {
+                        Ok(details) => {
+                            tables_loaded += 1;
+                            all_table_details.push(details);
+                        }
+                        Err(e) => log::warn!("Failed to fetch details for {}: {}", tbl.name, e),
+                    }
+                }
+
+                let graph = SchemaGraph::build(&all_table_details);
+                let layout = dbflux_schema_viz::layout::compute_layout(
+                    &graph,
+                    LayoutFormat::Compact,
+                    None,
+                    true,
+                    false,
+                );
+
+                Ok((all_table_details, graph, layout, capped, tables_loaded))
+            }
+        }
+    }
+
+    /// Finds tables that reference the focal table via FK.
+    /// Uses the already-fetched tables (which have FK data populated via table_details).
+    fn find_inbound_references(
+        tables: &[TableInfo],
+        focal_schema: Option<&str>,
+        focal_table: &str,
+    ) -> Vec<(String, String)> {
+        let mut neighbors = Vec::new();
+
+        for tbl in tables {
+            let Some(ref fks) = tbl.foreign_keys else {
+                continue;
+            };
+            for fk in fks {
+                if fk.referenced_table == focal_table
+                    && fk.referenced_schema.as_deref() == focal_schema
+                {
+                    neighbors.push((
+                        tbl.schema.clone().unwrap_or_else(|| "main".to_string()),
+                        tbl.name.clone(),
+                    ));
+                }
+            }
+        }
+
+        neighbors
+    }
+
+    pub fn id(&self) -> DocumentId {
+        self.id
+    }
+
+    pub fn state(&self) -> DocumentState {
+        match &self.load_status {
+            LoadStatus::Loading => DocumentState::Loading,
+            LoadStatus::Ready => DocumentState::Clean,
+            LoadStatus::Error(_) => DocumentState::Error,
+            LoadStatus::NotSupported => DocumentState::Error,
+        }
+    }
+
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
+    }
+
+    /// Recomputes layout using the current format, focal, show_types, and show_indexes.
+    fn recompute_layout(&mut self) {
+        let Some(ref graph) = self.graph else {
+            return;
+        };
+
+        let focal = match &self.mode {
+            SchemaVizMode::Focused { table, schema } => Some((table.as_str(), schema.as_deref())),
+            SchemaVizMode::Global => {
+                if self.layout_format == LayoutFormat::Snowflake {
+                    graph
+                        .most_connected_node()
+                        .map(|(_, node)| (node.id.name.as_str(), node.id.schema.as_deref()))
+                } else {
+                    None
+                }
+            }
+        };
+
+        self.layout = Some(dbflux_schema_viz::layout::compute_layout(
+            graph,
+            self.layout_format,
+            focal,
+            self.show_types,
+            self.show_indexes,
+        ));
+    }
+
+    /// Updates the `show_types` toggle, recomputes layout, and notifies.
+    pub fn set_show_types(&mut self, value: bool, cx: &mut Context<Self>) {
+        self.show_types = value;
+        self.recompute_layout();
+        cx.notify();
+    }
+
+    /// Updates the `show_indexes` toggle, recomputes layout, and notifies.
+    pub fn set_show_indexes(&mut self, value: bool, cx: &mut Context<Self>) {
+        self.show_indexes = value;
+        self.recompute_layout();
+        cx.notify();
+    }
+
+    pub fn set_layout_format(&mut self, format: LayoutFormat, cx: &mut Context<Self>) {
+        let old_format = self.layout_format;
+        self.layout_format = format;
+        if let Some(ref graph) = self.graph {
+            let focal = match &self.mode {
+                SchemaVizMode::Focused { table, schema } => {
+                    Some((table.as_str(), schema.as_deref()))
+                }
+                SchemaVizMode::Global => {
+                    if format == LayoutFormat::Snowflake {
+                        // Auto-select the most-connected table as focal in global mode
+                        graph
+                            .most_connected_node()
+                            .map(|(_, node)| (node.id.name.as_str(), node.id.schema.as_deref()))
+                    } else {
+                        None
+                    }
+                }
+            };
+            self.layout = Some(dbflux_schema_viz::layout::compute_layout(
+                graph,
+                format,
+                focal,
+                self.show_types,
+                self.show_indexes,
+            ));
+            self.zoom = 1.0;
+            self.pan_offset = Point::default();
+            self.node_position_overrides.clear();
+        }
+        cx.notify();
+
+        // Emit audit event after recomputation
+        let mode_str = match &self.mode {
+            SchemaVizMode::Focused { table, .. } => {
+                let details = serde_json::json!({
+                    "old_format": format!("{:?}", old_format),
+                    "new_format": format!("{:?}", format),
+                    "mode": "focused",
+                    "table": table,
+                });
+                self.emit_audit_event(
+                    EventSeverity::Info,
+                    EventOutcome::Success,
+                    audit_actions::SCHEMA_VIZ_LAYOUT_CHANGE,
+                    "Changed schema diagram layout",
+                    details,
+                    cx,
+                );
+                return;
+            }
+            SchemaVizMode::Global => "global",
+        };
+        let details = serde_json::json!({
+            "old_format": format!("{:?}", old_format),
+            "new_format": format!("{:?}", format),
+            "mode": mode_str,
+        });
+        self.emit_audit_event(
+            EventSeverity::Info,
+            EventOutcome::Success,
+            audit_actions::SCHEMA_VIZ_LAYOUT_CHANGE,
+            "Changed schema diagram layout",
+            details,
+            cx,
+        );
+    }
+
+    /// Returns nodes sorted spatially: y first (top-to-bottom), then x (left-to-right).
+    fn spatial_sorted_nodes(&self) -> Vec<NodeIndex> {
+        let layout = match &self.layout {
+            Some(l) => l,
+            None => return Vec::new(),
+        };
+
+        let mut nodes: Vec<_> = layout.nodes.keys().copied().collect();
+
+        nodes.sort_by(|&a, &b| {
+            let pos_a = layout.nodes.get(&a);
+            let pos_b = layout.nodes.get(&b);
+            match (pos_a, pos_b) {
+                (Some(node_a), Some(node_b)) => {
+                    let y_cmp = node_a
+                        .y
+                        .partial_cmp(&node_b.y)
+                        .unwrap_or(std::cmp::Ordering::Equal);
+                    if y_cmp != std::cmp::Ordering::Equal {
+                        y_cmp
+                    } else {
+                        node_a
+                            .x
+                            .partial_cmp(&node_b.x)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
+
+        nodes
+    }
+
+    /// Finds the next node in the given direction from the currently selected node.
+    fn find_next_node(&self, direction: Direction) -> Option<NodeIndex> {
+        let current = self.selected_node?;
+        let sorted = self.spatial_sorted_nodes();
+        let _current_idx = sorted.iter().position(|&idx| idx == current)?;
+
+        let layout = self.layout.as_ref()?;
+        let current_pos = layout.nodes.get(&current)?;
+
+        let threshold = 20.0_f32;
+
+        match direction {
+            Direction::Left => {
+                // Find nodes with x < current.x, pick the one with highest x
+                let candidates: Vec<_> = sorted
+                    .iter()
+                    .filter(|&&idx| {
+                        idx != current
+                            && layout
+                                .nodes
+                                .get(&idx)
+                                .map(|n| n.x < current_pos.x - threshold)
+                                .unwrap_or(false)
+                    })
+                    .collect();
+
+                candidates
+                    .into_iter()
+                    .max_by(|a, b| {
+                        let pos_a = layout.nodes.get(a).unwrap();
+                        let pos_b = layout.nodes.get(b).unwrap();
+                        pos_a
+                            .x
+                            .partial_cmp(&pos_b.x)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .copied()
+                    .or_else(|| {
+                        // Wrap: return rightmost node
+                        sorted.last().copied()
+                    })
+            }
+            Direction::Right => {
+                // Find nodes with x > current.x, pick the one with lowest x
+                let candidates: Vec<_> = sorted
+                    .iter()
+                    .filter(|&&idx| {
+                        idx != current
+                            && layout
+                                .nodes
+                                .get(&idx)
+                                .map(|n| n.x > current_pos.x + threshold)
+                                .unwrap_or(false)
+                    })
+                    .collect();
+
+                candidates
+                    .into_iter()
+                    .min_by(|a, b| {
+                        let pos_a = layout.nodes.get(a).unwrap();
+                        let pos_b = layout.nodes.get(b).unwrap();
+                        pos_a
+                            .x
+                            .partial_cmp(&pos_b.x)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .copied()
+                    .or_else(|| {
+                        // Wrap: return leftmost node
+                        sorted.first().copied()
+                    })
+            }
+            Direction::Up => {
+                // Find nodes with y < current.y, pick the one with highest y
+                let candidates: Vec<_> = sorted
+                    .iter()
+                    .filter(|&&idx| {
+                        idx != current
+                            && layout
+                                .nodes
+                                .get(&idx)
+                                .map(|n| n.y < current_pos.y - threshold)
+                                .unwrap_or(false)
+                    })
+                    .collect();
+
+                candidates
+                    .into_iter()
+                    .max_by(|a, b| {
+                        let pos_a = layout.nodes.get(a).unwrap();
+                        let pos_b = layout.nodes.get(b).unwrap();
+                        pos_a
+                            .y
+                            .partial_cmp(&pos_b.y)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .copied()
+                    .or_else(|| {
+                        // Wrap: return bottommost node
+                        sorted.last().copied()
+                    })
+            }
+            Direction::Down => {
+                // Find nodes with y > current.y, pick the one with lowest y
+                let candidates: Vec<_> = sorted
+                    .iter()
+                    .filter(|&&idx| {
+                        idx != current
+                            && layout
+                                .nodes
+                                .get(&idx)
+                                .map(|n| n.y > current_pos.y + threshold)
+                                .unwrap_or(false)
+                    })
+                    .collect();
+
+                candidates
+                    .into_iter()
+                    .min_by(|a, b| {
+                        let pos_a = layout.nodes.get(a).unwrap();
+                        let pos_b = layout.nodes.get(b).unwrap();
+                        pos_a
+                            .y
+                            .partial_cmp(&pos_b.y)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .copied()
+                    .or_else(|| {
+                        // Wrap: return topmost node
+                        sorted.first().copied()
+                    })
+            }
+        }
+    }
+
+    /// Centers the camera on the given node index, focusing on the table header.
+    fn center_on_node(&mut self, node_idx: NodeIndex) {
+        let layout = match &self.layout {
+            Some(l) => l,
+            None => return,
+        };
+
+        let node_layout = match layout.nodes.get(&node_idx) {
+            Some(n) => n,
+            None => return,
+        };
+
+        let viewport_width = if self.viewport_size.width > px(0.0) {
+            self.viewport_size.width.into()
+        } else {
+            800.0
+        };
+        let viewport_height = if self.viewport_size.height > px(0.0) {
+            self.viewport_size.height.into()
+        } else {
+            600.0
+        };
+
+        // Center horizontally on the node center
+        let node_center_x = node_layout.x + node_layout.width / 2.0;
+        let viewport_center_x = viewport_width / 2.0;
+
+        // Center vertically on the table HEADER (top of the node), not the center
+        // NODE_HEADER_PX is the height of the header
+        let header_y = node_layout.y + NODE_HEADER_PX / 2.0;
+        let viewport_center_y = viewport_height / 2.0;
+
+        self.pan_offset = Point::new(
+            px(viewport_center_x - node_center_x * self.zoom),
+            px(viewport_center_y - header_y * self.zoom),
+        );
+    }
+
+    fn viewport_local_position(&self, window_position: Point<Pixels>) -> Point<Pixels> {
+        Point::new(
+            window_position.x - self.viewport_origin.x,
+            window_position.y - self.viewport_origin.y,
+        )
+    }
+
+    /// Export the current schema graph as DBML to clipboard.
+    pub fn export_dbml(&mut self, cx: &mut Context<Self>) {
+        let graph = match &self.graph {
+            Some(g) => g,
+            None => return,
+        };
+
+        let scope = dbflux_schema_viz::DbmlScope::Subgraph;
+        let dbml_result = dbflux_schema_viz::to_dbml(graph, scope);
+
+        match dbml_result {
+            Ok(dbml_text) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(dbml_text));
+
+                self.pending_toast = Some(PendingToast {
+                    message: "Schema exported to DBML (copied to clipboard)".into(),
+                    is_error: false,
+                });
+
+                // Emit audit event
+                let details = serde_json::json!({
+                    "scope": "Subgraph",
+                    "table_count": graph.node_count(),
+                    "edge_count": graph.edge_count(),
+                });
+                self.emit_audit_event(
+                    EventSeverity::Info,
+                    EventOutcome::Success,
+                    audit_actions::SCHEMA_VIZ_EXPORT_DBML,
+                    "Exported schema to DBML",
+                    details,
+                    cx,
+                );
+            }
+            Err(e) => {
+                log::error!("DBML export failed: {}", e);
+
+                self.pending_toast = Some(PendingToast {
+                    message: format!("DBML export failed: {}", e),
+                    is_error: true,
+                });
+
+                // Emit error audit event
+                let details = serde_json::json!({
+                    "error": e,
+                });
+                self.emit_audit_event(
+                    EventSeverity::Error,
+                    EventOutcome::Failure,
+                    audit_actions::SCHEMA_VIZ_EXPORT_DBML,
+                    "DBML export failed",
+                    details,
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// Copy the current schema graph as SQL DDL to clipboard.
+    pub fn copy_as_sql(&mut self, cx: &mut Context<Self>) {
+        let graph = match &self.graph {
+            Some(g) => g,
+            None => return,
+        };
+
+        let scope = dbflux_schema_viz::SqlScope::Subgraph;
+        let sql_result = dbflux_schema_viz::to_sql(graph, scope);
+
+        match sql_result {
+            Ok(sql_text) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(sql_text.clone()));
+
+                self.pending_toast = Some(PendingToast {
+                    message: "Schema exported as SQL (copied to clipboard)".into(),
+                    is_error: false,
+                });
+
+                let details = serde_json::json!({
+                    "scope": "Subgraph",
+                    "table_count": graph.node_count(),
+                    "edge_count": graph.edge_count(),
+                    "sql_length": sql_text.len(),
+                });
+                self.emit_audit_event(
+                    EventSeverity::Info,
+                    EventOutcome::Success,
+                    audit_actions::SCHEMA_VIZ_EXPORT_SQL,
+                    "Exported schema as SQL",
+                    details,
+                    cx,
+                );
+            }
+            Err(e) => {
+                log::error!("SQL export failed: {}", e);
+
+                self.pending_toast = Some(PendingToast {
+                    message: format!("SQL export failed: {}", e),
+                    is_error: true,
+                });
+
+                let details = serde_json::json!({ "error": e });
+                self.emit_audit_event(
+                    EventSeverity::Error,
+                    EventOutcome::Failure,
+                    audit_actions::SCHEMA_VIZ_EXPORT_SQL,
+                    "SQL export failed",
+                    details,
+                    cx,
+                );
+            }
+        }
+    }
+
+    pub fn active_context(&self) -> ContextId {
+        ContextId::SchemaViz
+    }
+
+    // ── Rendering helpers ──────────────────────────────────────────────────────
+
+    fn render_loading(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .bg(theme.background)
+            .flex_col()
+            .gap(Spacing::MD)
+            .child(
+                div()
+                    .size(px(32.0))
+                    .border_2()
+                    .border_color(theme.primary)
+                    .rounded_full(),
+            )
+            .child(
+                div()
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.muted_foreground)
+                    .child("Loading schema..."),
+            )
+    }
+
+    fn render_error(&self, msg: &str) -> Div {
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .text_color(gpui::red())
+                    .child(format!("Error: {}", msg)),
+            )
+    }
+
+    fn render_not_supported(&self) -> Div {
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child("Schema diagram is not available for this database type")
+    }
+
+    pub(crate) fn layout_label(format: LayoutFormat) -> &'static str {
+        match format {
+            LayoutFormat::LeftRight => "Left-Right",
+            LayoutFormat::Snowflake => "Snowflake",
+            LayoutFormat::Compact => "Compact",
+        }
+    }
+
+    fn make_layout_menu_item(
+        &self,
+        label: &'static str,
+        format: LayoutFormat,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let is_selected = self.layout_format == format;
+        div()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .h(rems(1.6))
+            .px(Spacing::SM)
+            .rounded_sm()
+            .cursor_pointer()
+            .text_color(theme.foreground)
+            .when(is_selected, |d| d.bg(theme.primary.opacity(0.1)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.set_layout_format(format, cx);
+                    this.layout_menu_open = false;
+                    cx.notify();
+                }),
+            )
+            .child(div().text_size(FontSizes::SM).child(label))
+            .when(is_selected, |d| {
+                d.child(
+                    svg()
+                        .path(AppIcon::CircleCheck.path())
+                        .size_3()
+                        .text_color(theme.primary),
+                )
+            })
+    }
+
+    fn render_layout_menu(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let items = vec![
+            self.make_layout_menu_item("Left-Right", LayoutFormat::LeftRight, theme, cx),
+            self.make_layout_menu_item("Snowflake", LayoutFormat::Snowflake, theme, cx),
+            self.make_layout_menu_item("Compact", LayoutFormat::Compact, theme, cx),
+        ];
+
+        self.build_dropdown_menu(items, cx)
+    }
+
+    fn render_export_menu(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let items: Vec<Div> = vec![
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .h(rems(1.6))
+                .px(Spacing::SM)
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(theme.foreground)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.export_dbml(cx);
+                        this.export_menu_open = false;
+                        cx.notify();
+                    }),
+                )
+                .child(div().text_size(FontSizes::SM).child("Copy as DBML")),
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .h(rems(1.6))
+                .px(Spacing::SM)
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(theme.foreground)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.copy_as_sql(cx);
+                        this.export_menu_open = false;
+                        cx.notify();
+                    }),
+                )
+                .child(div().text_size(FontSizes::SM).child("Copy as SQL")),
+        ];
+
+        self.build_dropdown_menu(items, cx)
+    }
+
+    fn build_dropdown_menu(&self, items: Vec<Div>, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        deferred(
+            div()
+                .absolute()
+                .top_full()
+                .mt_1()
+                .left_0()
+                .min_w(px(140.0))
+                .bg(theme.popover)
+                .border_1()
+                .border_color(theme.border)
+                .rounded_md()
+                .shadow_lg()
+                .py(Spacing::XS)
+                .occlude()
+                .flex_col()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.layout_menu_open = false;
+                    this.export_menu_open = false;
+                    cx.notify();
+                }))
+                .children(items),
+        )
+    }
+
+    /// Opens the context menu at the given position.
+    fn open_context_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.context_menu = Some(SchemaVizContextMenuState::new(
+            position,
+            self.selected_node.is_some(),
+        ));
+        cx.notify();
+    }
+
+    /// Closes the context menu and schedules focus restoration for the next render.
+    fn close_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.context_menu.take().is_some() {
+            self.pending_focus_restore = true;
+            cx.notify();
+        }
+    }
+
+    /// Dispatches a command from the workspace keymap system.
+    /// Returns true if the command was handled.
+    pub fn dispatch_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match cmd {
+            Command::Cancel => {
+                if self.context_menu.is_some() {
+                    self.close_context_menu(cx);
+                    self.focus_handle.focus(window, cx);
+                    return true;
+                }
+                if self.selected_node.is_some() {
+                    self.selected_node = None;
+                    cx.notify();
+                    return true;
+                }
+                false
+            }
+            Command::OpenContextMenu => {
+                let menu_pos = if self.last_mouse_position != Point::default() {
+                    self.last_mouse_position
+                } else {
+                    Point::new(px(400.0), px(300.0))
+                };
+                self.open_context_menu(menu_pos, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Executes the action at the given index in the current context menu.
+    /// Builds (or reuses) a `SchemaInspector` for the given table node and
+    /// emits a `DocumentEvent::OpenInspector` so the workspace mounts it in
+    /// the right-side rail.
+    fn open_schema_inspector(
+        &mut self,
+        node_idx: petgraph::graph::NodeIndex,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(graph) = self.graph.as_ref() else {
+            return;
+        };
+        let Some(snapshot) = inspector::snapshot_for_node(graph, node_idx) else {
+            return;
+        };
+
+        let title = match &snapshot.node.id.schema {
+            Some(s) => format!("{}.{}", s, snapshot.node.id.name),
+            None => snapshot.node.id.name.clone(),
+        };
+
+        let content = match self.schema_inspector_content.clone() {
+            Some(existing) => {
+                existing.update(cx, |c, cx| c.open(snapshot, cx));
+                existing
+            }
+            None => {
+                let new_content = cx.new(|cx| inspector::SchemaInspector::new(snapshot, cx));
+                self.schema_inspector_content = Some(new_content.clone());
+                new_content
+            }
+        };
+
+        cx.emit(DocumentEvent::OpenInspector {
+            title: SharedString::from(title),
+            content: content.into(),
+        });
+    }
+
+    fn context_menu_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        let action = match self.context_menu.as_mut() {
+            Some(menu) => {
+                if index >= menu.actions.len() {
+                    return;
+                }
+                // Skip separators
+                if matches!(menu.actions[index], SchemaVizMenuAction::Separator) {
+                    return;
+                }
+                menu.selected_index = index;
+                menu.actions[index].clone()
+            }
+            None => return,
+        };
+
+        match action {
+            SchemaVizMenuAction::LayoutSubmenu | SchemaVizMenuAction::CopyAsSubmenu => {
+                if let Some(menu) = self.context_menu.as_mut() {
+                    menu.go_into_submenu();
+                }
+                cx.notify();
+            }
+            SchemaVizMenuAction::ZoomIn => {
+                self.zoom = (self.zoom * 1.25).min(4.0);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::ZoomOut => {
+                self.zoom = (self.zoom / 1.25).max(0.25);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::FocusOnTable => {
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::InspectTable => {
+                if let Some(node_idx) = self.selected_node {
+                    self.open_schema_inspector(node_idx, cx);
+                }
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::LayoutLeftRight => {
+                self.set_layout_format(LayoutFormat::LeftRight, cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::LayoutSnowflake => {
+                self.set_layout_format(LayoutFormat::Snowflake, cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::LayoutCompact => {
+                self.set_layout_format(LayoutFormat::Compact, cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::CopyAsDbml => {
+                self.export_dbml(cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::CopyAsSql => {
+                self.copy_as_sql(cx);
+                self.context_menu = None;
+                cx.notify();
+            }
+            SchemaVizMenuAction::Separator => {}
+        }
+    }
+
+    /// Renders the context menu using the app's standard context_menu component.
+    fn render_context_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        use crate::ui::components::context_menu as ctx;
+
+        let menu = self.context_menu.as_ref()?;
+        let entity = cx.entity().clone();
+
+        let menu_x = menu.position.x;
+        let menu_y = menu.position.y;
+        let selected = menu.selected_index;
+
+        let in_submenu = !menu.parent_stack.is_empty();
+
+        // Layout constants (must match the sidebar pattern)
+        let menu_container_padding = px(4.0);
+        let menu_item_height = px(28.0);
+        let menu_width = px(160.0);
+        let menu_gap = px(4.0);
+
+        let submenu_y_offset = if let Some((_, parent_selected)) = menu.parent_stack.last() {
+            menu_container_padding + (menu_item_height * (*parent_selected as f32))
+        } else {
+            px(0.0)
+        };
+
+        // Build menu items from actions (same pattern as sidebar's to_menu_items)
+        let items = menu.menu_items();
+
+        let dismiss_entity = entity.clone();
+        let overlay = ctx::render_menu_overlay("schema-viz-menu-overlay", move |_, cx| {
+            dismiss_entity.update(cx, |this, cx| this.close_context_menu(cx));
+        });
+
+        let parent_menu = menu.parent_menu_items().map(|parent_items| {
+            let parent_selected = menu.parent_stack.last().map(|(_, idx)| *idx).unwrap_or(0);
+            let parent_click = entity.clone();
+            let parent_hover = entity.clone();
+            div()
+                .absolute()
+                .top(menu_y)
+                .left(menu_x)
+                .child(ctx::render_menu_container(
+                    "schema-viz-parent-menu",
+                    &parent_items,
+                    Some(parent_selected),
+                    move |idx, cx| {
+                        parent_click.update(cx, |this, cx| {
+                            if let Some(menu) = this.context_menu.as_mut() {
+                                menu.go_back();
+                            }
+                            this.context_menu_execute_at(idx, cx);
+                        });
+                    },
+                    move |idx, cx| {
+                        parent_hover.update(cx, |this, cx| {
+                            if let Some(menu) = this.context_menu.as_mut() {
+                                menu.selected_index = idx;
+                                cx.notify();
+                            }
+                        });
+                    },
+                    cx,
+                ))
+        });
+
+        let click_entity = entity.clone();
+        let hover_entity = entity.clone();
+
+        let current_menu = div()
+            .absolute()
+            .top(menu_y + submenu_y_offset)
+            .left(if in_submenu {
+                menu_x + menu_width + menu_gap
+            } else {
+                menu_x
+            })
+            .child(ctx::render_menu_container(
+                "schema-viz-menu",
+                &items,
+                Some(selected),
+                move |idx, cx| {
+                    click_entity.update(cx, |this, cx| this.context_menu_execute_at(idx, cx));
+                },
+                move |idx, cx| {
+                    hover_entity.update(cx, |this, cx| {
+                        if let Some(menu) = this.context_menu.as_mut() {
+                            menu.selected_index = idx;
+                            cx.notify();
+                        }
+                    });
+                },
+                cx,
+            ));
+
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(overlay)
+                .when_some(parent_menu, |d, m| d.child(m))
+                .child(current_menu),
+        )
+    }
+
+    fn render_diagram(&self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let zoom = self.zoom;
+        let pan = self.pan_offset;
+
+        let theme = cx.theme().clone();
+        let background = theme.background;
+        let tab_bar = theme.tab_bar;
+        let border = theme.border;
+        let muted_foreground = theme.muted_foreground;
+
+        let diagram_transform = ElementTransform::default()
+            .translate(pan)
+            .scale(size(zoom, zoom));
+
+        let diagram_canvas = match &self.layout {
+            Some(layout) => {
+                // T20: dot-grid background rendered via a single canvas element.
+                // Each dot is a 1.5px square painted at 24px lattice intersections.
+                let dot_color = border.opacity(0.35);
+                let dot_lattice = 24.0_f32;
+                let dot_extent = 3000.0_f32;
+                let dot_size = px(1.5_f32);
+                let dot_grid = canvas(
+                    |_bounds, _, _cx| {},
+                    move |bounds, _, window, _cx| {
+                        let ox: f32 = bounds.origin.x.into();
+                        let oy: f32 = bounds.origin.y.into();
+                        let cols = (dot_extent / dot_lattice) as usize + 1;
+                        let rows = (dot_extent / dot_lattice) as usize + 1;
+                        for col in 0..cols {
+                            for row in 0..rows {
+                                let cx_f = col as f32 * dot_lattice + ox;
+                                let cy_f = row as f32 * dot_lattice + oy;
+                                let dot_bounds = gpui::Bounds::centered_at(
+                                    gpui::Point::new(px(cx_f), px(cy_f)),
+                                    gpui::Size {
+                                        width: dot_size,
+                                        height: dot_size,
+                                    },
+                                );
+                                window.paint_quad(gpui::fill(dot_bounds, dot_color));
+                            }
+                        }
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(px(dot_extent))
+                .h(px(dot_extent));
+
+                let mut canvas_children: Vec<AnyElement> = Vec::new();
+
+                canvas_children.push(dot_grid.into_any_element());
+
+                for seg in self.render_edges_overlay(layout, &theme) {
+                    canvas_children.push(seg.into_any_element());
+                }
+                for node_div in self.render_nodes(layout, &theme, cx) {
+                    canvas_children.push(node_div.into_any_element());
+                }
+
+                div()
+                    .relative()
+                    .size_full()
+                    .bg(background)
+                    .transform(diagram_transform)
+                    .children(canvas_children)
+            }
+            None => div()
+                .size_full()
+                .bg(background)
+                .child(self.render_error("No layout computed")),
+        };
+
+        // T22: Toolbar — left group (zoom, layout, export) + flex-1 spacer + right group (counter + toggles)
+        let n_tables = self.layout.as_ref().map(|l| l.nodes.len()).unwrap_or(0);
+        let n_relations = self.layout.as_ref().map(|l| l.edges.len()).unwrap_or(0);
+        let counter_label = format!("{} tables · {} relations", n_tables, n_relations);
+
+        // Clone entity once before building the toolbar so Checkbox closures can
+        // call back into self via update().
+        let entity_for_types = cx.entity().clone();
+        let entity_for_indexes = cx.entity().clone();
+
+        let show_types_val = self.show_types;
+        let show_indexes_val = self.show_indexes;
+
+        use dbflux_components::controls::Checkbox;
+
+        let right_group = div()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .child(
+                div()
+                    .text_size(FontSizes::XS)
+                    .text_color(muted_foreground)
+                    .child(counter_label),
+            )
+            .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+            .child(
+                Checkbox::new("schema-viz-show-types")
+                    .checked(show_types_val)
+                    .label("Types")
+                    .on_click(move |checked: &bool, _window: &mut Window, cx: &mut App| {
+                        entity_for_types.update(cx, |this, cx| {
+                            this.set_show_types(*checked, cx);
+                        });
+                    }),
+            )
+            .child(
+                Checkbox::new("schema-viz-show-indexes")
+                    .checked(show_indexes_val)
+                    .label("Indexes")
+                    .on_click(move |checked: &bool, _window: &mut Window, cx: &mut App| {
+                        entity_for_indexes.update(cx, |this, cx| {
+                            this.set_show_indexes(*checked, cx);
+                        });
+                    }),
+            );
+
+        let zoom_controls = div()
+            .flex()
+            .items_center()
+            .w_full()
+            .px(Spacing::MD)
+            .py(px(6.0))
+            .bg(tab_bar)
+            .border_b_1()
+            .border_color(border)
+            // Left group
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .child(
+                        div().flex().items_center().gap(px(4.0)).child(
+                            div()
+                                .text_size(FontSizes::SM)
+                                .text_color(muted_foreground)
+                                .child(format!("{:.0}%", zoom * 100.0)),
+                        ),
+                    )
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .when(self.zoom < 4.0, |d| {
+                                d.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.zoom = (this.zoom * 1.25).min(4.0);
+                                        cx.notify();
+                                    }),
+                                )
+                            })
+                            .child("+"),
+                    )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .when(self.zoom > 0.25, |d| {
+                                d.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.zoom = (this.zoom / 1.25).max(0.25);
+                                        cx.notify();
+                                    }),
+                                )
+                            })
+                            .child("-"),
+                    )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .px(px(8.0))
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.zoom = 1.0;
+                                    this.pan_offset = Point::default();
+                                    cx.notify();
+                                }),
+                            )
+                            .child("Reset"),
+                    )
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+                    // Layout dropdown
+                    .child(
+                        div()
+                            .relative()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(px(8.0))
+                                    .py(px(2.0))
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .when(self.layout_menu_open, |d| {
+                                        d.bg(theme.primary.opacity(0.15))
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.layout_menu_open = !this.layout_menu_open;
+                                            this.export_menu_open = false;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.foreground)
+                                            .child(Self::layout_label(self.layout_format)),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::ChevronDown.path())
+                                            .size_3()
+                                            .text_color(theme.muted_foreground),
+                                    ),
+                            )
+                            .when(self.layout_menu_open, |d| {
+                                d.child(self.render_layout_menu(&theme, cx))
+                            }),
+                    )
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(border.opacity(0.5)))
+                    // Export dropdown
+                    .child(
+                        div()
+                            .relative()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(px(8.0))
+                                    .py(px(2.0))
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .when(self.export_menu_open, |d| {
+                                        d.bg(theme.primary.opacity(0.15))
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.export_menu_open = !this.export_menu_open;
+                                            this.layout_menu_open = false;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(FontSizes::SM)
+                                            .text_color(theme.foreground)
+                                            .child("Export"),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path(AppIcon::ChevronDown.path())
+                                            .size_3()
+                                            .text_color(theme.muted_foreground),
+                                    ),
+                            )
+                            .when(self.export_menu_open, |d| {
+                                d.child(self.render_export_menu(&theme, cx))
+                            }),
+                    ),
+            )
+            // Flex-1 spacer
+            .child(div().flex_1())
+            // Right group
+            .child(right_group);
+
+        // The viewport handles all pointer and scroll events.
+        // It is `relative()` so child `absolute()` elements are anchored to it.
+        // `overflow_hidden` clips elements outside the visible area.
+        let viewport = div()
+            .flex_1()
+            .relative()
+            .overflow_hidden()
+            .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, _cx| {
+                    if event.click_count == 1 && this.dragging_node.is_none() {
+                        this.is_panning = true;
+                        this.pan_start = event.position;
+                    }
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                // Track mouse position in panel-local coordinates for keyboard-opened menus
+                this.last_mouse_position = Point::new(
+                    event.position.x - this.panel_origin.x,
+                    event.position.y - this.panel_origin.y,
+                );
+
+                if let Some(node_idx) = this.dragging_node {
+                    let local_position = this.viewport_local_position(event.position);
+                    let screen_x: f32 = local_position.x.into();
+                    let screen_y: f32 = local_position.y.into();
+                    let off_x: f32 = this.drag_offset.x.into();
+                    let off_y: f32 = this.drag_offset.y.into();
+                    let pan_x: f32 = this.pan_offset.x.into();
+                    let pan_y: f32 = this.pan_offset.y.into();
+                    let zoom = this.zoom;
+                    // graph_x = (screen_x - drag_offset_x - pan_x) / zoom
+                    let new_graph_x = (screen_x - off_x - pan_x) / zoom;
+                    let new_graph_y = (screen_y - off_y - pan_y) / zoom;
+                    this.node_position_overrides
+                        .insert(node_idx, Point::new(new_graph_x, new_graph_y));
+                    cx.notify();
+                    return;
+                }
+                if !this.is_panning {
+                    return;
+                }
+                let dx = event.position.x - this.pan_start.x;
+                let dy = event.position.y - this.pan_start.y;
+                if dx.abs() > px(0.5) || dy.abs() > px(0.5) {
+                    this.pan_offset = Point::new(this.pan_offset.x + dx, this.pan_offset.y + dy);
+                    this.pan_start = event.position;
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _cx| {
+                    this.is_panning = false;
+                    this.dragging_node = None;
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                let mouse = this.viewport_local_position(event.position);
+                let old_zoom = this.zoom;
+                let delta = event.delta.pixel_delta(px(1.0)).y;
+                let factor = if delta > px(0.0) { 1.1_f32 } else { 0.9_f32 };
+                let new_zoom = (old_zoom * factor).clamp(0.25, 4.0);
+
+                if (new_zoom - old_zoom).abs() < 0.001 {
+                    return;
+                }
+
+                // Keep the point under the mouse fixed:
+                // graph_pt = (screen - pan) / old_zoom
+                // new_pan  = screen - graph_pt * new_zoom
+                let pan = this.pan_offset;
+                let graph_x = (mouse.x - pan.x) / old_zoom;
+                let graph_y = (mouse.y - pan.y) / old_zoom;
+                let new_pan_x = mouse.x - graph_x * new_zoom;
+                let new_pan_y = mouse.y - graph_y * new_zoom;
+
+                this.pan_offset = Point::new(new_pan_x, new_pan_y);
+                this.zoom = new_zoom;
+                cx.notify();
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    // Convert window-absolute position to panel-local
+                    let local = Point::new(
+                        event.position.x - this.panel_origin.x,
+                        event.position.y - this.panel_origin.y,
+                    );
+                    this.open_context_menu(local, cx);
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                use crate::keymap::{Modifiers, key_chord_from_gpui};
+
+                // SchemaViz is a fully keyboard-driven context. Every key event is consumed
+                // here and must NOT propagate to the workspace, which would steal focus.
+                cx.stop_propagation();
+
+                let chord = key_chord_from_gpui(&event.keystroke);
+                let mods = &chord.modifiers;
+
+                // Handle context menu navigation first
+                if this.context_menu.is_some() {
+                    match chord.key.as_str() {
+                        "up" | "k" => {
+                            if let Some(menu) = this.context_menu.as_mut() {
+                                menu.navigate_up();
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        "down" | "j" => {
+                            if let Some(menu) = this.context_menu.as_mut() {
+                                menu.navigate_down();
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        "right" | "enter" | "l" => {
+                            let action = this
+                                .context_menu
+                                .as_ref()
+                                .and_then(|m| m.actions.get(m.selected_index).cloned());
+                            match action {
+                                Some(SchemaVizMenuAction::LayoutSubmenu)
+                                | Some(SchemaVizMenuAction::CopyAsSubmenu) => {
+                                    if let Some(menu) = this.context_menu.as_mut() {
+                                        menu.go_into_submenu();
+                                    }
+                                    cx.notify();
+                                    return;
+                                }
+                                _ => {
+                                    this.context_menu_execute_at(
+                                        this.context_menu
+                                            .as_ref()
+                                            .map(|m| m.selected_index)
+                                            .unwrap_or(0),
+                                        cx,
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                        "escape" | "h" | "left" => {
+                            let went_back = if let Some(menu) = this.context_menu.as_mut() {
+                                menu.go_back()
+                            } else {
+                                false
+                            };
+                            if !went_back {
+                                this.close_context_menu(cx);
+                            } else {
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                    // Consume all key events while the context menu is open
+                    return;
+                }
+
+                // Zoom in: + (with or without shift, since keyboard produces = when shift not held)
+                if (chord.key == "+" || chord.key == "=") && !mods.ctrl && !mods.alt {
+                    this.zoom = (this.zoom * 1.25).min(4.0);
+                    cx.notify();
+                    return;
+                }
+                // Zoom out: - (without shift)
+                if chord.key == "-" && !mods.shift && !mods.ctrl && !mods.alt {
+                    this.zoom = (this.zoom / 1.25).max(0.25);
+                    cx.notify();
+                    return;
+                }
+
+                // Layout shortcuts
+                if !mods.shift && !mods.ctrl && !mods.alt {
+                    match chord.key.as_str() {
+                        "s" => {
+                            this.set_layout_format(LayoutFormat::Snowflake, cx);
+                            return;
+                        }
+                        "c" => {
+                            this.set_layout_format(LayoutFormat::Compact, cx);
+                            return;
+                        }
+                        "r" => {
+                            this.set_layout_format(LayoutFormat::LeftRight, cx);
+                            return;
+                        }
+                        "m" => {
+                            // Use last mouse position if available, otherwise center of viewport
+                            let menu_pos = if this.last_mouse_position != Point::default() {
+                                this.last_mouse_position
+                            } else {
+                                Point::new(px(400.0), px(300.0))
+                            };
+                            this.open_context_menu(menu_pos, cx);
+                            return;
+                        }
+                        "escape" => {
+                            this.selected_node = None;
+                            cx.notify();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Pan with arrow keys / h,j,k,l
+                if !mods.shift && !mods.ctrl && !mods.alt {
+                    match chord.key.as_str() {
+                        "h" | "left" => {
+                            let pan_x: f32 = this.pan_offset.x.into();
+                            this.pan_offset = Point::new(px(pan_x + 50.0), this.pan_offset.y);
+                            cx.notify();
+                            return;
+                        }
+                        "l" | "right" => {
+                            let pan_x: f32 = this.pan_offset.x.into();
+                            this.pan_offset = Point::new(px(pan_x - 50.0), this.pan_offset.y);
+                            cx.notify();
+                            return;
+                        }
+                        "k" | "up" => {
+                            let pan_y: f32 = this.pan_offset.y.into();
+                            this.pan_offset = Point::new(this.pan_offset.x, px(pan_y + 50.0));
+                            cx.notify();
+                            return;
+                        }
+                        "j" | "down" => {
+                            let pan_y: f32 = this.pan_offset.y.into();
+                            this.pan_offset = Point::new(this.pan_offset.x, px(pan_y - 50.0));
+                            cx.notify();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Selection navigation with Shift+arrows / Shift+hjkl
+                // If no node is selected, selects the first node in the given direction
+                if mods.shift && !mods.ctrl && !mods.alt {
+                    match chord.key.as_str() {
+                        "l" | "right" => {
+                            if let Some(next) = this.find_next_node(Direction::Right) {
+                                this.selected_node = Some(next);
+                                this.center_on_node(next);
+                                cx.notify();
+                            } else if this.selected_node.is_none() {
+                                // No selection yet - select leftmost node
+                                if let Some(first) = this.spatial_sorted_nodes().first().copied() {
+                                    this.selected_node = Some(first);
+                                    this.center_on_node(first);
+                                    cx.notify();
+                                }
+                            }
+                            return;
+                        }
+                        "h" | "left" => {
+                            if let Some(next) = this.find_next_node(Direction::Left) {
+                                this.selected_node = Some(next);
+                                this.center_on_node(next);
+                                cx.notify();
+                            } else if this.selected_node.is_none() {
+                                // No selection yet - select rightmost node
+                                if let Some(last) = this.spatial_sorted_nodes().last().copied() {
+                                    this.selected_node = Some(last);
+                                    this.center_on_node(last);
+                                    cx.notify();
+                                }
+                            }
+                            return;
+                        }
+                        "k" | "up" => {
+                            if let Some(next) = this.find_next_node(Direction::Up) {
+                                this.selected_node = Some(next);
+                                this.center_on_node(next);
+                                cx.notify();
+                            } else if this.selected_node.is_none() {
+                                // No selection yet - select bottommost node
+                                if let Some(last) = this.spatial_sorted_nodes().last().copied() {
+                                    this.selected_node = Some(last);
+                                    this.center_on_node(last);
+                                    cx.notify();
+                                }
+                            }
+                            return;
+                        }
+                        "j" | "down" => {
+                            if let Some(next) = this.find_next_node(Direction::Down) {
+                                this.selected_node = Some(next);
+                                this.center_on_node(next);
+                                cx.notify();
+                            } else if this.selected_node.is_none() {
+                                // No selection yet - select topmost node
+                                if let Some(first) = this.spatial_sorted_nodes().first().copied() {
+                                    this.selected_node = Some(first);
+                                    this.center_on_node(first);
+                                    cx.notify();
+                                }
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Move selected table with Alt+arrows / Alt+hjkl
+                if mods.alt && !mods.shift && !mods.ctrl {
+                    let Some(selected) = this.selected_node else {
+                        return;
+                    };
+
+                    // Get current position (from override or layout)
+                    let current_pos = this
+                        .node_position_overrides
+                        .get(&selected)
+                        .copied()
+                        .or_else(|| {
+                            this.layout
+                                .as_ref()
+                                .and_then(|l| l.nodes.get(&selected))
+                                .map(|n| Point::new(n.x, n.y))
+                        })
+                        .unwrap_or(Point::new(0.0, 0.0));
+
+                    let mut new_pos = current_pos;
+
+                    match chord.key.as_str() {
+                        "h" | "left" => {
+                            new_pos.x -= 20.0;
+                        }
+                        "l" | "right" => {
+                            new_pos.x += 20.0;
+                        }
+                        "k" | "up" => {
+                            new_pos.y -= 20.0;
+                        }
+                        "j" | "down" => {
+                            new_pos.y += 20.0;
+                        }
+                        _ => return,
+                    }
+
+                    this.node_position_overrides.insert(selected, new_pos);
+                    cx.notify();
+                }
+            }))
+            .child({
+                let entity_for_viewport = cx.entity().clone();
+                canvas(
+                    move |bounds: gpui::Bounds<Pixels>, _, cx| {
+                        entity_for_viewport.update(cx, |this, _cx| {
+                            this.viewport_origin = bounds.origin;
+                            this.viewport_size = bounds.size;
+                        });
+                    },
+                    |_: gpui::Bounds<Pixels>, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            })
+            .child(diagram_canvas);
+
+        let cap_warning = self.table_cap_warning.then(|| {
+            div()
+                .px(Spacing::MD)
+                .py(px(4.0))
+                .bg(theme.primary.opacity(0.08))
+                .border_b_1()
+                .border_color(theme.border)
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child("Showing first 100 tables — the schema has more.")
+        });
+
+        // Clone entity before rendering to avoid borrow conflicts with canvas below.
+        let entity_for_origin = cx.entity().clone();
+
+        // Context menu overlay (rendered via app's standard component)
+        let context_menu = self.render_context_menu(cx);
+
+        // Track panel origin for context menu positioning (same pattern as
+        // DataGridPanel and AuditDocument). event.position from mouse events
+        // is window-absolute; the menu renders inside this div, so we need
+        // to subtract panel_origin to get local coordinates.
+        let origin_tracker = canvas(
+            move |bounds: gpui::Bounds<Pixels>, _, cx| {
+                entity_for_origin.update(cx, |this, _cx| {
+                    this.panel_origin = bounds.origin;
+                });
+            },
+            |_: gpui::Bounds<Pixels>, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(background)
+            .child(origin_tracker)
+            .child(zoom_controls)
+            .children(cap_warning)
+            .child(viewport)
+            .when_some(context_menu, |d, menu| d.child(menu))
+    }
+
+    fn render_nodes(
+        &self,
+        layout: &LayoutResult,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> Vec<Div> {
+        let Some(graph) = &self.graph else {
+            log::info!("DEBUG render_nodes: self.graph is None, returning empty");
+            return Vec::new();
+        };
+
+        let node_count = graph.nodes().count();
+        log::info!(
+            "DEBUG render_nodes: graph.nodes() count={} layout.nodes.len={}",
+            node_count,
+            layout.nodes.len()
+        );
+
+        let dragging_node = self.dragging_node;
+
+        graph
+            .nodes()
+            .filter_map(|(idx, node)| {
+                let node_layout = layout.nodes.get(&idx)?;
+                Some(self.render_node(node, node_layout, idx, theme, dragging_node, cx))
+            })
+            .collect()
+    }
+
+    /// Renders a small inline badge for a column attribute (PK, FK, NN).
+    ///
+    /// `filled=true`: solid background badge. `filled=false`: outlined badge.
+    fn render_column_badge(&self, label: &str, filled: bool, color: Hsla) -> impl IntoElement {
+        let base = div()
+            .px(px(5.0))
+            .py(px(1.0))
+            .rounded_full()
+            .text_size(FontSizes::XS)
+            .font_weight(gpui::FontWeight::BOLD)
+            .line_height(px(14.0));
+
+        if filled {
+            base.bg(color).text_color(gpui::white())
+        } else {
+            base.border_1().border_color(color).text_color(color)
+        }
+        .child(label.to_owned())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_node(
+        &self,
+        node: &dbflux_schema_viz::graph::TableNode,
+        layout: &NodeLayout,
+        node_idx: petgraph::graph::NodeIndex,
+        theme: &gpui_component::theme::Theme,
+        dragging_node: Option<petgraph::graph::NodeIndex>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let width = layout.width;
+
+        let position_override = self.node_position_overrides.get(&node_idx);
+        let (node_left, node_top) = if let Some(pos) = position_override {
+            (px(pos.x), px(pos.y))
+        } else {
+            (px(layout.x), px(layout.y))
+        };
+
+        let is_selected = self.selected_node.as_ref() == Some(&node_idx);
+
+        let border_color = if is_selected {
+            theme.primary
+        } else {
+            theme.border
+        };
+
+        let node_bg = theme.secondary;
+        let muted_fg = theme.muted_foreground;
+
+        let is_dragging = dragging_node == Some(node_idx);
+        let cursor_style = if is_dragging {
+            CursorStyle::PointingHand
+        } else {
+            CursorStyle::Arrow
+        };
+
+        let node_idx_clone = node_idx;
+
+        // T16: Redesigned node header — table icon + schema.name + col count badge
+        let table_name = match &node.id.schema {
+            Some(s) => format!("{}.{}", s, node.id.name),
+            None => node.id.name.clone(),
+        };
+        let col_count_label = format!("{} cols", node.columns.len());
+
+        let node_header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px(px(10.0))
+            .h(px(NODE_HEADER_PX))
+            .bg(theme.tab_bar)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                svg()
+                    .path(AppIcon::Table.path())
+                    .size_3()
+                    .text_color(muted_fg),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(FontSizes::SM)
+                    .text_color(theme.foreground)
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(table_name),
+            )
+            .child(
+                div()
+                    .text_size(FontSizes::XS)
+                    .text_color(muted_fg)
+                    .child(col_count_label),
+            );
+
+        // T18: Column rows with badge cluster
+        let show_types = self.show_types;
+        let col_rows: Vec<_> = node
+            .columns
+            .iter()
+            .map(|col| {
+                let pk_color = theme.primary;
+                let fk_color = theme.primary;
+                let nn_color = muted_fg.opacity(0.5);
+
+                let is_nn = !col.nullable && !col.is_pk;
+
+                // Fixed-width slots so badges and types align in a column
+                // regardless of the column name's width.
+                let badge_slot = div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .flex_shrink_0()
+                    .w(px(64.0))
+                    .gap(px(4.0))
+                    .when(col.is_pk, |d| {
+                        d.child(self.render_column_badge("PK", true, pk_color))
+                    })
+                    .when(col.is_fk, |d| {
+                        d.child(self.render_column_badge("FK", false, fk_color))
+                    })
+                    .when(is_nn, |d| {
+                        d.child(self.render_column_badge("NN", true, nn_color))
+                    });
+
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(NODE_ROW_PX))
+                    .gap(px(8.0))
+                    .overflow_hidden()
+                    .text_size(FontSizes::XS)
+                    .text_color(theme.foreground)
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(col.name.clone()),
+                    )
+                    .child(badge_slot)
+                    .when(show_types, |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .w(px(72.0))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .text_color(muted_fg)
+                                .child(col.type_name.clone()),
+                        )
+                    })
+            })
+            .collect();
+
+        // T19: Indexes section (only when show_indexes is true and there are indexes)
+        let show_indexes = self.show_indexes;
+        let indexes_section = if show_indexes && !node.indexes.is_empty() {
+            let index_rows: Vec<_> = node
+                .indexes
+                .iter()
+                .map(|idx| {
+                    let col_part = idx.columns.join(", ");
+                    let label = format!("{} ({})", idx.name, col_part);
+                    div()
+                        .flex()
+                        .items_center()
+                        .h(px(NODE_INDEX_ROW_PX))
+                        .gap(px(4.0))
+                        .overflow_hidden()
+                        .text_size(FontSizes::XS)
+                        .text_color(muted_fg)
+                        .child(
+                            div()
+                                .flex_1()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(label),
+                        )
+                        .when(idx.unique, |d| {
+                            d.child(
+                                svg()
+                                    .path(AppIcon::KeyRound.path())
+                                    .size_3()
+                                    .text_color(theme.primary),
+                            )
+                        })
+                })
+                .collect::<Vec<_>>();
+
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .px(px(10.0))
+                    .py(px(2.0))
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .h(px(NODE_INDEX_HEADER_PX))
+                            .flex()
+                            .items_center()
+                            .text_size(FontSizes::XS)
+                            .text_color(muted_fg)
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child("Indexes"),
+                    )
+                    .children(index_rows),
+            )
+        } else {
+            None
+        };
+
+        div()
+            .absolute()
+            .left(node_left)
+            .top(node_top)
+            .w(px(width))
+            .border_1()
+            .border_color(border_color)
+            .rounded_md()
+            .bg(node_bg)
+            .shadow_sm()
+            .overflow_hidden()
+            .cursor(cursor_style)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    if event.click_count >= 2 {
+                        this.selected_node = Some(node_idx_clone);
+                        this.open_schema_inspector(node_idx_clone, cx);
+                        return;
+                    }
+                    if event.click_count == 1 {
+                        this.selected_node = Some(node_idx_clone);
+                        this.pending_details_panel = Some(node_idx_clone);
+                        this.dragging_node = Some(node_idx_clone);
+                        this.is_panning = false;
+                        let zoom = this.zoom;
+                        let node_x = this
+                            .node_position_overrides
+                            .get(&node_idx_clone)
+                            .map(|p| p.x)
+                            .or_else(|| {
+                                this.layout
+                                    .as_ref()
+                                    .and_then(|l| l.nodes.get(&node_idx_clone))
+                                    .map(|n| n.x)
+                            })
+                            .unwrap_or(0.0);
+                        let node_y = this
+                            .node_position_overrides
+                            .get(&node_idx_clone)
+                            .map(|p| p.y)
+                            .or_else(|| {
+                                this.layout
+                                    .as_ref()
+                                    .and_then(|l| l.nodes.get(&node_idx_clone))
+                                    .map(|n| n.y)
+                            })
+                            .unwrap_or(0.0);
+                        let pan_x: f32 = this.pan_offset.x.into();
+                        let pan_y: f32 = this.pan_offset.y.into();
+                        let node_screen_x = px(node_x * zoom + pan_x);
+                        let node_screen_y = px(node_y * zoom + pan_y);
+                        let local_position = this.viewport_local_position(event.position);
+                        this.drag_offset = Point::new(
+                            local_position.x - node_screen_x,
+                            local_position.y - node_screen_y,
+                        );
+                        this.node_position_overrides
+                            .insert(node_idx_clone, Point::new(node_x, node_y));
+                    }
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    // Always retarget the selection to the node under the cursor
+                    // before opening the menu so the menu actions apply to the
+                    // table the user actually right-clicked on (not a stale
+                    // previously-selected table).
+                    this.selected_node = Some(node_idx_clone);
+                    let local = Point::new(
+                        event.position.x - this.panel_origin.x,
+                        event.position.y - this.panel_origin.y,
+                    );
+                    this.open_context_menu(local, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .flex()
+            .flex_col()
+            .child(node_header)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .px(px(10.0))
+                    .py(px(NODE_BODY_TOP_PX))
+                    .children(col_rows),
+            )
+            .when_some(indexes_section, |d, sec| d.child(sec))
+    }
+
+    /// Renders edges as cubic bezier curves on a canvas element.
+    ///
+    /// Column-level anchor Y positions are computed using the same formula as
+    /// `compute_node_height` so that edge endpoints always hit the correct row.
+    /// Edges that connect off-screen nodes are rendered dashed.
+    fn render_edges_overlay(
+        &self,
+        layout: &LayoutResult,
+        theme: &gpui_component::theme::Theme,
+    ) -> Vec<Div> {
+        let edge_color = theme.primary;
+        let edge_color_dim = theme.primary.opacity(0.5);
+
+        let Some(graph) = &self.graph else {
+            return Vec::new();
+        };
+
+        // Collect all edge data before moving into the canvas closure.
+        struct EdgeData {
+            from_x: f32,
+            from_y: f32,
+            to_x: f32,
+            to_y: f32,
+            dashed: bool,
+        }
+
+        let mut edges: Vec<EdgeData> = Vec::new();
+        let row_center = NODE_ROW_PX / 2.0;
+
+        for edge_idx in graph.edge_indices() {
+            let (source, target) = match graph.edge_endpoints(edge_idx) {
+                Some((s, t)) => (s, t),
+                None => continue,
+            };
+            let edge_weight = match graph.edge_weight(edge_idx) {
+                Some(w) => w,
+                None => continue,
+            };
+            let from_layout = match layout.nodes.get(&source) {
+                Some(l) => l,
+                None => continue,
+            };
+            let to_layout = match layout.nodes.get(&target) {
+                Some(l) => l,
+                None => continue,
+            };
+            let from_node_weight = match graph.node_weight(source) {
+                Some(n) => n,
+                None => continue,
+            };
+            let to_node_weight = match graph.node_weight(target) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            let (from_x_base, from_y_base) = self
+                .node_position_overrides
+                .get(&source)
+                .map_or((from_layout.x, from_layout.y), |pos| (pos.x, pos.y));
+            let (to_x_base, to_y_base) = self
+                .node_position_overrides
+                .get(&target)
+                .map_or((to_layout.x, to_layout.y), |pos| (pos.x, pos.y));
+
+            let from_col_y = edge_weight
+                .from_columns
+                .first()
+                .and_then(|col_name| {
+                    from_node_weight
+                        .columns
+                        .iter()
+                        .position(|c| &c.name == col_name)
+                })
+                .map(|col_idx| {
+                    NODE_HEADER_PX + NODE_BODY_TOP_PX + col_idx as f32 * NODE_ROW_PX + row_center
+                })
+                .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
+
+            let to_col_y = edge_weight
+                .to_columns
+                .first()
+                .and_then(|col_name| {
+                    to_node_weight
+                        .columns
+                        .iter()
+                        .position(|c| &c.name == col_name)
+                })
+                .map(|col_idx| {
+                    NODE_HEADER_PX + NODE_BODY_TOP_PX + col_idx as f32 * NODE_ROW_PX + row_center
+                })
+                .unwrap_or(NODE_HEADER_PX + NODE_BODY_TOP_PX);
+
+            // Anchor a few px outside the node so the curve and arrowhead never
+            // visually overlap the FK / PK badges inside the row.
+            let edge_anchor_gap = 6.0_f32;
+            let from_x = from_x_base + from_layout.width + edge_anchor_gap;
+            let from_y = from_y_base + from_col_y;
+            let to_x = to_x_base - edge_anchor_gap;
+            let to_y = to_y_base + to_col_y;
+
+            // All edges render solid; the off-screen dashed variant was dropped.
+            edges.push(EdgeData {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                dashed: false,
+            });
+        }
+
+        if edges.is_empty() {
+            return Vec::new();
+        }
+
+        // Paint all edges on a single canvas element covering the full canvas area.
+        // `paint_path` works in window-absolute coordinates, so every point must be
+        // offset by the canvas element's `bounds.origin`.
+        let canvas_el = canvas(
+            |_bounds, _, _cx| {},
+            move |bounds, _, window, _cx| {
+                use gpui::PathBuilder;
+
+                let ox: f32 = bounds.origin.x.into();
+                let oy: f32 = bounds.origin.y.into();
+
+                for e in &edges {
+                    let fx = e.from_x + ox;
+                    let fy = e.from_y + oy;
+                    let tx = e.to_x + ox;
+                    let ty = e.to_y + oy;
+
+                    let dx = (tx - fx).abs() / 2.0;
+                    let ctrl1 = gpui::point(px(fx + dx), px(fy));
+                    let ctrl2 = gpui::point(px(tx - dx), px(ty));
+                    let from = gpui::point(px(fx), px(fy));
+                    let to = gpui::point(px(tx), px(ty));
+
+                    let mut builder = PathBuilder::stroke(px(1.5));
+                    if e.dashed {
+                        builder = builder.dash_array(&[px(6.0), px(4.0)]);
+                    }
+                    builder.move_to(from);
+                    builder.cubic_bezier_to(to, ctrl1, ctrl2);
+
+                    if let Ok(path) = builder.build() {
+                        let color = if e.dashed { edge_color_dim } else { edge_color };
+                        window.paint_path(path, color);
+                    }
+
+                    // Arrowhead: small filled triangle at `to`, pointing from ctrl2 direction.
+                    let arrow_len = 8.0_f32;
+                    let arrow_half_base = 3.0_f32;
+                    let ctrl2_x: f32 = f32::from(ctrl2.x);
+                    let ctrl2_y: f32 = f32::from(ctrl2.y);
+                    let dx_arrow = tx - ctrl2_x;
+                    let dy_arrow = ty - ctrl2_y;
+                    let mag = (dx_arrow * dx_arrow + dy_arrow * dy_arrow)
+                        .sqrt()
+                        .max(0.001);
+                    let ux = dx_arrow / mag;
+                    let uy = dy_arrow / mag;
+
+                    let tip = gpui::point(px(tx), px(ty));
+                    let base_center_x = tx - ux * arrow_len;
+                    let base_center_y = ty - uy * arrow_len;
+                    let left = gpui::point(
+                        px(base_center_x - uy * arrow_half_base),
+                        px(base_center_y + ux * arrow_half_base),
+                    );
+                    let right = gpui::point(
+                        px(base_center_x + uy * arrow_half_base),
+                        px(base_center_y - ux * arrow_half_base),
+                    );
+
+                    let mut arrow_builder = PathBuilder::fill();
+                    arrow_builder.move_to(tip);
+                    arrow_builder.line_to(left);
+                    arrow_builder.line_to(right);
+                    arrow_builder.close();
+
+                    if let Ok(arrow_path) = arrow_builder.build() {
+                        let color = if e.dashed { edge_color_dim } else { edge_color };
+                        window.paint_path(arrow_path, color);
+                    }
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(px(10000.0))
+        .h(px(10000.0));
+
+        vec![div().absolute().top_0().left_0().child(canvas_el)]
+    }
+}
+
+/// Tests for SchemaVizDocument logic (pure unit tests — no GPUI harness required).
+/// Kept in a separate file to avoid rustc stack overflow during compilation of
+/// this large module (see crates/dbflux_ui/src/ui/document/schema_viz/tests.rs).
+#[cfg(test)]
+mod tests;
+
+impl EventEmitter<DocumentEvent> for SchemaVizDocument {}
+
+impl Render for SchemaVizDocument {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        flush_pending_toast(self.pending_toast.take(), window, cx);
+
+        // Restore focus after context menu closes (the overlay dismiss callback
+        // runs in App context without Window, so it sets pending_focus_restore
+        // and we restore focus here where Window is available).
+        if self.pending_focus_restore && self.context_menu.is_none() {
+            self.pending_focus_restore = false;
+            self.focus_handle.focus(window, cx);
+        }
+
+        match &self.load_status {
+            LoadStatus::Loading => self.render_loading(cx).into_any_element(),
+            LoadStatus::Error(msg) => self.render_error(msg).into_any_element(),
+            LoadStatus::NotSupported => self.render_not_supported().into_any_element(),
+            LoadStatus::Ready => self.render_diagram(window, cx).into_any_element(),
+        }
+    }
+}

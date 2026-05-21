@@ -18,7 +18,7 @@ use dbflux_core::{
 };
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::AlertDialog;
 use gpui_component::{ActiveTheme, Icon};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -642,7 +642,7 @@ impl AuthProfilesSection {
         cx.spawn(async move |_this, cx| {
             let result = fetch_task.await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(response) => {
@@ -1140,7 +1140,7 @@ impl AuthProfilesSection {
             // Retrieve the URL that the callback may have received during login.
             let captured_url = url_slot.lock().ok().and_then(|guard| guard.clone());
 
-            if let Err(err) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.provider_login_loading = false;
                     this.provider_login_status = Some(match &result {
@@ -1182,9 +1182,7 @@ impl AuthProfilesSection {
 
                     cx.notify();
                 });
-            }) {
-                log::warn!("Failed to apply auth-provider login result: {:?}", err);
-            }
+            });
         })
         .detach();
     }
@@ -2025,7 +2023,7 @@ impl Render for AuthProfilesSection {
                 };
 
                 element.child(
-                    Dialog::new(window, cx)
+                    AlertDialog::new(cx)
                         .title("Delete Auth Profile")
                         .confirm()
                         .on_ok(move |_, window, cx| {

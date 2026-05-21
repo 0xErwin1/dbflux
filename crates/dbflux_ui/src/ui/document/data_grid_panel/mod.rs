@@ -11,7 +11,6 @@ use super::result_view::{
 };
 use super::task_runner::DocumentTaskRunner;
 use crate::app::AppStateEntity;
-use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::data_table::{
     ContextMenuAction, DataTable, DataTableEvent, DataTableState, SortState as TableSortState,
     TableModel,
@@ -583,8 +582,7 @@ impl DataGridPanel {
                         cx.notify();
                     });
                 }
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1243,7 +1241,7 @@ impl DataGridPanel {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };
@@ -1382,12 +1380,12 @@ impl DataGridPanel {
 
         if self.view_config.mode == super::data_view::DataViewMode::Document {
             if let Some(tree_state) = &self.document_tree_state {
-                tree_state.update(cx, |state, _| state.focus(window));
+                tree_state.update(cx, |state, cx| state.focus(window, cx));
             } else {
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
             }
         } else {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         cx.emit(DataGridEvent::Focused);

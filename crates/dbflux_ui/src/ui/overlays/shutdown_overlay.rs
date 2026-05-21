@@ -38,7 +38,7 @@ impl ShutdownOverlay {
                 .timer(std::time::Duration::from_millis(50))
                 .await;
 
-            let should_continue = match cx.update(|cx| {
+            let should_continue = cx.update(|cx| {
                 let Some(entity) = this.upgrade() else {
                     return false;
                 };
@@ -53,13 +53,7 @@ impl ShutdownOverlay {
                         false
                     }
                 })
-            }) {
-                Ok(continue_flag) => continue_flag,
-                Err(_) => {
-                    log::debug!("Shutdown animation stopped: context unavailable");
-                    false
-                }
-            };
+            });
 
             if !should_continue {
                 break;

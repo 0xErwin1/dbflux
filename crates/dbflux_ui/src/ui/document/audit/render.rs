@@ -636,7 +636,7 @@ impl AuditDocument {
                             cx.emit(DocumentEvent::RequestFocus);
                             this.select_row(row_index, cx);
                             this.toggle_event_expanded(event_id, cx);
-                            this.focus_handle.focus(window);
+                            this.focus_handle.focus(window, cx);
                         }),
                     )
                     .on_mouse_down(

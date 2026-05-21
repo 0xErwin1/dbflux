@@ -4,7 +4,6 @@ use super::{
     PendingDocumentPreview, PendingModalOpen, PendingToast, SqlGenerateKind, TableContextMenu,
 };
 use crate::keymap::{Command, ContextId};
-use crate::ui::AsyncUpdateResultExt;
 use crate::ui::components::data_table::{ContextMenuAction, FilterOperator};
 use crate::ui::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
@@ -41,12 +40,12 @@ impl DataGridPanel {
 
         if is_document_view {
             if let Some(tree_state) = &self.document_tree_state {
-                tree_state.update(cx, |state, _| state.focus(window));
+                tree_state.update(cx, |state, cx| state.focus(window, cx));
             } else {
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
             }
         } else {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         cx.emit(DataGridEvent::Focused);
@@ -104,7 +103,7 @@ impl DataGridPanel {
         });
 
         // Focus the context menu to receive keyboard events
-        self.context_menu_focus.focus(window);
+        self.context_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -133,7 +132,7 @@ impl DataGridPanel {
             doc_field_value: None,
         });
 
-        self.context_menu_focus.focus(window);
+        self.context_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -189,7 +188,7 @@ impl DataGridPanel {
             doc_field_value: field_value,
         });
 
-        self.context_menu_focus.focus(window);
+        self.context_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -922,8 +921,7 @@ impl DataGridPanel {
                     panel.pending_toast = Some(PendingToast { message, is_error });
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -2598,8 +2596,7 @@ impl DataGridPanel {
                             insp.resolve_reference(index, Err(e.to_string()), cx);
                         }
                     })
-                })
-                .ok();
+                });
             })
             .detach();
         }
@@ -2990,8 +2987,7 @@ impl DataGridPanel {
                         }
                         cx.notify();
                     });
-                })
-                .log_if_dropped();
+                });
             })
             .detach();
 
@@ -3105,8 +3101,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

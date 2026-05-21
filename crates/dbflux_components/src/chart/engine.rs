@@ -1482,6 +1482,8 @@ impl Render for ChartView {
                                     let _ = shaped.paint(
                                         point(gpui::px(label_x), gpui::px(label_y)),
                                         line_height,
+                                        gpui::TextAlign::Left,
+                                        None,
                                         window,
                                         cx,
                                     );
@@ -1517,6 +1519,8 @@ impl Render for ChartView {
                                     let _ = shaped.paint(
                                         point(gpui::px(label_x), gpui::px(x_baseline_y)),
                                         line_height,
+                                        gpui::TextAlign::Left,
+                                        None,
                                         window,
                                         cx,
                                     );

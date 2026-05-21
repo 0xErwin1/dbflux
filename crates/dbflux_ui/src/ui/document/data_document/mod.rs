@@ -187,8 +187,8 @@ impl DataDocument {
         self.data_grid.read(cx).change_summary(cx)
     }
 
-    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn connection_id(&self, cx: &App) -> Option<Uuid> {

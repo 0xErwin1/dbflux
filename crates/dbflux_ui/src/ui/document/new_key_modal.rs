@@ -277,7 +277,7 @@ impl NewKeyModal {
             state.set_value("", window, cx);
         });
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

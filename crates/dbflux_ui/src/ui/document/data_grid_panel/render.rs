@@ -93,7 +93,7 @@ impl Render for DataGridPanel {
             self.pending_context_menu_focus = false;
         } else if self.pending_context_menu_focus {
             self.pending_context_menu_focus = false;
-            self.context_menu_focus.focus(window);
+            self.context_menu_focus.focus(window, cx);
         }
 
         if let Some(modal) = self.pending_modal_open.take() {
@@ -951,7 +951,7 @@ impl DataGridPanel {
                                                 }
                                             });
                                         }
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .when(!can_undo, |d| d.border_color(theme.border))
@@ -995,7 +995,7 @@ impl DataGridPanel {
                                                 }
                                             });
                                         }
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .when(!can_redo, |d| d.border_color(theme.border))
@@ -1028,7 +1028,7 @@ impl DataGridPanel {
                                             });
                                         }
                                         // Refocus table after button click
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .when(!has_changes, |d| d.border_color(theme.border))
@@ -1064,7 +1064,7 @@ impl DataGridPanel {
                                             });
                                         }
                                         // Refocus table after button click
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .child(Text::caption("Revert").color(if has_changes {

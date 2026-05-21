@@ -9,7 +9,7 @@ impl CodeDocument {
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
 
         if self.focus_mode == SqlQueryFocus::Editor {
             self.input_state

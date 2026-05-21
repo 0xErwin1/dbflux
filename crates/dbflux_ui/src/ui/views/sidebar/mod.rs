@@ -90,6 +90,18 @@ pub enum SidebarEvent {
     OpenScript {
         path: std::path::PathBuf,
     },
+    /// Open schema visualization for a table.
+    OpenSchemaViz {
+        profile_id: Uuid,
+        database: Option<String>,
+        schema: Option<String>,
+        table: String,
+    },
+    /// Open global schema visualization for an entire database.
+    OpenGlobalSchemaViz {
+        profile_id: Uuid,
+        database: String,
+    },
     /// Request to open a read-only code document showing a routine's definition.
     OpenRoutineDefinition {
         profile_id: Uuid,
@@ -241,6 +253,8 @@ pub enum ContextMenuAction {
     Open,
     OpenChildPicker,
     ViewSchema,
+    ViewRelationships,
+    ViewSchemaDiagram,
     GenerateCode(String),
     Connect,
     Disconnect,
@@ -322,6 +336,8 @@ impl ContextMenuAction {
             Self::Open => Some(AppIcon::Eye),
             Self::OpenChildPicker => Some(AppIcon::ScrollText),
             Self::ViewSchema => Some(AppIcon::Table),
+            Self::ViewRelationships => Some(AppIcon::Link2),
+            Self::ViewSchemaDiagram => Some(AppIcon::Link2),
             Self::GenerateCode(_) => Some(AppIcon::Code),
             Self::Connect => Some(AppIcon::Plug),
             Self::Disconnect => Some(AppIcon::Unplug),
@@ -1253,6 +1269,33 @@ impl Sidebar {
                 title: name,
             });
         }
+    }
+
+    fn open_schema_viz(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if let Some(SchemaNodeId::Table {
+            profile_id,
+            database,
+            schema,
+            name,
+        }) = parse_node_id(item_id)
+        {
+            cx.emit(SidebarEvent::OpenSchemaViz {
+                profile_id,
+                database,
+                schema: Some(schema),
+                table: name,
+            });
+        }
+    }
+
+    fn open_schema_diagram(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        let Some(SchemaNodeId::Database { profile_id, name }) = parse_node_id(item_id) else {
+            return;
+        };
+        cx.emit(SidebarEvent::OpenGlobalSchemaViz {
+            profile_id,
+            database: name,
+        });
     }
 
     fn toggle_item_expansion(&mut self, item_id: &str, cx: &mut Context<Self>) {

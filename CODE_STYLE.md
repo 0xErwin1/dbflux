@@ -97,3 +97,5 @@
 - Do use canonical action string constants from `dbflux_core::observability::actions` instead of bare string literals in audit events.
 - Do set category-specific required fields before calling `EventSink::record()` — validation runs at record time and returns an error if fields are missing.
 - Do not store full query text in `details_json` — the `AuditService` replaces it with a SHA256 fingerprint by default; if full text is needed, opt in explicitly with `set_capture_query_text(true)` and understand the compliance implications.
+- Do use `pending_toast` pattern for toast notifications in sync event handlers: add `pending_toast: Option<PendingToast>` field, set it during async operations, flush in `render()` via `flush_pending_toast()`. This avoids the `window` parameter problem in non-async contexts.
+- Do use dropdown menus for toolbar actions with `.on_mouse_down_out(cx.listener(...))` to close on outside click. Use toggle logic (clicking one closes the other) for mutually exclusive dropdowns. Use `AppIcon::CircleCheck` for active/selected states.

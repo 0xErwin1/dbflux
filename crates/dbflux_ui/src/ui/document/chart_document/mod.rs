@@ -271,8 +271,8 @@ impl ChartDocument {
         ContextId::Global
     }
 
-    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn dispatch_command(
@@ -385,8 +385,7 @@ impl ChartDocument {
                     doc.pending_result = Some(PendingResult { task_id, result });
                     cx.notify();
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

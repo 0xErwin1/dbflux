@@ -733,7 +733,7 @@ impl AuditDocument {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };
@@ -1405,8 +1405,8 @@ impl AuditDocument {
 
     // ── Focus ─────────────────────────────────────────────────────────────
 
-    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub(self) fn filter_by_correlation(&mut self, correlation_id: String, cx: &mut Context<Self>) {

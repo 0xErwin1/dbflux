@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 gpui.workspace = true
+gpui_platform.workspace = true
 gpui-component.workspace = true
 dbflux_app.workspace = true
 dbflux_ui = { workspace = true }
@@ -36,6 +37,7 @@ bincode = "1"
 interprocess.workspace = true
 open = "5"
 indexmap.workspace = true
+dbml-rs = "1.0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

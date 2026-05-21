@@ -36,6 +36,8 @@ pub enum DocumentKind {
     MongoCollection,
     // Global audit viewer
     Audit,
+    // Schema relationship diagram
+    SchemaViz,
     // Standalone chart document
     Chart,
 }
@@ -63,6 +65,7 @@ pub enum DocumentIcon {
     Mongo,
     Collection,
     Audit,
+    SchemaViz,
     Chart,
 }
 
@@ -78,6 +81,7 @@ impl DocumentIcon {
             Self::Mongo => "database",
             Self::Collection => "folder",
             Self::Audit => "shield",
+            Self::SchemaViz => "git-branch",
             Self::Chart => "bar-chart-2",
         }
     }

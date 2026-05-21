@@ -351,7 +351,7 @@ impl DataTableState {
 
     /// Focus the table for keyboard navigation and emit Focused event.
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.emit(DataTableEvent::Focused);
     }
 

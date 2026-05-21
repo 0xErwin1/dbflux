@@ -54,6 +54,18 @@ pub enum DocumentKey {
         schema: String,
         specific_name: String,
     },
+
+    /// A schema relationship diagram.
+    ///
+    /// `table` is `Some` for a focused single-table diagram and `None` for a
+    /// global (whole-database) diagram. `schema` and `database` qualify the
+    /// focused view; the global view deduplicates on `(profile_id, database)`.
+    SchemaViz {
+        profile_id: Uuid,
+        database: Option<String>,
+        schema: Option<String>,
+        table: Option<String>,
+    },
 }
 
 #[cfg(test)]

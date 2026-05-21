@@ -24,8 +24,8 @@ fn stub_handle(cx: &mut App) -> ViewHandle {
         .render(|_w, _cx| div().into_any())
         .focus({
             let focus = focus.clone();
-            move |w, _cx| {
-                focus.focus(w);
+            move |w, cx| {
+                focus.focus(w, cx);
             }
         })
         .focus_handle(move |_cx| focus.clone())
@@ -43,8 +43,8 @@ fn stub_handle_two_modes(cx: &mut App) -> ViewHandle {
         .render(|_w, _cx| div().into_any())
         .focus({
             let focus = focus.clone();
-            move |w, _cx| {
-                focus.focus(w);
+            move |w, cx| {
+                focus.focus(w, cx);
             }
         })
         .focus_handle(move |_cx| focus.clone())

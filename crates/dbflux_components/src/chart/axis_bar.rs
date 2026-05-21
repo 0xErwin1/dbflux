@@ -16,7 +16,7 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Corner, ElementId, MouseButton, SharedString, Window, anchored, deferred, div,
+    Anchor, AnyElement, App, ElementId, MouseButton, SharedString, Window, anchored, deferred, div,
     point, px,
 };
 
@@ -334,7 +334,7 @@ fn pill_group(
         container = container.child(
             deferred(
                 anchored()
-                    .anchor(Corner::TopLeft)
+                    .anchor(Anchor::TopLeft)
                     .offset(point(px(0.0), px(24.0)))
                     .snap_to_window()
                     .child(picker_el),

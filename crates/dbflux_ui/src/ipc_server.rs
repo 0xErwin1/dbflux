@@ -131,7 +131,7 @@ async fn process_commands(
     loop {
         match cmd_rx.try_recv() {
             Ok(cmd) => {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     workspace.update(cx, |ws, cx| match cmd {
                         IpcCommand::OpenScript { path } => {
                             ws.open_script_from_path(path, cx);

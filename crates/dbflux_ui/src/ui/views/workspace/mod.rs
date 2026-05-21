@@ -635,6 +635,27 @@ impl Workspace {
                 } => {
                     this.open_key_value_document(*profile_id, database.clone(), window, cx);
                 }
+                SidebarEvent::OpenSchemaViz {
+                    profile_id,
+                    database,
+                    schema,
+                    table,
+                } => {
+                    this.open_schema_viz_document(
+                        *profile_id,
+                        database.clone(),
+                        schema.clone(),
+                        table.clone(),
+                        window,
+                        cx,
+                    );
+                }
+                SidebarEvent::OpenGlobalSchemaViz {
+                    profile_id,
+                    database,
+                } => {
+                    this.open_global_schema_viz_document(*profile_id, database.clone(), window, cx);
+                }
                 SidebarEvent::RequestSqlPreview {
                     profile_id,
                     table_info,
@@ -952,7 +973,7 @@ impl Workspace {
         .detach();
 
         let focus_handle = cx.focus_handle();
-        focus_handle.focus(window);
+        focus_handle.focus(window, cx);
 
         let mut workspace = Self {
             app_state,
@@ -1044,28 +1065,24 @@ impl Workspace {
                             .await;
 
                         // Get retention_days from settings.
-                        let retention_days = cx
-                            .update(|cx| {
-                                let runtime = app_state.read(cx).storage_runtime();
-                                let repo = runtime.audit_settings();
-                                repo.get()
-                                    .ok()
-                                    .flatten()
-                                    .map(|s| s.retention_days)
-                                    .unwrap_or(30)
-                            })
-                            .unwrap_or(30);
+                        let retention_days = cx.update(|cx| {
+                            let runtime = app_state.read(cx).storage_runtime();
+                            let repo = runtime.audit_settings();
+                            repo.get()
+                                .ok()
+                                .flatten()
+                                .map(|s| s.retention_days)
+                                .unwrap_or(30)
+                        });
 
                         // Get audit_service for purge and emit from foreground update.
-                        let purge_result = cx
-                            .update(|cx| {
-                                let audit_service = app_state.read(cx).audit_service().clone();
-                                audit_service.purge_old_events(retention_days, 500)
-                            })
-                            .ok();
+                        let purge_result = cx.update(|cx| {
+                            let audit_service = app_state.read(cx).audit_service().clone();
+                            audit_service.purge_old_events(retention_days, 500)
+                        });
 
                         match purge_result {
-                            Some(Ok(stats)) => {
+                            Ok(stats) => {
                                 log::info!(
                                     "Periodic audit purge completed: deleted {} events in {} batches ({}ms)",
                                     stats.deleted_count,
@@ -1086,14 +1103,14 @@ impl Workspace {
                                     stats.deleted_count
                                 ))
                                 .with_duration_ms(stats.duration_ms as i64);
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     let audit_service = app_state.read(cx).audit_service().clone();
                                     if let Err(rec_err) = audit_service.record(event) {
                                         log::warn!("Failed to record purge success audit event: {}", rec_err);
                                     }
                                 });
                             }
-                            Some(Err(e)) => {
+                            Err(e) => {
                                 log::warn!("Periodic audit purge failed: {}", e);
                                 // Emit a system failure event for the purge failure.
                                 let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
@@ -1109,15 +1126,12 @@ impl Workspace {
                                     e
                                 ));
                                 // Emit through a foreground update so we have proper context.
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     let audit_service = app_state.read(cx).audit_service().clone();
                                     if let Err(rec_err) = audit_service.record(event) {
                                         log::warn!("Failed to record purge failure audit event: {}", rec_err);
                                     }
                                 });
-                            }
-                            None => {
-                                // cx.update failed - skip this cycle.
                             }
                         }
                     }
@@ -1302,7 +1316,7 @@ impl Workspace {
         });
 
         if target == FocusTarget::Sidebar {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         if target == FocusTarget::Document {

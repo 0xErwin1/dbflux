@@ -64,8 +64,6 @@ pub enum AppIcon {
     Layers,
     Keyboard,
     FingerprintPattern,
-    Maximize2,
-    Minimize2,
     PanelBottomClose,
     PanelBottomOpen,
     FileSpreadsheet,
@@ -95,6 +93,21 @@ pub enum AppIcon {
 
     // Database generic
     Database,
+    DatabaseZap,
+
+    // Zoom / View
+    ZoomIn,
+    ZoomOut,
+    Minus,
+    Maximize2,
+    Minimize2,
+    Grid3x3,
+    Snowflake,
+    Scale,
+    ArrowLeftRight,
+
+    // Clipboard
+    Clipboard,
 
     // Generic non-database data sources
     Logs,
@@ -176,8 +189,6 @@ impl AppIcon {
             Self::Layers => "icons/ui/layers.svg",
             Self::Keyboard => "icons/ui/keyboard.svg",
             Self::FingerprintPattern => "icons/ui/fingerprint-pattern.svg",
-            Self::Maximize2 => "icons/ui/maximize-2.svg",
-            Self::Minimize2 => "icons/ui/minimize-2.svg",
             Self::PanelBottomClose => "icons/ui/panel-bottom-close.svg",
             Self::PanelBottomOpen => "icons/ui/panel-bottom-open.svg",
             Self::FileSpreadsheet => "icons/ui/file-spreadsheet.svg",
@@ -200,6 +211,17 @@ impl AppIcon {
             Self::Sigma => "icons/ui/sigma.svg",
             Self::Database => "icons/ui/database.svg",
             Self::Logs => "icons/ui/logs.svg",
+            Self::DatabaseZap => "icons/ui/database-zap.svg",
+            Self::ZoomIn => "icons/ui/zoom-in.svg",
+            Self::ZoomOut => "icons/ui/zoom-out.svg",
+            Self::Minus => "icons/ui/minus.svg",
+            Self::Maximize2 => "icons/ui/maximize-2.svg",
+            Self::Minimize2 => "icons/ui/minimize-2.svg",
+            Self::Grid3x3 => "icons/ui/grid-3x3.svg",
+            Self::Snowflake => "icons/ui/snowflake.svg",
+            Self::Scale => "icons/ui/scale.svg",
+            Self::ArrowLeftRight => "icons/ui/arrow-left-right.svg",
+            Self::Clipboard => "icons/ui/clipboard.svg",
             Self::ChartSpline => "icons/ui/chart-spline.svg",
             Self::ChartArea => "icons/ui/chart-area.svg",
             Self::ChartColumnBig => "icons/ui/chart-column-big.svg",
@@ -287,8 +309,6 @@ impl AppIcon {
             Self::FingerprintPattern => {
                 include_bytes!("../../../../../resources/icons/ui/fingerprint-pattern.svg")
             }
-            Self::Maximize2 => include_bytes!("../../../../../resources/icons/ui/maximize-2.svg"),
-            Self::Minimize2 => include_bytes!("../../../../../resources/icons/ui/minimize-2.svg"),
             Self::PanelBottomClose => {
                 include_bytes!("../../../../../resources/icons/ui/panel-bottom-close.svg")
             }
@@ -327,6 +347,21 @@ impl AppIcon {
             Self::Sigma => include_bytes!("../../../../../resources/icons/ui/sigma.svg"),
             Self::Database => include_bytes!("../../../../../resources/icons/ui/database.svg"),
             Self::Logs => include_bytes!("../../../../../resources/icons/ui/logs.svg"),
+            Self::DatabaseZap => {
+                include_bytes!("../../../../../resources/icons/ui/database-zap.svg")
+            }
+            Self::ZoomIn => include_bytes!("../../../../../resources/icons/ui/zoom-in.svg"),
+            Self::ZoomOut => include_bytes!("../../../../../resources/icons/ui/zoom-out.svg"),
+            Self::Minus => include_bytes!("../../../../../resources/icons/ui/minus.svg"),
+            Self::Maximize2 => include_bytes!("../../../../../resources/icons/ui/maximize-2.svg"),
+            Self::Minimize2 => include_bytes!("../../../../../resources/icons/ui/minimize-2.svg"),
+            Self::Grid3x3 => include_bytes!("../../../../../resources/icons/ui/grid-3x3.svg"),
+            Self::Snowflake => include_bytes!("../../../../../resources/icons/ui/snowflake.svg"),
+            Self::Scale => include_bytes!("../../../../../resources/icons/ui/scale.svg"),
+            Self::ArrowLeftRight => {
+                include_bytes!("../../../../../resources/icons/ui/arrow-left-right.svg")
+            }
+            Self::Clipboard => include_bytes!("../../../../../resources/icons/ui/clipboard.svg"),
             Self::ChartSpline => {
                 include_bytes!("../../../../../resources/icons/ui/chart-spline.svg")
             }
@@ -498,6 +533,15 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Sigma,
     AppIcon::Database,
     AppIcon::Logs,
+    AppIcon::DatabaseZap,
+    AppIcon::ZoomIn,
+    AppIcon::ZoomOut,
+    AppIcon::Minus,
+    AppIcon::Grid3x3,
+    AppIcon::Snowflake,
+    AppIcon::Scale,
+    AppIcon::ArrowLeftRight,
+    AppIcon::Clipboard,
     AppIcon::ChartSpline,
     AppIcon::ChartArea,
     AppIcon::ChartColumnBig,

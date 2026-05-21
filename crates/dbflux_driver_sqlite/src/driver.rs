@@ -727,7 +727,7 @@ impl Connection for SqliteConnection {
 
         Ok(SchemaSnapshot::relational(RelationalSchema {
             databases: Vec::new(),
-            current_database: None,
+            current_database: Some("main".to_string()),
             schemas: vec![main_schema],
             tables: Vec::new(),
             views: Vec::new(),
@@ -748,7 +748,7 @@ impl Connection for SqliteConnection {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<TableInfo, DbError> {
-        log::info!("[SCHEMA] Fetching details for table: {}", table);
+        log::debug!("[SCHEMA] Fetching details for table: {}", table);
 
         let conn = self
             .conn
@@ -760,7 +760,7 @@ impl Connection for SqliteConnection {
         let foreign_keys = self.get_foreign_keys(&conn, table)?;
         let constraints = self.get_constraints(&conn, table)?;
 
-        log::info!(
+        log::debug!(
             "[SCHEMA] Table {}: {} columns, {} indexes, {} FKs, {} constraints",
             table,
             columns.len(),
@@ -771,7 +771,7 @@ impl Connection for SqliteConnection {
 
         Ok(TableInfo {
             name: table.to_string(),
-            schema: None,
+            schema: _schema.map(String::from),
             columns: Some(columns),
             indexes: Some(IndexData::Relational(indexes)),
             foreign_keys: Some(foreign_keys),
@@ -1289,6 +1289,27 @@ impl Connection for SqliteConnection {
 
     fn translate_filter(&self, filter: &Value) -> Result<String, DbError> {
         Ok(translate_filter_to_sql(filter))
+    }
+
+    fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let tables = self.get_tables(&conn)?;
+        let views = self.get_views(&conn)?;
+        log::debug!(
+            "[SCHEMA] schema_for_database({}): {} tables, {} views",
+            database,
+            tables.len(),
+            views.len()
+        );
+        Ok(DbSchemaInfo {
+            name: database.to_string(),
+            tables,
+            views,
+            custom_types: None,
+        })
     }
 }
 

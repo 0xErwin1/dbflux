@@ -88,8 +88,6 @@ impl StatusBar {
                         })
                     })
                 })
-                .ok()
-                .flatten()
                 .unwrap_or(false);
 
             if !keep_running {
@@ -104,28 +102,25 @@ impl StatusBar {
                 .timer(Duration::from_millis(100))
                 .await;
 
-            let should_notify = cx
-                .update(|cx| {
-                    this.upgrade()
-                        .map(|entity| {
-                            entity
-                                .read(cx)
-                                .app_state
-                                .read(cx)
-                                .tasks()
-                                .has_running_tasks()
-                        })
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
+            let should_notify = cx.update(|cx| {
+                this.upgrade()
+                    .map(|entity| {
+                        entity
+                            .read(cx)
+                            .app_state
+                            .read(cx)
+                            .tasks()
+                            .has_running_tasks()
+                    })
+                    .unwrap_or(false)
+            });
 
             if should_notify {
                 cx.update(|cx| {
                     if let Some(entity) = this.upgrade() {
                         entity.update(cx, |_, cx| cx.notify());
                     }
-                })
-                .ok();
+                });
             }
         }
     }
