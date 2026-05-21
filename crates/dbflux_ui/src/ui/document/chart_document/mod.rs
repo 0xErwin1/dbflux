@@ -16,10 +16,12 @@ use crate::keymap::{Command, ContextId};
 use crate::ui::common::time_range::view::TimeRangePanel;
 use crate::ui::components::dropdown::{Dropdown, DropdownItem};
 use crate::ui::components::toast::PendingToast;
-use dbflux_components::chart::{ChartDetection, detect_chart_columns};
+use dbflux_components::chart::{
+    ChartDataSource, ChartDetection, ChartSourceError, TimeWindow, detect_chart_columns,
+    resolve_source,
+};
 use dbflux_components::controls::InputState;
-use dbflux_components::saved_chart::SavedChart;
-use dbflux_core::{ExecutionContext, ExecutionSourceContext};
+use dbflux_components::saved_chart::{SavedChart, SavedChartSource};
 use dbflux_core::{QueryResult, RefreshPolicy};
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Task, Window};
@@ -81,6 +83,7 @@ pub struct ChartDocument {
 
     // Query + chart
     query: String,
+    data_source: Box<dyn ChartDataSource>,
     last_result: Option<Arc<QueryResult>>,
 
     // Execution
@@ -159,6 +162,13 @@ impl ChartDocument {
 
         let pending_run = !query.trim().is_empty();
 
+        // Build the data source from the query string. Uses resolve_source so
+        // construction goes through the single factory (QuerySource is pub(crate)
+        // in dbflux_components and not directly accessible here).
+        let data_source = resolve_source(&SavedChartSource::Query {
+            query: query.clone(),
+        });
+
         Self {
             id: DocumentId::new(),
             title: "Untitled chart".to_string(),
@@ -166,6 +176,7 @@ impl ChartDocument {
             exec_state: ExecState::Idle,
             profile_id,
             query,
+            data_source,
             last_result: None,
             runner,
             app_state,
@@ -201,19 +212,28 @@ impl ChartDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Self, String> {
-        use dbflux_components::saved_chart::SavedChartSource;
+        // Collection sources are not routed through ChartDocument in W0.
+        // They still open via DataDocument. This guard must remain intact
+        // until a future workstream explicitly changes routing.
+        if let SavedChartSource::Collection { .. } = &saved.source {
+            return Err(
+                "Collection source not supported in ChartDocument; open via DataDocument"
+                    .to_string(),
+            );
+        }
 
         let query = match &saved.source {
             SavedChartSource::Query { query } => query.clone(),
-            SavedChartSource::Collection { .. } => {
-                return Err(
-                    "Collection source not supported in ChartDocument; open via DataDocument"
-                        .to_string(),
-                );
-            }
+            // Already rejected above — unreachable, but exhaustive match.
+            SavedChartSource::Collection { .. } => String::new(),
         };
 
         let mut doc = Self::new(Some(saved.profile_id), query, app_state, window, cx);
+
+        // Override data_source with the resolver so from_saved is already
+        // correct for future source kinds once routing is extended.
+        doc.data_source = resolve_source(&saved.source);
+
         doc.title = saved.name.clone();
         doc.saved_chart_id = Some(saved.id);
         Ok(doc)
@@ -224,7 +244,6 @@ impl ChartDocument {
     /// Returns `Ok(())` for `Query` sources and `Err` for `Collection` sources.
     /// Call this before allocating an entity to avoid panicking inside `cx.new`.
     pub fn validate_saved_source(saved: &SavedChart) -> Result<(), String> {
-        use dbflux_components::saved_chart::SavedChartSource;
         match &saved.source {
             SavedChartSource::Query { .. } => Ok(()),
             SavedChartSource::Collection { .. } => Err(
@@ -299,10 +318,26 @@ impl ChartDocument {
     /// thread, and delivers the result back to the entity via `pending_result`.
     /// The render loop picks up `pending_result` and applies it.
     pub fn request_reexecute(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let query = self.query.trim().to_string();
-        if query.is_empty() {
-            return;
-        }
+        // Build the execution request through the data source seam.
+        // EmptyQuery → silent early return (preserves the old inline empty-query guard).
+        // Other errors → show a toast and return.
+        let window = self
+            .pending_time_window
+            .map(|(s, e)| TimeWindow { start_ms: s, end_ms: e });
+
+        let request = match self.data_source.build_request(window) {
+            Ok(r) => r,
+            Err(ChartSourceError::EmptyQuery) => return,
+            Err(e) => {
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Chart source error: {e}"),
+                    is_error: true,
+                });
+                cx.notify();
+                return;
+            }
+        };
+
         let Some(profile_id) = self.profile_id else {
             self.pending_toast = Some(PendingToast {
                 message: "No connection selected".to_string(),
@@ -344,22 +379,6 @@ impl ChartDocument {
         self.state = DocumentState::Executing;
         cx.notify();
 
-        // Attach a CollectionWindow source context when the time-range panel
-        // has produced a resolved window. The driver uses it to inject time
-        // bounds into queries that have no hardcoded WHERE time predicate.
-        let exec_ctx = self
-            .pending_time_window
-            .map(|(start_ms, end_ms)| ExecutionContext {
-                source: Some(ExecutionSourceContext::CollectionWindow {
-                    targets: Vec::new(),
-                    start_ms,
-                    end_ms,
-                    query_mode: None,
-                }),
-                ..ExecutionContext::default()
-            });
-
-        let request = dbflux_core::QueryRequest::new(query).with_execution_context(exec_ctx);
         let conn_cleanup = conn.clone();
 
         let task = cx
@@ -652,6 +671,94 @@ mod tests {
         assert!(
             !result_both_none.pending_chart_reexecute,
             "must not reexecute when both are None"
+        );
+    }
+
+    // ---- Task 2.6: data_source routing tests ----
+
+    /// T-DS-01 / R-03: `resolve_source` with a Query source and a time window
+    /// produces a request carrying the window. This mirrors the exact path
+    /// `request_reexecute` takes: `self.data_source.build_request(window)`.
+    ///
+    /// Tested without a GPUI runtime by calling the seam directly.
+    #[test]
+    fn data_source_build_request_with_window_produces_collection_window_context() {
+        use dbflux_components::chart::{ChartSourceError, TimeWindow, resolve_source};
+        use dbflux_components::saved_chart::SavedChartSource;
+        use dbflux_core::ExecutionSourceContext;
+
+        let source = resolve_source(&SavedChartSource::Query {
+            query: "SELECT * FROM metrics".to_string(),
+        });
+
+        let window = TimeWindow {
+            start_ms: 1_000,
+            end_ms: 2_000,
+        };
+
+        let request = source
+            .build_request(Some(window))
+            .expect("non-empty query with window must produce Ok request");
+
+        let ctx = request
+            .execution_context
+            .as_ref()
+            .expect("request must carry an execution context");
+
+        match ctx.source.as_ref().expect("source must be Some") {
+            ExecutionSourceContext::CollectionWindow {
+                start_ms, end_ms, ..
+            } => {
+                assert_eq!(*start_ms, 1_000);
+                assert_eq!(*end_ms, 2_000);
+            }
+        }
+    }
+
+    /// T-DS-02 / R-03, R-07: empty query via data source returns `EmptyQuery`.
+    /// This corresponds to the early-return branch in `request_reexecute`.
+    #[test]
+    fn data_source_build_request_empty_query_returns_empty_query_error() {
+        use dbflux_components::chart::{ChartSourceError, resolve_source};
+        use dbflux_components::saved_chart::SavedChartSource;
+
+        let source = resolve_source(&SavedChartSource::Query {
+            query: String::new(),
+        });
+
+        let result = source.build_request(None);
+
+        assert!(
+            matches!(result, Err(ChartSourceError::EmptyQuery)),
+            "empty query data source must return ChartSourceError::EmptyQuery"
+        );
+    }
+
+    /// T-DS-03 / R-03: data source without a window produces no source context.
+    /// Verifies the no-window branch preserves the pre-seam behavior (no
+    /// `CollectionWindow` injected when `pending_time_window` is `None`).
+    #[test]
+    fn data_source_build_request_without_window_produces_no_source_context() {
+        use dbflux_components::chart::resolve_source;
+        use dbflux_components::saved_chart::SavedChartSource;
+
+        let source = resolve_source(&SavedChartSource::Query {
+            query: "SELECT 1".to_string(),
+        });
+
+        let request = source
+            .build_request(None)
+            .expect("non-empty query without window must produce Ok request");
+
+        let has_source = request
+            .execution_context
+            .as_ref()
+            .and_then(|c| c.source.as_ref())
+            .is_some();
+
+        assert!(
+            !has_source,
+            "no time window must produce no source context in the request"
         );
     }
 
