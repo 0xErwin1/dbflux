@@ -15,6 +15,7 @@ use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
+use crate::ui::common::time_range::state::TimeRange;
 use crate::ui::common::time_range::view::TimeRangePanel;
 use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::PendingToast;
@@ -93,6 +94,10 @@ pub struct ChartDocument {
     // Toolbar controls
     time_range_panel: Option<Entity<TimeRangePanel>>,
     _time_range_sub: Option<Subscription>,
+    /// Mirrors `TimeRangePanel::selected_time_range` so the render path can
+    /// decide whether to show the custom date/time picker row without calling
+    /// `panel.read(cx)` on every frame.
+    selected_time_range: Option<TimeRange>,
     refresh_dropdown: Entity<Dropdown>,
     refresh_policy: RefreshPolicy,
     _refresh_subscriptions: Vec<Subscription>,
@@ -196,6 +201,7 @@ impl ChartDocument {
             chart_shell,
             time_range_panel: None,
             _time_range_sub: None,
+            selected_time_range: None,
             refresh_dropdown,
             refresh_policy: default_refresh,
             _refresh_subscriptions: vec![refresh_policy_sub],
@@ -315,6 +321,7 @@ impl ChartDocument {
             chart_shell,
             time_range_panel: None,
             _time_range_sub: None,
+            selected_time_range: None,
             refresh_dropdown,
             refresh_policy: default_refresh,
             _refresh_subscriptions: vec![refresh_policy_sub],
@@ -547,16 +554,50 @@ impl ChartDocument {
     ///
     /// Stashes the resolved window and schedules a re-execution on the next
     /// render cycle, mirroring how `CodeDocument` reacts to range changes.
+    /// Also mirrors `selected_time_range` from the panel so the render path
+    /// knows whether to keep the custom picker row visible after Apply.
     pub fn on_time_range_changed(
         &mut self,
         start_ms: Option<i64>,
         end_ms: Option<i64>,
         cx: &mut Context<Self>,
     ) {
+        // Mirror the panel's selected range so the custom picker row stays
+        // visible after the user applies a custom window.
+        if let Some(panel) = &self.time_range_panel {
+            self.selected_time_range = panel.read(cx).selected_time_range;
+        }
+
         if let (Some(start), Some(end)) = (start_ms, end_ms) {
             self.pending_time_window = Some((start, end));
             self.pending_chart_reexecute = true;
             cx.notify();
+        }
+    }
+
+    /// Apply the custom date/time picker values and trigger a chart re-execution.
+    ///
+    /// Called by the Apply button in the custom picker row. Delegates to the
+    /// panel's `apply_custom_range`, which validates the inputs, emits
+    /// `TimeRangeChanged` (handled by `on_time_range_changed`), and notifies.
+    /// On validation failure a toast is shown.
+    pub(super) fn apply_custom_range(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.time_range_panel.clone() else {
+            return;
+        };
+
+        match panel.update(cx, |p, cx| p.apply_custom_range(cx)) {
+            Ok(_) => {
+                // `TimeRangeChanged` is emitted by the panel; `on_time_range_changed`
+                // handles the window stash and re-execution scheduling.
+            }
+            Err(error) => {
+                self.pending_toast = Some(PendingToast {
+                    message: error,
+                    is_error: true,
+                });
+                cx.notify();
+            }
         }
     }
 
