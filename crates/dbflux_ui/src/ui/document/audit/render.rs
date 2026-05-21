@@ -472,12 +472,12 @@ impl AuditDocument {
                     .h(Heights::BUTTON)
                     .flex()
                     .items_center()
+                    .gap_1()
                     .px(Spacing::SM)
                     .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(theme.input)
                     .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
+                    .bg(theme.secondary)
+                    .hover(|d| d.bg(theme.secondary_hover))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if is_chart {
                             this.view_mode = AuditViewMode::Table;
@@ -489,6 +489,11 @@ impl AuditDocument {
                         }
                         cx.notify();
                     }))
+                    .child(
+                        Icon::new(AppIcon::ChartSpline)
+                            .size(px(12.0))
+                            .color(theme.foreground),
+                    )
                     .child(Text::caption(toggle_label));
 
                 items.push(view_toggle.into_any_element());
