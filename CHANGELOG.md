@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-dev.7] - 2026-05-21
+
 ### Fixed
 
 * **Focus shortcuts on macOS/Windows** — `Ctrl+Shift+1..4` (Focus
