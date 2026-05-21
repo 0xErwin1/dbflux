@@ -32,7 +32,9 @@ cargo test --workspace test_name     # Single test
 cargo test -p dbflux_core            # Tests in specific crate
 cargo test -p dbflux_driver_dynamodb --test live_integration -- --ignored  # Docker-backed live tests
 
-# Faster test runner (provided by the Nix dev shell). Does NOT run doctests.
+# Preferred test runner: always use `cargo nextest run` over `cargo test` when
+# available (provided by the Nix dev shell). It is faster and gives clearer
+# output. Note it does NOT run doctests, so run those separately.
 cargo nextest run --workspace        # All tests (unit + integration)
 cargo test --doc --workspace         # Doctests (run separately)
 cargo nextest run -p dbflux_driver_sqlite --run-ignored all  # Include #[ignore]d live tests
