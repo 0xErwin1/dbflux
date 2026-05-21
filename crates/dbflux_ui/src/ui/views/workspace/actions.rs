@@ -250,29 +250,26 @@ impl Workspace {
     /// Opens the global audit viewer as a document tab.
     pub(super) fn open_audit_viewer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::document::AuditDocument;
-
-        // Check if an audit document is already open
-        let existing_audit =
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find_map(|doc| match doc {
-                    crate::ui::document::DocumentHandle::Audit { id, entity } => {
-                        Some((*id, entity.clone()))
-                    }
-                    _ => None,
-                });
+        use crate::ui::document::DocumentKey;
 
         self.active_governance_panel = None;
 
-        if let Some((id, entity)) = existing_audit {
-            entity.update(cx, |doc, cx| {
-                doc.set_category_filter(None, cx);
-            });
+        // Check if an audit document is already open.
+        let existing_id = self
+            .tab_manager
+            .read(cx)
+            .find_by_key(&DocumentKey::Audit, cx);
 
-            // Focus the existing audit tab
+        if let Some(id) = existing_id {
+            // Reset the category filter and focus the existing audit tab.
+            // Both operations are done in a single update to avoid multiple borrows.
             self.tab_manager.update(cx, |mgr, cx| {
+                if let Some(tab) = mgr.documents().iter().find(|t| t.id() == id) {
+                    let pane = tab.as_pane();
+                    if let Some(f) = &pane.set_category_filter {
+                        f(None, cx);
+                    }
+                }
                 mgr.activate(id, cx);
             });
 
@@ -283,12 +280,12 @@ impl Workspace {
             return;
         }
 
-        // Create a new audit document
+        // Create a new audit document.
         let doc = cx.new(|cx| AuditDocument::new(self.app_state.clone(), window, cx));
-        let handle = crate::ui::document::DocumentHandle::audit(doc, cx);
+        let pane = AuditDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
@@ -353,10 +350,10 @@ impl Workspace {
                 cx,
             )
         });
-        let handle = crate::ui::document::DocumentHandle::chart(doc, cx);
+        let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
@@ -476,15 +473,14 @@ impl Workspace {
             .contains_key(&profile_id);
 
         let existing_id = if has_connection {
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find(|doc| {
-                    doc.is_table_with_database(&table, database.as_deref(), cx)
-                        && doc.connection_id(cx) == Some(profile_id)
-                })
-                .map(|doc| doc.id())
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::Table {
+                    profile_id,
+                    database: database.clone(),
+                    table: table.clone(),
+                },
+                cx,
+            )
         } else {
             None
         };
@@ -522,10 +518,10 @@ impl Workspace {
                 cx,
             )
         });
-        let handle = DocumentHandle::data(doc, cx);
+        let pane = DataDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         log::info!("Opened table document: {:?}.{:?}", table.schema, table.name);
@@ -555,27 +551,25 @@ impl Workspace {
             .unwrap_or(CollectionDocumentPresentation::DataGrid);
 
         let existing_id = if has_connection {
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find(|doc| match presentation {
-                    CollectionDocumentPresentation::DataGrid => {
-                        doc.is_collection(&collection, cx)
-                            && doc.connection_id(cx) == Some(profile_id)
-                    }
-                    CollectionDocumentPresentation::AuditLike => {
-                        matches!(doc, DocumentHandle::Audit { entity, .. }
-                        if entity.read(cx).matches_event_stream(
-                            profile_id,
-                            &dbflux_core::EventStreamTarget {
-                                collection: collection.clone(),
-                                child_id: None,
-                            },
-                        ))
-                    }
-                })
-                .map(|doc| doc.id())
+            match presentation {
+                CollectionDocumentPresentation::DataGrid => self.tab_manager.read(cx).find_by_key(
+                    &crate::ui::document::DocumentKey::Collection {
+                        profile_id,
+                        collection: collection.clone(),
+                    },
+                    cx,
+                ),
+                CollectionDocumentPresentation::AuditLike => {
+                    use crate::ui::document::DocumentKey;
+                    let target = dbflux_core::EventStreamTarget {
+                        collection: collection.clone(),
+                        child_id: None,
+                    };
+                    self.tab_manager
+                        .read(cx)
+                        .find_by_key(&DocumentKey::EventStream { profile_id, target }, cx)
+                }
+            }
         } else {
             None
         };
@@ -602,7 +596,7 @@ impl Workspace {
             OpenDocumentDecision::OpenNew => {}
         }
 
-        let handle = match presentation {
+        match presentation {
             CollectionDocumentPresentation::DataGrid => {
                 let doc = cx.new(|cx| {
                     DataDocument::new_for_collection(
@@ -613,7 +607,10 @@ impl Workspace {
                         cx,
                     )
                 });
-                DocumentHandle::data(doc, cx)
+                let pane = DataDocument::into_pane(doc, cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
+                });
             }
             CollectionDocumentPresentation::AuditLike => {
                 let doc = cx.new(|cx| {
@@ -629,13 +626,12 @@ impl Workspace {
                         cx,
                     )
                 });
-                DocumentHandle::audit(doc, cx)
+                let pane = crate::ui::document::AuditDocument::into_pane(doc, cx);
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
+                });
             }
-        };
-
-        self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
-        });
+        }
 
         log::info!(
             "Opened collection document: {}.{}",
@@ -659,15 +655,14 @@ impl Workspace {
             .contains_key(&profile_id);
 
         let existing_id = if has_connection {
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find(|doc| {
-                    matches!(doc, DocumentHandle::Audit { entity, .. }
-                        if entity.read(cx).matches_event_stream(profile_id, &target))
-                })
-                .map(|doc| doc.id())
+            use crate::ui::document::DocumentKey;
+            self.tab_manager.read(cx).find_by_key(
+                &DocumentKey::EventStream {
+                    profile_id,
+                    target: target.clone(),
+                },
+                cx,
+            )
         } else {
             None
         };
@@ -700,8 +695,9 @@ impl Workspace {
             )
         });
 
+        let pane = crate::ui::document::AuditDocument::into_pane(doc, cx);
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(DocumentHandle::audit(doc, cx), cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
     }
 
@@ -719,12 +715,13 @@ impl Workspace {
             .contains_key(&profile_id);
 
         let existing_id = if has_connection {
-            self.tab_manager
-                .read(cx)
-                .documents()
-                .iter()
-                .find(|doc| doc.is_key_value_database(profile_id, &database, cx))
-                .map(|doc| doc.id())
+            self.tab_manager.read(cx).find_by_key(
+                &crate::ui::document::DocumentKey::KeyValueDb {
+                    profile_id,
+                    database: database.clone(),
+                },
+                cx,
+            )
         } else {
             None
         };
@@ -757,10 +754,10 @@ impl Workspace {
                 cx,
             )
         });
-        let handle = DocumentHandle::key_value(doc, cx);
+        let pane = crate::ui::document::KeyValueDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -771,7 +768,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
         selector: impl FnOnce(
-            &[crate::ui::document::DocumentHandle],
+            &[crate::ui::document::Tab],
             crate::ui::document::DocumentId,
         ) -> Vec<crate::ui::document::DocumentId>,
         reference_id: crate::ui::document::DocumentId,
@@ -846,15 +843,7 @@ impl Workspace {
             .tab_manager
             .read(cx)
             .document(doc_id)
-            .and_then(|handle| {
-                if let crate::ui::document::DocumentHandle::Code { entity, .. } = handle {
-                    let doc = entity.read(cx);
-                    if doc.is_file_backed() && doc.is_content_empty(cx) {
-                        return doc.path().cloned();
-                    }
-                }
-                None
-            });
+            .and_then(|tab| tab.is_file_backed_empty(cx));
 
         if let Some(path) = empty_script_path {
             self.app_state.update(cx, |state, cx| {
@@ -889,12 +878,10 @@ impl Workspace {
 
             // Check if this file is already open
             let already_open = match cx.update(|cx| {
-                tab_manager
-                    .read(cx)
-                    .documents()
-                    .iter()
-                    .find(|doc| doc.is_file(&path, cx))
-                    .map(|doc| doc.id())
+                tab_manager.read(cx).find_by_key(
+                    &crate::ui::document::DocumentKey::File { path: path.clone() },
+                    cx,
+                )
             }) {
                 Ok(value) => value,
                 Err(error) => {
@@ -957,12 +944,10 @@ impl Workspace {
         let tab_manager = self.tab_manager.clone();
 
         // Check if already open
-        let already_open = tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .find(|doc| doc.is_file(&path, cx))
-            .map(|doc| doc.id());
+        let already_open = tab_manager.read(cx).find_by_key(
+            &crate::ui::document::DocumentKey::File { path: path.clone() },
+            cx,
+        );
 
         if let Some(id) = already_open {
             tab_manager.update(cx, |mgr, cx| {
@@ -1004,6 +989,123 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    /// Opens a read-only code document showing a routine's definition.
+    ///
+    /// Fetches the definition in the background (via `routine_definition`) and
+    /// defers creation to the next render cycle where `Window` is available.
+    /// Focuses the existing tab when already open.
+    pub fn open_routine_definition(
+        &mut self,
+        profile_id: uuid::Uuid,
+        schema: String,
+        specific_name: String,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::DocumentKey;
+
+        let dedup_key = DocumentKey::Routine {
+            profile_id,
+            schema: schema.clone(),
+            specific_name: specific_name.clone(),
+        };
+
+        if let Some(existing_id) = self.tab_manager.read(cx).find_by_key(&dedup_key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(existing_id, cx);
+            });
+            return;
+        }
+
+        let connections = self.app_state.read(cx).connections();
+        let connected = match connections.get(&profile_id) {
+            Some(c) => c,
+            None => return,
+        };
+
+        let database = connected
+            .active_database
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let connection = connected.connection.clone();
+
+        let schema_fetch = schema.clone();
+        let specific_name_fetch = specific_name.clone();
+
+        cx.spawn(async move |this, cx| {
+            let definition = cx
+                .background_executor()
+                .spawn(async move {
+                    connection.routine_definition(&database, &schema_fetch, &specific_name_fetch)
+                })
+                .await;
+
+            let body = match definition {
+                Ok(def) => def,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to fetch routine definition for {}: {}",
+                        specific_name,
+                        e
+                    );
+                    format!("-- Failed to load routine definition:\n-- {}", e)
+                }
+            };
+
+            cx.update(|cx| {
+                this.update(cx, |ws, cx| {
+                    ws.pending_open_routine = Some(PendingOpenRoutine {
+                        profile_id,
+                        schema,
+                        specific_name,
+                        title,
+                        body,
+                    });
+                    cx.notify();
+                })
+                .ok();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn finalize_open_routine(
+        &mut self,
+        pending: PendingOpenRoutine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let doc = cx.new(|cx| {
+            let connection_id = Some(pending.profile_id);
+            let mut doc = CodeDocument::new_with_language(
+                self.app_state.clone(),
+                connection_id,
+                dbflux_core::QueryLanguage::Sql,
+                window,
+                cx,
+            )
+            .with_title(pending.title)
+            .with_read_only(cx)
+            .with_routine_dedup(
+                pending.profile_id,
+                pending.schema,
+                pending.specific_name,
+            );
+
+            doc.set_content(&pending.body, window, cx);
+            doc
+        });
+
+        let pane = CodeDocument::into_pane(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+
+        self.set_focus(FocusTarget::Document, window, cx);
     }
 
     /// Opens a script file from a known path and content (called after file read).
@@ -1116,10 +1218,10 @@ impl Workspace {
             doc
         });
 
-        let handle = DocumentHandle::code(doc, cx);
+        let pane = CodeDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1164,10 +1266,10 @@ impl Workspace {
             doc.read(cx).initial_auto_save(cx);
         }
 
-        let handle = DocumentHandle::code(doc, cx);
+        let pane = CodeDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1225,10 +1327,10 @@ impl Workspace {
             }
         }
 
-        let handle = DocumentHandle::code(doc, cx);
+        let pane = CodeDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1244,35 +1346,21 @@ impl Workspace {
         let manager = self.tab_manager.read(cx);
         let mut tabs = Vec::new();
 
-        for doc_handle in manager.documents() {
-            let DocumentHandle::Code { entity, .. } = doc_handle else {
+        for doc_tab in manager.documents() {
+            let Some(snap) = doc_tab.session_tab_snapshot(cx) else {
                 continue;
             };
-
-            let doc = entity.read(cx);
-
-            let kind_str = if let Some(_path) = doc.path() {
-                "FileBacked".to_string()
-            } else if doc.scratch_path().is_some() {
-                "Scratch".to_string()
-            } else {
-                continue;
-            };
-
-            let scratch_path_str: Option<std::path::PathBuf> = doc.scratch_path().cloned();
-            let shadow_path_str: Option<std::path::PathBuf> = doc.shadow_path().cloned();
-            let file_path_str: Option<std::path::PathBuf> = doc.path().cloned();
 
             tabs.push(
                 dbflux_storage::repositories::state::sessions::WorkspaceTab {
-                    id: doc.id().0.to_string(),
-                    tab_kind: kind_str,
-                    language: SessionTab::language_key(doc.query_language()),
-                    exec_ctx: doc.exec_ctx().clone(),
-                    scratch_path: scratch_path_str,
-                    shadow_path: shadow_path_str,
-                    file_path: file_path_str,
-                    title: doc.title(),
+                    id: snap.id.0.to_string(),
+                    tab_kind: snap.kind.to_string(),
+                    language: SessionTab::language_key(snap.language),
+                    exec_ctx: snap.exec_ctx,
+                    scratch_path: snap.scratch_path,
+                    shadow_path: snap.shadow_path,
+                    file_path: snap.file_path,
+                    title: snap.title,
                     position: tabs.len(),
                     is_pinned: false,
                 },
@@ -1343,6 +1431,73 @@ impl Workspace {
                 }
                 _ => manifest_language,
             };
+
+            // Routine tabs are persisted with their descriptor encoded in exec_ctx:
+            // connection_id=profile_id, schema=schema, container=specific_name.
+            // Reconstruct as a read-only document; the definition is re-fetched when the
+            // connection becomes available (handled by AppStateChanged in CodeDocument).
+            if tab.tab_kind == "Routine" {
+                let exec_ctx_json = tab.exec_ctx_json.as_str();
+                let exec_ctx: dbflux_core::ExecutionContext = serde_json::from_str(exec_ctx_json)
+                    .unwrap_or_else(|_| dbflux_core::ExecutionContext::default());
+
+                let Some(profile_id) = exec_ctx.connection_id else {
+                    log::warn!(
+                        "Routine tab '{}' has no profile_id in exec_ctx — skipping",
+                        tab.title
+                    );
+                    continue;
+                };
+
+                let Some(schema) = exec_ctx.schema.clone() else {
+                    log::warn!(
+                        "Routine tab '{}' has no schema in exec_ctx — skipping",
+                        tab.title
+                    );
+                    continue;
+                };
+
+                let Some(specific_name) = exec_ctx.container.clone() else {
+                    log::warn!(
+                        "Routine tab '{}' has no specific_name (container) in exec_ctx — skipping",
+                        tab.title
+                    );
+                    continue;
+                };
+
+                let title = tab.title.clone();
+
+                let doc = cx.new(|cx| {
+                    // Pass Some(profile_id) as connection_id so the exec context
+                    // is pre-seeded; the connection might not be active yet.
+                    CodeDocument::new_with_language(
+                        self.app_state.clone(),
+                        Some(profile_id),
+                        language,
+                        window,
+                        cx,
+                    )
+                    .with_title(title)
+                    .with_read_only(cx)
+                    .with_routine_dedup(profile_id, schema, specific_name)
+                    .with_routine_definition_pending()
+                });
+
+                // If the connection is already active at restore time, trigger
+                // the definition fetch immediately via the same path used by
+                // the AppStateChanged handler.
+                doc.update(cx, |d, cx| {
+                    d.try_fetch_pending_routine_definition(cx);
+                });
+
+                let pane = CodeDocument::into_pane(doc, cx);
+
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
+                });
+
+                continue;
+            }
 
             let (content, path, scratch_path, shadow_path) = match tab.tab_kind.as_str() {
                 "Scratch" => {
@@ -1445,10 +1600,10 @@ impl Workspace {
                 doc
             });
 
-            let handle = DocumentHandle::code(doc, cx);
+            let pane = CodeDocument::into_pane(doc, cx);
 
             self.tab_manager.update(cx, |mgr, cx| {
-                mgr.open(handle, cx);
+                mgr.open(Tab::Pane(Box::new(pane)), cx);
             });
         }
 
@@ -1488,10 +1643,10 @@ impl Workspace {
                 cx,
             )
         });
-        let handle = DocumentHandle::chart(doc, cx);
+        let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);
 
         self.tab_manager.update(cx, |mgr, cx| {
-            mgr.open(handle, cx);
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
         });
 
         self.set_focus(FocusTarget::Document, window, cx);
@@ -1549,13 +1704,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // Focus existing tab if the chart is already open.
-        let existing_id = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .find(|doc| doc.is_chart(chart_id, cx))
-            .map(|doc| doc.id());
+        let existing_id = self.tab_manager.read(cx).find_by_key(
+            &crate::ui::document::DocumentKey::Chart {
+                saved_chart_id: chart_id,
+            },
+            cx,
+        );
 
         if let Some(id) = existing_id {
             self.tab_manager.update(cx, |mgr, cx| {
@@ -1610,9 +1764,9 @@ impl Workspace {
                         .expect("Query source validated before entity creation")
                 });
 
-                let handle = DocumentHandle::chart(doc, cx);
+                let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);
                 self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.open(handle, cx);
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
                 });
                 self.set_focus(FocusTarget::Document, window, cx);
             }

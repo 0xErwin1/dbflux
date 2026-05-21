@@ -1,18 +1,30 @@
 # dbflux_driver_cloudwatch
 
+AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](https://crates.io/crates/aws-sdk-cloudwatchlogs) SDK.
+
 ## Features
 
-- Built-in CloudWatch Logs driver registration for DBFlux connection profiles.
-- AWS region/profile/endpoint form handling aligned with the existing DynamoDB AWS connection flow.
-- CloudWatch query execution through `StartQuery` with editor-managed time range and log-group source context.
-- CloudWatch query documents can run Logs Insights QL, OpenSearch PPL, and OpenSearch SQL.
-- Schema discovery enumerates log groups and exposes log streams as event-stream children.
+- Log-streaming driver classified as `DatabaseCategory::LogStream`; `deployment_class` is `CloudManaged`. The declared capabilities are `AUTHENTICATION` and `METRIC_SERIES`.
+- AWS connection configuration via region, named profile, and optional endpoint override, aligned with the DynamoDB AWS connection flow.
+- Query execution through `StartQuery` + polling `GetQueryResults` (poll interval 500 ms, up to 120 attempts), with an editor-managed source context that supplies the target log groups and time range.
+- Three query syntaxes selectable from the source-context "Syntax" dropdown:
+  - CloudWatch Logs Insights QL (`cwli`, the default) — `QueryLanguage::CloudWatchLogsInsightsQl`.
+  - OpenSearch PPL (`ppl`) — `QueryLanguage::OpenSearchPpl`.
+  - OpenSearch SQL (`sql`) — `QueryLanguage::OpenSearchSql`.
+  These map to the SDK's `Cwli`, `Ppl`, and `Sql` query-language values.
+- Source-context spec (`SourceContextSpec`) exposes a "Log groups" target selector and Start/End time-range controls; CWLI and PPL queries pass the selected log groups to `StartQuery` via `set_log_group_names`.
+- Schema discovery enumerates log groups (`fetch_log_groups`) as the single logical database (`SchemaLoadingStrategy::SingleDatabase`, default database `logs`).
+- Log streams are surfaced as paginated collection children (`collection_children` over `fetch_log_stream_page`) and open as event streams (`CollectionPresentation::EventStream`).
+- Event-stream browsing (`browse_event_stream` / `EventStreamTarget`) backed by `FilterLogEvents`, with a default 24-hour browse window and support for filter pattern, stream-name prefix, explicit stream names, and a most-recent toggle.
+- Insights column names are classified into semantic `ColumnKind`s (e.g. `@timestamp`, `@ingestionTime` recognized as timestamps) for chart auto-detection.
 - CloudWatch Metrics via `GetMetricData`: executes a single `MetricDataQuery` per request, maps the response to a two-column (timestamp, value) `QueryResult` ordered ascending by timestamp. Timestamps from AWS (second-precision) are converted to milliseconds. Multi-metric pivot to wide format is supported when multiple `MetricDataResult` entries are returned.
 
 ## Limitations
 
-- Query cancellation is not implemented yet.
-- OpenSearch SQL queries must declare their queried log groups in the SQL text because the CloudWatch API does not accept external log-group parameters for SQL mode.
-- Editor syntax highlighting remains generic; mode selection currently focuses on execution semantics and completion keywords.
+- Query cancellation is not implemented; `cancel()` returns `NotSupported`.
+- OpenSearch SQL mode does not receive external log groups: SQL queries must declare their queried log groups in the SQL text, because the CloudWatch API does not accept external log-group parameters for SQL mode (only CWLI and PPL get `set_log_group_names`).
+- Editor syntax highlighting remains generic (`query_language` is reported as `Sql` at the metadata level); mode selection drives execution semantics and completion keywords rather than per-mode highlighting.
+- Read-only: no mutation, DDL, transaction, or pagination capabilities are declared (`query`, `mutation`, `ddl`, `transactions`, `limits` are all `None`); `schema_features` is empty.
+- No SSL form (TLS handled by the AWS SDK transport).
 - Metrics execution supports a single `MetricDataQuery` per request in this release (W2); a `ListMetrics`-backed picker for namespace/metric/dimension selection is deferred to a follow-up.
 - Live integration tests for metrics (`live_execute_cloudwatch_metric`) require real AWS credentials and are `#[ignore]`d by default. LocalStack Community does not support the CloudWatch Metrics API.

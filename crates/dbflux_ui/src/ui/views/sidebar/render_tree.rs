@@ -151,6 +151,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::ConstraintsFolder
                 | SchemaNodeKind::SchemaIndexesFolder
                 | SchemaNodeKind::SchemaForeignKeysFolder
+                | SchemaNodeKind::RoutinesFolder
                 | SchemaNodeKind::CustomType
                 | SchemaNodeKind::ScriptsFolder
                 | SchemaNodeKind::Collection
@@ -962,6 +963,11 @@ fn resolve_node_icon(
         SchemaNodeKind::ForeignKeysFolder | SchemaNodeKind::SchemaForeignKeysFolder => {
             (Some(AppIcon::KeyRound), "", params.color_orange)
         }
+        SchemaNodeKind::RoutinesFolder => (Some(AppIcon::Parentheses), "", params.color_blue),
+        SchemaNodeKind::Routine => {
+            let icon = resolve_routine_kind_icon(label);
+            (Some(icon), "", params.color_blue)
+        }
         SchemaNodeKind::ConstraintsFolder => (Some(AppIcon::Lock), "", params.color_yellow),
         SchemaNodeKind::Column => {
             let icon = resolve_column_type_icon(label);
@@ -1030,6 +1036,23 @@ fn resolve_column_type_icon(label: &str) -> AppIcon {
     }
 }
 
+/// Label format: `"routine_name (fn|proc|agg|win)"` — extracts the kind token.
+fn resolve_routine_kind_icon(label: &str) -> AppIcon {
+    let kind = label
+        .rsplit_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .unwrap_or("")
+        .trim();
+
+    match kind {
+        "fn" => AppIcon::Parentheses,
+        "proc" => AppIcon::SquareTerminal,
+        "agg" => AppIcon::Sigma,
+        "win" => AppIcon::Box,
+        _ => AppIcon::Code,
+    }
+}
+
 /// Label format: `"field_name: BsonType (85%)"` — extracts the BSON type.
 fn resolve_collection_field_type_icon(label: &str) -> AppIcon {
     let type_name = label
@@ -1073,7 +1096,9 @@ fn resolve_label_color(
         | SchemaNodeKind::ForeignKeysFolder
         | SchemaNodeKind::ConstraintsFolder
         | SchemaNodeKind::SchemaIndexesFolder
-        | SchemaNodeKind::SchemaForeignKeysFolder => params.color_gray,
+        | SchemaNodeKind::SchemaForeignKeysFolder
+        | SchemaNodeKind::RoutinesFolder => params.color_gray,
+        SchemaNodeKind::Routine => params.color_blue,
         SchemaNodeKind::Table => params.color_teal,
         SchemaNodeKind::View => params.color_yellow,
         SchemaNodeKind::CustomType => params.color_purple,
