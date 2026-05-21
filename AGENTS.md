@@ -14,16 +14,16 @@ For the branching model, version rules, tag flow, and release procedure, use `do
 
 ```bash
 cargo check --workspace              # Fast type checking
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,aws  # Debug build
-cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,aws --release  # Release build
-cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,aws    # Run app
+cargo build -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws  # Debug build
+cargo build -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws --release  # Release build
+cargo run -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws    # Run app
 
 # MCP server (AI integration) - included by default
 cargo build -p dbflux  # MCP included in default features
 ./target/debug/dbflux mcp --client-id test-client
 
 # Build without MCP support (smaller binary, no AI integration)
-cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mongodb,redis,dynamodb,influxdb,lua,aws
+cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,lua,aws
 
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint
@@ -370,14 +370,23 @@ Drivers declare their capabilities via `DriverMetadata`:
 
 ### Document System Pattern
 
-Documents follow a consistent pattern for tab-based UI:
+Documents are open-tab entities managed through a closure-erasing shell. The polymorphism mechanism is `PaneHandle`, not a closed enum. See `ARCHITECTURE.md` § Document System for the full picture.
 
-1. **Handle**: `DocumentHandle` wraps the entity and provides metadata
-2. **State**: Document struct implements `Render` with internal focus management
-3. **Tabs**: CodeDocument supports multiple result tabs with `TabManager`
-4. **Scripts**: Lua/Python/Bash use the same document shell but execute as scripts, not DB queries; script output streams into `code/live_output.rs`
-5. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus
-6. **Dedup**: Check for existing documents before creating new ones (e.g., `is_table()` for data documents)
+1. **Shell**: `PaneHandle` (`document/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
+2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`document/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
+3. **Event**: documents emit `DocumentEvent` directly (`document/handle.rs`, 29 LOC). No per-document event enums.
+4. **Dedup**: `DocumentKey` enum (`document/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
+5. **Chrome**: `ResultPanel` + `ViewHandle` (`dbflux_components::result_panel`) is the universal chrome host for data-result views. View entities expose `into_view_handle(entity, cx) -> ViewHandle` whose `toolbar_segments` closure returns `ToolbarSegment`s positioned `Left | Center | Right` with `index`. Filter bars, axis bars, range chips all become segments — the chrome row uses `flex_wrap` so segments wrap when narrow.
+6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `code/live_output.rs`.
+7. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus via their own `FocusHandle`.
+
+**Adding a new document type** (zero changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, `handle.rs`):
+1. Create `document/<name>/mod.rs` with the entity
+2. Create `<name>/pane.rs` with `into_pane(entity, cx) -> PaneHandle`
+3. Add a `DocumentKey` variant if dedup is needed
+4. Add `open_<name>` in `workspace/actions.rs`
+
+**Known constraint**: `KeyValueView` and `LogStreamView` are boundary structs in their `view.rs` files, NOT separate GPUI entities. `impl Render` remains on the host document because GPUI's single-`Context<T>` borrow model with `cx.listener()` closures over `Self` makes entity-level extraction infeasible without relocating all domain state. The boundary is file-level (render helpers + render code in sibling files), not entity-level.
 
 ### MCP Governance System
 
@@ -486,6 +495,7 @@ MCP provides a preview-before-execute workflow for schema changes:
 - PostgreSQL: All DDL is transactional (except `CREATE INDEX CONCURRENTLY`)
 - MySQL: DDL is NOT transactional; rewrites entire table for most `ALTER TABLE` ops
 - SQLite: Limited `ALTER TABLE` support (only `ADD COLUMN`, `RENAME`); `DROP COLUMN` requires table recreation
+- SQL Server (MSSQL): DDL is transactional (can run inside a transaction and roll back)
 
 **Reference**: See `crates/dbflux_mcp_server/docs/DDL_SAFETY.md` for complete safety guide with classification matrix.
 

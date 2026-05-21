@@ -1,7 +1,7 @@
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
     Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbKind, DbSchemaInfo,
-    HookContext, ProxyProfile, RelationRef, SchemaForeignKeyInfo, SchemaIndexInfo,
+    HookContext, ProxyProfile, RelationRef, RoutineInfo, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaLoadingStrategy, SchemaSnapshot, SecretStore, ShutdownCoordinator, ShutdownPhase,
     SshTunnelProfile, TableInfo, TaskTarget,
 };
@@ -40,6 +40,10 @@ pub enum CacheKey {
         schema: Option<String>,
     },
     SchemaForeignKeys {
+        database: String,
+        schema: Option<String>,
+    },
+    SchemaRoutines {
         database: String,
         schema: Option<String>,
     },
@@ -89,6 +93,13 @@ impl CacheKey {
             schema: schema.map(|s| s.into()),
         }
     }
+
+    pub fn schema_routines(database: impl Into<String>, schema: Option<impl Into<String>>) -> Self {
+        Self::SchemaRoutines {
+            database: database.into(),
+            schema: schema.map(|s| s.into()),
+        }
+    }
 }
 
 /// Borrowed reference to a cached value, returned by `ConnectedProfile::cache_get`.
@@ -100,6 +111,7 @@ pub enum CacheEntry<'a> {
     SchemaTypes(&'a Vec<CustomTypeInfo>),
     SchemaIndexes(&'a Vec<SchemaIndexInfo>),
     SchemaForeignKeys(&'a Vec<SchemaForeignKeyInfo>),
+    SchemaRoutines(&'a Vec<RoutineInfo>),
 }
 
 /// Owned cache value for inserting into the cache via `ConnectedProfile::cache_set`.
@@ -132,6 +144,11 @@ pub enum OwnedCacheEntry {
         database: String,
         schema: Option<String>,
         foreign_keys: Vec<SchemaForeignKeyInfo>,
+    },
+    SchemaRoutines {
+        database: String,
+        schema: Option<String>,
+        routines: Vec<RoutineInfo>,
     },
 }
 
@@ -267,6 +284,7 @@ pub struct ConnectedProfile {
     pub schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
     pub schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
     pub schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+    pub schema_routines: HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
     /// Dependent objects (views, FK children, triggers) per table, keyed by `(database, table)`.
     pub dependents_cache: HashMap<(String, String), Vec<RelationRef>>,
     /// Active database for query context (MySQL/MariaDB USE).
@@ -318,6 +336,13 @@ impl ConnectedProfile {
                 self.schema_foreign_keys
                     .get(&sk)
                     .map(CacheEntry::SchemaForeignKeys)
+            }
+
+            CacheKey::SchemaRoutines { database, schema } => {
+                let sk = SchemaCacheKey::new(database.as_str(), schema.as_deref());
+                self.schema_routines
+                    .get(&sk)
+                    .map(CacheEntry::SchemaRoutines)
             }
         }
     }
@@ -381,6 +406,15 @@ impl ConnectedProfile {
             } => {
                 let sk = SchemaCacheKey::new(database, schema);
                 self.schema_foreign_keys.insert(sk, foreign_keys);
+            }
+
+            OwnedCacheEntry::SchemaRoutines {
+                database,
+                schema,
+                routines,
+            } => {
+                let sk = SchemaCacheKey::new(database, schema);
+                self.schema_routines.insert(sk, routines);
             }
         }
     }
@@ -583,6 +617,7 @@ impl ConnectionManager {
                 schema_types: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
+                schema_routines: HashMap::new(),
                 dependents_cache: HashMap::new(),
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
@@ -840,6 +875,58 @@ impl ConnectionManager {
         self.connections
             .get(&profile_id)
             .is_some_and(|c| !c.cache_contains(&key))
+    }
+
+    pub fn set_schema_routines(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        schema: Option<String>,
+        routines: Vec<RoutineInfo>,
+    ) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.cache_set(OwnedCacheEntry::SchemaRoutines {
+                database,
+                schema,
+                routines,
+            });
+        }
+    }
+
+    pub fn needs_schema_routines(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> bool {
+        let key = CacheKey::schema_routines(database, schema);
+        self.connections
+            .get(&profile_id)
+            .is_some_and(|c| !c.cache_contains(&key))
+    }
+
+    pub fn prepare_fetch_schema_routines(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<FetchSchemaRoutinesParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let key = CacheKey::schema_routines(database, schema);
+        if connected.cache_contains(&key) {
+            return Err("Schema routines already cached".to_string());
+        }
+
+        Ok(FetchSchemaRoutinesParams {
+            profile_id,
+            database: database.to_string(),
+            schema: schema.map(String::from),
+            connection: connected.connection_for_database(database),
+        })
     }
 
     #[allow(dead_code)]
@@ -1145,6 +1232,7 @@ impl ConnectionManager {
                 schema_types: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
+                schema_routines: HashMap::new(),
                 dependents_cache: HashMap::new(),
                 active_database: None,
                 redis_key_cache: RedisKeyCache::default(),
@@ -1765,6 +1853,36 @@ pub struct FetchSchemaForeignKeysResult {
     pub foreign_keys: Vec<SchemaForeignKeyInfo>,
 }
 
+pub struct FetchSchemaRoutinesParams {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub connection: Arc<dyn Connection>,
+}
+
+impl FetchSchemaRoutinesParams {
+    pub fn execute(self) -> Result<FetchSchemaRoutinesResult, String> {
+        let routines = self
+            .connection
+            .schema_routines(&self.database, self.schema.as_deref())
+            .map_err(|e| e.to_string())?;
+
+        Ok(FetchSchemaRoutinesResult {
+            profile_id: self.profile_id,
+            database: self.database,
+            schema: self.schema,
+            routines,
+        })
+    }
+}
+
+pub struct FetchSchemaRoutinesResult {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub routines: Vec<RoutineInfo>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1875,6 +1993,7 @@ mod tests {
             schema_types: HashMap::new(),
             schema_indexes: HashMap::new(),
             schema_foreign_keys: HashMap::new(),
+            schema_routines: HashMap::new(),
             dependents_cache: HashMap::new(),
             active_database: None,
             redis_key_cache: RedisKeyCache::default(),
@@ -2496,5 +2615,58 @@ mod tests {
             "expected empty for unknown table, got {:?}",
             retrieved
         );
+    }
+
+    #[test]
+    fn schema_routines_cache_roundtrip() {
+        use crate::RoutineInfo;
+        use crate::RoutineKind;
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.add_connection(profile.clone(), connection, None, None);
+
+        let profile_id = profile.id;
+
+        // Before setting: needs_schema_routines should return true (cache miss)
+        assert!(
+            manager.needs_schema_routines(profile_id, "mydb", Some("public")),
+            "needs_schema_routines must be true before caching"
+        );
+
+        let routines = vec![RoutineInfo {
+            name: "add".to_string(),
+            kind: RoutineKind::Function,
+            specific_name: "add(integer, integer)".to_string(),
+            parameter_types: vec!["integer".to_string(), "integer".to_string()],
+            return_type_hint: Some("integer".to_string()),
+        }];
+
+        manager.set_schema_routines(
+            profile_id,
+            "mydb".to_string(),
+            Some("public".to_string()),
+            routines.clone(),
+        );
+
+        // After setting: needs_schema_routines must return false
+        assert!(
+            !manager.needs_schema_routines(profile_id, "mydb", Some("public")),
+            "needs_schema_routines must be false after caching"
+        );
+
+        // Retrieve and verify the cached value
+        let key = CacheKey::schema_routines("mydb", Some("public"));
+        let conn = manager.connections.get(&profile_id).unwrap();
+        if let Some(CacheEntry::SchemaRoutines(cached)) = conn.cache_get(&key) {
+            assert_eq!(cached.len(), 1);
+            assert_eq!(cached[0].specific_name, "add(integer, integer)");
+        } else {
+            panic!("Expected CacheEntry::SchemaRoutines but got something else");
+        }
     }
 }

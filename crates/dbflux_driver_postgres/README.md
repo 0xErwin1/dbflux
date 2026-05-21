@@ -4,13 +4,19 @@
 
 - PostgreSQL relational driver with SQL query execution and schema discovery.
 - Supports schemas, tables, views, indexes, foreign keys, check constraints, unique constraints, and custom types.
+- Exposes stored routines (functions, procedures, aggregates, window functions) in the schema tree with read-only definition viewer.
 - Supports authentication, SSL, SSH tunneling, and URI/manual connection modes.
 - Supports query cancellation through PostgreSQL cancel tokens.
 - Includes PostgreSQL-specific SQL/code generation for CRUD, indexes, reindex, foreign keys, and type operations.
+- Multi-statement scripts (several `;`-separated statements) run as a batch via the simple query protocol, returning one result set per statement.
 
 ## Limitations
 
+- Batched (multi-statement) result columns carry no type metadata; values are returned as text and chart auto-detection is disabled for them. Run a single statement to get fully typed columns.
+
 - SQL-only driver; it does not expose document or key-value APIs.
+- Routine definitions for aggregate and window functions are synthesized from catalog metadata because `pg_get_functiondef` does not support them.
+- Routine editing and execution are not supported; the routine viewer is read-only.
 - Cancellation is best effort and depends on server/session state at cancellation time.
 - Code generation targets supported PostgreSQL constructs only; unsupported generator IDs return `NotSupported`.
 

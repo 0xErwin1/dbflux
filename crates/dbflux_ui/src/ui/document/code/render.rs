@@ -20,6 +20,7 @@ impl CodeDocument {
         let is_executing = self.state == DocumentState::Executing;
         let is_preflight = self.drift_preflight_running;
         let is_db_language = self.query_language.supports_connection_context();
+        let is_read_only = self.read_only;
 
         let auto_refresh_enabled = self.refresh_policy.is_auto();
         let refresh_label = if auto_refresh_enabled {
@@ -87,40 +88,42 @@ impl CodeDocument {
             .border_b_1()
             .border_color(border)
             .bg(tab_bar)
-            .child(
-                div()
-                    .id("run-query-btn")
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .when(run_enabled, |el| {
-                        el.bg(if is_executing { danger } else { primary })
-                            .hover(|d| d.opacity(0.9))
-                    })
-                    .when(!run_enabled, |el| el.bg(btn_bg).cursor_not_allowed())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if this.state == DocumentState::Executing {
-                            this.cancel_query(cx);
+            .when(!is_read_only, |el| {
+                el.child(
+                    div()
+                        .id("run-query-btn")
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px(Spacing::SM)
+                        .py(Spacing::XS)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .when(run_enabled, |d| {
+                            d.bg(if is_executing { danger } else { primary })
+                                .hover(|d| d.opacity(0.9))
+                        })
+                        .when(!run_enabled, |d| d.bg(btn_bg).cursor_not_allowed())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if this.state == DocumentState::Executing {
+                                this.cancel_query(cx);
+                            } else {
+                                this.run_query(window, cx);
+                            }
+                        }))
+                        .child(Icon::new(run_icon).size(px(12.0)).color(if run_enabled {
+                            bg
                         } else {
-                            this.run_query(window, cx);
-                        }
-                    }))
-                    .child(Icon::new(run_icon).size(px(12.0)).color(if run_enabled {
-                        bg
-                    } else {
-                        muted_fg
-                    }))
-                    .child(if run_enabled {
-                        Text::caption(run_label).color(bg)
-                    } else {
-                        Text::caption(run_label).muted_foreground()
-                    }),
-            )
-            .when(is_db_language && !is_executing, |el| {
+                            muted_fg
+                        }))
+                        .child(if run_enabled {
+                            Text::caption(run_label).color(bg)
+                        } else {
+                            Text::caption(run_label).muted_foreground()
+                        }),
+                )
+            })
+            .when(!is_read_only && is_db_language && !is_executing, |el| {
                 el.child(
                     div()
                         .id("run-in-new-tab-btn")
@@ -158,9 +161,12 @@ impl CodeDocument {
                         .child(Text::body("Selection").font_size(FontSizes::SM)),
                 )
             })
-            .child(Text::caption(shortcut_hint))
-            .child(self.render_secondary_actions(cx))
-            .when(is_db_language, |el| {
+            .when(!is_read_only, |el| el.child(Text::caption(shortcut_hint)))
+            .when(is_read_only, |el| {
+                el.child(Text::caption("Read-only").muted_foreground())
+            })
+            .child(self.render_secondary_actions(is_read_only, cx))
+            .when(!is_read_only && is_db_language, |el| {
                 el.child(split_toolbar_action(
                     div()
                         .id("sql-refresh-action")
@@ -195,8 +201,14 @@ impl CodeDocument {
             .when(self.show_saved_label, |el| el.child(Text::caption("Saved")))
     }
 
-    /// Renders the secondary action buttons: Save, Format, History, Explain.
-    fn render_secondary_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Renders the secondary action buttons: Save, Format, History, Explain, Chart.
+    ///
+    /// All mutating or execution buttons are hidden when `is_read_only` is true.
+    fn render_secondary_actions(
+        &self,
+        is_read_only: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let secondary = theme.secondary;
         let secondary_hover = theme.secondary_hover;
@@ -210,75 +222,83 @@ impl CodeDocument {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            // Save button
-            .child(
-                div()
-                    .id("toolbar-save-btn")
-                    .h(Heights::BUTTON)
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .bg(secondary)
-                    .hover(|d| d.bg(secondary_hover))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.is_file_backed() {
-                            this.save_file(window, cx);
-                        } else {
-                            this.save_file_as(window, cx);
-                        }
-                    }))
-                    .tooltip(|window, cx| Tooltip::new("Save").build(window, cx))
-                    .child(
-                        Icon::new(AppIcon::Save)
-                            .size(px(12.0))
-                            .color(if is_file_backed { fg } else { muted_fg }),
-                    ),
-            )
-            // Format button — no SQL formatter available; disabled with tooltip
-            .child(
-                div()
-                    .id("toolbar-format-btn")
-                    .h(Heights::BUTTON)
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .cursor_not_allowed()
-                    .bg(secondary)
-                    .tooltip(|window, cx| Tooltip::new("Formatter unavailable").build(window, cx))
-                    .child(Icon::new(AppIcon::Zap).size(px(12.0)).color(muted_fg)),
-            )
-            // History button — opens history modal
-            .child(
-                div()
-                    .id("toolbar-history-btn")
-                    .h(Heights::BUTTON)
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .bg(secondary)
-                    .hover(|d| d.bg(secondary_hover))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let is_open = this.history_modal.read(cx).is_visible();
-                        if is_open {
-                            this.history_modal.update(cx, |modal, cx| modal.close(cx));
-                        } else {
-                            this.history_modal
-                                .update(cx, |modal, cx| modal.open(window, cx));
-                        }
-                    }))
-                    .tooltip(|window, cx| Tooltip::new("Query history").build(window, cx))
-                    .child(Icon::new(AppIcon::History).size(px(12.0)).color(fg)),
-            )
-            // Explain button — prepends EXPLAIN to the query and runs it (DB languages only)
-            .when(is_db_language, |el| {
+            // Save button — hidden for read-only documents
+            .when(!is_read_only, |el| {
+                el.child(
+                    div()
+                        .id("toolbar-save-btn")
+                        .h(Heights::BUTTON)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .bg(secondary)
+                        .hover(|d| d.bg(secondary_hover))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.is_file_backed() {
+                                this.save_file(window, cx);
+                            } else {
+                                this.save_file_as(window, cx);
+                            }
+                        }))
+                        .tooltip(|window, cx| Tooltip::new("Save").build(window, cx))
+                        .child(
+                            Icon::new(AppIcon::Save)
+                                .size(px(12.0))
+                                .color(if is_file_backed { fg } else { muted_fg }),
+                        ),
+                )
+            })
+            // Format button — hidden for read-only documents (no formatter available)
+            .when(!is_read_only, |el| {
+                el.child(
+                    div()
+                        .id("toolbar-format-btn")
+                        .h(Heights::BUTTON)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .cursor_not_allowed()
+                        .bg(secondary)
+                        .tooltip(|window, cx| {
+                            Tooltip::new("Formatter unavailable").build(window, cx)
+                        })
+                        .child(Icon::new(AppIcon::Zap).size(px(12.0)).color(muted_fg)),
+                )
+            })
+            // History button — hidden for read-only documents
+            .when(!is_read_only, |el| {
+                el.child(
+                    div()
+                        .id("toolbar-history-btn")
+                        .h(Heights::BUTTON)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .bg(secondary)
+                        .hover(|d| d.bg(secondary_hover))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let is_open = this.history_modal.read(cx).is_visible();
+                            if is_open {
+                                this.history_modal.update(cx, |modal, cx| modal.close(cx));
+                            } else {
+                                this.history_modal
+                                    .update(cx, |modal, cx| modal.open(window, cx));
+                            }
+                        }))
+                        .tooltip(|window, cx| Tooltip::new("Query history").build(window, cx))
+                        .child(Icon::new(AppIcon::History).size(px(12.0)).color(fg)),
+                )
+            })
+            // Explain button — hidden for read-only documents
+            .when(!is_read_only && is_db_language, |el| {
                 el.child(
                     div()
                         .id("toolbar-explain-btn")
@@ -298,26 +318,29 @@ impl CodeDocument {
                         .child(Icon::new(AppIcon::Info).size(px(12.0)).color(fg)),
                 )
             })
-            .child(
-                div()
-                    .id("toolbar-chart-btn")
-                    .h(Heights::BUTTON)
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .bg(secondary)
-                    .hover(|d| d.bg(secondary_hover))
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.emit_chart_this_query(cx);
-                    }))
-                    .tooltip(|window, cx| {
-                        Tooltip::new("Open current query in a chart document").build(window, cx)
-                    })
-                    .child(Icon::new(AppIcon::Zap).size(px(12.0)).color(fg)),
-            )
+            // Chart button — hidden for read-only documents
+            .when(!is_read_only, |el| {
+                el.child(
+                    div()
+                        .id("toolbar-chart-btn")
+                        .h(Heights::BUTTON)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .bg(secondary)
+                        .hover(|d| d.bg(secondary_hover))
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.emit_chart_this_query(cx);
+                        }))
+                        .tooltip(|window, cx| {
+                            Tooltip::new("Open current query in a chart document").build(window, cx)
+                        })
+                        .child(Icon::new(AppIcon::ChartSpline).size(px(12.0)).color(fg)),
+                )
+            })
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -376,7 +399,13 @@ impl CodeDocument {
                         Input::new(&self.input_state)
                             .appearance(false)
                             .w_full()
-                            .h_full(),
+                            .h_full()
+                            // Propagate read-only into the Input component so the
+                            // underlying InputState has its `disabled` flag set
+                            // during render. This prevents all text-mutating actions
+                            // (backspace, delete, paste, undo, redo) from being
+                            // bound while keeping selection and copy fully functional.
+                            .disabled(self.read_only),
                     ),
                 ),
             cx,
@@ -397,8 +426,8 @@ impl CodeDocument {
 
         let has_error = error.is_some();
         let has_live_output = self.live_output.is_some() && !has_error;
-        let active_grid = self.active_result_grid();
-        let has_grid = active_grid.is_some();
+        let active_panel = self.active_result_panel();
+        let has_panel = active_panel.is_some();
         let has_tabs = !has_live_output && !self.result_tabs.is_empty();
 
         focus_frame(
@@ -419,14 +448,14 @@ impl CodeDocument {
                         .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
                         .when(has_live_output, |el| el.child(self.render_live_output(cx)))
                         .when(!has_live_output, |el| {
-                            el.when_some(active_grid, |el, grid| el.child(grid))
+                            el.when_some(active_panel, |el, panel| el.child(panel))
                         })
                         .when(
-                            !has_live_output && !has_grid && !has_error && is_executing,
+                            !has_live_output && !has_panel && !has_error && is_executing,
                             |el| el.child(self.render_loading_results(cx)),
                         )
                         .when(
-                            !has_live_output && !has_grid && !has_error && !is_executing,
+                            !has_live_output && !has_panel && !has_error && !is_executing,
                             |el| el.child(self.render_empty_results(cx)),
                         ),
                 ),
@@ -676,6 +705,89 @@ impl CodeDocument {
             .child(Text::muted("Run a query to see results"))
     }
 
+    /// Placeholder shown for a routine document when no connection is active for
+    /// its profile.  The definition will be fetched automatically on connect.
+    fn render_awaiting_connection(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(Text::muted(
+                "Connect to this database to view the routine definition.",
+            ))
+    }
+
+    fn render_script_confirm_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let entity = cx.entity().clone();
+        let entity_cancel = cx.entity().clone();
+
+        let statement_count = self
+            .pending_script_confirm
+            .as_ref()
+            .map(|p| p.statement_count)
+            .unwrap_or(0);
+        let message = format!(
+            "No text is selected, so the entire script will run as {} statements in order. Continue?",
+            statement_count
+        );
+
+        div()
+            .id("script-confirm-modal-overlay")
+            .absolute()
+            .inset_0()
+            .bg(overlay_bg(theme))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                surface_panel(cx)
+                    .rounded(Radii::MD)
+                    .min_w(px(350.0))
+                    .max_w(px(500.0))
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::MD)
+                    .p(Spacing::MD)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(AppIcon::TriangleAlert).size(px(20.0)).warning())
+                            .child(Text::heading("Run entire script")),
+                    )
+                    .child(Text::caption(message))
+                    .child(
+                        div().flex().justify_end().items_center().child(
+                            div()
+                                .flex()
+                                .gap(Spacing::SM)
+                                .child(Button::new("script-confirm-cancel-btn", "Cancel").on_click(
+                                    move |_, _, cx| {
+                                        entity_cancel.update(cx, |doc, cx| {
+                                            doc.cancel_script_query(cx);
+                                        });
+                                    },
+                                ))
+                                .child(
+                                    Button::new("script-confirm-run-btn", "Run Script").on_click(
+                                        move |_, window, cx| {
+                                            entity.update(cx, |doc, cx| {
+                                                doc.confirm_script_query(window, cx);
+                                            });
+                                        },
+                                    ),
+                                ),
+                        ),
+                    ),
+            )
+    }
+
     fn render_dangerous_query_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let entity = cx.entity().clone();
@@ -853,9 +965,20 @@ impl Render for CodeDocument {
                 .push(cx);
         }
 
+        // Apply a pending routine definition fetched from a background task.
+        // `set_content` requires a `Window` reference, so it is deferred here.
+        if let Some(body) = self.pending_routine_definition.take() {
+            self.set_content(&body, window, cx);
+        }
+
         let context_bar = self.render_context_bar(cx).into_any_element();
         let toolbar = self.render_toolbar(cx).into_any_element();
-        let editor_view = self.render_editor(window, cx).into_any_element();
+
+        let editor_view = if self.routine_definition_pending {
+            self.render_awaiting_connection(cx).into_any_element()
+        } else {
+            self.render_editor(window, cx).into_any_element()
+        };
         let results_view = self.render_results(window, cx).into_any_element();
 
         let bg = cx.theme().background;
@@ -907,6 +1030,9 @@ impl Render for CodeDocument {
             .child(self.history_modal.clone())
             .when(self.pending_dangerous_query.is_some(), |el| {
                 el.child(self.render_dangerous_query_modal(cx))
+            })
+            .when(self.pending_script_confirm.is_some(), |el| {
+                el.child(self.render_script_confirm_modal(cx))
             })
             .when(drift_modal_visible, |el| {
                 el.child(self.schema_drift_modal.clone())

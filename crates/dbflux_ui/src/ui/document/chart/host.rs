@@ -42,7 +42,7 @@ pub trait ChartHost {
     fn time_range_panel(&self, cx: &App) -> Option<Entity<TimeRangePanel>>;
 
     /// The refresh-policy dropdown owned by the host.
-    fn refresh_dropdown(&self, cx: &App) -> Entity<Dropdown>;
+    fn refresh_dropdown(&self, cx: &App) -> Option<Entity<Dropdown>>;
 
     /// The most recent query result held by the host, if any.
     fn current_result(&self, cx: &App) -> Option<Arc<QueryResult>>;
@@ -113,13 +113,10 @@ impl ChartHost for HostAdapter {
         }
     }
 
-    fn refresh_dropdown(&self, cx: &App) -> Entity<Dropdown> {
+    fn refresh_dropdown(&self, cx: &App) -> Option<Entity<Dropdown>> {
         match self {
             HostAdapter::DataGrid(entity) => entity.read(cx).chart_host_refresh_dropdown(cx),
-            HostAdapter::Standalone => panic!(
-                "HostAdapter::Standalone does not own a refresh dropdown; \
-                 the host must render its own dropdown separately"
-            ),
+            HostAdapter::Standalone => None,
         }
     }
 
