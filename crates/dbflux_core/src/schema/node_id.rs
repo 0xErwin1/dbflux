@@ -71,6 +71,16 @@ pub enum SchemaNodeId {
         database: String,
         schema: String,
     },
+    RoutinesFolder {
+        profile_id: Uuid,
+        database: String,
+        schema: String,
+    },
+    RoutinesLoadingFolder {
+        profile_id: Uuid,
+        database: String,
+        schema: String,
+    },
     CollectionsFolder {
         profile_id: Uuid,
         database: String,
@@ -165,6 +175,13 @@ pub enum SchemaNodeId {
         schema: String,
         name: String,
     },
+    Routine {
+        profile_id: Uuid,
+        schema: String,
+        /// Engine-specific unique identity (name + argument signature).
+        /// Uses `specific_name` from `RoutineInfo` to distinguish overloads.
+        specific_name: String,
+    },
 
     // Collection detail variants
     DatabaseIndexesFolder {
@@ -251,6 +268,8 @@ pub enum SchemaNodeKind {
     SchemaIndexesLoadingFolder,
     SchemaForeignKeysFolder,
     SchemaForeignKeysLoadingFolder,
+    RoutinesFolder,
+    RoutinesLoadingFolder,
     CollectionsFolder,
     Table,
     View,
@@ -268,6 +287,7 @@ pub enum SchemaNodeKind {
     Constraint,
     SchemaIndex,
     SchemaForeignKey,
+    Routine,
     DatabaseIndexesFolder,
     CollectionFieldsFolder,
     CollectionField,
@@ -300,6 +320,8 @@ impl SchemaNodeId {
             Self::SchemaForeignKeysLoadingFolder { .. } => {
                 SchemaNodeKind::SchemaForeignKeysLoadingFolder
             }
+            Self::RoutinesFolder { .. } => SchemaNodeKind::RoutinesFolder,
+            Self::RoutinesLoadingFolder { .. } => SchemaNodeKind::RoutinesLoadingFolder,
             Self::CollectionsFolder { .. } => SchemaNodeKind::CollectionsFolder,
             Self::Table { .. } => SchemaNodeKind::Table,
             Self::View { .. } => SchemaNodeKind::View,
@@ -317,6 +339,7 @@ impl SchemaNodeId {
             Self::Constraint { .. } => SchemaNodeKind::Constraint,
             Self::SchemaIndex { .. } => SchemaNodeKind::SchemaIndex,
             Self::SchemaForeignKey { .. } => SchemaNodeKind::SchemaForeignKey,
+            Self::Routine { .. } => SchemaNodeKind::Routine,
             Self::DatabaseIndexesFolder { .. } => SchemaNodeKind::DatabaseIndexesFolder,
             Self::CollectionFieldsFolder { .. } => SchemaNodeKind::CollectionFieldsFolder,
             Self::CollectionField { .. } => SchemaNodeKind::CollectionField,
@@ -349,6 +372,8 @@ impl SchemaNodeId {
             | Self::SchemaIndexesLoadingFolder { profile_id, .. }
             | Self::SchemaForeignKeysFolder { profile_id, .. }
             | Self::SchemaForeignKeysLoadingFolder { profile_id, .. }
+            | Self::RoutinesFolder { profile_id, .. }
+            | Self::RoutinesLoadingFolder { profile_id, .. }
             | Self::CollectionsFolder { profile_id, .. }
             | Self::Table { profile_id, .. }
             | Self::View { profile_id, .. }
@@ -366,6 +391,7 @@ impl SchemaNodeId {
             | Self::Constraint { profile_id, .. }
             | Self::SchemaIndex { profile_id, .. }
             | Self::SchemaForeignKey { profile_id, .. }
+            | Self::Routine { profile_id, .. }
             | Self::DatabaseIndexesFolder { profile_id, .. }
             | Self::CollectionFieldsFolder { profile_id, .. }
             | Self::CollectionField { profile_id, .. }
@@ -424,6 +450,9 @@ const P_SCRIPTS_FOLDER: &str = "SCF";
 const P_SCRIPT_FILE: &str = "SCR";
 const P_DEPENDENTS_FOLDER: &str = "DEPF";
 const P_DEPENDENT_ITEM: &str = "DEP";
+const P_ROUTINES_FOLDER: &str = "RTF";
+const P_ROUTINES_LOADING: &str = "RTL";
+const P_ROUTINE: &str = "RT";
 
 impl fmt::Display for SchemaNodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -751,6 +780,39 @@ impl fmt::Display for SchemaNodeId {
                     f,
                     "{}|{}|{}|{}|{}",
                     P_DEPENDENT_ITEM, profile_id, schema, table, name
+                )
+            }
+            Self::RoutinesFolder {
+                profile_id,
+                database,
+                schema,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_ROUTINES_FOLDER, profile_id, database, schema
+                )
+            }
+            Self::RoutinesLoadingFolder {
+                profile_id,
+                database,
+                schema,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_ROUTINES_LOADING, profile_id, database, schema
+                )
+            }
+            Self::Routine {
+                profile_id,
+                schema,
+                specific_name,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_ROUTINE, profile_id, schema, specific_name
                 )
             }
             Self::ScriptsFolder { path } => match path {
@@ -1271,6 +1333,44 @@ impl FromStr for SchemaNodeId {
                 Ok(Self::ScriptFile { path })
             }
 
+            P_ROUTINES_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                let schema = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::RoutinesFolder {
+                    profile_id,
+                    database,
+                    schema,
+                })
+            }
+
+            P_ROUTINES_LOADING => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                let schema = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::RoutinesLoadingFolder {
+                    profile_id,
+                    database,
+                    schema,
+                })
+            }
+
+            P_ROUTINE => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let schema = parts.get(2).ok_or_else(err)?.to_string();
+                // specific_name may contain commas and parens but no pipes;
+                // with splitn(6) the 4th field absorbs any remaining content.
+                let specific_name = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::Routine {
+                    profile_id,
+                    schema,
+                    specific_name,
+                })
+            }
+
             _ => Err(err()),
         }
     }
@@ -1298,12 +1398,14 @@ impl SchemaNodeKind {
                 | Self::ConstraintsFolder
                 | Self::SchemaIndexesFolder
                 | Self::SchemaForeignKeysFolder
+                | Self::RoutinesFolder
                 | Self::CollectionsFolder
                 | Self::CollectionFieldsFolder
                 | Self::CustomType
                 | Self::ScriptsFolder
                 | Self::ScriptFile
                 | Self::DependentsFolder
+                | Self::Routine
         )
     }
 
@@ -1321,6 +1423,7 @@ impl SchemaNodeKind {
                 | Self::ConstraintsFolder
                 | Self::SchemaIndexesFolder
                 | Self::SchemaForeignKeysFolder
+                | Self::RoutinesFolder
                 | Self::CollectionsFolder
                 | Self::CollectionFieldsFolder
                 | Self::Database
@@ -1339,6 +1442,7 @@ impl SchemaNodeKind {
                 | Self::CollectionChild
                 | Self::CollectionChildrenMore
                 | Self::ScriptFile
+                | Self::Routine
         )
     }
 }
@@ -1559,6 +1663,37 @@ mod tests {
         roundtrip(SchemaNodeId::ScriptFile {
             path: "/home/user/scripts/query.sql".into(),
         });
+
+        // Routines variants
+        roundtrip(SchemaNodeId::RoutinesFolder {
+            profile_id: uuid,
+            database: "mydb".into(),
+            schema: "public".into(),
+        });
+        roundtrip(SchemaNodeId::RoutinesLoadingFolder {
+            profile_id: uuid,
+            database: "mydb".into(),
+            schema: "public".into(),
+        });
+        roundtrip(SchemaNodeId::Routine {
+            profile_id: uuid,
+            schema: "public".into(),
+            specific_name: "add(integer, integer)".into(),
+        });
+    }
+
+    #[test]
+    fn test_routine_display_format() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = SchemaNodeId::Routine {
+            profile_id: uuid,
+            schema: "public".into(),
+            specific_name: "add(integer, integer)".into(),
+        };
+        assert_eq!(
+            id.to_string(),
+            "RT|12345678-1234-1234-1234-123456789abc|public|add(integer, integer)"
+        );
     }
 
     #[test]

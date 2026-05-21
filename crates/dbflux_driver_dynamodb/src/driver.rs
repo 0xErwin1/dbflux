@@ -300,7 +300,9 @@ pub static DYNAMODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         supports_insert: true,
         supports_update: true,
         supports_delete: true,
-        supports_upsert: false,
+        // Single-item upsert is supported (PutItem is an upsert). The execution
+        // path rejects only `many && upsert`; see `update_many_with_upsert`.
+        supports_upsert: true,
         supports_returning: false,
         supports_batch: true,
         supports_bulk_update: false,

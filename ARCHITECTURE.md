@@ -4,8 +4,97 @@
 
 - DBFlux is a keyboard-first database client built with Rust and GPUI, focused on fast workflows and a clean desktop UI (README.md).
 - The repo is a Rust workspace with a UI app crate plus shared core types, driver implementations, and supporting libraries (Cargo.toml, crates/).
-- Supports multiple database paradigms: relational (SQL), document (MongoDB, DynamoDB), key-value, graph, time-series, and wide-column stores.
+- Supports multiple database paradigms: relational (SQL), document (MongoDB, DynamoDB), key-value (Redis), time-series (InfluxDB), log-stream (CloudWatch Logs), graph, and wide-column stores.
 - This is the canonical top-level document for project structure, architecture overview, crate boundaries, key files, and the cross-crate map. Other top-level docs should link here instead of duplicating that material.
+
+## Architecture at a Glance
+
+The text below is exhaustive but dense; these three diagrams give the mental model first. They are conceptual — exact symbol names live in the sections that follow.
+
+### Layered crate map
+
+Dependencies point downward. `dbflux_core` is the dependency-free contract layer every other crate builds on; the UI never depends on a concrete driver crate (see [Driver/UI decoupling](#driver-system)).
+
+```mermaid
+flowchart TB
+    subgraph Shell["Binary shell"]
+        bin["dbflux<br/>(main, CLI, single-instance IPC,<br/>mcp subcommand)"]
+    end
+
+    subgraph UI["Presentation — dbflux_ui"]
+        ui["Workspace, documents, overlays,<br/>components, keymap, settings,<br/>connection manager"]
+    end
+
+    subgraph Runtime["Runtime / domain — dbflux_app"]
+        app["AppState, managers, hooks,<br/>auth registry, access manager,<br/>rpc_services, config loader"]
+    end
+
+    subgraph Core["Contracts — dbflux_core"]
+        core["DbDriver / Connection traits,<br/>DriverMetadata, Value, schema,<br/>query, pipeline, storage models"]
+    end
+
+    subgraph Drivers["Driver implementations"]
+        drv["postgres · mysql · sqlite · mssql<br/>mongodb · redis · dynamodb<br/>influxdb · cloudwatch · ipc (RPC)"]
+    end
+
+    subgraph Support["Supporting libraries"]
+        sup["storage · audit · policy · approval<br/>mcp · export · lua · aws · ssm<br/>ssh · proxy · tunnel_core · ipc"]
+    end
+
+    bin --> ui --> app --> core
+    drv --> core
+    sup --> core
+    app --> drv
+    app --> sup
+    ui -. "generic seams only" .-> core
+```
+
+### Query flow
+
+A query travels from the editor document to a driver `Connection` and back to a result view chosen by `DatabaseCategory` — the UI never branches on a driver id.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant CD as CodeDocument<br/>(code/execution.rs)
+    participant LS as language_service<br/>(dangerous-query check)
+    participant Conn as Connection<br/>(driver impl)
+    participant RP as ResultPanel + DataGridPanel
+    participant V as View (by DatabaseCategory)
+
+    U->>CD: Run query (Cmd/Ctrl+Enter)
+    CD->>LS: classify statement(s)
+    alt dangerous (DELETE/DROP/TRUNCATE/FLUSH…)
+        LS-->>CD: needs confirmation
+        CD->>U: confirmation dialog
+    end
+    CD->>Conn: execute (on background executor)
+    Note over Conn: multi-statement split when<br/>MULTI_STATEMENT capability is set
+    Conn-->>CD: QueryResult(s)
+    CD->>RP: mount result(s)
+    RP->>V: Table / Document tree / Key-value<br/>(per metadata.category)
+    V-->>U: rendered result
+```
+
+### Connection flow
+
+Connecting runs a provider-agnostic pre-connect pipeline before the driver opens, with optional tunneling/managed access and lifecycle hooks at each phase.
+
+```mermaid
+flowchart TB
+    start["Connect from<br/>Connection Manager / sidebar"] --> prep["AppState::prepare_pipeline_input<br/>(provider-agnostic input)"]
+    prep --> pre{{"PreConnect hooks"}}
+    pre --> auth["Pipeline: Authenticating<br/>(DynAuthProvider, e.g. AWS SSO)"]
+    auth --> values["Pipeline: ResolvingValues<br/>(ValueRef → env/secret/param/auth)"]
+    values --> access["Pipeline: OpeningAccess"]
+    access --> tunnel{"Access kind?"}
+    tunnel -->|Direct| connect
+    tunnel -->|SSH / Proxy| t1["dbflux_tunnel_core::Tunnel<br/>(local port forward)"] --> connect
+    tunnel -->|Managed aws-ssm| t2["AccessManager<br/>(SSM tunnel)"] --> connect
+    connect["DbDriver::connect → Connection"] --> schema["Lazy schema fetch<br/>(names first, details on expand)"]
+    schema --> post{{"PostConnect hooks"}}
+    post --> ready["Sidebar populated · ready to query"]
+```
 
 ## Tech Stack
 
@@ -74,19 +163,30 @@ crates/
           sso_wizard.rs            # SSO account/role discovery wizard
         document/            # Document-based tab system (like VS Code/DBeaver)
           mod.rs             # Document exports and shared types
-          handle.rs          # DocumentHandle for entity management
-          types.rs           # DocumentId, DocumentKind, DocumentState
-          result_view.rs     # ResultView enum (Table, LiveOutput, etc.)
+          handle.rs          # DocumentEvent enum (unified — replaces per-document event enums)
+          pane.rs            # PaneHandle: closure-erasing shell for typed Entity<T> documents
+          dedup.rs           # DocumentKey enum: 7-variant identity key for tab deduplication
+          types.rs           # DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState
+          result_view.rs     # ResultViewMode enum (Table, LiveOutput, etc.)
           task_runner.rs     # Background task tracking for documents
-          data_document.rs   # Standalone data browsing document
-          tab_manager.rs     # MRU tab ordering and activation
+          tab_manager.rs     # Tab enum, TabManager (Vec<Tab> + MRU order), TabManagerEvent
           tab_bar.rs         # Visual tab bar rendering
           data_view.rs       # DataViewMode abstraction (Table vs Document)
+          data_view_trait.rs # DataView trait (available_view_modes, focus_handle, active_context)
+          chrome.rs          # Shared chrome utilities
           add_member_modal.rs # Modal for adding Redis set/list/sorted-set members
           new_key_modal.rs   # Modal for creating new Redis keys
           governance.rs      # MCP approvals view for pending executions
+          chart_document/    # ChartDocument: saved/interactive chart tab
+            mod.rs           # ChartDocument entity
+            pane.rs          # ChartDocument::into_pane constructor
+            render.rs        # impl Render for ChartDocument
+          data_document/     # DataDocument: standalone data browsing tab
+            mod.rs           # DataDocument entity (thin shell around DataGridPanel + ResultPanel)
+            pane.rs          # DataDocument::into_pane constructor
           code/              # CodeDocument: query/script editor
             mod.rs
+            pane.rs          # CodeDocument::into_pane constructor
             completion.rs    # Language-aware autocompletion
             context_bar.rs   # Execution context dropdowns (connection/database/schema)
             diagnostics.rs   # Live query diagnostics
@@ -103,8 +203,10 @@ crates/
             query.rs
             render.rs
             utils.rs
-          key_value/         # Redis/key-value-specific document view
-            mod.rs
+          key_value/         # Redis/key-value-specific document tab
+            mod.rs           # KeyValueDocument entity
+            pane.rs          # KeyValueDocument::into_pane constructor
+            view.rs          # KeyValueView boundary struct (file-level render helpers)
             commands.rs
             context_menu.rs
             copy_command.rs
@@ -112,7 +214,16 @@ crates/
             mutations.rs
             pagination.rs
             parsing.rs
-            render.rs
+            render.rs        # impl Render for KeyValueDocument
+          audit/             # AuditDocument: unified event/audit viewer tab
+            mod.rs           # AuditDocument entity
+            pane.rs          # AuditDocument::into_pane constructor
+            view.rs          # LogStreamView boundary struct
+            render.rs        # Extracted render code (~1300 LOC)
+            commands.rs      # Extracted command dispatch (~560 LOC)
+            filters.rs
+            saved_filter.rs
+            source_adapter.rs
         components/          # Reusable UI components
           mod.rs
           context_menu.rs    # Reusable context menu component
@@ -293,6 +404,11 @@ crates/
     src/query_parser.rs     # JSON command envelope parser for DynamoDB operations
     src/query_generator.rs  # Mutation -> DynamoDB command envelope generator
     tests/live_integration.rs # Docker-backed integration tests (DynamoDB Local)
+  dbflux_driver_influxdb/   # InfluxDB driver (v1 + v2)
+    src/driver.rs           # Connection, bucket/measurement discovery, query execution
+    src/query_generator.rs  # InfluxQL (v1) and Flux (v2) query/template generation
+  dbflux_driver_cloudwatch/ # AWS CloudWatch Logs driver (DatabaseCategory::LogStream)
+    src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_aws/               # AWS auth providers + Secrets Manager/SSM value providers
     src/auth.rs             # AWS SSO/shared/static providers and SSO login flow
     src/config.rs           # ~/.aws/config parser/cache and profile write-back helpers
@@ -376,23 +492,47 @@ crates/
 
 ### Document System
 
-`crates/dbflux_ui/src/ui/document/` implements a tab-based document architecture:
+`crates/dbflux_ui/src/ui/document/` implements a tab-based document architecture with five layers:
 
-- `DocumentHandle` manages document lifecycle as GPUI entities
-- `CodeDocument` provides language-aware editing for queries and scripts (SQL/MongoDB/Redis/Lua/Python/Bash) with multiple result tabs and live output for scripts. Connection/database/schema controls are only shown for languages that support connection context.
-- Driver-owned source-context controls are declared through generic core seams (`SourceContextSpec`, `ExecutionSourceContext`) and rendered generically by `CodeDocument`; no driver-specific query-context widgets should live in the UI layer.
-- Auto-save: tabs auto-save to scratch files (untitled) or shadow files (file-backed) on a 2-second debounce. Explicit Ctrl+S writes to the original file. Tabs close without warnings.
-- Session restore: `SessionStore` persists a manifest of open tabs to `~/.local/share/dbflux/sessions/`. On startup, all tabs are restored with conflict detection for externally modified files.
-- `DataDocument` enables standalone data browsing independent of queries
-- `TabManager` tracks MRU (Most Recently Used) order for tab switching
-- `DataGridPanel` renders data with switchable view modes (Table for SQL, Document tree for MongoDB)
-- Duplicate prevention: opening an already-open table/collection focuses the existing tab
+**Layers (outermost to innermost)**
+
+1. **`Tab`** (`tab_manager.rs`) — `#[non_exhaustive]` enum with a single `Pane(Box<PaneHandle>)` variant. Kept as enum for forward-compatibility (e.g., future detachable pane variants). `TabManager` holds a `Vec<Tab>` plus MRU ordering.
+
+2. **`PaneHandle`** (`pane.rs`) — closure-erasing shell that replaces the old closed `DocumentHandle` enum. Each of the 22 operations (render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe, plus optional helpers) is a `Box<dyn Fn>` closure capturing the typed `Entity<T>`. `PaneHandle` is `!Clone`. Each document type provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs` file. Adding a new document type requires no changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
+
+3. **`DocumentKey`** (`dedup.rs`) — 7-variant identity enum (`Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`) used for tab deduplication. Replaces the six `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
+
+4. **`DocumentEvent`** (`handle.rs`, ~30 LOC) — unified event enum replacing four per-document event enums that were deleted. Variants: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`, `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`, `ChartThisQuery`.
+
+5. **`ResultPanel` + `ViewHandle`** (`crates/dbflux_components/src/result_panel/mod.rs`) — universal chrome host. `ResultPanel` owns a chrome row and delegates body rendering to a `ViewHandle` (7 closures: render, focus, focus_handle, toolbar_segments, available_modes, current_mode, set_mode). The slot system (`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`) lets views contribute arbitrary chrome: `ResultPanel` merges built-in segments (mode bar at Left/0 when `available_modes.len() >= 2`) and view-provided segments, sorts by `(position, index)`, and renders them in a `flex_wrap` row.
+
+**The five document types**
+
+- `DataDocument` (`data_document/`) — thin shell around `DataGridPanel` + `ResultPanel`. DataGridPanel mounts as a `ViewHandle`; a filter bar is injected as a Center/0 segment.
+- `ChartDocument` (`chart_document/`) — `ChartShell` entity + lazy `Option<Entity<ResultPanel>>`. Chart area, axis bar, and action buttons mount as Left/Center/Right segments.
+- `CodeDocument` (`code/`) — multi-tab editor. Each result tab wraps its `DataGridPanel` in its own `ResultPanel`. Outer chrome (editor, context bar, tab strip) is self-rendered.
+- `KeyValueDocument` (`key_value/`) — self-renders. `KeyValueView` is a file-level boundary struct (not a separate GPUI entity) grouping render helpers extracted from `key_value/render.rs`.
+- `AuditDocument` (`audit/`) — self-renders. `LogStreamView` is a file-level boundary struct. Body extracted to `audit/render.rs` and `audit/commands.rs` as sibling `impl AuditDocument` files.
+
+**Adding a new document type** (no changes required outside the new module):
+1. Create `document/<name>/mod.rs` with the entity.
+2. Create `document/<name>/pane.rs` with `into_pane(entity, cx) -> PaneHandle`.
+3. Add a `DocumentKey` variant in `dedup.rs` if dedup is needed.
+4. Add an `open_<name>` function in `workspace/actions.rs`.
+
+**Architectural notes**
+
+- `KeyValueView` and `LogStreamView` are file-level boundary structs, not separate GPUI entities. GPUI's single-`Context<T>` borrow model makes cross-entity `impl Render` splits infeasible when 40+ `cx.listener()` closures in a document close over `Self`; splitting would require relocating all domain state to the view entity. The achieved boundary is file-level.
+- `DataView` trait (`data_view_trait.rs`) does not include a `render` method. The spec called for `render` on the trait, but `impl IntoElement` is not trait-object-safe and boxing to `AnyElement` conflicts with GPUI idioms. Rendering goes through `ViewHandle.render` instead.
+- Auto-save: tabs auto-save to scratch files (untitled) or shadow files (file-backed) on a 2-second debounce. Ctrl+S writes to the original file. Tabs close without warnings.
+- Session restore: `SessionStore` persists a manifest of open tabs to `~/.local/share/dbflux/sessions/`. On startup, all tabs are restored with conflict detection for externally modified files. Only code documents produce `CodeSessionTabSnapshot`; other document types are not session-persisted.
+- Duplicate prevention: `tab_manager.find_by_key` checks `PaneHandle::matches_dedup_key` before opening a new tab, focusing the existing one if found.
 
 ### Data Visualization
 
 - **Data table**: `crates/dbflux_ui/src/ui/components/data_table/` custom virtualized table with sorting, selection, horizontal scrolling via phantom scroller pattern, keyboard navigation, column resizing, and context menu with CRUD operations.
 - **Document tree**: `crates/dbflux_ui/src/ui/components/document_tree/` hierarchical JSON/BSON viewer for document databases with keyboard navigation (j/k/h/l), search (Ctrl+F or /), collapsible nodes, and view modes (Keys Only, Keys+Preview, Full Values).
-- **Key-value view**: `crates/dbflux_ui/src/ui/document/key_value/` Redis-specific document view with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu.
+- **Key-value view**: `crates/dbflux_ui/src/ui/document/key_value/` Redis-specific document tab with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu. Integrates with the workspace via a `PaneHandle` constructed in `key_value/pane.rs`.
 - Cell editor modal: `crates/dbflux_ui/src/ui/overlays/cell_editor_modal.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
 - Document preview modal: `crates/dbflux_ui/src/ui/overlays/document_preview_modal.rs` full-screen JSON document preview with an inline JSON editor.
 - Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions.
@@ -401,15 +541,16 @@ crates/
 
 - Sidebar: `crates/dbflux_ui/src/ui/views/sidebar/` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files, script hooks, and other user files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading.
 - Driver-owned child resources under collections/containers are published through generic `CollectionChildInfo` metadata. The sidebar must not infer driver-specific children from names, field types, or driver IDs.
+- Routines (functions, procedures, aggregates, window functions) appear as a per-schema "Routines" folder when the driver sets the `ROUTINES` capability and populates the `schema_routines` seam. The UI renders the folder generically; it does not special-case any driver.
 - Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
 - Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure with persistence via `connection_tree_store.rs`.
 
 ### Driver System
 
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs` defines:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn
-  - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, InfluxQuery, CQL (with editor mode, placeholder, comment prefix)
-  - `DriverCapabilities`: bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.
+  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream
+  - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (each carries editor mode, placeholder, comment prefix)
+  - `DriverCapabilities`: `u64` bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, etc.
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
 - **Error formatting**: `crates/dbflux_core/src/core/error_formatter.rs` provides `ErrorFormatter` trait for driver-specific error messages with context (detail, hint, column, table, constraint).
 - Core domain API: `crates/dbflux_core/src/core/traits.rs` defines `DbDriver`, `Connection`, SQL generation, cancellation contracts, and generic driver-to-UI seams such as `EventStreamTarget` and `SourceContextSpec`.
@@ -543,6 +684,14 @@ crates/
   - Mutation support for single and multi-item paths (`put`, `update`, `delete`), with single-item upsert and bounded retry handling for unprocessed batch writes
   - JSON command-envelope parser for execute mode (`scan`, `query`, `put`, `update`, `delete`) and mutation query generation (`DynamoQueryGenerator`)
   - Current limits: no query cancellation, no PartiQL/transaction API surface, and no `update many + upsert` combination
+- **InfluxDB**: `crates/dbflux_driver_influxdb/` — `DatabaseCategory::TimeSeries` driver covering both InfluxDB v1 and v2:
+  - v1 speaks InfluxQL; v2 exposes Flux in addition to InfluxQL (`QueryGenerator` emits Flux only when `version == V2`)
+  - Bucket/database and measurement discovery mapped to the schema model, with pagination and CSV/JSON export
+  - Read-oriented: no transactions; mutation generation is limited compared with the relational drivers
+- **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — `DatabaseCategory::LogStream` driver for AWS CloudWatch Logs:
+  - Log group/stream discovery exposed as collections; log groups open as event streams via `CollectionPresentation::EventStream` and a generic `EventStreamTarget`, consumed by the `AuditDocument`/log-stream viewer without any driver-specific UI branch
+  - Query modes (Logs Insights QL, OpenSearch PPL/SQL) are surfaced through `SourceContextSpec`; `DriverMetadata.query_language` defaults to `Sql` for editor behavior
+  - Authentication through the AWS auth stack; no query cancellation yet
 
 ### Driver README policy
 
@@ -619,7 +768,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (crates/dbflux/src/main.rs, crates/dbflux_ui/src/ui/views/workspace/).
 - External driver bootstrap: at startup, DBFlux reads `cfg_services` from `~/.local/share/dbflux/dbflux.db`, probes each service, and only registers services that complete the RPC handshake (`Hello`) successfully.
 - Connect flow: `AppState::prepare_pipeline_input` builds a provider-agnostic pre-connect pipeline input. The pipeline runs auth/session validation, dynamic value resolution, and managed/direct access setup before driver connect + schema fetch. Supports form-based configuration, direct URI input, optional proxy/SSH, and managed access (`aws-ssm`). Connection hooks still run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
-- Query flow: `CodeDocument` submits database queries to a `Connection` implementation when the active `QueryLanguage` supports connection context. The query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs (handled in `code/execution.rs`).
+- Query flow: `CodeDocument` submits database queries to a `Connection` implementation when the active `QueryLanguage` supports connection context. The query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs (handled in `code/execution.rs`). When the driver advertises the `MULTI_STATEMENT` capability, a script containing several statements separated by `;` is executed as a batch, producing one result set per statement.
 - Script flow: `CodeDocument` executes Lua, Python, and Bash documents as script hooks rather than database queries. Script runs create a local output channel, stream live text into a document-owned buffer, and keep the final output as a text result when execution completes.
 - View mode selection: `DataGridPanel` (in `document/data_grid_panel/`) automatically selects appropriate view mode based on database category—Table view for relational databases, Document tree view for document databases like MongoDB and DynamoDB, key-value view for Redis. Event-stream-like document containers are opened through `CollectionPresentation::EventStream` rather than UI-side driver checks. Context menus include "Copy as Query" for generating driver-specific mutation statements/envelopes via `QueryGenerator`.
 - Query preview: `SqlPreviewModal` (in `overlays/sql_preview_modal.rs`) routes relational read/DML previews through `QueryGenerator` for row, table, and view previews, while DDL stays on `CodeGenerator`. Non-SQL languages (MongoDB, Redis) still use generic preview mode with static text and language-specific syntax highlighting.

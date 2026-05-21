@@ -4,6 +4,94 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Focus shortcuts on macOS/Windows** — `Ctrl+Shift+1..4` (Focus
+  Sidebar / Editor / Results / Tasks) now fire on every platform. GPUI
+  normalizes `Shift`+digit chords at the platform layer (e.g. macOS
+  delivers `Ctrl+Shift+2` as `@` with `shift=false`), so the literal
+  `KeymapStack` matchers never matched the runtime keystroke. The four
+  shortcuts are now registered as native GPUI key bindings, which GPUI
+  normalizes per platform/layout at registration time. The `KeymapStack`
+  entries are retained solely as the command-palette shortcut-label
+  source.
+* **DriverCapabilities bit collision** — `MULTI_STATEMENT` and `ROUTINES`
+  were both defined as `1 << 47` in the same bitflags, so a driver
+  advertising one silently advertised the other. `MULTI_STATEMENT` now
+  occupies bit 48, with a regression test asserting the bits are
+  distinct.
+* **DynamoDB upsert capability** — `MutationCapabilities.supports_upsert`
+  was `false` even though the driver implements single-item upsert
+  (`PutItem`) and only rejects `many + upsert`. The flag is now `true`,
+  so the MCP write tool no longer rejects a supported operation.
+
+## [0.6.0-dev.6] - 2026-05-20
+
+### Added
+
+* **Multi-statement script execution** — running a buffer with no active
+  selection now offers to execute the whole script (multiple
+  `;`-separated statements) behind a "Run entire script (N statements)?"
+  confirmation, on drivers that advertise the new
+  `DriverCapabilities::MULTI_STATEMENT` flag. `QueryLanguage` splits
+  SQL-family buffers while skipping separators inside strings,
+  identifiers, line/block comments, and PostgreSQL dollar-quoted bodies;
+  non-SQL languages stay single-statement. PostgreSQL routes batches
+  through the simple query protocol (batched columns are untyped text);
+  MySQL/MariaDB and SQLite split client-side and run each statement
+  through the typed prepared path (also fixing SQLite silently executing
+  only the first statement); MSSQL already executed batches natively.
+  Each result set renders in its own result tab. The seam is
+  driver-agnostic — the UI gates on the capability flag, never on driver
+  identity.
+* **Stored Procedures / Routines folder** — a capability-gated Routines
+  folder now appears under schema nodes in the sidebar, gated on the new
+  `DriverCapabilities::ROUTINES` flag (never on driver id). Core exposes
+  `RoutineInfo` / `RoutineKind` keyed on the engine-provided
+  `specific_name` for overload-safe node identity, plus
+  `Connection::schema_routines` / `routine_definition` with default
+  empty implementations so non-supporting drivers fall back gracefully.
+  PostgreSQL (via `pg_proc`/`pg_get_functiondef` with an aggregate/window
+  fallback), MySQL/MariaDB (via `information_schema.ROUTINES` +
+  `SHOW CREATE`), and SQL Server (via `sys.objects` +
+  `OBJECT_DEFINITION`) implement listing. Clicking a routine opens a
+  read-only `CodeDocument` (editor disabled, completion off, mutating and
+  execution toolbar buttons hidden) that round-trips across session
+  restore.
+
+### Changed
+
+* **Workspace document architecture refactor** — the closed
+  `DocumentHandle` enum that previously gated every document type was
+  replaced with a `PaneHandle` closure-erasing shell. Adding a new
+  document type now requires only a new `<name>/pane.rs` and one
+  `open_<name>` function in `workspace/actions.rs`; no changes to
+  `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
+  Introduces `DocumentKey` for tab deduplication (replaces the six
+  `is_*` methods), a unified `DocumentEvent` (replaces four per-document
+  event enums), and a universal `ResultPanel` + `ViewHandle` chrome host
+  with a `ToolbarSegment` slot system (`Left | Center | Right` +
+  `index`, `flex_wrap` row) for filter bars, axis bars, range chips,
+  and similar view-provided controls. `handle.rs` reduced from 486 to
+  29 LOC; `audit/mod.rs` reduced from 3454 to 1628 LOC. No new
+  dependencies, no functional regressions, 2169 tests pass.
+* **Chart-specific icons across chart surfaces and the result mode bar**
+  — added `ChartSpline`/`ChartArea`/`ChartColumnBig`/`ChartBar`/
+  `ChartPie`/`ChartNetwork` icons (with a `for_chart_kind` helper) and
+  replaced generic placeholders: the chart tab and the "Chart this
+  query" menu/editor button now use `ChartSpline`, the chart toolbar
+  Stats button uses `ChartBar`, and the Data | Chart | JSON result-view
+  mode bar gains per-mode icons.
+
+### Fixed
+
+* **Result mode bar appears in CodeDocument query results** —
+  `DataGridPanel::available_result_view_modes` no longer gates on the
+  currently active mode, so the Data | Chart | JSON bar now renders the
+  moment a `QueryResult` arrives (instead of only after the user
+  manually switched away from Table). Regression introduced earlier in
+  the workspace-view refactor.
+
 ## [0.6.0-dev.5] - 2026-05-20
 
 ### Added
