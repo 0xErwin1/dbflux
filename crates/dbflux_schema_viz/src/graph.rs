@@ -54,6 +54,18 @@ pub struct SchemaGraph {
     pub(crate) node_index_by_id: HashMap<TableNodeId, NodeIndex>,
 }
 
+/// Format a list of column names for use in SQL or DBML constructs.
+///
+/// A single column returns the bare name (no parentheses).
+/// Two or more columns return a parenthesized, comma-separated list: `(a, b)`.
+pub(crate) fn format_column_list(cols: &[String]) -> String {
+    if cols.len() == 1 {
+        cols[0].clone()
+    } else {
+        format!("({})", cols.join(", "))
+    }
+}
+
 impl SchemaGraph {
     /// Build a `SchemaGraph` from a slice of `TableInfo`.
     ///
@@ -65,7 +77,7 @@ impl SchemaGraph {
     /// If a FK references a table not present in `tables`, that edge is
     /// skipped silently.
     pub fn build(tables: &[TableInfo]) -> Self {
-        log::info!(
+        log::debug!(
             "DEBUG SchemaGraph::build INPUT: tables.len={} tables={:?}",
             tables.len(),
             tables
@@ -171,7 +183,7 @@ impl SchemaGraph {
             node_index_by_id,
         };
 
-        log::info!(
+        log::debug!(
             "DEBUG SchemaGraph::build OUTPUT: node_count={} edge_count={}",
             result.node_count(),
             result.edge_count()
@@ -186,7 +198,7 @@ impl SchemaGraph {
     /// The focal table is identified by `name` and optional `schema`.
     /// Returns an empty `SchemaGraph` if the focal table is not found.
     pub fn neighborhood(&self, table: &str, schema: Option<&str>, depth: usize) -> SchemaGraph {
-        log::info!(
+        log::debug!(
             "DEBUG SchemaGraph::neighborhood INPUT: table={:?} schema={:?} depth={} self node_count={}",
             table,
             schema,
@@ -303,7 +315,7 @@ impl SchemaGraph {
             node_index_by_id,
         };
 
-        log::info!(
+        log::debug!(
             "DEBUG SchemaGraph::neighborhood OUTPUT: node_count={} edge_count={}",
             result.node_count(),
             result.edge_count()
@@ -361,6 +373,104 @@ impl SchemaGraph {
         self.graph.edge_count()
     }
 
+    /// Extract the 1-hop subgraph centered on `focal_id`.
+    ///
+    /// Collects the focal node plus every table reachable via one outgoing FK edge
+    /// (tables the focal table references) or one incoming FK edge (tables that
+    /// reference the focal table). Returns an empty `SchemaGraph` if `focal_id` is
+    /// not present in this graph.
+    ///
+    /// Nodes are inserted in lexicographic `id.name` order for deterministic output.
+    /// Edges where both endpoints are in the collected set are preserved.
+    pub(crate) fn focal_subgraph(&self, focal_id: &TableNodeId) -> SchemaGraph {
+        let Some(&focal_idx) = self.node_index_by_id.get(focal_id) else {
+            return SchemaGraph {
+                graph: DiGraph::new(),
+                node_index_by_id: HashMap::new(),
+            };
+        };
+
+        let mut visited: HashSet<NodeIndex> = HashSet::new();
+        visited.insert(focal_idx);
+
+        // Outgoing edges: focal references these tables.
+        for edge in self
+            .graph
+            .edges_directed(focal_idx, petgraph::Direction::Outgoing)
+        {
+            visited.insert(edge.target());
+        }
+
+        // Incoming edges: these tables reference the focal table.
+        for edge in self
+            .graph
+            .edges_directed(focal_idx, petgraph::Direction::Incoming)
+        {
+            visited.insert(edge.source());
+        }
+
+        // Sort visited nodes by name for deterministic subgraph node insertion order.
+        let visited_set = visited.clone();
+        let mut sorted_visited: Vec<NodeIndex> = visited.into_iter().collect();
+        sorted_visited.sort_by_key(|&idx| {
+            self.graph
+                .node_weight(idx)
+                .map(|n| n.id.name.as_str())
+                .unwrap_or("")
+        });
+
+        let mut subgraph = DiGraph::with_capacity(sorted_visited.len(), sorted_visited.len());
+        let mut new_index_by_old: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+
+        for old_idx in sorted_visited {
+            let node = self
+                .graph
+                .node_weight(old_idx)
+                .expect("invariant: old_idx is from the same source graph")
+                .clone();
+            let new_idx = subgraph.add_node(node);
+            new_index_by_old.insert(old_idx, new_idx);
+        }
+
+        // Preserve edges where both endpoints are in the visited set.
+        for edge_idx in self.graph.edge_indices() {
+            let (source, target) = self
+                .graph
+                .edge_endpoints(edge_idx)
+                .expect("invariant: edge is from the same source graph");
+
+            if visited_set.contains(&source) && visited_set.contains(&target) {
+                let weight = self
+                    .graph
+                    .edge_weight(edge_idx)
+                    .expect("invariant: edge is from the same source graph")
+                    .clone();
+                let new_source = *new_index_by_old
+                    .get(&source)
+                    .expect("invariant: source was visited");
+                let new_target = *new_index_by_old
+                    .get(&target)
+                    .expect("invariant: target was visited");
+                subgraph.add_edge(new_source, new_target, weight);
+            }
+        }
+
+        let node_index_by_id = new_index_by_old
+            .iter()
+            .map(|(_, &new_idx)| {
+                let node = subgraph
+                    .node_weight(new_idx)
+                    .expect("invariant: new_idx was added via add_node");
+                (node.id.clone(), new_idx)
+            })
+            .collect();
+
+        SchemaGraph {
+            graph: subgraph,
+            node_index_by_id,
+        }
+    }
+
     /// Returns the node with the most FK connections (both inbound and outbound).
     /// Used to auto-select a focal table for global-mode snowflake layout.
     pub fn most_connected_node(&self) -> Option<(NodeIndex, &TableNode)> {
@@ -377,7 +487,16 @@ impl SchemaGraph {
             }
         }
 
-        let max_node_idx = *degree_by_node.iter().max_by_key(|(_, deg)| *deg)?.0;
+        // Find the maximum degree, then pick the min `id.name` (then `id.schema`)
+        // among all nodes that share it — deterministic regardless of HashMap iteration order.
+        let max_degree = degree_by_node.values().copied().max()?;
+
+        let max_node_idx = degree_by_node
+            .iter()
+            .filter(|&(_, &deg)| deg == max_degree)
+            .filter_map(|(&idx, _)| self.node_weight(idx).map(|n| (idx, &n.id)))
+            .min_by(|(_, a), (_, b)| a.name.cmp(&b.name).then(a.schema.cmp(&b.schema)))
+            .map(|(idx, _)| idx)?;
 
         self.node_weight(max_node_idx)
             .map(|node| (max_node_idx, node))
@@ -388,6 +507,25 @@ impl SchemaGraph {
 mod tests {
     use super::*;
     use dbflux_core::{ColumnInfo, ForeignKeyInfo, TableInfo};
+
+    // ── format_column_list ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_format_column_list() {
+        // Single column: bare name, no parentheses.
+        assert_eq!(
+            format_column_list(&["id".to_owned()]),
+            "id",
+            "single-column list should return bare name"
+        );
+
+        // Multiple columns: parenthesized comma-separated.
+        assert_eq!(
+            format_column_list(&["order_id".to_owned(), "line_id".to_owned()]),
+            "(order_id, line_id)",
+            "multi-column list should be wrapped in parentheses"
+        );
+    }
 
     fn make_table(
         name: &str,
@@ -421,6 +559,102 @@ mod tests {
     }
 
     // ── 9.1: isolated node ─────────────────────────────────────────────────────
+
+    // ── focal_subgraph includes both directions ────────────────────────────────
+
+    #[test]
+    fn test_focal_subgraph_includes_incoming() {
+        // Graph: parent <- focal <- child, plus unrelated (isolated).
+        // focal -> parent (outgoing), child -> focal (incoming).
+        let parent = make_table("parent", None, vec![("id", "integer", true)], vec![]);
+        let focal = make_table(
+            "focal",
+            None,
+            vec![("id", "integer", true)],
+            vec![ForeignKeyInfo {
+                name: "fk_focal_parent".into(),
+                columns: vec!["id".into()],
+                referenced_table: "parent".into(),
+                referenced_schema: None,
+                referenced_columns: vec!["id".into()],
+                on_delete: None,
+                on_update: None,
+            }],
+        );
+        let child = make_table(
+            "child",
+            None,
+            vec![("id", "integer", true)],
+            vec![ForeignKeyInfo {
+                name: "fk_child_focal".into(),
+                columns: vec!["id".into()],
+                referenced_table: "focal".into(),
+                referenced_schema: None,
+                referenced_columns: vec!["id".into()],
+                on_delete: None,
+                on_update: None,
+            }],
+        );
+        let unrelated = make_table("unrelated", None, vec![("id", "integer", true)], vec![]);
+
+        let graph = SchemaGraph::build(&[parent, focal, child, unrelated]);
+
+        let focal_id = TableNodeId {
+            schema: None,
+            name: "focal".to_owned(),
+        };
+        let sub = graph.focal_subgraph(&focal_id);
+
+        let node_names: HashSet<_> = sub.nodes().map(|(_, n)| n.id.name.clone()).collect();
+
+        assert!(
+            node_names.contains("parent"),
+            "outgoing neighbor must be included"
+        );
+        assert!(node_names.contains("focal"), "focal node must be included");
+        assert!(
+            node_names.contains("child"),
+            "incoming neighbor must be included"
+        );
+        assert!(
+            !node_names.contains("unrelated"),
+            "unrelated node must be excluded"
+        );
+    }
+
+    // ── most_connected_node determinism ───────────────────────────────────────
+
+    #[test]
+    fn test_most_connected_node_deterministic() {
+        // Two nodes "b" and "a" both connected by one FK edge each.
+        // The tie-break must always pick min `id.name`, which is "a".
+        let b = make_table(
+            "b",
+            None,
+            vec![("id", "integer", true)],
+            vec![ForeignKeyInfo {
+                name: "fk_b_a".into(),
+                columns: vec!["id".into()],
+                referenced_table: "a".into(),
+                referenced_schema: None,
+                referenced_columns: vec!["id".into()],
+                on_delete: None,
+                on_update: None,
+            }],
+        );
+        let a = make_table("a", None, vec![("id", "integer", true)], vec![]);
+        let graph = SchemaGraph::build(&[b, a]);
+
+        for _ in 0..10 {
+            let (_, node) = graph
+                .most_connected_node()
+                .expect("graph has nodes, result must be Some");
+            assert_eq!(
+                node.id.name, "a",
+                "tie-break must pick lexicographically smallest name"
+            );
+        }
+    }
 
     // ── T3: ColumnSummary.nullable round-trips from ColumnInfo.nullable ─────────
 

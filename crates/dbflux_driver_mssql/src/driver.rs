@@ -1543,7 +1543,7 @@ impl Connection for MssqlConnection {
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
         let total_start = Instant::now();
-        log::info!("[SCHEMA] Starting schema fetch");
+        log::debug!("[SCHEMA] Starting schema fetch");
 
         let databases = self.list_databases()?;
         let current_database = self
@@ -1552,7 +1552,7 @@ impl Connection for MssqlConnection {
             .ok()
             .and_then(|guard| guard.clone());
 
-        log::info!(
+        log::debug!(
             "[SCHEMA] Fetched {} databases in {:.2}ms",
             databases.len(),
             total_start.elapsed().as_secs_f64() * 1000.0
@@ -1597,7 +1597,7 @@ impl Connection for MssqlConnection {
     }
 
     fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
-        log::info!("[SCHEMA] Fetching schema for database: {}", database);
+        log::debug!("[SCHEMA] Fetching schema for database: {}", database);
 
         let escaped_db = database.replace(']', "]]");
         let qualified = format!("[{}]", escaped_db);
@@ -1684,7 +1684,7 @@ impl Connection for MssqlConnection {
     ) -> Result<TableInfo, DbError> {
         let schema_name = schema.unwrap_or("dbo");
 
-        log::info!(
+        log::debug!(
             "[SCHEMA] Fetching details for table: {}.{}.{}",
             database,
             schema_name,
@@ -1716,7 +1716,7 @@ impl Connection for MssqlConnection {
         view: &str,
     ) -> Result<ViewInfo, DbError> {
         let schema_name = schema.unwrap_or("dbo");
-        log::info!(
+        log::debug!(
             "[SCHEMA] Fetching details for view: {}.{}.{}",
             database,
             schema_name,

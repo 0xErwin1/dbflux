@@ -58,7 +58,7 @@ fn compute_node_height(node: &crate::graph::TableNode, show_indexes: bool) -> f3
 /// `show_types` controls whether type labels contribute to width.
 /// `show_indexes` controls whether index label widths are considered.
 /// Badge cluster always contributes `badge_count * 26.0` px.
-/// Result is clamped to [180, 400].
+/// Result is clamped to [200, 640].
 pub fn compute_node_width(
     node: &crate::graph::TableNode,
     show_types: bool,
@@ -744,11 +744,11 @@ mod tests {
         let ft = compute_node_width(node, false, true);
         let ff = compute_node_width(node, false, false);
 
-        // All results must be within the clamp range [180, 400]
+        // All results must be within the clamp range [200, 640]
         for (label, w) in [("TT", tt), ("TF", tf), ("FT", ft), ("FF", ff)] {
             assert!(
                 (200.0..=640.0).contains(&w),
-                "compute_node_width({label}) = {w} outside [180, 400]"
+                "compute_node_width({label}) = {w} outside [200, 640]"
             );
         }
 

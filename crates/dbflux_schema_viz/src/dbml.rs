@@ -3,8 +3,6 @@
 //! DBML is a human-readable text format for defining database schemas.
 //! This module converts a `SchemaGraph` to DBML text for export.
 
-use petgraph::prelude::{DiGraph, EdgeRef};
-
 use crate::graph::{SchemaGraph, TableNodeId};
 
 /// DBML export scope.
@@ -65,9 +63,11 @@ fn build_dbml_text(graph: &SchemaGraph) -> Result<String, String> {
             {
                 modifiers.push("increment");
             }
-            // Nullable if not pk and not fk
-            if !col.is_pk && !col.is_fk {
-                modifiers.push("null");
+            // PK implies NOT NULL by DBML convention — no null modifier needed.
+            // For non-PK columns, emit `not null` only when the column is not nullable.
+            // Nullable columns get no modifier (nullable is the DBML default).
+            if !col.is_pk && !col.nullable {
+                modifiers.push("not null");
             }
 
             let modifier_str = if modifiers.is_empty() {
@@ -88,23 +88,48 @@ fn build_dbml_text(graph: &SchemaGraph) -> Result<String, String> {
                 && let Some(edge) = graph.edge_weight(edge_idx)
                 && let Some(target_node) = graph.node_weight(target_idx)
             {
-                let from_col = edge.from_columns.first().cloned().unwrap_or_default();
-                let to_col = edge.to_columns.first().cloned().unwrap_or_default();
-
                 let from_table = build_table_name(&node.id);
                 let to_table = build_table_name(&target_node.id);
 
-                let mut ref_parts =
-                    format!("Ref: {}.{} > {}.{}", from_table, from_col, to_table, to_col);
+                // dbml_rs rejects the parenthesized composite-FK form `t.(a,b) > u.(c,d)`
+                // with a semantic error when the referenced columns lack a composite PK/unique key.
+                // Fallback: emit one `Ref:` line per column pair (zip from/to columns).
+                let from_cols = &edge.from_columns;
+                let to_cols = &edge.to_columns;
 
-                if let Some(ref on_delete) = edge.on_delete {
-                    ref_parts.push_str(&format!(" on_delete: {}", on_delete));
-                }
-                if let Some(ref on_update) = edge.on_update {
-                    ref_parts.push_str(&format!(" on_update: {}", on_update));
-                }
+                if from_cols.len() <= 1 {
+                    // Single-column FK: existing format, no regression.
+                    let from_col = from_cols.first().cloned().unwrap_or_default();
+                    let to_col = to_cols.first().cloned().unwrap_or_default();
 
-                refs.push(ref_parts);
+                    let mut ref_parts =
+                        format!("Ref: {}.{} > {}.{}", from_table, from_col, to_table, to_col);
+
+                    if let Some(ref on_delete) = edge.on_delete {
+                        ref_parts.push_str(&format!(" on_delete: {}", on_delete));
+                    }
+                    if let Some(ref on_update) = edge.on_update {
+                        ref_parts.push_str(&format!(" on_update: {}", on_update));
+                    }
+
+                    refs.push(ref_parts);
+                } else {
+                    // Composite FK: emit one Ref line per column pair.
+                    for (from_col, to_col) in from_cols.iter().zip(to_cols.iter()) {
+                        let mut ref_parts =
+                            format!("Ref: {}.{} > {}.{}", from_table, from_col, to_table, to_col);
+
+                        // Attach on_delete/on_update to each line so each is self-contained.
+                        if let Some(ref on_delete) = edge.on_delete {
+                            ref_parts.push_str(&format!(" on_delete: {}", on_delete));
+                        }
+                        if let Some(ref on_update) = edge.on_update {
+                            ref_parts.push_str(&format!(" on_update: {}", on_update));
+                        }
+
+                        refs.push(ref_parts);
+                    }
+                }
             }
         }
     }
@@ -118,6 +143,9 @@ fn build_dbml_text(graph: &SchemaGraph) -> Result<String, String> {
 }
 
 /// Extract focal table + 1-hop neighbors as a new SchemaGraph.
+///
+/// Delegates to `SchemaGraph::focal_subgraph`, which collects both outgoing
+/// and incoming FK neighbors for the named focal table.
 fn extract_focal_subgraph(
     graph: &SchemaGraph,
     focal_name: &str,
@@ -128,88 +156,7 @@ fn extract_focal_subgraph(
         name: focal_name.to_string(),
     };
 
-    let Some(&focal_idx) = graph.node_index_by_id.get(&focal_id) else {
-        return SchemaGraph {
-            graph: DiGraph::new(),
-            node_index_by_id: Default::default(),
-        };
-    };
-
-    // BFS to find all 1-hop neighbors
-    let mut visited = std::collections::HashSet::new();
-    visited.insert(focal_idx);
-
-    // Outgoing edges (this table references others)
-    for edge in graph
-        .graph
-        .edges_directed(focal_idx, petgraph::Direction::Outgoing)
-    {
-        visited.insert(edge.target());
-    }
-
-    // Incoming edges (others reference this table)
-    for edge in graph
-        .graph
-        .edges_directed(focal_idx, petgraph::Direction::Incoming)
-    {
-        visited.insert(edge.source());
-    }
-
-    // Build a new graph with just those nodes
-    let mut subgraph = DiGraph::with_capacity(visited.len(), visited.len());
-    let mut new_index_by_old = std::collections::HashMap::new();
-
-    // Sort for deterministic ordering
-    let mut visited_vec: Vec<_> = visited.into_iter().collect();
-    visited_vec.sort_by_key(|&idx| {
-        graph
-            .node_weight(idx)
-            .map(|n| n.id.name.as_str())
-            .unwrap_or("")
-    });
-
-    for old_idx in visited_vec {
-        let node = graph
-            .node_weight(old_idx)
-            .expect("old_idx is from the same graph")
-            .clone();
-        let new_idx = subgraph.add_node(node);
-        new_index_by_old.insert(old_idx, new_idx);
-    }
-
-    // Add edges where both ends are in visited
-    for edge_idx in graph.graph.edge_indices() {
-        let (source, target) = match graph.graph.edge_endpoints(edge_idx) {
-            Some(ends) => ends,
-            None => continue,
-        };
-
-        if new_index_by_old.contains_key(&source) && new_index_by_old.contains_key(&target) {
-            let weight = graph
-                .graph
-                .edge_weight(edge_idx)
-                .expect("edge is from the same graph")
-                .clone();
-            let new_source = *new_index_by_old.get(&source).expect("source was visited");
-            let new_target = *new_index_by_old.get(&target).expect("target was visited");
-            subgraph.add_edge(new_source, new_target, weight);
-        }
-    }
-
-    let node_index_by_id = new_index_by_old
-        .iter()
-        .map(|(_old_idx, &new_idx)| {
-            let node = subgraph
-                .node_weight(new_idx)
-                .expect("new_idx was added via add_node");
-            (node.id.clone(), new_idx)
-        })
-        .collect();
-
-    SchemaGraph {
-        graph: subgraph,
-        node_index_by_id,
-    }
+    graph.focal_subgraph(&focal_id)
 }
 
 /// Build a fully-qualified table name (schema.table or just table).
@@ -343,11 +290,21 @@ mod tests {
         let graph = SchemaGraph::build(&[users]);
         let dbml = to_dbml(&graph, DbmlScope::Subgraph).expect("DBML export should succeed");
 
-        // Verify basic structure
+        // Verify basic structure.
+        // Non-PK nullable columns carry no modifier (nullable is the DBML default).
         assert!(dbml.contains("Table users {"));
         assert!(dbml.contains("  id integer [pk, increment]"));
-        assert!(dbml.contains("  email varchar [null]"));
-        assert!(dbml.contains("  created_at timestamp [null]"));
+        // email and created_at are nullable non-PK columns — no null modifier emitted.
+        assert!(
+            dbml.contains("  email varchar\n") || dbml.contains("  email varchar\r"),
+            "nullable non-PK column must have no modifier, got:\n{}",
+            dbml
+        );
+        assert!(
+            dbml.contains("  created_at timestamp\n") || dbml.contains("  created_at timestamp\r"),
+            "nullable non-PK column must have no modifier, got:\n{}",
+            dbml
+        );
     }
 
     #[test]
@@ -459,13 +416,15 @@ mod tests {
         let graph = SchemaGraph::build(&[table]);
         let dbml = to_dbml(&graph, DbmlScope::Subgraph).expect("DBML export should succeed");
 
-        // Verify type mappings
+        // Verify type mappings. Non-PK nullable columns carry no null modifier
+        // (nullable is the DBML default). Non-PK non-nullable columns would carry [not null].
         assert!(dbml.contains("  id integer [pk, increment]"));
-        assert!(dbml.contains("  name varchar [null]"));
-        assert!(dbml.contains("  active boolean [null]"));
-        assert!(dbml.contains("  created timestamp [null]"));
-        assert!(dbml.contains("  data json [null]"));
-        assert!(dbml.contains("  balance numeric [null]"));
+        // All other columns are nullable (make_column sets nullable = !is_pk = true for non-pk).
+        assert!(dbml.contains("  name varchar"));
+        assert!(dbml.contains("  active boolean"));
+        assert!(dbml.contains("  created timestamp"));
+        assert!(dbml.contains("  data json"));
+        assert!(dbml.contains("  balance numeric"));
     }
 
     #[test]
@@ -529,6 +488,127 @@ mod tests {
         // Verify composite FK is represented
         assert!(dbml.contains("Ref: line_items.order_id > orders.id"));
         assert!(dbml.contains("on_delete: CASCADE"));
+    }
+
+    // ── Parse-gate for composite FK syntax ────────────────────────────────────
+
+    #[test]
+    fn test_composite_fk_parse_gate() {
+        // Gate test: verify whether dbml_rs accepts the parenthesized composite-FK Ref syntax.
+        //
+        // Outcome: dbml_rs rejects `Ref: t.(a, b) > u.(c, d)` with a semantic error
+        // ("referenced column is neither a composite primary key or a composite unique key")
+        // even when those columns exist on the table. The parenthesized syntax IS recognized
+        // by the parser, but semantic validation enforces that referenced columns form a
+        // composite PK/unique key. Since we cannot always control the schema constraints in
+        // the exported DBML, the fallback (one Ref per column pair) is used.
+        //
+        // This test documents the parse-gate outcome by asserting the FALLBACK is correct:
+        // for each composite FK edge, we emit one single-column Ref line per column pair.
+        let line_items = make_table(
+            "line_items",
+            vec![
+                make_column("order_id", "integer", false),
+                make_column("line_id", "integer", false),
+            ],
+            vec![ForeignKeyInfo {
+                name: "fk_composite".into(),
+                columns: vec!["order_id".into(), "line_id".into()],
+                referenced_table: "orders".into(),
+                referenced_schema: None,
+                referenced_columns: vec!["id".into(), "line_seq".into()],
+                on_delete: None,
+                on_update: None,
+            }],
+        );
+        let orders = make_table(
+            "orders",
+            vec![
+                make_column("id", "integer", true),
+                make_column("line_seq", "integer", false),
+            ],
+            vec![],
+        );
+
+        let graph = SchemaGraph::build(&[line_items, orders]);
+        let dbml = to_dbml(&graph, DbmlScope::Subgraph).expect("DBML export should succeed");
+
+        // Fallback: both column pairs must appear as separate Ref lines.
+        assert!(
+            dbml.contains("Ref: line_items.order_id > orders.id"),
+            "first column pair must appear as separate Ref line, got:\n{}",
+            dbml
+        );
+        assert!(
+            dbml.contains("Ref: line_items.line_id > orders.line_seq"),
+            "second column pair must appear as separate Ref line, got:\n{}",
+            dbml
+        );
+    }
+
+    // ── Nullability fix ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_dbml_nullability() {
+        // Non-PK non-nullable column must carry [not null].
+        // Non-PK nullable column must NOT carry [null] or [not null].
+        let table = TableInfo {
+            name: "items".to_string(),
+            schema: None,
+            columns: Some(vec![
+                ColumnInfo {
+                    name: "id".to_string(),
+                    type_name: "integer".to_string(),
+                    nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    enum_values: None,
+                },
+                ColumnInfo {
+                    name: "required_name".to_string(),
+                    type_name: "varchar".to_string(),
+                    nullable: false,
+                    is_primary_key: false,
+                    default_value: None,
+                    enum_values: None,
+                },
+                ColumnInfo {
+                    name: "optional_note".to_string(),
+                    type_name: "text".to_string(),
+                    nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    enum_values: None,
+                },
+            ]),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::default(),
+            child_items: None,
+        };
+
+        let graph = SchemaGraph::build(&[table]);
+        let dbml = to_dbml(&graph, DbmlScope::Subgraph).expect("DBML export should succeed");
+
+        // Non-PK non-nullable must have [not null]
+        assert!(
+            dbml.contains("required_name varchar [not null]"),
+            "non-PK non-nullable column must emit [not null], got:\n{}",
+            dbml
+        );
+
+        // Non-PK nullable must NOT contain [null] or [not null] for that column
+        let optional_line = dbml
+            .lines()
+            .find(|l| l.contains("optional_note"))
+            .expect("optional_note column line must exist");
+        assert!(
+            !optional_line.contains("[null]") && !optional_line.contains("[not null]"),
+            "nullable non-PK column must emit no null modifier, got: {}",
+            optional_line
+        );
     }
 
     #[test]
