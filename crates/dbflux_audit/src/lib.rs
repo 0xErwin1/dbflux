@@ -19,8 +19,8 @@ use crate::query::AuditQueryFilter;
 use crate::redaction::{redact_error_message, redact_json};
 use crate::store::sqlite::SqliteAuditStore;
 
-pub use dbflux_storage::repositories::audit::AuditEventDto;
 pub use crate::query::{AuditAggregateParams, AuditGroupColumn};
+pub use dbflux_storage::repositories::audit::AuditEventDto;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
@@ -717,7 +717,9 @@ mod tests {
             filter: StorageFilter::default(),
         };
 
-        let result = service.aggregate(&params).expect("aggregate should succeed");
+        let result = service
+            .aggregate(&params)
+            .expect("aggregate should succeed");
 
         assert_eq!(result.columns.len(), 3);
         assert_eq!(result.columns[0].name, "bucket_ms");
@@ -751,10 +753,14 @@ mod tests {
 
         // Call the service and the store directly with the same params; the
         // service rows must correspond exactly to the raw repo tuples.
-        let result = service.aggregate(&params).expect("service aggregate should succeed");
+        let result = service
+            .aggregate(&params)
+            .expect("service aggregate should succeed");
 
         let store = SqliteAuditStore::new(&path).expect("should open store");
-        let raw_tuples = store.aggregate(&params).expect("store aggregate should succeed");
+        let raw_tuples = store
+            .aggregate(&params)
+            .expect("store aggregate should succeed");
 
         // Service must return exactly as many rows as the repo.
         assert_eq!(result.rows.len(), raw_tuples.len());

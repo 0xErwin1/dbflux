@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use dbflux_core::observability::EventRecord;
 use dbflux_storage::repositories::audit::AuditEventDto;
 use dbflux_storage::{
-    AppendAuditEventExtended, AuditAggregateParams,
-    AuditQueryFilter as StorageAuditQueryFilter, AuditRepository, error::RepositoryError,
+    AppendAuditEventExtended, AuditAggregateParams, AuditQueryFilter as StorageAuditQueryFilter,
+    AuditRepository, error::RepositoryError,
 };
 use rusqlite::Connection;
 
@@ -479,7 +479,13 @@ mod tests {
         // Insert 3 events — all fall in the same bucket (bucket_ms=60_000)
         insert_event_in_store(&store, 1_000, Some("query"), Some("success"), Some("info"));
         insert_event_in_store(&store, 2_000, Some("query"), Some("success"), Some("info"));
-        insert_event_in_store(&store, 3_000, Some("connection"), Some("success"), Some("info"));
+        insert_event_in_store(
+            &store,
+            3_000,
+            Some("connection"),
+            Some("success"),
+            Some("info"),
+        );
 
         let params = AuditAggregateParams {
             bucket_ms: 60_000,

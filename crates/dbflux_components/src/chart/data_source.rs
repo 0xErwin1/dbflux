@@ -562,7 +562,10 @@ mod tests {
             panic!("expected ChartDataPlan::LocalAudit");
         };
 
-        assert_eq!(returned_spec, spec, "spec must be returned unchanged when no window");
+        assert_eq!(
+            returned_spec, spec,
+            "spec must be returned unchanged when no window"
+        );
     }
 
     /// When a TimeWindow is provided, AuditSource must override start_ms/end_ms.
@@ -593,10 +596,25 @@ mod tests {
             panic!("expected ChartDataPlan::LocalAudit");
         };
 
-        assert_eq!(returned_spec.start_ms, Some(9_000_000), "window start_ms must override spec");
-        assert_eq!(returned_spec.end_ms, Some(18_000_000), "window end_ms must override spec");
-        assert_eq!(returned_spec.bucket_ms, 60_000, "bucket_ms must be unchanged");
-        assert_eq!(returned_spec.group_by, AuditGroupBy::Outcome, "group_by must be unchanged");
+        assert_eq!(
+            returned_spec.start_ms,
+            Some(9_000_000),
+            "window start_ms must override spec"
+        );
+        assert_eq!(
+            returned_spec.end_ms,
+            Some(18_000_000),
+            "window end_ms must override spec"
+        );
+        assert_eq!(
+            returned_spec.bucket_ms, 60_000,
+            "bucket_ms must be unchanged"
+        );
+        assert_eq!(
+            returned_spec.group_by,
+            AuditGroupBy::Outcome,
+            "group_by must be unchanged"
+        );
     }
 
     /// AuditSource with no prior bounds and a window must populate start_ms/end_ms.

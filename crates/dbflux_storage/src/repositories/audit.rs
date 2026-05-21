@@ -1153,7 +1153,9 @@ mod tests {
             filter: AuditQueryFilter::default(),
         };
 
-        let err = repo.aggregate(&params).expect_err("should reject bucket_ms <= 0");
+        let err = repo
+            .aggregate(&params)
+            .expect_err("should reject bucket_ms <= 0");
         assert!(
             matches!(err, RepositoryError::Validation(_)),
             "expected Validation variant, got {:?}",
@@ -1205,8 +1207,20 @@ mod tests {
         insert_event(&repo, 50_000, Some("query"), Some("success"), Some("info"));
 
         // Insert 2 events in bucket 1 (category=connection)
-        insert_event(&repo, 60_000, Some("connection"), Some("success"), Some("info"));
-        insert_event(&repo, 90_000, Some("connection"), Some("success"), Some("info"));
+        insert_event(
+            &repo,
+            60_000,
+            Some("connection"),
+            Some("success"),
+            Some("info"),
+        );
+        insert_event(
+            &repo,
+            90_000,
+            Some("connection"),
+            Some("success"),
+            Some("info"),
+        );
 
         let params = AuditAggregateParams {
             bucket_ms: 60_000,

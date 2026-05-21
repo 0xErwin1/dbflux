@@ -1,8 +1,10 @@
 //! Audit document module.
 
+mod chart_view;
 mod filters;
 mod source_adapter;
 
+pub use chart_view::{AuditChartState, AuditViewMode};
 pub use filters::{AuditFilters, TimeRange, TimestampDisplayMode};
 pub use source_adapter::AuditSourceAdapter;
 
@@ -182,6 +184,14 @@ pub struct AuditDocument {
 
     suppress_load: bool,
 
+    // ── Chart view-mode ──────────────────────────────────────────────────
+    /// Current view mode: Table (default) or Chart.
+    pub view_mode: AuditViewMode,
+    /// Chart-specific state. Only used when `view_mode == Chart`.
+    pub chart: AuditChartState,
+    /// Group-by selector shown in the toolbar when in Chart mode.
+    dropdown_chart_group_by: Entity<Dropdown>,
+
     // ── Keyboard navigation state ─────────────────────────────────────────
     focus_handle: FocusHandle,
     /// Currently highlighted row (0-based index into `events`).
@@ -346,6 +356,10 @@ impl AuditDocument {
                 this.filters.end_ms = event.end_ms;
                 this.reset_pagination();
                 this.load_events(cx);
+
+                if matches!(this.view_mode, AuditViewMode::Chart) {
+                    this.trigger_chart_aggregate(cx);
+                }
             },
         );
 
@@ -477,6 +491,38 @@ impl AuditDocument {
 
         let filters = Self::default_filters_for_source(&source);
 
+        // Chart group-by dropdown — visible only when in Chart mode.
+        let dropdown_chart_group_by = cx.new(|_cx| {
+            Dropdown::new("audit-chart-group-by")
+                .items(vec![
+                    DropdownItem::new("Category"),
+                    DropdownItem::new("Outcome"),
+                    DropdownItem::new("Level"),
+                ])
+                .selected_index(Some(0))
+                .toolbar_style(true)
+        });
+
+        let chart_group_by_sub = cx.subscribe(
+            &dropdown_chart_group_by,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                use dbflux_components::chart::AuditGroupBy;
+                let group_by = match event.index {
+                    0 => AuditGroupBy::Category,
+                    1 => AuditGroupBy::Outcome,
+                    2 => AuditGroupBy::Level,
+                    _ => AuditGroupBy::Category,
+                };
+                this.chart.group_by = group_by;
+                // Reset binding seeded flag so the new group-by gets a fresh
+                // BindingSpec seed after the next aggregate result arrives.
+                this.chart.binding_seeded = false;
+                if matches!(this.view_mode, AuditViewMode::Chart) {
+                    this.trigger_chart_aggregate(cx);
+                }
+            },
+        );
+
         Self {
             app_state,
             source,
@@ -523,8 +569,12 @@ impl AuditDocument {
                 category_sub,
                 outcome_sub,
                 refresh_dropdown_sub,
+                chart_group_by_sub,
             ],
             suppress_load: false,
+            view_mode: AuditViewMode::Table,
+            chart: AuditChartState::new(cx),
+            dropdown_chart_group_by,
             focus_handle,
             selected_row: None,
             context_menu: None,
@@ -748,6 +798,10 @@ impl AuditDocument {
                             return;
                         }
                         doc.load_events(cx);
+
+                        if matches!(doc.view_mode, AuditViewMode::Chart) {
+                            doc.trigger_chart_aggregate(cx);
+                        }
                     });
                 });
             }
@@ -2623,6 +2677,42 @@ impl AuditDocument {
                 ]);
             }
 
+            // View-mode toggle and chart group-by selector (Internal source only).
+            if !self.is_external_event_stream() {
+                let is_chart = matches!(self.view_mode, AuditViewMode::Chart);
+
+                let toggle_label = if is_chart { "Table" } else { "Chart" };
+                let view_toggle = div()
+                    .id("audit-view-toggle")
+                    .h(Heights::BUTTON)
+                    .flex()
+                    .items_center()
+                    .px(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .border_1()
+                    .border_color(theme.input)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(theme.secondary))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if is_chart {
+                            this.view_mode = AuditViewMode::Table;
+                        } else {
+                            this.view_mode = AuditViewMode::Chart;
+                            if this.chart.last_result.is_none() {
+                                this.trigger_chart_aggregate(cx);
+                            }
+                        }
+                        cx.notify();
+                    }))
+                    .child(Text::caption(toggle_label));
+
+                items.push(view_toggle.into_any_element());
+
+                if is_chart {
+                    items.push(self.dropdown_chart_group_by.clone().into_any_element());
+                }
+            }
+
             items.extend([
                 div().flex_1().into_any_element(),
                 refresh_btn.into_any_element(),
@@ -3322,6 +3412,9 @@ impl Render for AuditDocument {
             self.load_events(cx);
         }
 
+        // Drain any pending chart aggregate result before rendering.
+        self.drain_chart_pending_result(cx);
+
         flush_pending_toast(self.pending_toast.take(), window, cx);
 
         // Update focus state before rendering rows so the selection highlight
@@ -3329,8 +3422,24 @@ impl Render for AuditDocument {
         self.has_focus = self.focus_handle.contains_focused(window, cx);
 
         let theme = cx.theme().clone();
-        let context_menu = self.render_context_menu(cx);
         let focus_handle = self.focus_handle.clone();
+
+        // Build the content area based on the current view mode.
+        let content_area: AnyElement = match self.view_mode {
+            AuditViewMode::Table => {
+                let context_menu = self.render_context_menu(cx);
+                div()
+                    .relative()
+                    .flex_1()
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .child(self.render_event_list(window, cx))
+                    .children(context_menu)
+                    .into_any_element()
+            }
+            AuditViewMode::Chart => self.render_chart_area(window, cx),
+        };
 
         div()
             .size_full()
@@ -3361,16 +3470,7 @@ impl Render for AuditDocument {
             // cause both to fire with different context IDs, breaking navigation.
             .track_focus(&focus_handle)
             .child(self.render_toolbar(window, cx))
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .child(self.render_event_list(window, cx))
-                    .children(context_menu),
-            )
+            .child(content_area)
             .child(self.render_status_bar(cx))
     }
 }
