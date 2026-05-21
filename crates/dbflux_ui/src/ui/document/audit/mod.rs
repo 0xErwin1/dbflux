@@ -350,6 +350,19 @@ impl AuditDocument {
             },
         );
 
+        // The panel emits TimeRangeChanged only for presets and on Custom Apply,
+        // not when "Custom…" is first selected. Subscribe to the dropdown directly
+        // so selecting Custom flips `selected_time_range` immediately and the
+        // custom date/time picker row appears without waiting for an Apply.
+        let time_range_dropdown_sub = cx.subscribe(
+            &dropdown_time_range,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.selected_time_range = Self::time_range_for_index(event.index);
+                this.refresh_filter_bar_items();
+                cx.notify();
+            },
+        );
+
         let timestamp_mode_sub = cx.subscribe(
             &dropdown_timestamp_mode,
             |this, _, event: &DropdownSelectionChanged, cx| {
@@ -563,6 +576,7 @@ impl AuditDocument {
             _subscriptions: vec![
                 search_sub,
                 time_range_sub,
+                time_range_dropdown_sub,
                 timestamp_mode_sub,
                 level_sub,
                 category_sub,
