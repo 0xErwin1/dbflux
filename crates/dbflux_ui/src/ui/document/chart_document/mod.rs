@@ -328,8 +328,19 @@ impl ChartDocument {
             end_ms: e,
         });
 
-        let request = match self.data_source.build_request(window) {
-            Ok(r) => r,
+        // Build the execution plan through the data source seam, then extract the
+        // Driver request. Query/Collection sources always yield ChartDataPlan::Driver;
+        // the non-Driver arm is a defensive guard for any future source kind that
+        // somehow reaches ChartDocument (which should not happen by design).
+        let request = match self.data_source.build_plan(window) {
+            Ok(dbflux_components::chart::ChartDataPlan::Driver(r)) => r,
+            Ok(_non_driver) => {
+                // Non-Driver plans are not executable by ChartDocument; this path
+                // is unreachable with Query/Collection sources but is handled
+                // defensively to avoid a silent no-op.
+                log::warn!("[chart-doc] build_plan returned a non-Driver plan; ignoring");
+                return;
+            }
             Err(ChartSourceError::EmptyQuery) => return,
             Err(e) => {
                 self.pending_toast = Some(PendingToast {
@@ -681,12 +692,13 @@ mod tests {
 
     /// T-DS-01 / R-03: `resolve_source` with a Query source and a time window
     /// produces a request carrying the window. This mirrors the exact path
-    /// `request_reexecute` takes: `self.data_source.build_request(window)`.
+    /// `request_reexecute` takes: `self.data_source.build_plan(window)` and
+    /// destructures `ChartDataPlan::Driver(request)`.
     ///
     /// Tested without a GPUI runtime by calling the seam directly.
     #[test]
-    fn data_source_build_request_with_window_produces_collection_window_context() {
-        use dbflux_components::chart::{ChartSourceError, TimeWindow, resolve_source};
+    fn data_source_build_plan_with_window_produces_driver_plan_with_collection_window_context() {
+        use dbflux_components::chart::{ChartDataPlan, TimeWindow, resolve_source};
         use dbflux_components::saved_chart::SavedChartSource;
         use dbflux_core::ExecutionSourceContext;
 
@@ -699,9 +711,13 @@ mod tests {
             end_ms: 2_000,
         };
 
-        let request = source
-            .build_request(Some(window))
-            .expect("non-empty query with window must produce Ok request");
+        let plan = source
+            .build_plan(Some(window))
+            .expect("non-empty query with window must produce Ok plan");
+
+        let ChartDataPlan::Driver(request) = plan else {
+            panic!("expected ChartDataPlan::Driver");
+        };
 
         let ctx = request
             .execution_context
@@ -712,8 +728,8 @@ mod tests {
             ExecutionSourceContext::CollectionWindow {
                 start_ms, end_ms, ..
             } => {
-                assert_eq!(*start_ms, 1_000);
-                assert_eq!(*end_ms, 2_000);
+                assert_eq!(start_ms, &1_000_i64);
+                assert_eq!(end_ms, &2_000_i64);
             }
         }
     }
@@ -721,7 +737,7 @@ mod tests {
     /// T-DS-02 / R-03, R-07: empty query via data source returns `EmptyQuery`.
     /// This corresponds to the early-return branch in `request_reexecute`.
     #[test]
-    fn data_source_build_request_empty_query_returns_empty_query_error() {
+    fn data_source_build_plan_empty_query_returns_empty_query_error() {
         use dbflux_components::chart::{ChartSourceError, resolve_source};
         use dbflux_components::saved_chart::SavedChartSource;
 
@@ -729,7 +745,7 @@ mod tests {
             query: String::new(),
         });
 
-        let result = source.build_request(None);
+        let result = source.build_plan(None);
 
         assert!(
             matches!(result, Err(ChartSourceError::EmptyQuery)),
@@ -737,21 +753,25 @@ mod tests {
         );
     }
 
-    /// T-DS-03 / R-03: data source without a window produces no source context.
-    /// Verifies the no-window branch preserves the pre-seam behavior (no
-    /// `CollectionWindow` injected when `pending_time_window` is `None`).
+    /// T-DS-03 / R-03: data source without a window produces a Driver plan with
+    /// no source context. Verifies the no-window branch preserves the pre-seam
+    /// behavior (no `CollectionWindow` injected when `pending_time_window` is `None`).
     #[test]
-    fn data_source_build_request_without_window_produces_no_source_context() {
-        use dbflux_components::chart::resolve_source;
+    fn data_source_build_plan_without_window_produces_driver_plan_with_no_source_context() {
+        use dbflux_components::chart::{ChartDataPlan, resolve_source};
         use dbflux_components::saved_chart::SavedChartSource;
 
         let source = resolve_source(&SavedChartSource::Query {
             query: "SELECT 1".to_string(),
         });
 
-        let request = source
-            .build_request(None)
-            .expect("non-empty query without window must produce Ok request");
+        let plan = source
+            .build_plan(None)
+            .expect("non-empty query without window must produce Ok plan");
+
+        let ChartDataPlan::Driver(request) = plan else {
+            panic!("expected ChartDataPlan::Driver");
+        };
 
         let has_source = request
             .execution_context
