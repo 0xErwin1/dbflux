@@ -14,9 +14,9 @@ use gpui::{
     canvas, div, fill, font, point,
 };
 
-use crate::chart::axis::{TickLabel, ticks_numeric, ticks_time};
+use crate::chart::axis::{TickLabel, ticks_log, ticks_numeric, ticks_time};
 use crate::chart::decimate::{lttb, lttb_with_indices};
-use crate::chart::spec::{AxisKind, ChartSpec};
+use crate::chart::spec::{AxisKind, ChartSpec, YScale};
 use crate::chart::stats::{
     SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x,
 };
@@ -121,9 +121,15 @@ pub(crate) struct RenderModel {
     /// Data-space X bounds.
     pub x_min: f64,
     pub x_max: f64,
-    /// Data-space Y bounds.
+    /// Data-space Y bounds (always original scale).
     pub y_min: f64,
     pub y_max: f64,
+    /// Whether Y is rendered in log1p scale.
+    pub y_is_log: bool,
+    /// Y bounds in log1p space when `y_is_log` is true; equal to
+    /// `(y_min, y_max)` in linear mode.
+    pub y_log_min: f64,
+    pub y_log_max: f64,
     /// Per-series descriptive stats over post-decimation Y values.
     /// Indexed parallel to `decimated`; `None` for empty series.
     pub series_stats: Vec<Option<SeriesStats>>,
@@ -343,6 +349,21 @@ impl ChartView {
             .flat_map(|s| s.iter().map(|(_, y)| *y))
             .fold(f64::NEG_INFINITY, f64::max);
 
+        // --- Y scale mode ---
+
+        let y_is_log = spec.y_scale == YScale::Log;
+
+        // In log1p mode: bounds and ticks live in log1p space so the canvas
+        // projection is a simple linear map of those transformed values.
+        // In linear mode: y_log_* mirrors y_min/y_max unchanged.
+        let (y_log_min, y_log_max) = if y_is_log {
+            let lmin = (y_min.max(0.0) + 1.0).ln();
+            let lmax = (y_max.max(0.0) + 1.0).ln();
+            (lmin, lmax)
+        } else {
+            (y_min, y_max)
+        };
+
         // --- Axis ticks ---
 
         let x_ticks = if x_is_time {
@@ -351,7 +372,11 @@ impl ChartView {
             ticks_numeric(x_min, x_max, 6)
         };
 
-        let y_ticks = ticks_numeric(y_min, y_max, 5);
+        let y_ticks = if y_is_log {
+            ticks_log(y_min, y_max, 5)
+        } else {
+            ticks_numeric(y_min, y_max, 5)
+        };
 
         // --- Palette colours ---
 
@@ -379,6 +404,9 @@ impl ChartView {
             x_max,
             y_min,
             y_max,
+            y_is_log,
+            y_log_min,
+            y_log_max,
             series_stats,
             source_indices,
         };
@@ -425,6 +453,15 @@ impl ChartView {
     /// Useful for deriving the window span when `resolved_window` is absent.
     pub fn data_x_bounds(&self) -> (f64, f64) {
         (self.render_model.x_min, self.render_model.x_max)
+    }
+
+    /// Data-space Y bounds `(y_min, y_max)` for the current render model.
+    ///
+    /// These are always original-scale values regardless of the active `YScale`
+    /// mode. The projection-space bounds are stored separately as `y_log_min`
+    /// / `y_log_max` and are not exposed publicly.
+    pub fn data_y_bounds(&self) -> (f64, f64) {
+        (self.render_model.y_min, self.render_model.y_max)
     }
 
     /// Whether the X axis is a time axis.
@@ -579,13 +616,17 @@ impl ChartView {
 
         let x_min = self.render_model.x_min;
         let x_range = (self.render_model.x_max - x_min).max(1.0);
-        let y_min = self.render_model.y_min;
-        let y_range = (self.render_model.y_max - y_min).max(1.0);
+        let y_log_min = self.render_model.y_log_min;
+        let y_log_range = (self.render_model.y_log_max - y_log_min).max(1.0);
+        let y_is_log = self.render_model.y_is_log;
 
         let cursor_data_x = x_min + (rel_x as f64 / plot_w as f64) * x_range;
 
-        let data_to_screen_y =
-            |dy: f64| -> f32 { plot_y0 + plot_h - ((dy - y_min) / y_range * plot_h as f64) as f32 };
+        // Use the shared projection helper so hover hit-test and render canvas
+        // always apply the same Y transform.
+        let data_to_screen_y = |dy: f64| -> f32 {
+            project_y_to_screen(dy, plot_y0, plot_h, y_log_min, y_log_range, y_is_log)
+        };
 
         let cursor_screen_y = f32::from(hover_y);
 
@@ -626,6 +667,84 @@ impl ChartView {
             self.focused_series_idx = new_idx;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Y projection helper
+// ---------------------------------------------------------------------------
+
+/// Project a data-space Y value to a screen-space Y coordinate (pixels).
+///
+/// This is the single authoritative projection used by both the render canvas
+/// (for series polylines / hover dots) and the hover hit-test path.
+/// Keeping both in sync here ensures they always agree.
+///
+/// Parameters:
+/// - `dy` — data-space Y value in the **original** scale (not log-transformed).
+/// - `plot_y0` — screen Y of the plot area top edge.
+/// - `plot_h` — screen height of the plot area in pixels.
+/// - `y_proj_min` — lower bound in projection space (`y_log_min` or `y_min`).
+/// - `y_proj_range` — span in projection space; must be > 0.
+/// - `y_is_log` — when `true`, applies `ln(dy + 1)` before the linear map.
+///
+/// Y is inverted: the top of the plot area corresponds to the maximum value.
+/// Non-finite intermediate values are clamped to plot boundaries rather than
+/// propagating NaN into the path builder.
+#[inline]
+fn project_y_to_screen(
+    dy: f64,
+    plot_y0: f32,
+    plot_h: f32,
+    y_proj_min: f64,
+    y_proj_range: f64,
+    y_is_log: bool,
+) -> f32 {
+    let projected = if y_is_log {
+        // Apply log1p; clamp to avoid ln(0) or ln(negative).
+        let safe = dy.max(-1.0 + 1e-9);
+        (safe + 1.0).ln()
+    } else {
+        dy
+    };
+
+    // Guard against non-finite values (e.g. NaN from degenerate data).
+    if !projected.is_finite() {
+        return plot_y0 + plot_h;
+    }
+
+    let ratio = if y_proj_range > 0.0 {
+        ((projected - y_proj_min) / y_proj_range).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+
+    plot_y0 + plot_h - (ratio * plot_h as f64) as f32
+}
+
+/// Map a value that is already in **projection space** to a screen Y coordinate.
+///
+/// Used to place Y-axis tick gridlines and labels.  In log mode `ticks_log`
+/// stores `tick.value` in log1p space; in linear mode tick values are already
+/// original-scale.  Both cases are in projection space, so no further transform
+/// is needed — only the linear `[proj_min, proj_max] → [plot_y0+plot_h, plot_y0]`
+/// mapping is applied.
+#[inline]
+fn project_y_proj_space_to_screen(
+    proj_value: f64,
+    plot_y0: f32,
+    plot_h: f32,
+    y_proj_min: f64,
+    y_proj_range: f64,
+) -> f32 {
+    if !proj_value.is_finite() {
+        return plot_y0 + plot_h;
+    }
+    let ratio = if y_proj_range > 0.0 {
+        ((proj_value - y_proj_min) / y_proj_range).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    plot_y0 + plot_h - (ratio * plot_h as f64) as f32
 }
 
 // ---------------------------------------------------------------------------
@@ -677,10 +796,11 @@ impl Render for ChartView {
 
         let x_min = model.x_min;
         let x_max = model.x_max;
-        let y_min = model.y_min;
-        let y_max = model.y_max;
         let x_range = (x_max - x_min).max(1.0);
-        let y_range = (y_max - y_min).max(1.0);
+        let y_log_min = model.y_log_min;
+        let y_log_max = model.y_log_max;
+        let y_log_range = (y_log_max - y_log_min).max(1.0);
+        let y_is_log = model.y_is_log;
 
         let palette = model.palette_colors.clone();
         let decimated = model.decimated.clone();
@@ -803,10 +923,17 @@ impl Render for ChartView {
                                 let data_to_screen_x = |dx: f64| -> f32 {
                                     plot_x0 + ((dx - x_min) / x_range * plot_w as f64) as f32
                                 };
+                                // Use the shared projection helper so this closure and
+                                // the hover hit-test always apply the same Y transform.
                                 let data_to_screen_y = |dy: f64| -> f32 {
-                                    // Y is inverted: top = y_max, bottom = y_min.
-                                    plot_y0 + plot_h
-                                        - ((dy - y_min) / y_range * plot_h as f64) as f32
+                                    project_y_to_screen(
+                                        dy,
+                                        plot_y0,
+                                        plot_h,
+                                        y_log_min,
+                                        y_log_range,
+                                        y_is_log,
+                                    )
                                 };
 
                                 // Dynamic X tick density: roughly one tick per 120px,
@@ -821,8 +948,16 @@ impl Render for ChartView {
                                 };
 
                                 // --- Horizontal gridlines at each Y tick ---
+                                // `tick.value` is in projection space (log1p or linear);
+                                // use the projection-space mapper, not data_to_screen_y.
                                 for tick in &y_ticks_canvas {
-                                    let sy = data_to_screen_y(tick.value);
+                                    let sy = project_y_proj_space_to_screen(
+                                        tick.value,
+                                        plot_y0,
+                                        plot_h,
+                                        y_log_min,
+                                        y_log_range,
+                                    );
                                     window.paint_quad(fill(
                                         gpui::Bounds {
                                             origin: point(gpui::px(plot_x0), gpui::px(sy - 0.5)),
@@ -1033,7 +1168,14 @@ impl Render for ChartView {
                                 let line_height = gpui::px(12.0);
 
                                 for (value, label) in &y_tick_labels_canvas {
-                                    let sy = data_to_screen_y(*value);
+                                    // `value` is in projection space (log1p or linear).
+                                    let sy = project_y_proj_space_to_screen(
+                                        *value,
+                                        plot_y0,
+                                        plot_h,
+                                        y_log_min,
+                                        y_log_range,
+                                    );
                                     let run = TextRun {
                                         len: label.len(),
                                         font: tick_font.clone(),
@@ -1555,6 +1697,7 @@ mod tests {
                 aggregation: AggKind::None,
             },
             track_source_indices: false,
+            y_scale: crate::chart::spec::YScale::Linear,
         }
     }
 
@@ -1916,5 +2059,125 @@ mod tests {
         assert_eq!(s1.min, 10.0);
         assert_eq!(s1.max, 30.0);
         assert_eq!(s1.last, 30.0);
+
+        // Linear mode: y_is_log must be false; y_log_* mirrors y bounds.
+        assert!(!view.render_model.y_is_log);
+        assert_eq!(view.render_model.y_log_min, view.render_model.y_min);
+        assert_eq!(view.render_model.y_log_max, view.render_model.y_max);
+    }
+
+    // ---------------------------------------------------------------------------
+    // T-PROJ-01..04: project_y_to_screen / regression for Y projection
+    // ---------------------------------------------------------------------------
+
+    /// T-PROJ-01: linear projection maps min → bottom, max → top.
+    #[test]
+    fn project_y_linear_maps_min_to_bottom_and_max_to_top() {
+        let plot_y0 = 10.0_f32;
+        let plot_h = 200.0_f32;
+        let y_min = 0.0_f64;
+        let y_max = 100.0_f64;
+        let y_range = y_max - y_min;
+
+        let bottom = project_y_to_screen(y_min, plot_y0, plot_h, y_min, y_range, false);
+        let top = project_y_to_screen(y_max, plot_y0, plot_h, y_min, y_range, false);
+
+        assert!(
+            (bottom - (plot_y0 + plot_h)).abs() < 0.01,
+            "min should map to bottom, got {bottom}"
+        );
+        assert!(
+            (top - plot_y0).abs() < 0.01,
+            "max should map to top, got {top}"
+        );
+    }
+
+    /// T-PROJ-02: linear mode is byte-identical before and after this change.
+    #[test]
+    fn project_y_linear_midpoint_is_correct() {
+        let plot_y0 = 0.0_f32;
+        let plot_h = 100.0_f32;
+        let y_min = 0.0_f64;
+        let y_range = 100.0_f64;
+
+        let mid = project_y_to_screen(50.0, plot_y0, plot_h, y_min, y_range, false);
+        assert!(
+            (mid - 50.0).abs() < 0.01,
+            "midpoint should map to screen center (50px), got {mid}"
+        );
+    }
+
+    /// T-PROJ-03: log1p mode — known value maps to expected screen coordinate.
+    #[test]
+    fn project_y_log_known_value() {
+        // Setup: y range 0..99, log1p bounds ln(1)=0 to ln(100)≈4.605.
+        let y_min = 0.0_f64;
+        let y_max = 99.0_f64;
+        let log_min = (y_min + 1.0).ln(); // = 0.0
+        let log_max = (y_max + 1.0).ln(); // ≈ 4.605
+        let log_range = log_max - log_min;
+
+        let plot_y0 = 0.0_f32;
+        let plot_h = 100.0_f32;
+
+        // y = 0 → log1p(0) = 0 → bottom of chart.
+        let sy0 = project_y_to_screen(0.0, plot_y0, plot_h, log_min, log_range, true);
+        assert!(
+            (sy0 - (plot_y0 + plot_h)).abs() < 0.1,
+            "y=0 should map to bottom in log mode, got {sy0}"
+        );
+
+        // y = 99 → log1p(99) = log_max → top of chart.
+        let sy_max = project_y_to_screen(99.0, plot_y0, plot_h, log_min, log_range, true);
+        assert!(
+            (sy_max - plot_y0).abs() < 0.1,
+            "y=99 should map to top in log mode, got {sy_max}"
+        );
+    }
+
+    /// T-PROJ-04: log mode with y=0 produces finite result (no -Inf from ln(0)).
+    #[test]
+    fn project_y_log_zero_is_finite() {
+        let result = project_y_to_screen(0.0, 0.0, 100.0, 0.0, 5.0, true);
+        assert!(
+            result.is_finite(),
+            "log mode with y=0 must produce finite screen coord"
+        );
+    }
+
+    /// T-PROJ-05: ChartView::build with y_scale=Log sets y_is_log and log bounds.
+    #[test]
+    fn build_with_log_scale_sets_y_is_log() {
+        let rows = vec![
+            vec![Value::Int(0), Value::Float(0.0)],
+            vec![Value::Int(1000), Value::Float(99.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.y_scale = crate::chart::spec::YScale::Log;
+
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+
+        assert!(view.render_model.y_is_log, "y_is_log must be true");
+        // Log bounds: ln(0+1)=0 to ln(99+1)≈4.605.
+        assert!(
+            view.render_model.y_log_min.abs() < 1e-9,
+            "y_log_min should be ~0"
+        );
+        assert!(
+            (view.render_model.y_log_max - 100f64.ln()).abs() < 1e-6,
+            "y_log_max should be ~ln(100)"
+        );
+        // Linear y bounds are still original-scale.
+        assert_eq!(view.render_model.y_min, 0.0);
+        assert_eq!(view.render_model.y_max, 99.0);
     }
 }

@@ -170,58 +170,29 @@ impl AuditService {
         self.store.query(filter)
     }
 
-    /// Aggregates audit events into time buckets and returns a `QueryResult`.
+    /// Aggregates audit events into time buckets and returns a wide-format `QueryResult`.
     ///
-    /// The result has three columns:
+    /// The result is pivoted so each distinct group value becomes its own column:
     /// - `bucket_ms` (`ColumnKind::Timestamp`): start of the time bucket in ms since epoch.
-    /// - `group_label` (`ColumnKind::Text`): the value of the grouped column (NULL → "unknown").
-    /// - `count` (`ColumnKind::Integer`): number of events in this bucket/group combination.
+    /// - One `ColumnKind::Integer` column per distinct group value, named after the value
+    ///   (e.g. "error", "warn"). Column order is ascending alphabetical for stable
+    ///   series colors across calls.
     ///
-    /// This shape is directly consumable by the chart engine without any post-processing.
+    /// Rows contain one entry per distinct bucket (ascending). Missing (bucket, group)
+    /// combinations are filled with `Value::Int(0)` so line charts stay continuous.
+    ///
+    /// Empty input returns a `QueryResult` with only the `bucket_ms` column and no rows.
     pub fn aggregate(
         &self,
         params: &AuditAggregateParams,
     ) -> Result<dbflux_core::QueryResult, AuditError> {
         use std::time::Instant;
 
-        use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
-
         let started = Instant::now();
         let raw = self.store.aggregate(params)?;
         let elapsed = started.elapsed();
 
-        let columns = vec![
-            ColumnMeta {
-                name: "bucket_ms".to_string(),
-                type_name: "INTEGER".to_string(),
-                kind: ColumnKind::Timestamp,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "group_label".to_string(),
-                type_name: "TEXT".to_string(),
-                kind: ColumnKind::Text,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "count".to_string(),
-                type_name: "INTEGER".to_string(),
-                kind: ColumnKind::Integer,
-                nullable: false,
-                is_primary_key: false,
-            },
-        ];
-
-        let rows = raw
-            .into_iter()
-            .map(|(bucket_ms, label, count)| {
-                vec![Value::Int(bucket_ms), Value::Text(label), Value::Int(count)]
-            })
-            .collect();
-
-        Ok(QueryResult::table(columns, rows, None, elapsed))
+        Ok(pivot_long_to_wide(raw, elapsed))
     }
 
     pub fn get(&self, id: i64) -> Result<Option<AuditEvent>, AuditError> {
@@ -637,6 +608,83 @@ impl AuditService {
     }
 }
 
+/// Pivots a long-format aggregate result `(bucket_ms, group_label, count)` into
+/// a wide `QueryResult` where each distinct group value becomes its own column.
+///
+/// Column layout:
+/// - col 0: `bucket_ms` (`ColumnKind::Timestamp`)
+/// - col 1..N: one `ColumnKind::Integer` column per distinct group value, sorted
+///   ascending alphabetically for stable series ordering and colors.
+///
+/// Rows are ordered by `bucket_ms` ascending. Missing (bucket, group) combinations
+/// are filled with `Value::Int(0)` so line charts stay continuous.
+///
+/// Empty input returns a result with only the `bucket_ms` column and no rows.
+pub fn pivot_long_to_wide(
+    raw: Vec<(i64, String, i64)>,
+    elapsed: std::time::Duration,
+) -> dbflux_core::QueryResult {
+    use std::collections::BTreeMap;
+
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
+
+    if raw.is_empty() {
+        let columns = vec![ColumnMeta {
+            name: "bucket_ms".to_string(),
+            type_name: "INTEGER".to_string(),
+            kind: ColumnKind::Timestamp,
+            nullable: false,
+            is_primary_key: false,
+        }];
+        return QueryResult::table(columns, vec![], None, elapsed);
+    }
+
+    // Collect distinct group labels in sorted order, and accumulate counts
+    // keyed by (bucket_ms, group_label).
+    let mut group_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut counts: BTreeMap<i64, BTreeMap<String, i64>> = BTreeMap::new();
+
+    for (bucket_ms, label, count) in raw {
+        group_set.insert(label.clone());
+        counts.entry(bucket_ms).or_default().insert(label, count);
+    }
+
+    let group_labels: Vec<String> = group_set.into_iter().collect();
+
+    // Build column metadata: bucket_ms + one Integer column per group.
+    let mut columns = vec![ColumnMeta {
+        name: "bucket_ms".to_string(),
+        type_name: "INTEGER".to_string(),
+        kind: ColumnKind::Timestamp,
+        nullable: false,
+        is_primary_key: false,
+    }];
+    for label in &group_labels {
+        columns.push(ColumnMeta {
+            name: label.clone(),
+            type_name: "INTEGER".to_string(),
+            kind: ColumnKind::Integer,
+            nullable: false,
+            is_primary_key: false,
+        });
+    }
+
+    // Build rows: one per distinct bucket, 0-fill missing groups.
+    let rows: Vec<Vec<Value>> = counts
+        .into_iter()
+        .map(|(bucket_ms, group_counts)| {
+            let mut row = vec![Value::Int(bucket_ms)];
+            for label in &group_labels {
+                let count = group_counts.get(label).copied().unwrap_or(0);
+                row.push(Value::Int(count));
+            }
+            row
+        })
+        .collect();
+
+    QueryResult::table(columns, rows, None, elapsed)
+}
+
 /// Implement `EventSink` for `AuditService`.
 ///
 /// This allows services to emit audit events through the `EventSink` trait
@@ -704,9 +752,10 @@ mod tests {
         service.record(event).expect("record should succeed");
     }
 
+    // T-SVC-01: wide schema — bucket_ms column + one Integer column per distinct group value.
     #[test]
-    fn service_aggregate_query_result_schema() {
-        let service = make_service("schema");
+    fn service_aggregate_wide_schema() {
+        let service = make_service("wide_schema");
 
         seed_event(&service, 0, "success");
         seed_event(&service, 1_000, "failure");
@@ -721,26 +770,130 @@ mod tests {
             .aggregate(&params)
             .expect("aggregate should succeed");
 
-        assert_eq!(result.columns.len(), 3);
+        // Wide format: bucket_ms + one column per distinct group value.
+        // "failure" and "success" both fall in bucket 0 — two group columns.
+        assert!(
+            result.columns.len() >= 2,
+            "expected at least 2 columns (bucket_ms + groups)"
+        );
         assert_eq!(result.columns[0].name, "bucket_ms");
         assert_eq!(result.columns[0].kind, ColumnKind::Timestamp);
-        assert_eq!(result.columns[1].name, "group_label");
-        assert_eq!(result.columns[1].kind, ColumnKind::Text);
-        assert_eq!(result.columns[2].name, "count");
-        assert_eq!(result.columns[2].kind, ColumnKind::Integer);
+
+        // All non-bucket columns must be ColumnKind::Integer.
+        for col in result.columns.iter().skip(1) {
+            assert_eq!(
+                col.kind,
+                ColumnKind::Integer,
+                "group column '{}' must be Integer",
+                col.name
+            );
+        }
     }
 
+    // T-SVC-02: distinct values become columns in sorted (ascending) order.
     #[test]
-    fn service_aggregate_delegation_transparent() {
-        let path = std::env::temp_dir().join(format!(
-            "dbflux_service_test_delegation_{}.db",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
+    fn service_aggregate_columns_sorted_ascending() {
+        let service = make_service("sorted_cols");
 
-        let service = AuditService::new_sqlite(&path).expect("should create service");
+        seed_event(&service, 0, "success");
+        seed_event(&service, 1_000, "failure");
 
-        // Two events with outcome=success, one with outcome=failure.
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Outcome,
+            filter: StorageFilter::default(),
+        };
+
+        let result = service
+            .aggregate(&params)
+            .expect("aggregate should succeed");
+
+        // Group columns after bucket_ms must be in sorted ascending order.
+        let group_names: Vec<&str> = result
+            .columns
+            .iter()
+            .skip(1)
+            .map(|c| c.name.as_str())
+            .collect();
+        let mut sorted = group_names.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            group_names, sorted,
+            "group columns must be in sorted ascending order"
+        );
+    }
+
+    // T-SVC-03: 0-fill for missing (bucket, group) combinations.
+    #[test]
+    fn service_aggregate_zero_fill_for_missing_combos() {
+        let service = make_service("zero_fill");
+
+        // Bucket 0: only "success". Bucket 60_001: only "failure".
+        // Wide result should have both group columns in both rows, with 0 where absent.
+        seed_event(&service, 0, "success");
+        seed_event(&service, 60_001, "failure");
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Outcome,
+            filter: StorageFilter::default(),
+        };
+
+        let result = service
+            .aggregate(&params)
+            .expect("aggregate should succeed");
+
+        // Must have exactly 2 group columns (failure + success, sorted) and 2 rows.
+        assert_eq!(
+            result.columns.len(),
+            3,
+            "expected bucket_ms + 2 group columns"
+        );
+        assert_eq!(result.rows.len(), 2, "expected 2 bucket rows");
+
+        // Find which column index is "failure" and which is "success".
+        let failure_col = result
+            .columns
+            .iter()
+            .position(|c| c.name == "failure")
+            .expect("failure column");
+        let success_col = result
+            .columns
+            .iter()
+            .position(|c| c.name == "success")
+            .expect("success column");
+
+        // Row 0 is bucket 0 (only "success") — "failure" cell must be 0.
+        assert!(
+            matches!(result.rows[0][failure_col], Value::Int(0)),
+            "failure count in bucket-0 row must be 0, got {:?}",
+            result.rows[0][failure_col]
+        );
+        assert!(
+            matches!(result.rows[0][success_col], Value::Int(1)),
+            "success count in bucket-0 row must be 1, got {:?}",
+            result.rows[0][success_col]
+        );
+
+        // Row 1 is the next bucket (only "failure") — "success" cell must be 0.
+        assert!(
+            matches!(result.rows[1][success_col], Value::Int(0)),
+            "success count in bucket-1 row must be 0, got {:?}",
+            result.rows[1][success_col]
+        );
+        assert!(
+            matches!(result.rows[1][failure_col], Value::Int(1)),
+            "failure count in bucket-1 row must be 1, got {:?}",
+            result.rows[1][failure_col]
+        );
+    }
+
+    // T-SVC-04: counts land in the correct (bucket, group) cell.
+    #[test]
+    fn service_aggregate_counts_in_correct_cells() {
+        let service = make_service("counts_cells");
+
+        // All events in the same bucket to simplify assertions.
         seed_event(&service, 0, "success");
         seed_event(&service, 1_000, "success");
         seed_event(&service, 2_000, "failure");
@@ -751,42 +904,86 @@ mod tests {
             filter: StorageFilter::default(),
         };
 
-        // Call the service and the store directly with the same params; the
-        // service rows must correspond exactly to the raw repo tuples.
         let result = service
             .aggregate(&params)
-            .expect("service aggregate should succeed");
+            .expect("aggregate should succeed");
 
-        let store = SqliteAuditStore::new(&path).expect("should open store");
-        let raw_tuples = store
+        // Single bucket row; failure=1, success=2.
+        assert_eq!(result.rows.len(), 1, "all events fit in one bucket");
+
+        let failure_col = result
+            .columns
+            .iter()
+            .position(|c| c.name == "failure")
+            .expect("failure col");
+        let success_col = result
+            .columns
+            .iter()
+            .position(|c| c.name == "success")
+            .expect("success col");
+
+        assert!(
+            matches!(result.rows[0][failure_col], Value::Int(1)),
+            "failure count must be 1, got {:?}",
+            result.rows[0][failure_col]
+        );
+        assert!(
+            matches!(result.rows[0][success_col], Value::Int(2)),
+            "success count must be 2, got {:?}",
+            result.rows[0][success_col]
+        );
+    }
+
+    // T-SVC-05: single-group result has one Integer column beside bucket_ms.
+    #[test]
+    fn service_aggregate_single_group_case() {
+        let service = make_service("single_group");
+
+        seed_event(&service, 0, "success");
+        seed_event(&service, 1_000, "success");
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Outcome,
+            filter: StorageFilter::default(),
+        };
+
+        let result = service
             .aggregate(&params)
-            .expect("store aggregate should succeed");
+            .expect("aggregate should succeed");
 
-        // Service must return exactly as many rows as the repo.
-        assert_eq!(result.rows.len(), raw_tuples.len());
+        // Only "success" group → exactly 2 columns.
+        assert_eq!(
+            result.columns.len(),
+            2,
+            "expected bucket_ms + 1 group column"
+        );
+        assert_eq!(result.columns[1].name, "success");
+        assert_eq!(result.columns[1].kind, ColumnKind::Integer);
+    }
 
-        // Each service row must match the corresponding raw tuple in order.
-        for (row, (bucket, label, count)) in result.rows.iter().zip(raw_tuples.iter()) {
-            assert!(
-                matches!(&row[0], Value::Int(b) if *b == *bucket),
-                "bucket_ms mismatch: row={:?}, tuple={}",
-                row[0],
-                bucket
-            );
-            assert!(
-                matches!(&row[1], Value::Text(l) if l == label),
-                "group_label mismatch: row={:?}, tuple={}",
-                row[1],
-                label
-            );
-            assert!(
-                matches!(&row[2], Value::Int(c) if *c == *count),
-                "count mismatch: row={:?}, tuple={}",
-                row[2],
-                count
-            );
-        }
+    // T-SVC-06: empty raw input returns only the bucket_ms column, no rows, no panic.
+    #[test]
+    fn service_aggregate_empty_input_no_panic() {
+        let service = make_service("empty_input");
 
-        let _ = std::fs::remove_file(&path);
+        // No events — aggregate over an empty store.
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Outcome,
+            filter: StorageFilter::default(),
+        };
+
+        let result = service
+            .aggregate(&params)
+            .expect("aggregate on empty store should succeed");
+
+        assert_eq!(
+            result.columns.len(),
+            1,
+            "empty input must yield only bucket_ms column"
+        );
+        assert_eq!(result.columns[0].name, "bucket_ms");
+        assert!(result.rows.is_empty(), "empty input must yield no rows");
     }
 }

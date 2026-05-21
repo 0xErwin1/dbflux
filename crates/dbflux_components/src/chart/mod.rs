@@ -37,7 +37,7 @@ pub use engine::{
 pub use point_inspector::{DataPointRef, SourceRowRef, point_inspector_element};
 pub use spec::{
     AggKind, AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, ManualChartSelection,
-    SeriesSpec,
+    SeriesSpec, YScale,
 };
 pub use stats::{
     SeriesStats, compute_series_stats, count_columns_for_why, format_resolution, format_span,

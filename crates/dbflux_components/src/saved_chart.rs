@@ -342,6 +342,7 @@ mod tests {
             decimation_threshold: 10_000,
             binding: BindingSpec::default(),
             track_source_indices: false,
+            y_scale: crate::chart::YScale::Linear,
         }
     }
 

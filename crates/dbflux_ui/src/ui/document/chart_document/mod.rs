@@ -551,6 +551,7 @@ impl ChartDocument {
                 decimation_threshold: 10_000,
                 binding: dbflux_components::chart::BindingSpec::default(),
                 track_source_indices: false,
+                y_scale: dbflux_components::chart::YScale::Linear,
             });
 
         let bindings = spec.binding.clone();

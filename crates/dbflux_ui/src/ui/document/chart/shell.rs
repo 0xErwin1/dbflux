@@ -16,7 +16,7 @@ pub enum ChartRailTab {
 use super::host::{ChartHost, HostAdapter};
 use dbflux_components::chart::{
     AxisPill, BindingSpec, ChartDetection, ChartSpec, ChartView, DataPointRef,
-    ManualChartSelection, SourceRowRef, detect_chart_columns,
+    ManualChartSelection, SourceRowRef, YScale, detect_chart_columns,
 };
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult};
 use gpui::prelude::*;
@@ -90,6 +90,10 @@ pub struct ChartShell {
     // ---- AxisBar state ----
     /// Which AxisBar pill picker is currently open.
     pub(crate) axis_open_pill: Option<AxisPill>,
+
+    // ---- Y scale ----
+    /// Y-axis scale mode. Persists across rebuilds (set_result / apply_bindings).
+    pub(crate) y_scale: YScale,
 }
 
 impl ChartShell {
@@ -123,6 +127,7 @@ impl ChartShell {
             chart_rail_picker_x_col: 0,
             chart_rail_picker_y_checked: Vec::new(),
             axis_open_pill: None,
+            y_scale: YScale::Linear,
         }
     }
 
@@ -209,6 +214,7 @@ impl ChartShell {
         }?;
 
         spec.legend_visible = self.chart_legend_visible && spec.series.len() > 1;
+        spec.y_scale = self.y_scale;
 
         match ChartView::build(result, spec) {
             Ok(chart_view) => {
@@ -328,6 +334,25 @@ impl ChartShell {
         }
     }
 
+    /// Update the Y-axis scale mode and rebuild the chart view.
+    ///
+    /// The new scale is applied to the next `ensure_chart_view` call.
+    /// Clears the existing `chart_view` so the rebuild happens on the next render.
+    pub fn set_y_scale(&mut self, scale: YScale, cx: &mut Context<Self>) {
+        if self.y_scale == scale {
+            return;
+        }
+        self.y_scale = scale;
+        self.chart_view = None;
+        self.chart_view_observer = None;
+        cx.notify();
+    }
+
+    /// Current Y-axis scale mode.
+    pub fn y_scale(&self) -> YScale {
+        self.y_scale
+    }
+
     /// Returns the current `ChartSpec` built from the active bindings and a
     /// caller-supplied column slice.
     ///
@@ -366,6 +391,7 @@ impl ChartShell {
             decimation_threshold: 10_000,
             binding: self.active_bindings(),
             track_source_indices: false,
+            y_scale: dbflux_components::chart::YScale::Linear,
         }
     }
 

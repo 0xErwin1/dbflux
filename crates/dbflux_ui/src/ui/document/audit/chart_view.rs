@@ -16,6 +16,7 @@ use crate::ui::document::chart::ChartShell;
 use crate::ui::tokens::Spacing;
 use dbflux_audit::{AuditAggregateParams, AuditGroupColumn};
 use dbflux_components::chart::{AggKind, AuditGroupBy, BindingSpec};
+use dbflux_core::ColumnKind;
 use dbflux_core::QueryResult;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, Entity, Task, Window};
@@ -178,23 +179,30 @@ impl AuditDocument {
                     shell.set_result(&arc, was_chart_mode, cx);
                 });
 
-                self.chart.last_result = Some(arc);
-
                 // Seed the BindingSpec once per group-by setting so the chart
-                // always opens with the correct axis assignments regardless of
-                // auto-detection heuristics.
+                // always opens with deterministic axis assignments.
                 //
-                // Fixed schema: col 0 = bucket_ms (Timestamp X), col 1 =
-                // group_label (Text series grouping), col 2 = count (Integer Y).
+                // Wide schema: col 0 = bucket_ms (Timestamp X), cols 1..N =
+                // one Integer series per distinct group value.  Collect all
+                // Integer column indices as Y series; no group_by needed since
+                // each group is already its own column.
                 if !self.chart.binding_seeded {
                     self.chart.binding_seeded = true;
+
+                    let y_cols: Vec<usize> = arc
+                        .columns
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, col)| col.kind == ColumnKind::Integer)
+                        .map(|(idx, _)| idx)
+                        .collect();
 
                     self.chart.chart_shell.update(cx, |shell, cx| {
                         shell.apply_bindings(
                             BindingSpec {
                                 x: 0,
-                                y: vec![2],
-                                group_by: Some(1),
+                                y: y_cols,
+                                group_by: None,
                                 filter: None,
                                 aggregation: AggKind::None,
                             },
@@ -202,6 +210,8 @@ impl AuditDocument {
                         );
                     });
                 }
+
+                self.chart.last_result = Some(arc);
             }
 
             Err(msg) => {

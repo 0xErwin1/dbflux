@@ -20,6 +20,7 @@ use crate::ui::components::toast::{PendingToast, flush_pending_toast};
 use crate::ui::document::audit::filters::format_timestamp_ms;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::chart::YScale;
 use dbflux_components::controls::{
     GpuiInput as Input, InputEvent, InputState, ReadonlyTextView, SelectableText,
 };
@@ -397,6 +398,10 @@ impl AuditDocument {
 
                 this.reset_pagination();
                 this.load_events(cx);
+
+                if matches!(this.view_mode, AuditViewMode::Chart) {
+                    this.trigger_chart_aggregate(cx);
+                }
             },
         );
 
@@ -424,6 +429,10 @@ impl AuditDocument {
 
                 this.reset_pagination();
                 this.load_events(cx);
+
+                if matches!(this.view_mode, AuditViewMode::Chart) {
+                    this.trigger_chart_aggregate(cx);
+                }
             },
         );
 
@@ -450,6 +459,10 @@ impl AuditDocument {
 
                 this.reset_pagination();
                 this.load_events(cx);
+
+                if matches!(this.view_mode, AuditViewMode::Chart) {
+                    this.trigger_chart_aggregate(cx);
+                }
             },
         );
 
@@ -2709,7 +2722,49 @@ impl AuditDocument {
                 items.push(view_toggle.into_any_element());
 
                 if is_chart {
-                    items.push(self.dropdown_chart_group_by.clone().into_any_element());
+                    // Fixed-width container prevents the dropdown from consuming
+                    // the full toolbar row width.  The "Group:" label distinguishes
+                    // this selector from the Level/Category/Outcome filter chips.
+                    let group_by_control = div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .w(px(148.0))
+                        .child(Text::caption("Group:"))
+                        .child(div().flex_1().child(self.dropdown_chart_group_by.clone()));
+                    items.push(group_by_control.into_any_element());
+
+                    // Y-scale toggle: "Y: Linear" / "Y: Log".
+                    // Fixed-width so it does not stretch the toolbar row.
+                    let current_y_scale = self.chart.chart_shell.read(cx).y_scale();
+                    let y_scale_label = match current_y_scale {
+                        YScale::Linear => "Y: Linear",
+                        YScale::Log => "Y: Log",
+                    };
+                    let y_scale_toggle = div()
+                        .id("audit-y-scale-toggle")
+                        .h(Heights::BUTTON)
+                        .w(px(80.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .px(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .border_1()
+                        .border_color(theme.input)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.secondary))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let next_scale = match current_y_scale {
+                                YScale::Linear => YScale::Log,
+                                YScale::Log => YScale::Linear,
+                            };
+                            this.chart.chart_shell.update(cx, |shell, cx| {
+                                shell.set_y_scale(next_scale, cx);
+                            });
+                        }))
+                        .child(Text::caption(y_scale_label));
+                    items.push(y_scale_toggle.into_any_element());
                 }
             }
 
@@ -3471,7 +3526,9 @@ impl Render for AuditDocument {
             .track_focus(&focus_handle)
             .child(self.render_toolbar(window, cx))
             .child(content_area)
-            .child(self.render_status_bar(cx))
+            .when(self.view_mode == AuditViewMode::Table, |d| {
+                d.child(self.render_status_bar(cx))
+            })
     }
 }
 

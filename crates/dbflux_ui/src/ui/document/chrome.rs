@@ -6,6 +6,13 @@ use gpui_component::theme::Theme;
 
 /// Toolbar bar that matches the DataGridPanel toolbar exactly:
 /// `h(Heights::TOOLBAR)` / `bg(theme.secondary)` / `border_b_1`.
+///
+/// `flex_shrink_0` ensures that when toolbar items wrap onto multiple rows the
+/// bar claims its full content-driven height before the sibling `flex_1`
+/// content area gets the residual space.  Without it the parent `flex_col`
+/// keeps the bar at `min_h(TOOLBAR)` and clipped wrapped rows are invisible.
+///
+/// `py(Spacing::XS)` adds breathing room between wrapped rows.
 pub(crate) fn compact_top_bar(
     theme: &Theme,
     children: impl IntoIterator<Item = AnyElement>,
@@ -13,9 +20,11 @@ pub(crate) fn compact_top_bar(
     div()
         .flex()
         .flex_wrap()
+        .flex_shrink_0()
         .items_center()
         .gap(Spacing::SM)
         .min_h(Heights::TOOLBAR)
+        .py(Spacing::XS)
         .px(Spacing::SM)
         .border_b_1()
         .border_color(theme.border)

@@ -6,14 +6,14 @@
 //! API and enables future sources (CloudWatch, Loki) to be swapped in without
 //! changing the document logic.
 
-use dbflux_audit::{AuditAggregateParams, AuditGroupColumn};
+use dbflux_audit::{AuditAggregateParams, AuditGroupColumn, pivot_long_to_wide};
+use dbflux_core::QueryResult;
 use dbflux_core::observability::query::EventDetail;
 use dbflux_core::observability::source::{EventSource as _, EventSourceError};
 use dbflux_core::observability::{
     AuditQuerySource, EventActorType, EventCategory, EventOutcome, EventQuery, EventRecord,
     EventSeverity, EventSource, EventSourceId,
 };
-use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
 use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter, AuditRepository};
 
 /// Adapter exposing the `EventSource` interface over the `AuditRepository` storage layer.
@@ -187,13 +187,11 @@ impl AuditSourceAdapter {
             .map_err(|e| format!("audit count failed: {}", e))
     }
 
-    /// Aggregates audit events into time buckets and returns a `QueryResult`
+    /// Aggregates audit events into time buckets and returns a wide-format `QueryResult`
     /// directly consumable by the chart engine.
     ///
-    /// The result has the fixed 3-column schema:
-    /// - `bucket_ms` (`ColumnKind::Timestamp`): bucket start in ms since epoch.
-    /// - `group_label` (`ColumnKind::Text`): grouped column value (NULL → "unknown").
-    /// - `count` (`ColumnKind::Integer`): event count.
+    /// Delegates pivot logic to `dbflux_audit::pivot_long_to_wide` so the wide-format
+    /// schema is defined in exactly one place.
     pub fn aggregate(&self, params: &AuditAggregateParams) -> Result<QueryResult, String> {
         use std::time::Instant;
 
@@ -204,38 +202,7 @@ impl AuditSourceAdapter {
             .map_err(|e| format!("audit aggregate failed: {e}"))?;
         let elapsed = started.elapsed();
 
-        let columns = vec![
-            ColumnMeta {
-                name: "bucket_ms".to_string(),
-                type_name: "INTEGER".to_string(),
-                kind: ColumnKind::Timestamp,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "group_label".to_string(),
-                type_name: "TEXT".to_string(),
-                kind: ColumnKind::Text,
-                nullable: false,
-                is_primary_key: false,
-            },
-            ColumnMeta {
-                name: "count".to_string(),
-                type_name: "INTEGER".to_string(),
-                kind: ColumnKind::Integer,
-                nullable: false,
-                is_primary_key: false,
-            },
-        ];
-
-        let rows = raw
-            .into_iter()
-            .map(|(bucket_ms, label, count)| {
-                vec![Value::Int(bucket_ms), Value::Text(label), Value::Int(count)]
-            })
-            .collect();
-
-        Ok(QueryResult::table(columns, rows, None, elapsed))
+        Ok(pivot_long_to_wide(raw, elapsed))
     }
 
     /// Queries using the `EventQuery` abstraction and returns an `EventPage`.
