@@ -20,6 +20,7 @@ use crate::redaction::{redact_error_message, redact_json};
 use crate::store::sqlite::SqliteAuditStore;
 
 pub use dbflux_storage::repositories::audit::AuditEventDto;
+pub use crate::query::{AuditAggregateParams, AuditGroupColumn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
@@ -45,6 +46,8 @@ pub enum AuditError {
     EventSink(#[from] EventSinkError),
     #[error("entity not found: {0}")]
     NotFound(String),
+    #[error("invalid parameter: {0}")]
+    Validation(String),
 }
 
 impl From<AuditError> for EventSinkError {
@@ -56,6 +59,7 @@ impl From<AuditError> for EventSinkError {
             AuditError::ConfigDirUnavailable => EventSinkError::Internal(err.to_string()),
             AuditError::EventSink(e) => e,
             AuditError::NotFound(_) => EventSinkError::Storage(err.to_string()),
+            AuditError::Validation(_) => EventSinkError::Internal(err.to_string()),
         }
     }
 }
@@ -65,6 +69,7 @@ impl From<RepositoryError> for AuditError {
         match err {
             RepositoryError::Sqlite { source } => AuditError::Sqlite(source),
             RepositoryError::NotFound(msg) => AuditError::NotFound(msg),
+            RepositoryError::Validation(msg) => AuditError::Validation(msg),
             RepositoryError::Serialization { source } => AuditError::Serialization(source),
         }
     }
@@ -163,6 +168,60 @@ impl AuditService {
 
     pub fn query(&self, filter: &AuditQueryFilter) -> Result<Vec<AuditEvent>, AuditError> {
         self.store.query(filter)
+    }
+
+    /// Aggregates audit events into time buckets and returns a `QueryResult`.
+    ///
+    /// The result has three columns:
+    /// - `bucket_ms` (`ColumnKind::Timestamp`): start of the time bucket in ms since epoch.
+    /// - `group_label` (`ColumnKind::Text`): the value of the grouped column (NULL → "unknown").
+    /// - `count` (`ColumnKind::Integer`): number of events in this bucket/group combination.
+    ///
+    /// This shape is directly consumable by the chart engine without any post-processing.
+    pub fn aggregate(
+        &self,
+        params: &AuditAggregateParams,
+    ) -> Result<dbflux_core::QueryResult, AuditError> {
+        use std::time::Instant;
+
+        use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
+
+        let started = Instant::now();
+        let raw = self.store.aggregate(params)?;
+        let elapsed = started.elapsed();
+
+        let columns = vec![
+            ColumnMeta {
+                name: "bucket_ms".to_string(),
+                type_name: "INTEGER".to_string(),
+                kind: ColumnKind::Timestamp,
+                nullable: false,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "group_label".to_string(),
+                type_name: "TEXT".to_string(),
+                kind: ColumnKind::Text,
+                nullable: false,
+                is_primary_key: false,
+            },
+            ColumnMeta {
+                name: "count".to_string(),
+                type_name: "INTEGER".to_string(),
+                kind: ColumnKind::Integer,
+                nullable: false,
+                is_primary_key: false,
+            },
+        ];
+
+        let rows = raw
+            .into_iter()
+            .map(|(bucket_ms, label, count)| {
+                vec![Value::Int(bucket_ms), Value::Text(label), Value::Int(count)]
+            })
+            .collect();
+
+        Ok(QueryResult::table(columns, rows, None, elapsed))
     }
 
     pub fn get(&self, id: i64) -> Result<Option<AuditEvent>, AuditError> {
@@ -590,4 +649,138 @@ impl CoreEventSink for AuditService {
 
 pub fn temp_sqlite_path(file_name: &str) -> PathBuf {
     std::env::temp_dir().join(file_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use dbflux_core::{ColumnKind, Value};
+    use dbflux_storage::AuditQueryFilter as StorageFilter;
+
+    use super::*;
+
+    fn make_service(name: &str) -> AuditService {
+        let path = std::env::temp_dir().join(format!(
+            "dbflux_service_test_{}_{}.db",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        AuditService::new_sqlite(&path).expect("should create service")
+    }
+
+    /// Seeds a System-category event (no required fields beyond action/summary).
+    fn seed_event(service: &AuditService, ts_ms: i64, outcome: &str) {
+        use dbflux_core::observability::{
+            EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+        };
+
+        let event = EventRecord {
+            id: None,
+            ts_ms,
+            level: EventSeverity::Info,
+            category: EventCategory::System,
+            action: "test_action".to_string(),
+            outcome: match outcome {
+                "failure" => EventOutcome::Failure,
+                _ => EventOutcome::Success,
+            },
+            actor_type: EventActorType::User,
+            actor_id: Some("test".to_string()),
+            source_id: EventSourceId::Local,
+            summary: "test".to_string(),
+            connection_id: None,
+            database_name: None,
+            driver_id: None,
+            object_type: None,
+            object_id: None,
+            details_json: None,
+            error_code: None,
+            error_message: None,
+            duration_ms: None,
+            session_id: None,
+            correlation_id: None,
+        };
+
+        service.record(event).expect("record should succeed");
+    }
+
+    #[test]
+    fn service_aggregate_query_result_schema() {
+        let service = make_service("schema");
+
+        seed_event(&service, 0, "success");
+        seed_event(&service, 1_000, "failure");
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Outcome,
+            filter: StorageFilter::default(),
+        };
+
+        let result = service.aggregate(&params).expect("aggregate should succeed");
+
+        assert_eq!(result.columns.len(), 3);
+        assert_eq!(result.columns[0].name, "bucket_ms");
+        assert_eq!(result.columns[0].kind, ColumnKind::Timestamp);
+        assert_eq!(result.columns[1].name, "group_label");
+        assert_eq!(result.columns[1].kind, ColumnKind::Text);
+        assert_eq!(result.columns[2].name, "count");
+        assert_eq!(result.columns[2].kind, ColumnKind::Integer);
+    }
+
+    #[test]
+    fn service_aggregate_delegation_transparent() {
+        let path = std::env::temp_dir().join(format!(
+            "dbflux_service_test_delegation_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let service = AuditService::new_sqlite(&path).expect("should create service");
+
+        // Two events with outcome=success, one with outcome=failure.
+        seed_event(&service, 0, "success");
+        seed_event(&service, 1_000, "success");
+        seed_event(&service, 2_000, "failure");
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Outcome,
+            filter: StorageFilter::default(),
+        };
+
+        // Call the service and the store directly with the same params; the
+        // service rows must correspond exactly to the raw repo tuples.
+        let result = service.aggregate(&params).expect("service aggregate should succeed");
+
+        let store = SqliteAuditStore::new(&path).expect("should open store");
+        let raw_tuples = store.aggregate(&params).expect("store aggregate should succeed");
+
+        // Service must return exactly as many rows as the repo.
+        assert_eq!(result.rows.len(), raw_tuples.len());
+
+        // Each service row must match the corresponding raw tuple in order.
+        for (row, (bucket, label, count)) in result.rows.iter().zip(raw_tuples.iter()) {
+            assert!(
+                matches!(&row[0], Value::Int(b) if *b == *bucket),
+                "bucket_ms mismatch: row={:?}, tuple={}",
+                row[0],
+                bucket
+            );
+            assert!(
+                matches!(&row[1], Value::Text(l) if l == label),
+                "group_label mismatch: row={:?}, tuple={}",
+                row[1],
+                label
+            );
+            assert!(
+                matches!(&row[2], Value::Int(c) if *c == *count),
+                "count mismatch: row={:?}, tuple={}",
+                row[2],
+                count
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

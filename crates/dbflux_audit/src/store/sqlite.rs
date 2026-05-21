@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use dbflux_core::observability::EventRecord;
 use dbflux_storage::repositories::audit::AuditEventDto;
 use dbflux_storage::{
-    AppendAuditEventExtended, AuditQueryFilter as StorageAuditQueryFilter, AuditRepository,
-    error::RepositoryError,
+    AppendAuditEventExtended, AuditAggregateParams,
+    AuditQueryFilter as StorageAuditQueryFilter, AuditRepository, error::RepositoryError,
 };
 use rusqlite::Connection;
 
@@ -23,6 +23,7 @@ fn to_audit_error(e: RepositoryError) -> AuditError {
     match e {
         RepositoryError::Sqlite { source } => AuditError::Sqlite(source),
         RepositoryError::NotFound(msg) => AuditError::NotFound(msg),
+        RepositoryError::Validation(msg) => AuditError::Validation(msg),
         RepositoryError::Serialization { source: _ } => {
             AuditError::Sqlite(rusqlite::Error::InvalidQuery)
         }
@@ -375,6 +376,21 @@ impl SqliteAuditStore {
         }
     }
 
+    /// Aggregates audit events into time buckets grouped by a chosen column.
+    ///
+    /// Delegates to `AuditRepository::aggregate`. The `params.filter` uses
+    /// the storage `AuditQueryFilter` directly (same type), so no conversion
+    /// is needed here.
+    ///
+    /// Returns `(bucket_ms, group_label, count)` tuples ordered by bucket
+    /// ascending.
+    pub fn aggregate(
+        &self,
+        params: &AuditAggregateParams,
+    ) -> Result<Vec<(i64, String, i64)>, AuditError> {
+        self.repo.aggregate(params).map_err(to_audit_error)
+    }
+
     /// Deletes audit events older than the given cutoff timestamp.
     ///
     /// ## Arguments
@@ -389,5 +405,99 @@ impl SqliteAuditStore {
         self.repo
             .delete_older_than(cutoff_ms, limit)
             .map_err(to_audit_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dbflux_storage::AuditGroupColumn;
+
+    use super::*;
+
+    fn temp_store(name: &str) -> SqliteAuditStore {
+        let path = std::env::temp_dir().join(format!(
+            "dbflux_audit_store_{}_{}.db",
+            name,
+            std::process::id()
+        ));
+
+        let _ = std::fs::remove_file(&path);
+
+        SqliteAuditStore::new(&path).expect("should open store")
+    }
+
+    fn insert_event_in_store(
+        store: &SqliteAuditStore,
+        ts_ms: i64,
+        category: Option<&str>,
+        outcome: Option<&str>,
+        _level: Option<&str>,
+    ) {
+        use dbflux_core::observability::{
+            EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+        };
+
+        let event = EventRecord {
+            id: None,
+            ts_ms,
+            level: EventSeverity::Info,
+            category: match category {
+                Some("query") => EventCategory::Query,
+                Some("connection") => EventCategory::Connection,
+                Some("config") => EventCategory::Config,
+                _ => EventCategory::System,
+            },
+            action: "test_action".to_string(),
+            outcome: match outcome {
+                Some("failure") => EventOutcome::Failure,
+                _ => EventOutcome::Success,
+            },
+            actor_type: EventActorType::User,
+            actor_id: Some("test".to_string()),
+            source_id: EventSourceId::Local,
+            summary: "test event".to_string(),
+            connection_id: None,
+            database_name: None,
+            driver_id: None,
+            object_type: None,
+            object_id: None,
+            details_json: None,
+            error_code: None,
+            error_message: None,
+            duration_ms: None,
+            session_id: None,
+            correlation_id: None,
+        };
+
+        store.record(event).expect("record should succeed");
+    }
+
+    #[test]
+    fn sqlite_store_aggregate_delegates() {
+        let store = temp_store("delegate");
+
+        // Insert 3 events — all fall in the same bucket (bucket_ms=60_000)
+        insert_event_in_store(&store, 1_000, Some("query"), Some("success"), Some("info"));
+        insert_event_in_store(&store, 2_000, Some("query"), Some("success"), Some("info"));
+        insert_event_in_store(&store, 3_000, Some("connection"), Some("success"), Some("info"));
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Category,
+            filter: StorageAuditQueryFilter::default(),
+        };
+
+        let results = store.aggregate(&params).expect("aggregate should succeed");
+
+        // 2 distinct category values in bucket 0
+        assert_eq!(results.len(), 2);
+
+        let query_row = results.iter().find(|(_, l, _)| l == "query");
+        assert!(query_row.is_some());
+        assert_eq!(query_row.unwrap().2, 2);
+
+        let connection_row = results.iter().find(|(_, l, _)| l == "connection");
+        assert!(connection_row.is_some());
+        assert_eq!(connection_row.unwrap().2, 1);
     }
 }
