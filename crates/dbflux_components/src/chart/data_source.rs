@@ -40,6 +40,13 @@ pub struct TimeWindow {
 pub enum ChartSourceError {
     /// The source contains no query text (empty string after trimming).
     EmptyQuery,
+    /// A collection source was asked to build a request without a time window.
+    ///
+    /// `ExecutionSourceContext::CollectionWindow` requires concrete `start_ms`/`end_ms`
+    /// values (both `i64`, not `Option`) so "collection without window" cannot be
+    /// represented. Callers must supply a `TimeWindow` before executing a collection
+    /// source.
+    WindowRequired,
     /// A source-specific error, e.g. a malformed configuration.
     Source(String),
 }
@@ -48,6 +55,9 @@ impl std::fmt::Display for ChartSourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ChartSourceError::EmptyQuery => write!(f, "chart query is empty"),
+            ChartSourceError::WindowRequired => {
+                write!(f, "a collection source requires a time window")
+            }
             ChartSourceError::Source(msg) => write!(f, "chart source error: {msg}"),
         }
     }
@@ -131,13 +141,14 @@ impl ChartDataSource for QuerySource {
 /// Derives the query target from `collection_ref` generically — no driver_id
 /// branching. The driver interprets the `CollectionWindow` source context.
 ///
-/// # Current status
+/// A time window is **required**: `ExecutionSourceContext::CollectionWindow` mandates
+/// concrete `start_ms`/`end_ms` values (`i64`, not `Option`), so there is no
+/// representation for "collection without window". Callers must supply a window;
+/// `build_request(None)` returns `Err(ChartSourceError::WindowRequired)`.
 ///
-/// TODO(Slice 3): This is a stub implementation that makes the seam genuinely
-/// two-kind and is covered by unit tests, but `ChartDocument` does NOT route
-/// Collection sources here yet — Collection charts still open via `DataDocument`
-/// as today. Finalise in Slice 3 when the team decides to wire the execution
-/// path.
+/// Note: `ChartDocument` does NOT route `Collection` sources here yet — collection
+/// charts still open via `DataDocument`. This implementation completes the two-kind
+/// seam contract and is exercised by unit tests only in W0.
 pub(crate) struct CollectionSource {
     collection_ref: CollectionRef,
 }
@@ -147,11 +158,14 @@ impl ChartDataSource for CollectionSource {
         &self,
         window: Option<TimeWindow>,
     ) -> Result<QueryRequest, ChartSourceError> {
-        // Derive targets generically from the collection reference.
-        // No driver_id branching — the driver handles the CollectionWindow context.
+        // A window is mandatory: CollectionWindow requires concrete start/end bounds.
+        let w = window.ok_or(ChartSourceError::WindowRequired)?;
+
+        // Derive target generically from the collection name.
+        // No driver_id branching — the driver interprets the CollectionWindow context.
         let targets = vec![self.collection_ref.name.clone()];
 
-        let exec_ctx = window.map(|w| ExecutionContext {
+        let exec_ctx = ExecutionContext {
             source: Some(ExecutionSourceContext::CollectionWindow {
                 targets,
                 start_ms: w.start_ms,
@@ -159,9 +173,9 @@ impl ChartDataSource for CollectionSource {
                 query_mode: None,
             }),
             ..ExecutionContext::default()
-        });
+        };
 
-        Ok(QueryRequest::new(String::new()).with_execution_context(exec_ctx))
+        Ok(QueryRequest::new(String::new()).with_execution_context(Some(exec_ctx)))
     }
 }
 
@@ -352,5 +366,66 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- Task 3.2: CollectionSource finalized tests ---
+
+    /// S-02 / R-05: collection source with a window must forward the collection name
+    /// as the single target, carry the exact start_ms/end_ms values, and leave
+    /// query_mode as None.
+    #[test]
+    fn collection_source_with_window_carries_collection_ref_in_targets() {
+        let src = CollectionSource {
+            collection_ref: CollectionRef::new("influxdb", "cpu_metrics"),
+        };
+        let window = TimeWindow {
+            start_ms: 1_700_000_000_000,
+            end_ms: 1_700_003_600_000,
+        };
+
+        let request = src
+            .build_request(Some(window))
+            .expect("should produce Ok request with a window");
+
+        let ctx = request
+            .execution_context
+            .as_ref()
+            .expect("request must carry an execution context");
+
+        match ctx.source.as_ref().expect("source must be Some") {
+            ExecutionSourceContext::CollectionWindow {
+                targets,
+                start_ms,
+                end_ms,
+                query_mode,
+            } => {
+                assert_eq!(
+                    targets,
+                    &vec!["cpu_metrics".to_string()],
+                    "targets must be exactly [collection_ref.name]"
+                );
+                assert_eq!(*start_ms, 1_700_000_000_000, "start_ms must be forwarded");
+                assert_eq!(*end_ms, 1_700_003_600_000, "end_ms must be forwarded");
+                assert!(query_mode.is_none(), "query_mode must be None");
+            }
+        }
+    }
+
+    /// S-02 / R-05: collection source without a window must return WindowRequired.
+    /// A collection source cannot represent "no window" because CollectionWindow
+    /// mandates concrete start_ms/end_ms (i64, not Option).
+    #[test]
+    fn collection_source_without_window_returns_err_window_required() {
+        let src = CollectionSource {
+            collection_ref: CollectionRef::new("influxdb", "cpu_metrics"),
+        };
+
+        let result = src.build_request(None);
+
+        assert!(
+            matches!(result, Err(ChartSourceError::WindowRequired)),
+            "expected WindowRequired error when window is None, got: {:?}",
+            result
+        );
     }
 }
