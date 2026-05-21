@@ -241,6 +241,71 @@ impl ChartDocument {
         Ok(doc)
     }
 
+    /// Create a `ChartDocument` with an explicitly supplied `ChartDataSource`.
+    ///
+    /// Used when the caller already holds a fully-constructed source (e.g.
+    /// `MetricSource`) and does not want to go through `resolve_source`. The
+    /// document title defaults to `"Untitled chart"` and can be overridden by
+    /// the caller after construction.
+    ///
+    /// `pending_run_on_first_render` is always `true`: the document auto-executes
+    /// on first render, which seeds the initial time window from `TimeRangePanel`
+    /// and fires the first data request.
+    pub fn new_with_source(
+        profile_id: Option<Uuid>,
+        title: String,
+        data_source: Box<dyn ChartDataSource>,
+        app_state: Entity<AppStateEntity>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let chart_shell = cx.new(ChartShell::new_standalone);
+
+        let refresh_dropdown = cx.new(|_cx| {
+            Dropdown::new("chart-doc-refresh").items(vec![
+                DropdownItem::new("Off"),
+                DropdownItem::new("30s"),
+                DropdownItem::new("1m"),
+                DropdownItem::new("5m"),
+            ])
+        });
+
+        let mut runner = DocumentTaskRunner::new(app_state.clone());
+        if let Some(pid) = profile_id {
+            runner.set_profile_id(pid);
+        }
+
+        Self {
+            id: DocumentId::new(),
+            title,
+            state: DocumentState::Clean,
+            exec_state: ExecState::Idle,
+            profile_id,
+            query: String::new(),
+            data_source,
+            last_result: None,
+            runner,
+            app_state,
+            pending_result: None,
+            pending_run_on_first_render: true,
+            chart_shell,
+            time_range_panel: None,
+            _time_range_sub: None,
+            refresh_dropdown,
+            refresh_policy: RefreshPolicy::default(),
+            _refresh_subscriptions: Vec::new(),
+            _refresh_timer: None,
+            pending_time_window: None,
+            pending_chart_reexecute: false,
+            saved_chart_id: None,
+            name_prompt: None,
+            pending_toast: None,
+            focus_handle: cx.focus_handle(),
+            focus_mode: ChartDocFocus::default(),
+            _subscriptions: Vec::new(),
+        }
+    }
+
     /// Check whether a `SavedChart` source is compatible with `ChartDocument`.
     ///
     /// Returns `Ok(())` for `Query` sources and `Err` for `Collection` sources.

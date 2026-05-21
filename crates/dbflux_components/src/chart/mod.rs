@@ -27,7 +27,7 @@ pub mod stats;
 pub use axis_bar::{AxisPill, axis_bar_element};
 pub use data_source::{
     AuditAggregateSpec, AuditGroupBy, AuditSource, ChartDataPlan, ChartDataSource,
-    ChartSourceError, TimeWindow, resolve_source,
+    ChartSourceError, MetricSource, TimeWindow, resolve_source,
 };
 pub use detect::{ChartDetection, detect_chart_columns};
 pub use engine::{

@@ -1213,6 +1213,7 @@ impl Workspace {
                 .with_shortcut(SC.open_audit_viewer),
             // Charts
             PaletteCommand::new("open_saved_chart", "Open Chart...", "Charts"),
+            PaletteCommand::new("open_metrics_chart", "Open Metrics Chart", "Charts"),
         ]
     }
 

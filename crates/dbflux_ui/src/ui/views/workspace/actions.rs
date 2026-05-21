@@ -1,5 +1,18 @@
 use super::*;
 use crate::platform;
+use dbflux_components::chart::MetricSource;
+use dbflux_core::{DriverCapabilities, DriverMetadata};
+
+/// Returns `true` when the given driver metadata advertises the `METRIC_SERIES`
+/// capability, meaning the driver can execute `MetricQuery` requests.
+///
+/// This is the sole gating condition for showing the "Open Metrics Chart" entry
+/// point. No driver_id, database category, or driver name comparisons are used.
+pub(crate) fn supports_metric_charts(metadata: &DriverMetadata) -> bool {
+    metadata
+        .capabilities
+        .contains(DriverCapabilities::METRIC_SERIES)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenDocumentDecision {
@@ -282,6 +295,71 @@ impl Workspace {
         Toast::info("Opened audit viewer")
             .meta_right(now_hms())
             .push(cx);
+    }
+
+    /// Opens a `ChartDocument` pre-seeded with a default `MetricSource` for the
+    /// active connection — but only when the driver advertises `METRIC_SERIES`.
+    ///
+    /// The visibility condition is `metadata.capabilities.contains(METRIC_SERIES)`.
+    /// No driver_id, driver name, or DatabaseCategory comparisons are used here.
+    ///
+    /// The `MetricSource` is constructed with sensible defaults (period 300 s,
+    /// statistic "Average"). A follow-up workstream will add a ListMetrics-backed
+    /// picker so the user can select namespace / metric interactively.
+    pub(super) fn open_metrics_chart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::document::ChartDocument;
+
+        let active = self.app_state.read(cx).active_connection();
+
+        let Some(active) = active else {
+            Toast::warning("No active connection")
+                .meta_right(now_hms())
+                .push(cx);
+            return;
+        };
+
+        // Sole visibility condition: the driver must advertise METRIC_SERIES.
+        // No driver_id, driver name, or DatabaseCategory check anywhere here.
+        let metadata = active.connection.metadata();
+        if !supports_metric_charts(metadata) {
+            Toast::warning("Connected driver does not support metric charts")
+                .meta_right(now_hms())
+                .push(cx);
+            return;
+        }
+
+        let profile_id = active.profile.id;
+
+        // Construct MetricSource with defaults. Period and statistic are set to
+        // commonly useful values; namespace and metric_name are placeholders that
+        // the user replaces in the chart's title area or via a future picker.
+        // Follow-up: wire a ListMetrics-backed picker to let the user select
+        // namespace / metric / dimensions without typing them manually.
+        let source = MetricSource {
+            namespace: "AWS/Lambda".to_string(),
+            metric_name: "Invocations".to_string(),
+            dimensions: vec![],
+            period_s: 300,
+            statistic: "Average".to_string(),
+        };
+
+        let doc = cx.new(|cx| {
+            ChartDocument::new_with_source(
+                Some(profile_id),
+                "Metrics chart".to_string(),
+                Box::new(source),
+                self.app_state.clone(),
+                window,
+                cx,
+            )
+        });
+        let handle = crate::ui::document::DocumentHandle::chart(doc, cx);
+
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(handle, cx);
+        });
+
+        self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
     }
 
     #[cfg(feature = "mcp")]
@@ -2605,5 +2683,66 @@ mod tests {
             filter_elapsed.as_millis()
         );
         assert!(!matched.is_empty(), "Should match some items");
+    }
+
+    // --- supports_metric_charts gating predicate ---
+
+    use super::supports_metric_charts;
+    use dbflux_core::{DatabaseCategory, DriverCapabilities, DriverMetadata, Icon, QueryLanguage};
+
+    fn make_metadata_with_caps(capabilities: DriverCapabilities) -> DriverMetadata {
+        DriverMetadata {
+            id: "test-driver".into(),
+            display_name: "Test Driver".into(),
+            description: "Unit-test metadata stub".into(),
+            category: DatabaseCategory::Relational,
+            deployment_class: None,
+            query_language: QueryLanguage::Sql,
+            capabilities,
+            default_port: None,
+            uri_scheme: "test".into(),
+            icon: Icon::Database,
+            syntax: None,
+            query: None,
+            mutation: None,
+            ddl: None,
+            transactions: None,
+            limits: None,
+            ssl_modes: None,
+            ssl_cert_fields: None,
+            classification_override: None,
+        }
+    }
+
+    /// A driver advertising METRIC_SERIES must return true from supports_metric_charts.
+    ///
+    /// This test is RED until TASK-3.1 adds supports_metric_charts (already done above)
+    /// AND TASK-3.2 is complete (but the predicate itself is the thing under test here).
+    #[test]
+    fn supports_metric_charts_true_when_metric_series_set() {
+        let meta = make_metadata_with_caps(DriverCapabilities::METRIC_SERIES);
+        assert!(
+            supports_metric_charts(&meta),
+            "METRIC_SERIES capability must make supports_metric_charts return true"
+        );
+    }
+
+    /// A driver without METRIC_SERIES must return false regardless of category or id.
+    ///
+    /// This proves the gating decision is driven only by the capability flag,
+    /// not by any driver_id or DatabaseCategory branching.
+    #[test]
+    fn supports_metric_charts_false_when_metric_series_not_set() {
+        let meta = make_metadata_with_caps(DriverCapabilities::AUTHENTICATION);
+        assert!(
+            !supports_metric_charts(&meta),
+            "Absence of METRIC_SERIES must make supports_metric_charts return false"
+        );
+
+        let empty = make_metadata_with_caps(DriverCapabilities::empty());
+        assert!(
+            !supports_metric_charts(&empty),
+            "Empty capabilities must make supports_metric_charts return false"
+        );
     }
 }

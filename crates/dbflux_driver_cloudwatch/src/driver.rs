@@ -28,7 +28,7 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     category: DatabaseCategory::LogStream,
     deployment_class: Some(DeploymentClass::CloudManaged),
     query_language: QueryLanguage::Sql,
-    capabilities: DriverCapabilities::AUTHENTICATION,
+    capabilities: DriverCapabilities::AUTHENTICATION.union(DriverCapabilities::METRIC_SERIES),
     default_port: None,
     uri_scheme: "cloudwatch".into(),
     icon: Icon::Logs,
@@ -1492,11 +1492,14 @@ fn fetch_log_stream_page(
 
 #[cfg(test)]
 mod tests {
-    use super::{CloudWatchCollectionFilter, CloudWatchDriver, metric_data_output_to_query_result};
+    use super::{
+        CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
+        metric_data_output_to_query_result,
+    };
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
     use aws_sdk_cloudwatch::types::MetricDataResult;
-    use dbflux_core::{ColumnKind, DbConfig, DbDriver, Value};
+    use dbflux_core::{ColumnKind, DbConfig, DbDriver, DriverCapabilities, Value};
 
     #[test]
     fn cloudwatch_driver_uses_builtin_form_and_key() {
@@ -1656,5 +1659,18 @@ mod tests {
         for row in &result.rows {
             assert_eq!(row.len(), result.columns.len());
         }
+    }
+
+    // T-5: CLOUDWATCH_METADATA must advertise METRIC_SERIES.
+    //
+    // This test is RED until TASK-3.2 adds the flag to CLOUDWATCH_METADATA.
+    #[test]
+    fn cloudwatch_metadata_has_metric_series() {
+        assert!(
+            CLOUDWATCH_METADATA
+                .capabilities
+                .contains(DriverCapabilities::METRIC_SERIES),
+            "CLOUDWATCH_METADATA must advertise METRIC_SERIES capability"
+        );
     }
 }
