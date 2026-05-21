@@ -222,10 +222,12 @@ impl ChartDocument {
             );
         }
 
-        let query = match &saved.source {
-            SavedChartSource::Query { query } => query.clone(),
-            // Already rejected above — unreachable, but exhaustive match.
-            SavedChartSource::Collection { .. } => String::new(),
+        // Extract the query string. The Collection guard above ensures this is
+        // always a Query variant at this point; the fallback is a safe no-op.
+        let query = if let SavedChartSource::Query { query } = &saved.source {
+            query.clone()
+        } else {
+            String::new()
         };
 
         let mut doc = Self::new(Some(saved.profile_id), query, app_state, window, cx);
@@ -321,9 +323,10 @@ impl ChartDocument {
         // Build the execution request through the data source seam.
         // EmptyQuery → silent early return (preserves the old inline empty-query guard).
         // Other errors → show a toast and return.
-        let window = self
-            .pending_time_window
-            .map(|(s, e)| TimeWindow { start_ms: s, end_ms: e });
+        let window = self.pending_time_window.map(|(s, e)| TimeWindow {
+            start_ms: s,
+            end_ms: e,
+        });
 
         let request = match self.data_source.build_request(window) {
             Ok(r) => r,

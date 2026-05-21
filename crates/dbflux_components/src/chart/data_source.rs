@@ -78,10 +78,7 @@ pub trait ChartDataSource: Send + 'static {
     ///
     /// Pure and synchronous — no IO, no GPUI context. The async
     /// `conn.execute` call remains in `ChartDocument`.
-    fn build_request(
-        &self,
-        window: Option<TimeWindow>,
-    ) -> Result<QueryRequest, ChartSourceError>;
+    fn build_request(&self, window: Option<TimeWindow>) -> Result<QueryRequest, ChartSourceError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,10 +101,7 @@ impl QuerySource {
 }
 
 impl ChartDataSource for QuerySource {
-    fn build_request(
-        &self,
-        window: Option<TimeWindow>,
-    ) -> Result<QueryRequest, ChartSourceError> {
+    fn build_request(&self, window: Option<TimeWindow>) -> Result<QueryRequest, ChartSourceError> {
         let q = self.query.trim();
 
         if q.is_empty() {
@@ -154,10 +148,7 @@ pub(crate) struct CollectionSource {
 }
 
 impl ChartDataSource for CollectionSource {
-    fn build_request(
-        &self,
-        window: Option<TimeWindow>,
-    ) -> Result<QueryRequest, ChartSourceError> {
+    fn build_request(&self, window: Option<TimeWindow>) -> Result<QueryRequest, ChartSourceError> {
         // A window is mandatory: CollectionWindow requires concrete start/end bounds.
         let w = window.ok_or(ChartSourceError::WindowRequired)?;
 
@@ -193,17 +184,17 @@ impl ChartDataSource for CollectionSource {
 ///
 /// To add a new source kind:
 /// 1. Add a `SavedChartSource` variant in `dbflux_components::saved_chart`.
-/// 2. Implement `ChartDataSource` for the new type.
-/// 3. Add one arm here.
+/// 2. Implement `ChartDataSource` for the new concrete struct in this file
+///    (see `QuerySource` and `CollectionSource` as examples).
+/// 3. Add one `match` arm below, mapping the new variant to `Box::new(<NewSource>)`.
 ///
-/// No edits to `dbflux_ui` are required.
+/// No changes to `dbflux_ui` are required. `ChartDocument::request_reexecute`
+/// calls `self.data_source.build_request(window)` without inspecting the kind.
 pub fn resolve_source(source: &SavedChartSource) -> Box<dyn ChartDataSource> {
     match source {
         // EXTENSION POINT: add new SavedChartSource variants here.
         SavedChartSource::Query { query } => Box::new(QuerySource::new(query.clone())),
-        SavedChartSource::Collection {
-            collection_ref, ..
-        } => Box::new(CollectionSource {
+        SavedChartSource::Collection { collection_ref, .. } => Box::new(CollectionSource {
             collection_ref: collection_ref.clone(),
         }),
     }
@@ -284,9 +275,7 @@ mod tests {
     fn query_source_without_window_produces_no_source_context() {
         let src = QuerySource::new("SELECT 1".to_string());
 
-        let request = src
-            .build_request(None)
-            .expect("should produce Ok request");
+        let request = src.build_request(None).expect("should produce Ok request");
 
         // Either no context at all, or context with source = None.
         let has_source = request
