@@ -12,7 +12,10 @@ The long-term goal is to provide a fully open-source alternative to DBeaver, sup
 
 ## Documentation
 
-- [Architecture](ARCHITECTURE.md)
+- [Usage Guide](docs/USAGE.md) — getting started: connect, query, chart, export
+- [Architecture](ARCHITECTURE.md) — layered diagrams, query/connection flow, crate map
+- [Drivers Overview](docs/DRIVERS.md) — supported databases, capabilities, limitations
+- [Charts](docs/CHARTS.md) — chart types, column kinds, axis auto-detection
 - [Contributing](CONTRIBUTING.md)
 - [Release Process](docs/RELEASE.md)
 - [Code Style](CODE_STYLE.md)
@@ -181,7 +184,7 @@ git clone https://github.com/0xErwin1/dbflux.git
 cd dbflux
 
 # Recommended: build with the full default feature set
-cargo build --release --features sqlite,postgres,mysql,mongodb,redis,dynamodb,cloudwatch,influxdb,lua,aws,mcp
+cargo build --release --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,lua,aws,mcp
 
 # Minimal build (relational drivers only, no AI/MCP, no Lua)
 cargo build --release --no-default-features --features sqlite,postgres,mysql
@@ -208,12 +211,15 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 - **PostgreSQL** with SSL/TLS modes (Disable, Prefer, Require)
 - **MySQL** / MariaDB
 - **SQLite** for local database files
+- **Microsoft SQL Server** (TDS) with TLS, SQL Browser named-instance routing, and multi-schema introspection
 - **MongoDB** with collection browsing, document CRUD, and shell query generation
 - **Redis** with key browsing for all types (String, Hash, List, Set, Sorted Set, Stream)
 - **DynamoDB** with table browsing, item CRUD, and AWS authentication
+- **InfluxDB** v1 and v2 (InfluxQL on v1, InfluxQL + Flux on v2)
 - **CloudWatch Logs** with log group/stream browsing and event streaming
-- SSH tunnel support with key, password, and agent authentication
-- Reusable SSH tunnel profiles
+- **External drivers over RPC** (register out-of-process drivers via the [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md))
+
+See [docs/DRIVERS.md](docs/DRIVERS.md) for a full capability matrix and per-driver limitations.
 
 ### User Interface
 
@@ -221,14 +227,43 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 - Collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B)
 - Schema tree browser with lazy loading for large databases
 - Schema-level metadata: indexes, foreign keys, constraints, custom types (PostgreSQL)
-- Multi-tab SQL editor with syntax highlighting
+- Stored procedures / routines folder per schema (drivers that expose them)
+- Multi-tab SQL editor with syntax highlighting and multi-statement execution (one result set per statement, where the driver supports it)
 - Virtualized data table with column resizing, horizontal scrolling, and sorting
 - Table browser with WHERE filters, custom LIMIT, and pagination
+- Workspace inspector rail for row/document details
 - "Copy as Query" context menu to copy INSERT/UPDATE/DELETE as SQL, MongoDB shell, or Redis commands
 - Query preview modal with language-specific syntax highlighting
 - Command palette with fuzzy search
 - Custom toast notification system with auto-dismiss
 - Background task panel
+- Session restore: open tabs are restored on startup with conflict detection for externally modified files
+
+### Charts & Visualization
+
+- Chart any query or collection result: Line, Bar, Scatter, Area, Stacked Bar, and Pie
+- Automatic axis detection from column kinds (timestamp X axis, numeric Y series) — no per-driver heuristics
+- Saved charts that reopen as their own document tab
+- See [docs/CHARTS.md](docs/CHARTS.md) for details
+
+### Connectivity & Access
+
+- SSH tunnels with key, password, and agent authentication; reusable SSH tunnel profiles
+- SOCKS5 / HTTP CONNECT proxy tunnels with reusable proxy profiles
+- Managed access providers (AWS SSM) for connecting without exposing ports
+- Provider-driven auth profiles (e.g. AWS SSO/shared/static), with import from `~/.aws/config`
+- Connection hooks at PreConnect/PostConnect/PreDisconnect/PostDisconnect, runnable as a command, a script, or in-process Lua
+
+### AI & MCP Integration
+
+- Built-in Model Context Protocol (MCP) server (`dbflux mcp`) for AI clients
+- Governance layer: operation classification, role/policy engine, trusted clients, and human approval flow for write/destructive operations
+- See [docs/MCP_AI_INTEGRATION.md](docs/MCP_AI_INTEGRATION.md)
+
+### Audit & Scripting
+
+- SQLite-backed audit log for queries, connections, hooks, scripts, MCP, governance, and config events, with redaction and query fingerprinting — see [docs/AUDIT.md](docs/AUDIT.md)
+- Lua, Python, and Bash scripts run as documents with live streamed output — see [docs/LUA.md](docs/LUA.md)
 
 ### Keyboard Navigation
 
