@@ -99,6 +99,14 @@ impl SqliteAuditStore {
         // Open the database and run migrations if needed
         let conn = Connection::open(&path)?;
 
+        // Wait on a contended database instead of failing immediately with
+        // SQLITE_BUSY. The audit database can be opened concurrently (it shares
+        // the WAL file with StorageRuntime, and tests may race on a shared temp
+        // path), so a busy timeout serializes these openers rather than
+        // surfacing a spurious "database is locked" error.
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(AuditError::Sqlite)?;
+
         // Enable WAL mode to be compatible with StorageRuntime's database configuration.
         // This must be done before any other operations to ensure proper isolation.
         conn.pragma_update(None, "journal_mode", "WAL")
