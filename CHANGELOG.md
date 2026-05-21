@@ -4,6 +4,18 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Focus shortcuts on macOS/Windows** — `Ctrl+Shift+1..4` (Focus
+  Sidebar / Editor / Results / Tasks) now fire on every platform. GPUI
+  normalizes `Shift`+digit chords at the platform layer (e.g. macOS
+  delivers `Ctrl+Shift+2` as `@` with `shift=false`), so the literal
+  `KeymapStack` matchers never matched the runtime keystroke. The four
+  shortcuts are now registered as native GPUI key bindings, which GPUI
+  normalizes per platform/layout at registration time. The `KeymapStack`
+  entries are retained solely as the command-palette shortcut-label
+  source.
+
 ## [0.6.0-dev.6] - 2026-05-20
 
 ### Added
