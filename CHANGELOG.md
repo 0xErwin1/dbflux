@@ -4,6 +4,14 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Audit event charts** — the Audit document now has a Table/Chart view
+  toggle that visualizes the currently filtered audit events as counts
+  over time, grouped by category, outcome, or level. The chart honors the
+  document's active time range and auto-refresh. Charts are ephemeral (a
+  view mode, not a saved artifact).
+
 ## [0.6.0-dev.5] - 2026-05-20
 
 ### Added
