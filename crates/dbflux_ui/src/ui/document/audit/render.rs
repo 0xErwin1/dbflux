@@ -796,6 +796,7 @@ impl AuditDocument {
             .filter(|value| !value.is_empty());
 
         div()
+            .w_full()
             .px_4()
             .pb_3()
             .pt_1()
@@ -917,6 +918,7 @@ impl AuditDocument {
         let details_json = event.details_json.clone().filter(|value| !value.is_empty());
 
         div()
+            .w_full()
             .px_4()
             .pb_3()
             .pt_1()
