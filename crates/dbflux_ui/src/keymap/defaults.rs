@@ -95,6 +95,19 @@ fn global_layer() -> KeymapLayer {
     // Cmd+Shift+3 and Cmd+Shift+4 are reserved by macOS for screenshots, so
     // switching the whole group to the primary modifier would silently break
     // two of the four bindings on Mac.
+    //
+    // IMPORTANT — these four entries are retained as a no-op label source only.
+    //
+    // (a) Actual keystroke dispatch is owned by `workspace_keybindings()` in
+    //     `actions.rs`, registered via `cx.bind_keys` as native GPUI bindings.
+    //     GPUI normalizes Ctrl+Shift+digit chords at the platform layer before
+    //     KeymapStack sees them (see GitHub #65), so these structural matchers
+    //     never fire at runtime.
+    // (b) These entries serve one live purpose: supplying the shortcut label in
+    //     the command palette. `shortcut_for_command` reads KeymapStack (not the
+    //     GPUI keymap), so removing these entries would drop the "Ctrl+Shift+N"
+    //     hints from the palette. Do not remove them until the command palette is
+    //     updated to read GPUI native bindings.
     layer.bind(
         KeyChord::new("1", Modifiers::ctrl_shift()),
         Command::FocusSidebar,
