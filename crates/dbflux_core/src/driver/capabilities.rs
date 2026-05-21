@@ -368,7 +368,7 @@ bitflags! {
         /// Driver can execute a batch of multiple statements submitted as a
         /// single query (e.g. several SQL statements separated by `;`),
         /// producing one result set per statement.
-        const MULTI_STATEMENT = 1 << 47;
+        const MULTI_STATEMENT = 1 << 48;
 
         // === Schema features ===
 
@@ -1983,6 +1983,16 @@ mod tests {
             DriverCapabilities::ROUTINES.bits(),
             1u64 << 47,
             "ROUTINES must be bit 47"
+        );
+        assert_eq!(
+            DriverCapabilities::MULTI_STATEMENT.bits(),
+            1u64 << 48,
+            "MULTI_STATEMENT must be bit 48"
+        );
+        assert_eq!(
+            DriverCapabilities::ROUTINES.bits() & DriverCapabilities::MULTI_STATEMENT.bits(),
+            0,
+            "ROUTINES and MULTI_STATEMENT must not share a bit"
         );
         assert!(
             DatabaseCategory::Relational
