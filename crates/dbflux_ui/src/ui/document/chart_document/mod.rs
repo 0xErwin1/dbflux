@@ -732,6 +732,7 @@ mod tests {
                 assert_eq!(start_ms, &1_000_i64);
                 assert_eq!(end_ms, &2_000_i64);
             }
+            other => panic!("expected CollectionWindow source context, got: {other:?}"),
         }
     }
 

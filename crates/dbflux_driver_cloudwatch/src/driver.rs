@@ -199,12 +199,21 @@ impl Connection for CloudWatchConnection {
                 DbError::query_failed("CloudWatch execution requires structured source context")
             })?;
 
-        let ExecutionSourceContext::CollectionWindow {
-            targets: log_groups,
-            start_ms,
-            end_ms,
-            query_mode,
-        } = source;
+        // Route on source context: existing logs path for CollectionWindow; the
+        // MetricQuery path (GetMetricData) is implemented in the next slice.
+        let (log_groups, start_ms, end_ms, query_mode) = match source {
+            ExecutionSourceContext::CollectionWindow {
+                targets: log_groups,
+                start_ms,
+                end_ms,
+                query_mode,
+            } => (log_groups, start_ms, end_ms, query_mode),
+            ExecutionSourceContext::MetricQuery { .. } => {
+                return Err(DbError::query_failed(
+                    "CloudWatch metric series execution is not yet available in this version",
+                ));
+            }
+        };
 
         let query_mode = query_mode.as_deref().unwrap_or(CLOUDWATCH_QUERY_MODE_CWLI);
 

@@ -298,6 +298,8 @@ impl CodeDocument {
             None => source_spec
                 .as_ref()
                 .and_then(|spec| spec.default_query_mode.clone()),
+            // MetricQuery sources do not participate in the log-group source controls.
+            _ => None,
         };
 
         let selected_query_mode_index = selected_query_mode.as_ref().and_then(|selected| {
@@ -321,6 +323,8 @@ impl CodeDocument {
                 .and_then(|spec| spec.default_target.clone())
                 .into_iter()
                 .collect(),
+            // MetricQuery sources do not populate the log-group targets selector.
+            _ => Vec::new(),
         };
 
         let targets_placeholder = source_spec
@@ -1501,6 +1505,7 @@ mod tests {
                 assert_eq!(end_ms, 20);
                 assert_eq!(query_mode.as_deref(), Some("cwli"));
             }
+            other => panic!("expected CollectionWindow source context, got: {other:?}"),
         }
 
         assert_eq!(
@@ -1539,6 +1544,7 @@ mod tests {
             ExecutionSourceContext::CollectionWindow { targets, .. } => {
                 assert!(targets.is_empty());
             }
+            other => panic!("expected CollectionWindow source context, got: {other:?}"),
         }
     }
 }
