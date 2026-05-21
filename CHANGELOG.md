@@ -4,6 +4,18 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+* **DriverCapabilities bit collision** — `MULTI_STATEMENT` and `ROUTINES`
+  were both defined as `1 << 47` in the same bitflags, so a driver
+  advertising one silently advertised the other. `MULTI_STATEMENT` now
+  occupies bit 48, with a regression test asserting the bits are
+  distinct.
+* **DynamoDB upsert capability** — `MutationCapabilities.supports_upsert`
+  was `false` even though the driver implements single-item upsert
+  (`PutItem`) and only rejects `many + upsert`. The flag is now `true`,
+  so the MCP write tool no longer rejects a supported operation.
+
 ## [0.6.0-dev.6] - 2026-05-20
 
 ### Added
