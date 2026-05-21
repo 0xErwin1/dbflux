@@ -45,8 +45,24 @@ impl Render for ChartDocument {
             self.time_range_panel = Some(panel.clone());
             self._time_range_sub = Some(sub);
 
-            // Seed the initial window. The subscription above is now registered,
-            // so emit_initial will reach on_time_range_changed.
+            // Seed the initial window synchronously rather than relying on
+            // emit_initial's event delivery, which GPUI defers until after the
+            // current render pass. Sources that require a window (MetricSource,
+            // CollectionSource) would otherwise call build_plan(None) → WindowRequired
+            // toast on the very first auto-run triggered by pending_run_on_first_render.
+            //
+            // Index 3 = Last24Hours. Mirror the logic from
+            // TimeRangePanel::resolved_window_for_preset: fill end = now when start
+            // is Some so the window is always closed (required by MetricQuery).
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let start_ms = now_ms - 24 * 60 * 60_000; // 24h lookback
+            self.pending_time_window = Some((start_ms, now_ms));
+
+            // Also trigger emit_initial so that the subscription fires on the
+            // next render pass, keeping the dropdown and panel state consistent.
             panel.update(cx, |panel, cx| panel.emit_initial(cx));
         }
 
@@ -203,26 +219,28 @@ impl Render for ChartDocument {
             let shell_for_stats = self.chart_shell.clone();
             let weak_self_for_png = cx.weak_entity();
             let weak_self_for_save = cx.weak_entity();
-            let weak_self_for_range = cx.weak_entity();
+            let weak_self_for_refresh = cx.weak_entity();
+
+            let dropdown_time_range = self
+                .time_range_panel
+                .as_ref()
+                .map(|p| p.read(cx).dropdown_time_range.clone());
 
             let ctx = ChartToolbarContext {
                 theme: &theme,
                 chart_shell: self.chart_shell.clone(),
+                refresh_policy: self.refresh_policy,
                 refresh_dropdown: self.refresh_dropdown.clone(),
-                time_range_panel: self.time_range_panel.clone(),
+                dropdown_time_range,
                 row_count,
                 resolved_window,
                 source_supports_save: true,
             };
 
             let handlers = ChartToolbarHandlers {
-                on_select_range_preset: Arc::new(move |idx, _window, cx| {
-                    if let Some(doc) = weak_self_for_range.upgrade() {
-                        doc.update(cx, |this, cx| {
-                            if let Some(panel) = this.time_range_panel.clone() {
-                                panel.update(cx, |p, cx| p.select_preset(idx, cx));
-                            }
-                        });
+                on_refresh: Arc::new(move |window, cx| {
+                    if let Some(doc) = weak_self_for_refresh.upgrade() {
+                        doc.update(cx, |this, cx| this.request_reexecute(window, cx));
                     }
                 }),
                 on_toggle_stats_rail: Arc::new(move |_window, cx| {

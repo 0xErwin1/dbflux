@@ -14,7 +14,7 @@ use super::types::{DocumentId, DocumentState};
 use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
 use crate::ui::common::time_range::view::TimeRangePanel;
-use crate::ui::components::dropdown::{Dropdown, DropdownItem};
+use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::PendingToast;
 use dbflux_components::chart::{
     ChartDataSource, ChartDetection, ChartSourceError, TimeWindow, detect_chart_columns,
@@ -146,14 +146,26 @@ impl ChartDocument {
             ChartShell::new_standalone(cx)
         });
 
+        let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
-            Dropdown::new("chart-doc-refresh").items(vec![
-                DropdownItem::new("Off"),
-                DropdownItem::new("30s"),
-                DropdownItem::new("1m"),
-                DropdownItem::new("5m"),
-            ])
+            let items = RefreshPolicy::ALL
+                .iter()
+                .map(|p| DropdownItem::new(p.label()))
+                .collect();
+
+            Dropdown::new("chart-doc-refresh")
+                .items(items)
+                .selected_index(Some(default_refresh.index()))
+                .compact_trigger(true)
         });
+
+        let refresh_policy_sub = cx.subscribe(
+            &refresh_dropdown,
+            |this: &mut Self, _, event: &DropdownSelectionChanged, cx| {
+                let policy = RefreshPolicy::from_index(event.index);
+                this.set_refresh_policy(policy, cx);
+            },
+        );
 
         let mut runner = DocumentTaskRunner::new(app_state.clone());
         if let Some(pid) = profile_id {
@@ -186,8 +198,8 @@ impl ChartDocument {
             time_range_panel: None,
             _time_range_sub: None,
             refresh_dropdown,
-            refresh_policy: RefreshPolicy::default(),
-            _refresh_subscriptions: Vec::new(),
+            refresh_policy: default_refresh,
+            _refresh_subscriptions: vec![refresh_policy_sub],
             _refresh_timer: None,
             pending_time_window: None,
             pending_chart_reexecute: false,
@@ -261,14 +273,26 @@ impl ChartDocument {
     ) -> Self {
         let chart_shell = cx.new(ChartShell::new_standalone);
 
+        let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
-            Dropdown::new("chart-doc-refresh").items(vec![
-                DropdownItem::new("Off"),
-                DropdownItem::new("30s"),
-                DropdownItem::new("1m"),
-                DropdownItem::new("5m"),
-            ])
+            let items = RefreshPolicy::ALL
+                .iter()
+                .map(|p| DropdownItem::new(p.label()))
+                .collect();
+
+            Dropdown::new("chart-doc-refresh")
+                .items(items)
+                .selected_index(Some(default_refresh.index()))
+                .compact_trigger(true)
         });
+
+        let refresh_policy_sub = cx.subscribe(
+            &refresh_dropdown,
+            |this: &mut Self, _, event: &DropdownSelectionChanged, cx| {
+                let policy = RefreshPolicy::from_index(event.index);
+                this.set_refresh_policy(policy, cx);
+            },
+        );
 
         let mut runner = DocumentTaskRunner::new(app_state.clone());
         if let Some(pid) = profile_id {
@@ -292,8 +316,8 @@ impl ChartDocument {
             time_range_panel: None,
             _time_range_sub: None,
             refresh_dropdown,
-            refresh_policy: RefreshPolicy::default(),
-            _refresh_subscriptions: Vec::new(),
+            refresh_policy: default_refresh,
+            _refresh_subscriptions: vec![refresh_policy_sub],
             _refresh_timer: None,
             pending_time_window: None,
             pending_chart_reexecute: false,

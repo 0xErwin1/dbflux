@@ -56,7 +56,7 @@ impl std::fmt::Display for ChartSourceError {
         match self {
             ChartSourceError::EmptyQuery => write!(f, "chart query is empty"),
             ChartSourceError::WindowRequired => {
-                write!(f, "a collection source requires a time window")
+                write!(f, "this chart source requires a time window")
             }
             ChartSourceError::Source(msg) => write!(f, "chart source error: {msg}"),
         }
@@ -363,6 +363,19 @@ pub fn resolve_source(source: &SavedChartSource) -> Box<dyn ChartDataSource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Display tests ---
+
+    /// ChartSourceError::WindowRequired must display a source-agnostic message
+    /// (not "collection source") so it reads correctly for MetricSource too.
+    #[test]
+    fn window_required_display_is_source_agnostic() {
+        let msg = format!("{}", ChartSourceError::WindowRequired);
+        assert_eq!(
+            msg, "this chart source requires a time window",
+            "WindowRequired Display must be source-agnostic"
+        );
+    }
 
     // --- QuerySource tests ---
 

@@ -2,8 +2,8 @@
 //! `ChartDocument`.
 //!
 //! Contains (left to right):
-//! - RANGE label + preset chips (only when `time_range_panel` is `Some`)
-//! - Vertical divider + REFRESH label + dropdown
+//! - Range dropdown (only when `dropdown_time_range` is `Some`)
+//! - Vertical divider + Refresh split-button (icon + "Refresh" label + interval dropdown)
 //! - Clock icon + resolved window string
 //! - Spacer
 //! - Points · resolution display
@@ -15,21 +15,20 @@
 //! assembled separately in each caller.
 
 use super::shell::{ChartRailTab, ChartShell};
-use crate::ui::common::time_range::state::TimeRange;
-use crate::ui::common::time_range::view::TimeRangePanel;
+use crate::ui::common::refresh_split_button::refresh_split_button;
 use crate::ui::components::dropdown::Dropdown;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Radii, Spacing};
 use dbflux_components::chart::{format_resolution, format_x_value};
 use dbflux_components::primitives::Icon;
+use dbflux_core::RefreshPolicy;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::theme::Theme;
 use std::sync::Arc;
 
-/// Handler called when a RANGE preset chip is clicked; receives the preset index.
-pub type RangePresetHandler = Arc<dyn Fn(usize, &mut Window, &mut App)>;
-/// Handler called when the Stats button, PNG button, or Save button is clicked.
+/// Handler called when the Stats button, PNG button, Save button, or Refresh
+/// button is clicked.
 pub type ActionHandler = Arc<dyn Fn(&mut Window, &mut App)>;
 
 /// All read-only state the toolbar needs to render itself.
@@ -43,11 +42,13 @@ pub struct ChartToolbarContext<'a> {
     /// The `ChartShell` entity — used to read rail open/tab state and the
     /// chart view's data bounds (x_min / x_max).
     pub chart_shell: Entity<ChartShell>,
-    /// The REFRESH dropdown entity rendered inline.
+    /// The current refresh policy — drives the refresh split-button icon and label.
+    pub refresh_policy: RefreshPolicy,
+    /// The REFRESH interval-selector dropdown entity (right section of split-button).
     pub refresh_dropdown: Entity<Dropdown>,
-    /// The `TimeRangePanel` driving RANGE chip state. When `None` the RANGE
-    /// chip row and divider are hidden entirely.
-    pub time_range_panel: Option<Entity<TimeRangePanel>>,
+    /// The range preset dropdown from `TimeRangePanel`. When `None` the range
+    /// dropdown and its preceding divider are hidden entirely.
+    pub dropdown_time_range: Option<Entity<Dropdown>>,
     /// Total number of data-point rows in the current result.
     pub row_count: usize,
     /// The resolved time window from the driver response `(start_ms, end_ms)`.
@@ -64,8 +65,8 @@ pub struct ChartToolbarContext<'a> {
 /// moved into GPUI's element event closures without lifetime issues. The boxing
 /// cost is one allocation per `render_chart_toolbar` call, which is negligible.
 pub struct ChartToolbarHandlers {
-    /// Called when a RANGE preset chip is clicked. Argument is the preset index.
-    pub on_select_range_preset: RangePresetHandler,
+    /// Called when the Refresh (left segment) of the split-button is clicked.
+    pub on_refresh: ActionHandler,
     /// Called when the Stats button is clicked.
     pub on_toggle_stats_rail: ActionHandler,
     /// Called when the PNG button is clicked.
@@ -88,8 +89,6 @@ pub fn render_chart_toolbar(
     let border = theme.border;
     let foreground = theme.foreground;
     let secondary = theme.secondary;
-    let primary = theme.primary;
-    let primary_fg = theme.primary_foreground;
 
     // --- Read rail state from the shell ---
     let (chart_view_entity, rail_open, rail_tab) = {
@@ -121,93 +120,39 @@ pub fn render_chart_toolbar(
     let resolution_label = SharedString::from(format_resolution(x_span_ms, row_count));
     let window_label: SharedString = window_label.into();
 
-    // --- RANGE chips (only when a TimeRangePanel is wired) ---
-    let range_section: Option<AnyElement> = ctx.time_range_panel.map(|trp| {
-        let all_presets: Vec<SharedString> = TimeRangePanel::preset_items()
-            .into_iter()
-            .map(|item| item.label)
-            .collect();
-
-        let active_preset_label: Option<SharedString> = {
-            let panel = trp.read(cx);
-            panel.selected_time_range.and_then(|range| {
-                let index = match range {
-                    TimeRange::Last15min => 0,
-                    TimeRange::LastHour => 1,
-                    TimeRange::Last6Hours => 2,
-                    TimeRange::Last24Hours => 3,
-                    TimeRange::Last7Days => 4,
-                    TimeRange::Custom => 5,
-                };
-                TimeRangePanel::preset_items()
-                    .get(index)
-                    .map(|item| item.label.clone())
-            })
-        };
-
-        let num_presets = all_presets.len();
-        let on_select = handlers.on_select_range_preset.clone();
-
-        let chips = div()
-            .flex()
-            .items_center()
-            .border_1()
-            .border_color(border)
-            .rounded(Radii::SM)
-            .overflow_hidden()
-            .children(all_presets.into_iter().enumerate().map(|(i, label)| {
-                let is_active = active_preset_label.as_ref().is_some_and(|a| a == &label);
-                let is_last = i == num_presets - 1;
-                let handler = on_select.clone();
-
-                let mut chip = div()
-                    .id(ElementId::Name(format!("range-chip-{i}").into()))
-                    .px(px(8.0))
-                    .py(px(3.0))
-                    .text_size(px(11.0))
-                    .font(font("JetBrains Mono"))
-                    .cursor_pointer()
-                    .when(is_active, |d| {
-                        d.bg(primary)
-                            .text_color(primary_fg)
-                            .font_weight(FontWeight::SEMIBOLD)
-                    })
-                    .when(!is_active, |d| {
-                        d.text_color(muted).hover(move |d| d.bg(secondary))
-                    })
-                    .when(!is_last, |d| d.border_r_1().border_color(border))
-                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                        handler(i, window, cx);
-                    })
-                    .child(label);
-
-                if i == 0 {
-                    chip = chip.rounded_tl(Radii::SM).rounded_bl(Radii::SM);
-                } else if is_last {
-                    chip = chip.rounded_tr(Radii::SM).rounded_br(Radii::SM);
-                }
-
-                chip
-            }));
-
+    // --- Range dropdown (only when a TimeRangePanel dropdown is wired) ---
+    // Mirrors how AuditDocument surfaces its range dropdown: the entity is
+    // cloned into the element tree so the Dropdown widget handles open/close
+    // and selection internally. The "Custom…" handling is performed by the
+    // TimeRangePanel subscription already wired in the host document — no
+    // additional on_select callback is needed here.
+    let range_section: Option<AnyElement> = ctx.dropdown_time_range.map(|dropdown| {
         div()
             .flex()
             .items_center()
             .gap(px(4.0))
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(muted)
-                    .font_weight(FontWeight::BOLD)
-                    .child("RANGE"),
-            )
-            .child(chips)
+            .child(dropdown)
             .child(vdivider(border))
             .into_any_element()
     });
 
+    // --- Refresh split-button ---
+    let on_refresh = handlers.on_refresh.clone();
+    let refresh_btn = refresh_split_button(
+        "chart-toolbar-refresh",
+        ctx.refresh_policy,
+        false,
+        false,
+        ctx.refresh_dropdown.clone(),
+        move |window, cx| on_refresh(window, cx),
+        theme,
+    );
+
     // --- Toolbar action button helper ---
     let toolbar_btn = |id: &'static str, icon: AppIcon, label: &'static str, is_active: bool| {
+        let primary = theme.primary;
+        let primary_fg = theme.primary_foreground;
+
         div()
             .id(id)
             .flex()
@@ -268,26 +213,7 @@ pub fn render_chart_toolbar(
         .border_color(theme.border)
         .bg(theme.tab_bar)
         .when_some(range_section, |el, range| el.child(range))
-        // REFRESH label + dropdown
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(muted)
-                        .font_weight(FontWeight::BOLD)
-                        .child("REFRESH"),
-                )
-                .child(
-                    div()
-                        .w(px(80.0))
-                        .h(px(22.0))
-                        .child(ctx.refresh_dropdown.clone()),
-                ),
-        )
+        .child(refresh_btn)
         .child(vdivider(border))
         // Clock icon + resolved window string
         .child(
@@ -346,14 +272,14 @@ mod tests {
         );
     }
 
-    /// When `time_range_panel` is `None`, no RANGE section element is produced.
+    /// When `dropdown_time_range` is `None`, no RANGE section element is produced.
     #[test]
-    fn no_time_range_panel_produces_no_range_section() {
-        let trp: Option<()> = None;
-        let range_section = trp.map(|_| "chips");
+    fn no_dropdown_time_range_produces_no_range_section() {
+        let dropdown: Option<()> = None;
+        let range_section = dropdown.map(|_| "range");
         assert!(
             range_section.is_none(),
-            "absent time_range_panel must hide RANGE section"
+            "absent dropdown_time_range must hide RANGE section"
         );
     }
 

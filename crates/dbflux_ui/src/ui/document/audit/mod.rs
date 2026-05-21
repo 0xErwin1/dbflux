@@ -44,6 +44,7 @@ use uuid::Uuid;
 
 use super::chrome::{compact_top_bar, workspace_footer_bar};
 use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
+use crate::ui::common::refresh_split_button::refresh_split_button;
 
 // ── Context menu ─────────────────────────────────────────────────────────────
 
@@ -2590,63 +2591,26 @@ impl AuditDocument {
             })
             .child(self.multi_select_outcome.clone());
 
-        // Refresh split button.
-        let refresh_label = if self.refresh_policy.is_auto() {
-            self.refresh_policy.label()
-        } else {
-            "Refresh"
-        };
-        let refresh_icon = if self.refresh_policy.is_auto() {
-            AppIcon::Clock
-        } else {
-            AppIcon::RefreshCcw
-        };
-
-        let refresh_btn = div()
-            .id("audit-refresh-control")
-            .h(Heights::BUTTON)
-            .flex()
-            .items_center()
-            .gap_0()
-            .rounded(Radii::SM)
-            .bg(theme.background)
-            .border_1()
-            .border_color(if self.slot_has_ring(ToolbarSlot::Refresh) {
-                theme.ring
-            } else {
-                theme.input
-            })
-            .child(
-                div()
-                    .id("audit-refresh-action")
-                    .h_full()
-                    .px(Spacing::SM)
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.load_events(cx);
-                    }))
-                    .child(
-                        Icon::new(refresh_icon)
-                            .size(px(16.0))
-                            .color(theme.foreground),
-                    )
-                    .child(Text::caption(refresh_label)),
-            )
-            .child(div().w(px(1.0)).h_full().bg(theme.input))
-            .child(
-                div()
-                    .w(px(28.0))
-                    .h_full()
-                    .rounded_r(Radii::SM)
-                    .when(self.slot_has_ring(ToolbarSlot::RefreshPolicy), |d| {
-                        d.border_1().border_color(theme.ring)
-                    })
-                    .child(self.refresh_dropdown.clone()),
-            );
+        // Refresh split button — shared helper keeps this identical to the
+        // chart toolbar's refresh control.
+        let refresh_dropdown = self.refresh_dropdown.clone();
+        let refresh_ring = self.slot_has_ring(ToolbarSlot::Refresh);
+        let refresh_policy_ring = self.slot_has_ring(ToolbarSlot::RefreshPolicy);
+        let refresh_policy = self.refresh_policy;
+        let weak_self = cx.weak_entity();
+        let refresh_btn = refresh_split_button(
+            "audit-refresh-control",
+            refresh_policy,
+            refresh_ring,
+            refresh_policy_ring,
+            refresh_dropdown,
+            move |_window, cx| {
+                if let Some(doc) = weak_self.upgrade() {
+                    doc.update(cx, |this, cx| this.load_events(cx));
+                }
+            },
+            &theme,
+        );
 
         // Clear button.
         let clear_btn = div()
