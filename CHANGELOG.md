@@ -4,6 +4,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Audit SQLite "database is locked" errors under contention** — the
+  audit store now sets a 5s `busy_timeout` when opening its connection.
+  Since the audit database shares a WAL file with `StorageRuntime` (and
+  tests may race on a shared temp path), concurrent openers previously
+  failed immediately with `SQLITE_BUSY` instead of waiting; they now
+  serialize. Fixes intermittent test failures in the MCP governance
+  suite.
+
 ## [0.6.0-dev.7] - 2026-05-21
 
 ### Fixed
