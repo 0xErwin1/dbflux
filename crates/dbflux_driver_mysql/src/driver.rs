@@ -1739,7 +1739,7 @@ impl Connection for MysqlConnection {
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
         let databases = self.list_databases()?;
-        log::info!("[SCHEMA] Found {} databases", databases.len());
+        log::debug!("[SCHEMA] Found {} databases", databases.len());
 
         Ok(SchemaSnapshot::relational(RelationalSchema {
             databases,
@@ -1751,7 +1751,7 @@ impl Connection for MysqlConnection {
     }
 
     fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
-        log::info!("[SCHEMA] Fetching schema for database: {}", database);
+        log::debug!("[SCHEMA] Fetching schema for database: {}", database);
 
         let mut conn = self
             .catalog_conn
@@ -1760,11 +1760,11 @@ impl Connection for MysqlConnection {
 
         // Fetch tables (shallow - without columns/indexes)
         let tables = fetch_tables_shallow(&mut conn, database)?;
-        log::info!("[SCHEMA] Found {} tables in {}", tables.len(), database);
+        log::debug!("[SCHEMA] Found {} tables in {}", tables.len(), database);
 
         // Fetch views
         let views = fetch_views(&mut conn, database)?;
-        log::info!("[SCHEMA] Found {} views in {}", views.len(), database);
+        log::debug!("[SCHEMA] Found {} views in {}", views.len(), database);
 
         Ok(DbSchemaInfo {
             name: database.to_string(),
@@ -1825,7 +1825,7 @@ impl Connection for MysqlConnection {
         _schema: Option<&str>,
         view: &str,
     ) -> Result<ViewInfo, DbError> {
-        log::info!("[SCHEMA] Fetching details for view: {}.{}", database, view);
+        log::debug!("[SCHEMA] Fetching details for view: {}.{}", database, view);
 
         // Views don't have columns/indexes in our model, just return basic info
         Ok(ViewInfo {

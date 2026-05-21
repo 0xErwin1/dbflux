@@ -748,7 +748,7 @@ impl Connection for SqliteConnection {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<TableInfo, DbError> {
-        log::info!("[SCHEMA] Fetching details for table: {}", table);
+        log::debug!("[SCHEMA] Fetching details for table: {}", table);
 
         let conn = self
             .conn
@@ -760,7 +760,7 @@ impl Connection for SqliteConnection {
         let foreign_keys = self.get_foreign_keys(&conn, table)?;
         let constraints = self.get_constraints(&conn, table)?;
 
-        log::info!(
+        log::debug!(
             "[SCHEMA] Table {}: {} columns, {} indexes, {} FKs, {} constraints",
             table,
             columns.len(),
@@ -1298,7 +1298,7 @@ impl Connection for SqliteConnection {
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
         let tables = self.get_tables(&conn)?;
         let views = self.get_views(&conn)?;
-        log::info!(
+        log::debug!(
             "[SCHEMA] schema_for_database({}): {} tables, {} views",
             database,
             tables.len(),

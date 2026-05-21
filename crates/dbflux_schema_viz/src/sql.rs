@@ -3,11 +3,7 @@
 //! Generates `CREATE TABLE` and `ALTER TABLE ADD CONSTRAINT` statements
 //! for all tables and foreign keys in a `SchemaGraph`.
 
-use std::collections::{HashMap, HashSet};
-
-use petgraph::prelude::{DiGraph, EdgeRef, NodeIndex};
-
-use crate::graph::{FkEdge, SchemaGraph, TableNode, TableNodeId};
+use crate::graph::{FkEdge, SchemaGraph, TableNode, TableNodeId, format_column_list};
 
 /// SQL export scope (mirrors `DbmlScope`).
 #[derive(Clone, Copy, Debug)]
@@ -38,7 +34,11 @@ pub fn to_sql(graph: &SchemaGraph, scope: SqlScope) -> Result<String, String> {
     build_sql_text(&export_graph)
 }
 
-/// Extract the focal subgraph: focal table + 1-hop neighbors.
+/// Extract the focal subgraph: focal table + 1-hop neighbors in both FK directions.
+///
+/// Delegates to `SchemaGraph::focal_subgraph`, which correctly collects both
+/// outgoing FK neighbors (tables the focal table references) and incoming FK
+/// neighbors (tables that reference the focal table).
 fn extract_focal_subgraph(
     graph: &SchemaGraph,
     focal_name: &str,
@@ -49,60 +49,7 @@ fn extract_focal_subgraph(
         name: focal_name.to_string(),
     };
 
-    let Some(focal_idx) = graph.node_index_by_id.get(&focal_id).copied() else {
-        return SchemaGraph {
-            graph: DiGraph::new(),
-            node_index_by_id: HashMap::new(),
-        };
-    };
-
-    // Collect 1-hop neighbor node IDs (focal + all adjacent)
-    let mut neighbor_ids: HashSet<TableNodeId> = HashSet::new();
-    neighbor_ids.insert(focal_id.clone());
-
-    for edge in graph.graph.edges(focal_idx) {
-        let neighbor_idx = edge.source();
-        if neighbor_idx != focal_idx
-            && let Some(neighbor) = graph.graph.node_weight(neighbor_idx)
-        {
-            neighbor_ids.insert(neighbor.id.clone());
-        }
-        let neighbor_idx = edge.target();
-        if neighbor_idx != focal_idx
-            && let Some(neighbor) = graph.graph.node_weight(neighbor_idx)
-        {
-            neighbor_ids.insert(neighbor.id.clone());
-        }
-    }
-
-    // Rebuild graph with only the relevant nodes and edges (where both endpoints are in neighbor_ids)
-    let mut new_graph: DiGraph<_, _> = DiGraph::new();
-    let mut index_map: HashMap<NodeIndex, NodeIndex> = HashMap::new();
-    let mut node_index_by_id: HashMap<TableNodeId, NodeIndex> = HashMap::new();
-
-    // Add only neighbor nodes to new graph
-    for idx in graph.graph.node_indices() {
-        let node = graph.graph.node_weight(idx).unwrap();
-        if neighbor_ids.contains(&node.id) {
-            let new_idx = new_graph.add_node(node.clone());
-            index_map.insert(idx, new_idx);
-            node_index_by_id.insert(node.id.clone(), new_idx);
-        }
-    }
-
-    // Add only edges where both endpoints are in the neighbor set
-    for edge_idx in graph.graph.edge_indices() {
-        let (source, target) = graph.graph.edge_endpoints(edge_idx).unwrap();
-        if index_map.contains_key(&source) && index_map.contains_key(&target) {
-            let edge = graph.graph.edge_weight(edge_idx).unwrap().clone();
-            new_graph.add_edge(index_map[&source], index_map[&target], edge);
-        }
-    }
-
-    SchemaGraph {
-        graph: new_graph,
-        node_index_by_id,
-    }
+    graph.focal_subgraph(&focal_id)
 }
 
 /// Build SQL text from a SchemaGraph.
@@ -150,34 +97,31 @@ fn build_table_name(id: &TableNodeId) -> String {
 
 fn build_create_table(node: &TableNode) -> String {
     let table_name = build_table_name(&node.id);
-    let mut lines: Vec<String> = Vec::new();
-
-    lines.push(format!("CREATE TABLE {} ({{", table_name));
-
     let mut column_defs: Vec<String> = Vec::new();
-    let mut pk_columns: Vec<&str> = Vec::new();
+    let mut pk_columns: Vec<String> = Vec::new();
 
     for col in &node.columns {
         let mut def = format!("  {} {}", col.name, col.type_name);
+
         if col.is_pk {
             def.push_str(" NOT NULL");
-            pk_columns.push(&col.name);
+            pk_columns.push(col.name.clone());
         }
-        // Note: nullable columns without DEFAULT get NULL implicitly
+
         column_defs.push(def);
     }
 
-    lines.push(column_defs.join(",\n"));
-    lines.push("\n}".to_string());
-
-    // Add PRIMARY KEY constraint if composite
+    // Composite PK becomes a trailing in-parens clause.
+    // Single-PK stays inline as `col NOT NULL` — no separate clause.
     if pk_columns.len() > 1 {
-        let pk_cols = pk_columns.join(", ");
-        lines.push(format!(",\n  PRIMARY KEY ({})", pk_cols));
+        column_defs.push(format!("  PRIMARY KEY {}", format_column_list(&pk_columns)));
     }
 
-    lines.push(");".to_string());
-    lines.join("\n")
+    format!(
+        "CREATE TABLE {} (\n{}\n);",
+        table_name,
+        column_defs.join(",\n")
+    )
 }
 
 fn build_alter_table_add_fk(
@@ -315,12 +259,59 @@ mod tests {
     }
 
     #[test]
-    fn test_sql_composite_pk() {
+    fn test_sql_single_pk() {
         let table = make_table(
-            "order_items",
+            "users",
             vec![
-                make_column("order_id", "integer", false),
-                make_column("product_id", "integer", false),
+                make_column("id", "integer", true),
+                make_column("name", "text", false),
+            ],
+            vec![],
+        );
+
+        let graph = SchemaGraph::build(&[table]);
+        let sql = to_sql(&graph, SqlScope::Subgraph).expect("SQL export should succeed");
+
+        // Must open with ( and close with ); — no { or }
+        assert!(
+            !sql.contains('{') && !sql.contains('}'),
+            "DDL must not contain brace characters, got:\n{}",
+            sql
+        );
+        // Single-PK: NOT NULL inline, no standalone PRIMARY KEY clause in the block
+        assert!(
+            sql.contains("id integer NOT NULL"),
+            "PK column must carry NOT NULL inline, got:\n{}",
+            sql
+        );
+        // Nullable column has no modifier
+        assert!(
+            sql.contains("name text"),
+            "nullable column must appear without NOT NULL, got:\n{}",
+            sql
+        );
+        // Normalized structure: must have CREATE TABLE users ( ... );
+        let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.contains("CREATE TABLE users ("),
+            "DDL must open with CREATE TABLE users (, got normalized:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains(");"),
+            "DDL must close with );, got normalized:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_sql_composite_pk() {
+        // All PK columns must have is_pk = true so the composite-PK branch is exercised.
+        let table = make_table(
+            "line_items",
+            vec![
+                make_column("order_id", "integer", true),
+                make_column("line_id", "integer", true),
                 make_column("qty", "integer", false),
             ],
             vec![],
@@ -329,8 +320,45 @@ mod tests {
         let graph = SchemaGraph::build(&[table]);
         let sql = to_sql(&graph, SqlScope::Subgraph).expect("SQL export should succeed");
 
-        // No PK since none of the columns are marked as primary_key in our test helper
-        // But let's verify the table is created
-        assert!(sql.contains("CREATE TABLE order_items"));
+        // No brace characters
+        assert!(
+            !sql.contains('{') && !sql.contains('}'),
+            "DDL must not contain brace characters, got:\n{}",
+            sql
+        );
+
+        // Composite PRIMARY KEY clause must appear inside the parentheses.
+        // Normalize whitespace to avoid brittleness.
+        let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.contains("PRIMARY KEY (order_id, line_id)"),
+            "composite PK clause must appear inside the table block, got normalized:\n{}",
+            normalized
+        );
+
+        // Both PK columns must carry NOT NULL.
+        assert!(
+            sql.contains("order_id integer NOT NULL"),
+            "first PK column must carry NOT NULL, got:\n{}",
+            sql
+        );
+        assert!(
+            sql.contains("line_id integer NOT NULL"),
+            "second PK column must carry NOT NULL, got:\n{}",
+            sql
+        );
+
+        // Non-PK column has no NOT NULL.
+        assert!(
+            !sql.contains("qty integer NOT NULL"),
+            "non-PK column must not carry NOT NULL, got:\n{}",
+            sql
+        );
+
+        assert!(
+            sql.contains("CREATE TABLE line_items"),
+            "table header must be present, got:\n{}",
+            sql
+        );
     }
 }

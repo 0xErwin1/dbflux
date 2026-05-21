@@ -1553,7 +1553,7 @@ impl Connection for PostgresConnection {
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
         let total_start = Instant::now();
-        log::info!("[SCHEMA] Starting schema fetch");
+        log::debug!("[SCHEMA] Starting schema fetch");
 
         let mut client = self
             .client
@@ -1562,7 +1562,7 @@ impl Connection for PostgresConnection {
 
         let phase_start = Instant::now();
         let databases = get_databases(&mut client)?;
-        log::info!(
+        log::debug!(
             "[SCHEMA] Fetched {} databases in {:.2}ms",
             databases.len(),
             phase_start.elapsed().as_secs_f64() * 1000.0
@@ -1570,7 +1570,7 @@ impl Connection for PostgresConnection {
 
         let phase_start = Instant::now();
         let current_database = get_current_database(&mut client)?;
-        log::info!(
+        log::debug!(
             "[SCHEMA] Fetched current database in {:.2}ms",
             phase_start.elapsed().as_secs_f64() * 1000.0
         );
@@ -1579,7 +1579,7 @@ impl Connection for PostgresConnection {
         let schemas = get_schemas(&mut client)?;
         let table_count: usize = schemas.iter().map(|s| s.tables.len()).sum();
         let view_count: usize = schemas.iter().map(|s| s.views.len()).sum();
-        log::info!(
+        log::debug!(
             "[SCHEMA] Fetched {} schemas ({} tables, {} views) in {:.2}ms",
             schemas.len(),
             table_count,
@@ -1587,7 +1587,7 @@ impl Connection for PostgresConnection {
             phase_start.elapsed().as_secs_f64() * 1000.0
         );
 
-        log::info!(
+        log::debug!(
             "[SCHEMA] Total schema fetch time: {:.2}ms",
             total_start.elapsed().as_secs_f64() * 1000.0
         );
@@ -1625,7 +1625,7 @@ impl Connection for PostgresConnection {
         table: &str,
     ) -> Result<TableInfo, DbError> {
         let schema_name = schema.unwrap_or("public");
-        log::info!(
+        log::debug!(
             "[SCHEMA] Fetching details for table: {}.{}",
             schema_name,
             table
@@ -1641,7 +1641,7 @@ impl Connection for PostgresConnection {
         let foreign_keys = get_foreign_keys(&mut client, schema_name, table)?;
         let constraints = get_constraints(&mut client, schema_name, table)?;
 
-        log::info!(
+        log::debug!(
             "[SCHEMA] Table {}.{}: {} columns, {} indexes, {} FKs, {} constraints",
             schema_name,
             table,
@@ -2311,7 +2311,7 @@ impl Connection for PostgresConnection {
             }
         }
 
-        log::info!(
+        log::debug!(
             "[SCHEMA] schema_for_database({}): {} tables, {} views, {} custom types",
             database,
             all_tables.len(),
@@ -2395,7 +2395,7 @@ fn get_schemas(client: &mut Client) -> Result<Vec<DbSchemaInfo>, DbError> {
         )
         .map_err(|e| format_pg_query_error(&e))?;
 
-    log::info!(
+    log::debug!(
         "[SCHEMA] Found {} schemas in {:.2}ms",
         schema_rows.len(),
         phase_start.elapsed().as_secs_f64() * 1000.0
@@ -2410,7 +2410,7 @@ fn get_schemas(client: &mut Client) -> Result<Vec<DbSchemaInfo>, DbError> {
         let tables = get_tables_for_schema(client, &schema_name)?;
         let views = get_views_for_schema(client, &schema_name)?;
 
-        log::info!(
+        log::debug!(
             "[SCHEMA] Schema '{}': {} tables, {} views in {:.2}ms",
             schema_name,
             tables.len(),
