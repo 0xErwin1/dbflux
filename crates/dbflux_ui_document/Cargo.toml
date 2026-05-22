@@ -1,0 +1,31 @@
+[package]
+name = "dbflux_ui_document"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Document subsystem (tabs, panes, code/data/audit/chart/key-value documents) for DBFlux"
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[lib]
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+dbflux_ui_base.workspace = true
+dbflux_components.workspace = true
+dbflux_core.workspace = true
+dbflux_app.workspace = true
+dbflux_audit.workspace = true
+dbflux_storage.workspace = true
+uuid.workspace = true
+log.workspace = true
+dbflux_mcp = { workspace = true, optional = true }
+dbflux_policy = { workspace = true, optional = true }
+
+[features]
+default = []
+mcp = ["dbflux_mcp", "dbflux_policy", "dbflux_app/mcp", "dbflux_ui_base/mcp"]
+lua = ["dbflux_app/lua", "dbflux_ui_base/lua"]
+aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]
