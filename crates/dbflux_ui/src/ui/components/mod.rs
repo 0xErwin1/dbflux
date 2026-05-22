@@ -1,6 +1,6 @@
 pub mod context_menu;
 pub use dbflux_components::components::data_table;
-pub mod document_tree;
+pub use dbflux_components::components::document_tree;
 pub mod dropdown;
 pub mod filter_bar;
 pub mod form_navigation;
