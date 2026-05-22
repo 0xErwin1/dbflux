@@ -21,6 +21,7 @@ pub mod components;
 pub mod composites;
 pub mod controls;
 pub mod icons;
+pub mod modals;
 pub mod primitives;
 pub mod result_panel;
 pub mod result_view;
