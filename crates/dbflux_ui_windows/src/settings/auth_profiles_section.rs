@@ -10,7 +10,7 @@ use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChang
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::{
     AccessKind, AuthProfile, FetchOptionsError, FetchOptionsRequest, FormFieldKind,
     ImportableProfile, RefreshTrigger,
@@ -1380,7 +1380,7 @@ impl AuthProfilesSection {
         div()
             .m_4()
             .p_3()
-            .rounded(px(8.0))
+            .rounded(Spacing::SM)
             .border_1()
             .border_color(theme.primary)
             .bg(theme.secondary)
@@ -1395,7 +1395,7 @@ impl AuthProfilesSection {
                     .gap_2()
                     .child(
                         FluxIcon::new(AppIcon::Info)
-                            .size(px(16.0))
+                            .size(Heights::ICON_SM)
                             .color(theme.primary),
                     )
                     .child(

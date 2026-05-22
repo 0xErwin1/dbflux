@@ -9,7 +9,7 @@ use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Label};
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{Heights, Radii, Widths};
 use dbflux_components::typography::{
     Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel,
 };
@@ -700,7 +700,7 @@ impl DriversSection {
         }
 
         div()
-            .w(px(300.0))
+            .w(Widths::SETTINGS_LIST_PANEL)
             .h_full()
             .min_h_0()
             .border_r_1()
@@ -757,7 +757,7 @@ impl DriversSection {
                                     .child(
                                         div().mt(px(2.0)).child(
                                             Icon::new(AppIcon::from_icon(entry.metadata.icon))
-                                                .size(px(16.0))
+                                                .size(Heights::ICON_SM)
                                                 .muted(),
                                         ),
                                     )
@@ -955,7 +955,7 @@ impl DriversSection {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(div().w(px(220.0)))
+                            .child(div().w(Widths::SETTINGS_FORM_LABEL))
                             .child(div().w(px(160.0)).child(FieldLabel::new("Override Value"))),
                     )
                     .child(
@@ -1008,7 +1008,11 @@ impl DriversSection {
                                             )),
                                     ),
                             )
-                            .child(div().w(px(220.0)).child(Label::new("Refresh policy")))
+                            .child(
+                                div()
+                                    .w(Widths::SETTINGS_FORM_LABEL)
+                                    .child(Label::new("Refresh policy")),
+                            )
                             .child(
                                 div()
                                     .min_w(px(160.0))
@@ -1098,7 +1102,7 @@ impl DriversSection {
                             )
                             .child(
                                 div()
-                                    .w(px(220.0))
+                                    .w(Widths::SETTINGS_FORM_LABEL)
                                     .child(Label::new("Refresh interval (sec)")),
                             )
                             .child(
@@ -1151,7 +1155,7 @@ impl DriversSection {
                             .gap_3()
                             .child(
                                 div()
-                                    .w(px(220.0))
+                                    .w(Widths::SETTINGS_FORM_LABEL)
                                     .child(Label::new("Confirm dangerous queries")),
                             )
                             .child(
@@ -1193,7 +1197,11 @@ impl DriversSection {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(div().w(px(220.0)).child(Label::new("Require WHERE")))
+                            .child(
+                                div()
+                                    .w(Widths::SETTINGS_FORM_LABEL)
+                                    .child(Label::new("Require WHERE")),
+                            )
                             .child(
                                 div()
                                     .w(px(160.0))
@@ -1233,7 +1241,11 @@ impl DriversSection {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(div().w(px(220.0)).child(Label::new("Require preview")))
+                            .child(
+                                div()
+                                    .w(Widths::SETTINGS_FORM_LABEL)
+                                    .child(Label::new("Require preview")),
+                            )
                             .child(
                                 div()
                                     .w(px(160.0))
@@ -1358,7 +1370,11 @@ impl DriversSection {
                                                 .gap_1()
                                                 .opacity(if enabled { 1.0 } else { 0.6 })
                                                 .child(Label::new(field.label.clone()))
-                                                .child(div().w(px(240.0)).child(dropdown))
+                                                .child(
+                                                    div()
+                                                        .w(Widths::CM_FORM_DROPDOWN)
+                                                        .child(dropdown),
+                                                )
                                                 .into_any_element(),
                                         )
                                     }

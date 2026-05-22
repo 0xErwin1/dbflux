@@ -909,9 +909,13 @@ impl ServicesSection {
                                     .flex()
                                     .items_start()
                                     .gap_2()
-                                    .child(div().mt(px(2.0)).child(
-                                        PrimitiveIcon::new(AppIcon::Plug).size(px(16.0)).muted(),
-                                    ))
+                                    .child(
+                                        div().mt(px(2.0)).child(
+                                            PrimitiveIcon::new(AppIcon::Plug)
+                                                .size(Heights::ICON_SM)
+                                                .muted(),
+                                        ),
+                                    )
                                     .child(
                                         div()
                                             .flex()

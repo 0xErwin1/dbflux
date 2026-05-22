@@ -3,6 +3,7 @@ use dbflux_components::composites::ModalFrame as ComponentModalFrame;
 use dbflux_components::icon::IconSource;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Icon;
+use dbflux_components::tokens::Heights;
 use gpui::*;
 
 /// Compatibility wrapper over the component-owned modal frame.
@@ -22,7 +23,7 @@ impl ModalFrame {
     ) -> Self {
         let inner = ComponentModalFrame::new(id, focus_handle, on_close)
             .key_context(ContextId::SqlPreviewModal.as_gpui_context())
-            .header_leading(Icon::new(AppIcon::X).size(px(16.0)).primary())
+            .header_leading(Icon::new(AppIcon::X).size(Heights::ICON_SM).primary())
             .close_icon(IconSource::Svg(AppIcon::X.path().into()));
 
         Self { inner }
@@ -36,7 +37,7 @@ impl ModalFrame {
     pub fn icon(mut self, icon: AppIcon) -> Self {
         self.inner = self
             .inner
-            .header_leading(Icon::new(icon).size(px(16.0)).primary());
+            .header_leading(Icon::new(icon).size(Heights::ICON_SM).primary());
         self
     }
 
