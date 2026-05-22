@@ -815,3 +815,166 @@ fn dropdown_layer() -> KeymapLayer {
 
     layer
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_keymap_resolves_global() {
+        let keymap = default_keymap();
+
+        let chord = KeyChord::new("p", Modifiers::primary_shift());
+        assert_eq!(
+            keymap.resolve(ContextId::Global, &chord),
+            Some(Command::ToggleCommandPalette)
+        );
+    }
+
+    #[test]
+    fn test_sidebar_vim_navigation() {
+        let keymap = default_keymap();
+
+        let j = KeyChord::new("j", Modifiers::none());
+        let k = KeyChord::new("k", Modifiers::none());
+
+        assert_eq!(
+            keymap.resolve(ContextId::Sidebar, &j),
+            Some(Command::SelectNext)
+        );
+        assert_eq!(
+            keymap.resolve(ContextId::Sidebar, &k),
+            Some(Command::SelectPrev)
+        );
+    }
+
+    #[test]
+    fn test_editor_history_bindings() {
+        let keymap = default_keymap();
+
+        let alt_h = KeyChord::new("h", Modifiers::alt());
+        let primary_p = KeyChord::new("p", Modifiers::primary());
+        let primary_s = KeyChord::new("s", Modifiers::primary());
+
+        assert_eq!(
+            keymap.resolve(ContextId::Editor, &alt_h),
+            Some(Command::ToggleHistoryDropdown)
+        );
+        assert_eq!(
+            keymap.resolve(ContextId::Editor, &primary_p),
+            Some(Command::OpenSavedQueries)
+        );
+        assert_eq!(
+            keymap.resolve(ContextId::Editor, &primary_s),
+            Some(Command::SaveQuery)
+        );
+    }
+
+    #[test]
+    fn test_global_fallback_from_sidebar() {
+        let keymap = default_keymap();
+
+        let primary_enter = KeyChord::new("enter", Modifiers::primary());
+        assert_eq!(
+            keymap.resolve(ContextId::Sidebar, &primary_enter),
+            Some(Command::RunQuery)
+        );
+    }
+
+    #[test]
+    fn test_primary_n_available_in_sidebar_and_text_input() {
+        let keymap = default_keymap();
+
+        let primary_n = KeyChord::new("n", Modifiers::primary());
+
+        assert_eq!(
+            keymap.resolve(ContextId::Sidebar, &primary_n),
+            Some(Command::NewQueryTab)
+        );
+        assert_eq!(
+            keymap.resolve(ContextId::TextInput, &primary_n),
+            Some(Command::NewQueryTab)
+        );
+    }
+
+    #[test]
+    fn test_command_palette_no_fallback() {
+        let keymap = default_keymap();
+
+        let primary_enter = KeyChord::new("enter", Modifiers::primary());
+        assert_eq!(
+            keymap.resolve(ContextId::CommandPalette, &primary_enter),
+            None
+        );
+    }
+
+    /// On macOS the literal Ctrl+C must not trigger ResultsCopyCell — the
+    /// platform convention is Cmd+C, and Ctrl+C is reserved for editor
+    /// interrupt semantics. See the per-platform branch in `results_layer`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_results_copy_uses_cmd_not_ctrl() {
+        let keymap = default_keymap();
+        let ctrl_c = KeyChord::new("c", Modifiers::ctrl());
+        assert_eq!(keymap.resolve(ContextId::Results, &ctrl_c), None);
+
+        let cmd_c = KeyChord {
+            key: "c".to_string(),
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::none()
+            },
+        };
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &cmd_c),
+            Some(Command::ResultsCopyCell)
+        );
+    }
+
+    /// Regression test for the "missing letters in the SQL editor after
+    /// Ctrl+Enter" bug: while focus is on the editor input, the Editor
+    /// keymap layer must not consume plain ASCII letters — they have to fall
+    /// through to gpui-component's `InputState` so they get inserted as text.
+    #[test]
+    fn editor_layer_does_not_steal_unmodified_letters() {
+        let keymap = default_keymap();
+        for letter in ['h', 'j', 'k', 'l', 'o', 'r', 's', 'v', 'x', 'y'] {
+            let chord = KeyChord::new(letter.to_string(), Modifiers::none());
+            assert_eq!(
+                keymap.resolve(ContextId::Editor, &chord),
+                None,
+                "Editor layer must not bind unmodified `{letter}` — it would be \
+                 swallowed by Workspace::on_key_down before the SQL input ever \
+                 sees the keystroke",
+            );
+        }
+    }
+
+    /// Pairs with `editor_layer_does_not_steal_unmodified_letters`: these
+    /// single-letter bindings are intentionally claimed by the Results layer,
+    /// which is exactly why `CodeDocument::process_pending_result` must keep
+    /// `focus_mode = Editor` while the input is focused — otherwise the same
+    /// letters would get routed here and never reach the editor.
+    #[test]
+    fn results_layer_owns_navigation_and_crud_letters() {
+        let keymap = default_keymap();
+        let expectations: &[(char, Command)] = &[
+            ('h', Command::ColumnLeft),
+            ('l', Command::ColumnRight),
+            ('j', Command::SelectNext),
+            ('k', Command::SelectPrev),
+            ('r', Command::Rename),
+            ('o', Command::ResultsAddRow),
+            ('x', Command::Delete),
+        ];
+        for (letter, expected) in expectations {
+            let chord = KeyChord::new(letter.to_string(), Modifiers::none());
+            assert_eq!(
+                keymap.resolve(ContextId::Results, &chord),
+                Some(*expected),
+                "Results layer must keep `{letter}` → {expected:?} so the \
+                 typing-vs-grid focus invariant in CodeDocument stays meaningful",
+            );
+        }
+    }
+}
