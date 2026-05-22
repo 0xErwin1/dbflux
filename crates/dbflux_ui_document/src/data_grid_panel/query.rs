@@ -1,0 +1,617 @@
+use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount};
+use dbflux_components::components::data_table::SortState as TableSortState;
+use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_core::{
+    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, OrderByColumn, Pagination,
+    QueryResult, TableBrowseRequest, TableCountRequest, TableRef, TaskKind, TaskTarget,
+};
+use gpui::*;
+use log::info;
+use uuid::Uuid;
+
+impl DataGridPanel {
+    /// Refresh data from source.
+    pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                table,
+                pagination,
+                order_by,
+                total_rows,
+            } => {
+                self.run_table_query(
+                    *profile_id,
+                    database.clone(),
+                    table.clone(),
+                    pagination.clone(),
+                    order_by.clone(),
+                    *total_rows,
+                    window,
+                    cx,
+                );
+            }
+            DataSource::Collection {
+                profile_id,
+                collection,
+                pagination,
+                total_docs,
+            } => {
+                self.run_collection_query(
+                    *profile_id,
+                    collection.clone(),
+                    pagination.clone(),
+                    *total_docs,
+                    window,
+                    cx,
+                );
+            }
+            DataSource::QueryResult { .. } => {
+                // QueryResult is static, nothing to refresh
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn run_table_query(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        table: TableRef,
+        pagination: Pagination,
+        order_by: Vec<OrderByColumn>,
+        total_rows: Option<u64>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let filter_value = self.filter_input.read(cx).value();
+        let filter = if filter_value.trim().is_empty() {
+            None
+        } else {
+            Some(filter_value.to_string())
+        };
+
+        let limit_value = self.limit_input.read(cx).value();
+        let limit_str = limit_value.trim();
+        let pagination = match limit_str.parse::<u32>() {
+            Ok(0) => {
+                Toast::warning("Limit must be greater than 0")
+                    .meta_right(now_hms())
+                    .push(cx);
+                pagination
+            }
+            Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
+            Ok(_) => pagination,
+            Err(_) if !limit_str.is_empty() => {
+                Toast::warning("Invalid limit value")
+                    .meta_right(now_hms())
+                    .push(cx);
+                pagination
+            }
+            Err(_) => pagination,
+        };
+
+        let mut request = TableBrowseRequest::new(table.clone())
+            .with_pagination(pagination.clone())
+            .with_order_by(order_by.clone());
+
+        if let Some(ref f) = filter {
+            request = request.with_filter(f.clone());
+        }
+
+        let conn = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                Toast::error("Connection not found")
+                    .meta_right(now_hms())
+                    .action(copy_action("Connection not found"))
+                    .push(cx);
+                return;
+            };
+
+            match connected.resolve_connection_for_execution(database.as_deref()) {
+                Ok(connection) => connection,
+                Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
+                    database,
+                }) => {
+                    let msg = format!(
+                        "No connection to database '{}'. Please expand it in the sidebar first.",
+                        database
+                    );
+                    Toast::error(msg.clone())
+                        .meta_right(now_hms())
+                        .action(copy_action(msg))
+                        .push(cx);
+                    return;
+                }
+            }
+        };
+
+        let active_database = {
+            let state = self.app_state.read(cx);
+            state
+                .connections()
+                .get(&profile_id)
+                .and_then(|c| c.active_database.clone())
+        };
+
+        let mut browse_request = request.clone();
+        if browse_request.table.schema.is_none()
+            && let Some(ref db) = active_database
+        {
+            browse_request.table.schema = Some(db.clone());
+        }
+
+        info!(
+            "Running table browse: {:?}",
+            browse_request.table.qualified_name()
+        );
+
+        let task_target = TaskTarget {
+            profile_id,
+            database: database.clone(),
+        };
+
+        let (task_id, cancel_token) = self.runner.start_primary_for_target(
+            TaskKind::Query,
+            format!("SELECT * FROM {}", table.qualified_name()),
+            Some(task_target),
+            cx,
+        );
+
+        self.state = GridState::Loading;
+        cx.notify();
+
+        let entity = cx.entity().clone();
+        let conn_for_cleanup = conn.clone();
+
+        let table_for_spawn = table.clone();
+        let pagination_for_spawn = pagination.clone();
+        let order_by_for_spawn = order_by.clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.browse_table(&browse_request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(error) = cx.update(|cx| {
+                if cancel_token.is_cancelled() {
+                    log::info!("Query was cancelled, discarding result");
+                    if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
+                        log::warn!("Cleanup after cancel failed: {}", e);
+                    }
+                    return;
+                }
+
+                match &result {
+                    Ok(query_result) => {
+                        info!(
+                            "Query returned {} rows in {:?}",
+                            query_result.row_count(),
+                            query_result.execution_time
+                        );
+
+                        entity.update(cx, |panel, cx| {
+                            panel.runner.complete_primary(task_id, cx);
+                            panel.apply_table_result(
+                                profile_id,
+                                table_for_spawn,
+                                pagination_for_spawn,
+                                order_by_for_spawn,
+                                total_rows,
+                                query_result.clone(),
+                                cx,
+                            );
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("Query failed: {}", e);
+
+                        entity.update(cx, |panel, cx| {
+                            panel.runner.fail_primary(task_id, e.to_string(), cx);
+                            panel.state = GridState::Error;
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Query failed: {}", e),
+                                is_error: true,
+                            });
+                            cx.notify();
+                        });
+                    }
+                }
+            }) {
+                log::warn!(
+                    "Failed to apply table query result to UI state: {:?}",
+                    error
+                );
+            }
+        })
+        .detach();
+
+        // Fetch total count if not known
+        if total_rows.is_none() {
+            self.fetch_total_count(profile_id, database, table, filter, cx);
+        }
+    }
+
+    pub(super) fn run_collection_query(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        pagination: Pagination,
+        total_docs: Option<u64>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let limit_value = self.limit_input.read(cx).value();
+        let limit_str = limit_value.trim();
+        let pagination = match limit_str.parse::<u32>() {
+            Ok(0) => {
+                Toast::warning("Limit must be greater than 0")
+                    .meta_right(now_hms())
+                    .push(cx);
+                pagination
+            }
+            Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
+            Ok(_) => pagination,
+            Err(_) if !limit_str.is_empty() => {
+                Toast::warning("Invalid limit value")
+                    .meta_right(now_hms())
+                    .push(cx);
+                pagination
+            }
+            Err(_) => pagination,
+        };
+
+        let conn = {
+            let state = self.app_state.read(cx);
+            match state.connections().get(&profile_id) {
+                Some(c) => Some(c.connection.clone()),
+                None => {
+                    Toast::error("Connection not found")
+                        .meta_right(now_hms())
+                        .action(copy_action("Connection not found"))
+                        .push(cx);
+                    return;
+                }
+            }
+        };
+
+        let Some(conn) = conn else {
+            Toast::error("Connection not available")
+                .meta_right(now_hms())
+                .action(copy_action("Connection not available"))
+                .push(cx);
+            return;
+        };
+
+        let filter_value = self.filter_input.read(cx).value();
+        let filter_str = filter_value.trim();
+        let filter: Option<serde_json::Value> = if filter_str.is_empty() {
+            None
+        } else {
+            match serde_json::from_str(filter_str) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    let toast_body = e.to_string();
+                    Toast::error("Invalid JSON filter")
+                        .meta_right(now_hms())
+                        .body(toast_body.clone())
+                        .action(copy_action(format!("Invalid JSON filter: {}", toast_body)))
+                        .push(cx);
+                    return;
+                }
+            }
+        };
+
+        let filter_for_count = filter.clone();
+
+        let mut browse_request =
+            CollectionBrowseRequest::new(collection.clone()).with_pagination(pagination.clone());
+        if let Some(f) = filter {
+            browse_request = browse_request.with_filter(f);
+        }
+
+        info!(
+            "Running collection browse: {}.{}",
+            collection.database, collection.name
+        );
+
+        let task_target = TaskTarget {
+            profile_id,
+            database: Some(collection.database.clone()),
+        };
+
+        let (task_id, cancel_token) = self.runner.start_primary_for_target(
+            TaskKind::Query,
+            format!("find {}.{}", collection.database, collection.name),
+            Some(task_target),
+            cx,
+        );
+
+        self.state = GridState::Loading;
+        cx.notify();
+
+        let entity = cx.entity().clone();
+        let conn_for_cleanup = conn.clone();
+        let collection_for_spawn = collection.clone();
+        let pagination_for_spawn = pagination.clone();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.browse_collection(&browse_request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(error) = cx.update(|cx| {
+                if cancel_token.is_cancelled() {
+                    log::info!("Query was cancelled, discarding result");
+                    if let Err(e) = conn_for_cleanup.cleanup_after_cancel() {
+                        log::warn!("Cleanup after cancel failed: {}", e);
+                    }
+                    return;
+                }
+
+                match &result {
+                    Ok(query_result) => {
+                        info!(
+                            "Collection query returned {} documents in {:?}",
+                            query_result.row_count(),
+                            query_result.execution_time
+                        );
+
+                        entity.update(cx, |panel, cx| {
+                            panel.runner.complete_primary(task_id, cx);
+                            panel.apply_collection_result(
+                                profile_id,
+                                collection_for_spawn,
+                                pagination_for_spawn,
+                                total_docs,
+                                query_result.clone(),
+                                cx,
+                            );
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("Collection query failed: {}", e);
+
+                        entity.update(cx, |panel, cx| {
+                            panel.runner.fail_primary(task_id, e.to_string(), cx);
+                            panel.state = GridState::Error;
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Query failed: {}", e),
+                                is_error: true,
+                            });
+                            cx.notify();
+                        });
+                    }
+                }
+            }) {
+                log::warn!(
+                    "Failed to apply collection query result to UI state: {:?}",
+                    error
+                );
+            }
+        })
+        .detach();
+
+        // Fetch total count if not known (always re-fetch when filter changes)
+        if total_docs.is_none() {
+            self.fetch_collection_count(profile_id, collection, filter_for_count, cx);
+        }
+    }
+
+    pub(super) fn apply_collection_result(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        pagination: Pagination,
+        total_docs: Option<u64>,
+        result: QueryResult,
+        cx: &mut Context<Self>,
+    ) {
+        // Preserve existing total_docs if not provided
+        let existing_total = match &self.source {
+            DataSource::Collection { total_docs, .. } => *total_docs,
+            _ => None,
+        };
+
+        self.source = DataSource::Collection {
+            profile_id,
+            collection,
+            pagination,
+            total_docs: total_docs.or(existing_total),
+        };
+
+        self.result = result;
+        self.local_sort_state = None;
+        self.original_row_order = None;
+        self.rebuild_table(None, cx);
+        self.state = GridState::Ready;
+        cx.notify();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn apply_table_result(
+        &mut self,
+        profile_id: Uuid,
+        table: TableRef,
+        pagination: Pagination,
+        order_by: Vec<OrderByColumn>,
+        total_rows: Option<u64>,
+        result: QueryResult,
+        cx: &mut Context<Self>,
+    ) {
+        // Determine sort state from order_by for visual indicator
+        let initial_sort = order_by.first().and_then(|col| {
+            let pos = result
+                .columns
+                .iter()
+                .position(|c| c.name == col.column.name);
+            pos.map(|column_ix| TableSortState::new(column_ix, col.direction))
+        });
+
+        // Preserve existing total_rows and database if not provided
+        let (existing_total, existing_database) = match &self.source {
+            DataSource::Table {
+                total_rows,
+                database,
+                ..
+            } => (*total_rows, database.clone()),
+            _ => (None, None),
+        };
+
+        self.source = DataSource::Table {
+            profile_id,
+            database: existing_database,
+            table,
+            pagination,
+            order_by,
+            total_rows: total_rows.or(existing_total),
+        };
+
+        self.result = result;
+        self.local_sort_state = None;
+        self.original_row_order = None;
+        self.rebuild_table(initial_sort, cx);
+        self.state = GridState::Ready;
+        cx.notify();
+    }
+
+    pub(super) fn fetch_total_count(
+        &mut self,
+        profile_id: Uuid,
+        database: Option<String>,
+        table: TableRef,
+        filter: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let conn = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                return;
+            };
+
+            match connected.resolve_connection_for_execution(database.as_deref()) {
+                Ok(connection) => connection,
+                Err(_) => return,
+            }
+        };
+
+        let mut count_request = TableCountRequest::new(table.clone());
+        if let Some(f) = filter {
+            count_request = count_request.with_filter(f);
+        }
+
+        let entity = cx.entity().clone();
+        let qualified = table.qualified_name();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.count_table(&count_request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(error) = cx.update(|cx| {
+                if let Ok(total) = result {
+                    entity.update(cx, |panel, cx| {
+                        panel.pending_total_count = Some(PendingTotalCount {
+                            source_qualified: qualified,
+                            total,
+                        });
+                        cx.notify();
+                    });
+                }
+            }) {
+                log::warn!(
+                    "Failed to apply table count result to UI state: {:?}",
+                    error
+                );
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn apply_total_count(
+        &mut self,
+        source_qualified: String,
+        total: u64,
+        cx: &mut Context<Self>,
+    ) {
+        match &mut self.source {
+            DataSource::Table {
+                table, total_rows, ..
+            } if table.qualified_name() == source_qualified => {
+                *total_rows = Some(total);
+                cx.notify();
+            }
+            DataSource::Collection {
+                collection,
+                total_docs,
+                ..
+            } if collection.qualified_name() == source_qualified => {
+                *total_docs = Some(total);
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn fetch_collection_count(
+        &mut self,
+        profile_id: Uuid,
+        collection: CollectionRef,
+        filter: Option<serde_json::Value>,
+        cx: &mut Context<Self>,
+    ) {
+        let conn = {
+            let state = self.app_state.read(cx);
+            state
+                .connections()
+                .get(&profile_id)
+                .map(|c| c.connection.clone())
+        };
+
+        let Some(conn) = conn else {
+            return;
+        };
+
+        let mut count_request = CollectionCountRequest::new(collection.clone());
+        if let Some(f) = filter {
+            count_request = count_request.with_filter(f);
+        }
+
+        let entity = cx.entity().clone();
+        let qualified = collection.qualified_name();
+
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.count_collection(&count_request) });
+
+        cx.spawn(async move |_this, cx| {
+            let result = task.await;
+
+            if let Err(error) = cx.update(|cx| {
+                if let Ok(total) = result {
+                    entity.update(cx, |panel, cx| {
+                        panel.pending_total_count = Some(PendingTotalCount {
+                            source_qualified: qualified,
+                            total,
+                        });
+                        cx.notify();
+                    });
+                }
+            }) {
+                log::warn!(
+                    "Failed to apply collection count result to UI state: {:?}",
+                    error
+                );
+            }
+        })
+        .detach();
+    }
+}

@@ -33,12 +33,11 @@ actions!(
         ToggleResults,
         ToggleTasks,
         ToggleSidebar,
-        // List navigation
-        SelectNext,
-        SelectPrev,
+        // List navigation (SelectNext/SelectPrev/Execute/SelectFirst/SelectLast live in
+        // dbflux_components::actions so dbflux_ui_document can reach them without an
+        // upward dependency on dbflux_ui)
         SelectFirst,
         SelectLast,
-        Execute,
         ExpandCollapse,
         // Column navigation (Results)
         ColumnLeft,
@@ -48,12 +47,6 @@ actions!(
         FocusRight,
         FocusUp,
         FocusDown,
-        // Saved queries / history actions
-        Delete,
-        ToggleFavorite,
-        Rename,
-        FocusSearch,
-        SaveQuery,
         // Settings
         OpenSettings,
         // Item menu
@@ -66,6 +59,12 @@ actions!(
         SaveFileAs,
     ]
 );
+
+// Re-export shared document/navigation actions from dbflux_components so
+// callers inside dbflux_ui can keep using `crate::keymap::SelectNext` etc.
+pub use dbflux_components::actions::{
+    Delete, Execute, FocusSearch, Rename, SaveQuery, SelectNext, SelectPrev, ToggleFavorite,
+};
 
 /// GPUI native bindings for the four workspace pane-focus shortcuts.
 ///

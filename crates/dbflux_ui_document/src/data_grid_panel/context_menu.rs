@@ -1,0 +1,4368 @@
+use super::utils::{extract_pk_columns, value_to_json};
+use super::{
+    ContextMenuItem, DataGridEvent, DataGridPanel, DataSource, EditState, PendingDeleteConfirm,
+    PendingDocumentPreview, PendingModalOpen, PendingToast, SqlGenerateKind, TableContextMenu,
+};
+use dbflux_app::keymap::{Command, ContextId};
+use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
+use dbflux_components::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
+use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::chart::detect_chart_columns;
+use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
+use dbflux_core::{
+    DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
+    RowIdentity, RowInsert, RowPatch, Value,
+};
+use dbflux_export::ExportFormat;
+use gpui::prelude::FluentBuilder;
+use gpui::{deferred, *};
+use gpui_component::ActiveTheme;
+use std::fs::File;
+use std::io::BufWriter;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilterBackend {
+    Sql,
+    Mongo,
+}
+
+impl DataGridPanel {
+    fn restore_focus_after_context_menu(
+        &mut self,
+        is_document_view: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_mode = super::GridFocusMode::Table;
+        self.edit_state = EditState::Navigating;
+
+        if is_document_view {
+            if let Some(tree_state) = &self.document_tree_state {
+                tree_state.update(cx, |state, _| state.focus(window));
+            } else {
+                self.focus_handle.focus(window);
+            }
+        } else {
+            self.focus_handle.focus(window);
+        }
+
+        cx.emit(DataGridEvent::Focused);
+    }
+
+    /// Opens context menu at the current selection.
+    pub(super) fn open_context_menu_at_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let (row, col, cell_x, horizontal_offset) = {
+            let ts = table_state.read(cx);
+
+            let (row, col) = ts
+                .selection()
+                .active
+                .map(|c| (c.row, c.col))
+                .unwrap_or((0, 0));
+
+            let widths = ts.column_widths();
+
+            // Calculate cell x position: sum of column widths up to col
+            let cell_x: f32 = widths.iter().take(col).sum();
+
+            (row, col, cell_x, ts.horizontal_offset())
+        };
+
+        // Calculate position in window coordinates:
+        // x: panel_origin.x + cell_x - horizontal_scroll + some padding
+        // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
+        let toolbar_height = px(36.0); // Approximate toolbar height
+        let position = Point {
+            x: self.panel_origin.x + px(cell_x) - horizontal_offset + px(20.0),
+            y: self.panel_origin.y + toolbar_height + HEADER_HEIGHT + ROW_HEIGHT * row,
+        };
+
+        self.context_menu = Some(TableContextMenu {
+            row,
+            col,
+            position,
+            sql_submenu_open: false,
+            copy_query_submenu_open: false,
+            filter_submenu_open: false,
+            order_submenu_open: false,
+            selected_index: 0,
+            submenu_selected_index: 0,
+            is_document_view: false,
+            doc_field_path: None,
+            doc_field_value: None,
+        });
+
+        // Focus the context menu to receive keyboard events
+        self.context_menu_focus.focus(window);
+        cx.emit(DataGridEvent::Focused);
+        cx.notify();
+    }
+
+    /// Opens context menu for document view at the specified position.
+    #[allow(dead_code)]
+    pub(super) fn open_document_context_menu(
+        &mut self,
+        doc_index: usize,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.context_menu = Some(TableContextMenu {
+            row: doc_index,
+            col: 0,
+            position,
+            sql_submenu_open: false,
+            copy_query_submenu_open: false,
+            filter_submenu_open: false,
+            order_submenu_open: false,
+            selected_index: 0,
+            submenu_selected_index: 0,
+            is_document_view: true,
+            doc_field_path: None,
+            doc_field_value: None,
+        });
+
+        self.context_menu_focus.focus(window);
+        cx.emit(DataGridEvent::Focused);
+        cx.notify();
+    }
+
+    /// Opens context menu for document view at the current cursor position (keyboard triggered).
+    pub(super) fn open_document_context_menu_at_cursor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tree_state) = &self.document_tree_state else {
+            return;
+        };
+
+        let (doc_index, field_path, field_value) = tree_state.update(cx, |ts, _cx| {
+            let cursor_id = ts.cursor().cloned();
+            let idx = cursor_id
+                .as_ref()
+                .and_then(|id| id.doc_index())
+                .unwrap_or(0);
+
+            let (fp, fv) = cursor_id
+                .as_ref()
+                .and_then(|cid| {
+                    let node = ts.visible_nodes().iter().find(|n| &n.id == cid)?;
+                    let path: Vec<String> = cid.path[1..].to_vec();
+                    let path_opt = if path.is_empty() { None } else { Some(path) };
+                    Some((path_opt, Some(node.value.clone())))
+                })
+                .unwrap_or((None, None));
+
+            (idx, fp, fv)
+        });
+
+        // Use panel origin with some offset for keyboard-triggered menu
+        let position = Point {
+            x: self.panel_origin.x + px(100.0),
+            y: self.panel_origin.y + px(100.0),
+        };
+
+        self.context_menu = Some(TableContextMenu {
+            row: doc_index,
+            col: 0,
+            position,
+            sql_submenu_open: false,
+            copy_query_submenu_open: false,
+            filter_submenu_open: false,
+            order_submenu_open: false,
+            selected_index: 0,
+            submenu_selected_index: 0,
+            is_document_view: true,
+            doc_field_path: field_path,
+            doc_field_value: field_value,
+        });
+
+        self.context_menu_focus.focus(window);
+        cx.emit(DataGridEvent::Focused);
+        cx.notify();
+    }
+
+    fn filter_backend(&self, cx: &App) -> Option<FilterBackend> {
+        match &self.source {
+            DataSource::Table { profile_id, .. } => {
+                let is_sql = self
+                    .app_state
+                    .read(cx)
+                    .connections()
+                    .get(profile_id)
+                    .map(|c| {
+                        c.connection.metadata().query_language == dbflux_core::QueryLanguage::Sql
+                    })
+                    .unwrap_or(false);
+                is_sql.then_some(FilterBackend::Sql)
+            }
+            DataSource::Collection { .. } => Some(FilterBackend::Mongo),
+            _ => None,
+        }
+    }
+
+    fn has_filter_submenu(
+        &self,
+        backend: Option<FilterBackend>,
+        is_document_view: bool,
+        cx: &App,
+    ) -> bool {
+        match backend {
+            Some(FilterBackend::Sql) => !is_document_view,
+            Some(FilterBackend::Mongo) => {
+                is_document_view && self.mongo_filter_field_info(cx).is_some()
+            }
+            None => false,
+        }
+    }
+
+    fn mongo_filter_field_info(&self, _cx: &App) -> Option<(String, Value)> {
+        use dbflux_components::components::document_tree::NodeValue;
+
+        let menu = self.context_menu.as_ref()?;
+        let path = menu.doc_field_path.as_ref()?;
+        if path.is_empty() {
+            return None;
+        }
+
+        let field = path.join(".");
+        let value = match menu.doc_field_value.as_ref()? {
+            NodeValue::Scalar(v) => v.clone(),
+            _ => return None,
+        };
+
+        if matches!(value, Value::Bytes(_)) {
+            return None;
+        }
+
+        Some((field, value))
+    }
+
+    fn sql_filter_operators(type_name: &str, value: &Value) -> Vec<FilterOperator> {
+        if !Self::is_value_filterable(value) {
+            return Vec::new();
+        }
+
+        if Self::is_sql_json_type(type_name, value) {
+            return vec![FilterOperator::Eq, FilterOperator::NotEq];
+        }
+
+        if Self::is_sql_bool_type(type_name, value) {
+            return vec![FilterOperator::Eq, FilterOperator::NotEq];
+        }
+
+        if Self::is_sql_comparable_type(type_name, value) {
+            return vec![
+                FilterOperator::Eq,
+                FilterOperator::NotEq,
+                FilterOperator::Gt,
+                FilterOperator::Gte,
+                FilterOperator::Lt,
+                FilterOperator::Lte,
+            ];
+        }
+
+        if Self::is_sql_text_type(type_name, value) {
+            return vec![
+                FilterOperator::Eq,
+                FilterOperator::NotEq,
+                FilterOperator::Like,
+            ];
+        }
+
+        vec![FilterOperator::Eq, FilterOperator::NotEq]
+    }
+
+    fn mongo_filter_operators(value: &Value) -> Vec<FilterOperator> {
+        if !Self::is_value_filterable(value) {
+            return Vec::new();
+        }
+
+        if Self::is_mongo_comparable(value) {
+            return vec![
+                FilterOperator::Eq,
+                FilterOperator::NotEq,
+                FilterOperator::Gt,
+                FilterOperator::Gte,
+                FilterOperator::Lt,
+                FilterOperator::Lte,
+            ];
+        }
+
+        vec![FilterOperator::Eq, FilterOperator::NotEq]
+    }
+
+    fn is_mongo_comparable(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Int(_)
+                | Value::Float(_)
+                | Value::Decimal(_)
+                | Value::DateTime(_)
+                | Value::Date(_)
+                | Value::Time(_)
+        )
+    }
+
+    fn is_sql_json_type(type_name: &str, value: &Value) -> bool {
+        type_name.contains("json") || type_name.contains("bson") || matches!(value, Value::Json(_))
+    }
+
+    fn is_sql_bool_type(type_name: &str, value: &Value) -> bool {
+        type_name.contains("bool") || matches!(value, Value::Bool(_))
+    }
+
+    fn is_sql_comparable_type(type_name: &str, value: &Value) -> bool {
+        if matches!(
+            value,
+            Value::Int(_)
+                | Value::Float(_)
+                | Value::Decimal(_)
+                | Value::DateTime(_)
+                | Value::Date(_)
+                | Value::Time(_)
+        ) {
+            return true;
+        }
+
+        type_name.contains("int")
+            || type_name.contains("serial")
+            || type_name.contains("float")
+            || type_name.contains("double")
+            || type_name.contains("real")
+            || type_name.contains("numeric")
+            || type_name.contains("decimal")
+            || type_name.contains("number")
+            || type_name.contains("money")
+            || type_name.contains("date")
+            || type_name.contains("time")
+            || type_name.contains("timestamp")
+            || type_name.contains("datetime")
+            || type_name.contains("year")
+    }
+
+    fn is_sql_text_type(type_name: &str, value: &Value) -> bool {
+        if matches!(value, Value::Text(_) | Value::ObjectId(_)) {
+            return true;
+        }
+
+        type_name.contains("text")
+            || type_name.contains("char")
+            || type_name.contains("string")
+            || type_name.contains("clob")
+            || type_name.contains("uuid")
+            || type_name.contains("citext")
+            || type_name.contains("tsvector")
+            || type_name.contains("tsquery")
+            || type_name.contains("enum")
+            || type_name.contains("set")
+    }
+
+    fn sql_operator_symbol(operator: FilterOperator) -> &'static str {
+        match operator {
+            FilterOperator::Eq => "=",
+            FilterOperator::NotEq => "<>",
+            FilterOperator::Gt => ">",
+            FilterOperator::Gte => ">=",
+            FilterOperator::Lt => "<",
+            FilterOperator::Lte => "<=",
+            FilterOperator::Like => "LIKE",
+        }
+    }
+
+    fn mongo_operator_symbol(operator: FilterOperator) -> &'static str {
+        match operator {
+            FilterOperator::Eq => "=",
+            FilterOperator::NotEq => "!=",
+            FilterOperator::Gt => ">",
+            FilterOperator::Gte => ">=",
+            FilterOperator::Lt => "<",
+            FilterOperator::Lte => "<=",
+            FilterOperator::Like => "LIKE",
+        }
+    }
+
+    fn mongo_value_display_preview(value: &Value) -> String {
+        match value {
+            Value::Null => "null".to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Int(i) => i.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Decimal(d) => d.clone(),
+            Value::Text(s) => {
+                let sanitized = Self::sanitize_for_label(s);
+                format!("\"{}\"", sanitized)
+            }
+            Value::Json(j) => Self::truncate_for_label(&Self::sanitize_for_label(j), 20),
+            Value::ObjectId(oid) => {
+                format!("ObjectId(\"{}\")", Self::truncate_for_label(oid, 12))
+            }
+            Value::DateTime(dt) => format!("\"{}\"", dt.to_rfc3339()),
+            Value::Date(d) => format!("\"{}\"", d),
+            Value::Time(t) => format!("\"{}\"", t),
+            Value::Unsupported(type_name) => {
+                format!("<unsupported:{}>", Self::truncate_for_label(type_name, 20))
+            }
+            Value::Bytes(b) => format!("[{} bytes]", b.len()),
+            Value::Array(_) | Value::Document(_) => "...".to_string(),
+        }
+    }
+
+    fn build_filter_items(
+        &self,
+        menu: &TableContextMenu,
+        backend: Option<FilterBackend>,
+        cx: &App,
+    ) -> (String, usize, Vec<(String, ContextMenuAction)>, usize) {
+        match backend {
+            Some(FilterBackend::Sql) => self.build_sql_filter_items(menu, cx),
+            Some(FilterBackend::Mongo) => self.build_mongo_filter_items(cx),
+            None => (String::new(), 0, Vec::new(), 0),
+        }
+    }
+
+    fn build_sql_filter_items(
+        &self,
+        menu: &TableContextMenu,
+        cx: &App,
+    ) -> (String, usize, Vec<(String, ContextMenuAction)>, usize) {
+        let (col_name, col_type_name) = self
+            .result
+            .columns
+            .get(menu.col)
+            .map(|column| (column.name.clone(), column.type_name.to_ascii_lowercase()))
+            .unwrap_or_default();
+
+        let cell_value = self.resolve_cell_value(menu.row, menu.col, cx);
+
+        let mut items: Vec<(String, ContextMenuAction)> = Vec::new();
+        let mut value_ops_count = 0;
+
+        if let Some(ref value) = cell_value {
+            let display = cell_value
+                .as_ref()
+                .map(Self::value_display_preview)
+                .unwrap_or_default();
+            let short = Self::truncate_for_label(&display, 20);
+
+            let operators = Self::sql_filter_operators(&col_type_name, value);
+            value_ops_count = operators.len();
+
+            for operator in operators {
+                let op = Self::sql_operator_symbol(operator);
+                items.push((
+                    format!("{} {} {}", col_name, op, short),
+                    ContextMenuAction::FilterByValue(operator),
+                ));
+            }
+        }
+
+        items.push((
+            format!("{} IS NULL", col_name),
+            ContextMenuAction::FilterIsNull,
+        ));
+        items.push((
+            format!("{} IS NOT NULL", col_name),
+            ContextMenuAction::FilterIsNotNull,
+        ));
+        items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
+
+        let count = items.len();
+        (col_name, count, items, value_ops_count)
+    }
+
+    fn build_mongo_filter_items(
+        &self,
+        cx: &App,
+    ) -> (String, usize, Vec<(String, ContextMenuAction)>, usize) {
+        let Some((field, ref val)) = self.mongo_filter_field_info(cx) else {
+            return (String::new(), 0, Vec::new(), 0);
+        };
+
+        let display = Self::mongo_value_display_preview(val);
+        let short = Self::truncate_for_label(&display, 20);
+
+        let mut items: Vec<(String, ContextMenuAction)> = Vec::new();
+        let operators = Self::mongo_filter_operators(val);
+        let value_ops_count = operators.len();
+
+        for operator in operators {
+            let op = Self::mongo_operator_symbol(operator);
+            items.push((
+                format!("{} {} {}", field, op, short),
+                ContextMenuAction::FilterByValue(operator),
+            ));
+        }
+
+        items.push((
+            format!("{} IS NULL", field),
+            ContextMenuAction::FilterIsNull,
+        ));
+        items.push((
+            format!("{} IS NOT NULL", field),
+            ContextMenuAction::FilterIsNotNull,
+        ));
+        items.push(("Remove filter".to_string(), ContextMenuAction::RemoveFilter));
+
+        let count = items.len();
+        (field, count, items, value_ops_count)
+    }
+
+    /// Returns true if the data grid is editable (has primary key info).
+    pub(super) fn check_is_editable(&self, cx: &App) -> bool {
+        self.table_state
+            .as_ref()
+            .map(|ts| ts.read(cx).is_editable())
+            .unwrap_or(false)
+    }
+
+    /// Returns true if the context menu is currently open.
+    /// Returns the active context for keyboard handling.
+    pub fn active_context(&self, cx: &App) -> ContextId {
+        if self.cell_editor.read(cx).is_visible()
+            || self.document_preview_modal.read(cx).is_visible()
+        {
+            return ContextId::TextInput;
+        }
+
+        if self.context_menu.is_some() {
+            ContextId::ContextMenu
+        } else if self.edit_state == EditState::Editing {
+            ContextId::TextInput
+        } else {
+            ContextId::Results
+        }
+    }
+
+    /// Handles commands when the context menu is open.
+    pub(super) fn dispatch_menu_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let is_editable = self.check_is_editable(cx);
+        let backend = self.filter_backend(cx);
+        let is_document_view = self
+            .context_menu
+            .as_ref()
+            .map(|m| m.is_document_view)
+            .unwrap_or(false);
+        let has_row_target = self
+            .context_menu
+            .as_ref()
+            .map(|m| self.has_context_menu_row_target(m.row, m.is_document_view, cx))
+            .unwrap_or(false);
+
+        let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
+        let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+        let has_generate_sql = !is_document_view;
+        let has_copy_query = self.has_copy_query_support();
+        let can_chart = self.can_chart_from_context_menu(cx);
+
+        // Layout:
+        //   [base items]
+        //   [sep + Filter trigger]?   (if has_filter)
+        //   [Order trigger]?          (if has_order, shares separator with filter)
+        //   [sep + GenSQL trigger]?   (if has_generate_sql)
+        //   [sep + CopyQuery trigger]?(if has_copy_query)
+        let base_items = Self::build_context_menu_items(
+            is_editable,
+            is_document_view,
+            has_row_target,
+            can_chart,
+        );
+        let base_count = base_items.len();
+
+        // Filter: sep(1) + filter(1) = 2; Order adds 1 more
+        let filter_slots = if has_filter { 2 } else { 0 };
+        let order_slots = if has_order { 1 } else { 0 };
+        let after_filter_order = base_count + filter_slots + order_slots;
+
+        // GenSQL: sep(1) + trigger(1) = 2
+        let gen_sql_slots = if has_generate_sql { 2 } else { 0 };
+        let after_gen_sql = after_filter_order + gen_sql_slots;
+
+        // CopyQuery: sep(1) + trigger(1) = 2
+        let copy_query_slots = if has_copy_query { 2 } else { 0 };
+        let total_count = after_gen_sql + copy_query_slots;
+
+        let filter_trigger_idx = if has_filter {
+            Some(base_count + 1) // after separator
+        } else {
+            None
+        };
+
+        let order_trigger_idx = if has_order {
+            Some(base_count + filter_slots) // right after filter trigger
+        } else {
+            None
+        };
+
+        let gen_sql_trigger_idx = if has_generate_sql {
+            Some(after_filter_order + 1) // after separator
+        } else {
+            None
+        };
+
+        let copy_query_trigger_idx = if has_copy_query {
+            Some(after_gen_sql + 1) // after separator
+        } else {
+            None
+        };
+
+        let any_submenu_open = self
+            .context_menu
+            .as_ref()
+            .map(|m| {
+                m.sql_submenu_open
+                    || m.copy_query_submenu_open
+                    || m.filter_submenu_open
+                    || m.order_submenu_open
+            })
+            .unwrap_or(false);
+
+        let filter_submenu_actions: Vec<ContextMenuAction> = self
+            .context_menu
+            .as_ref()
+            .filter(|m| m.filter_submenu_open)
+            .map(|m| {
+                let (_, _, items, _) = self.build_filter_items(m, backend, cx);
+                items.into_iter().map(|(_, action)| action).collect()
+            })
+            .unwrap_or_default();
+
+        // Determine count of items in the active submenu
+        let active_submenu_count = if let Some(menu) = &self.context_menu {
+            if menu.filter_submenu_open {
+                filter_submenu_actions.len()
+            } else if menu.order_submenu_open {
+                3 // ASC, DESC, Remove
+            } else if menu.sql_submenu_open {
+                4 // SELECT WHERE, INSERT, UPDATE, DELETE
+            } else if menu.copy_query_submenu_open {
+                3 // INSERT, UPDATE, DELETE
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        let is_separator = |idx: usize| -> bool {
+            if idx < base_count {
+                return base_items.get(idx).map(|i| i.is_separator).unwrap_or(false);
+            }
+
+            // Filter separator
+            if has_filter && idx == base_count {
+                return true;
+            }
+
+            // GenSQL separator
+            if has_generate_sql && idx == after_filter_order {
+                return true;
+            }
+
+            // CopyQuery separator
+            if has_copy_query && idx == after_gen_sql {
+                return true;
+            }
+
+            false
+        };
+
+        match cmd {
+            Command::MenuDown => {
+                if let Some(ref mut menu) = self.context_menu {
+                    if any_submenu_open {
+                        menu.submenu_selected_index =
+                            (menu.submenu_selected_index + 1) % active_submenu_count;
+                    } else {
+                        menu.selected_index = (menu.selected_index + 1) % total_count;
+                        while is_separator(menu.selected_index) {
+                            menu.selected_index = (menu.selected_index + 1) % total_count;
+                        }
+                    }
+                    cx.notify();
+                }
+                true
+            }
+            Command::MenuUp => {
+                if let Some(ref mut menu) = self.context_menu {
+                    if any_submenu_open {
+                        menu.submenu_selected_index = if menu.submenu_selected_index == 0 {
+                            active_submenu_count - 1
+                        } else {
+                            menu.submenu_selected_index - 1
+                        };
+                    } else {
+                        menu.selected_index = if menu.selected_index == 0 {
+                            total_count - 1
+                        } else {
+                            menu.selected_index - 1
+                        };
+                        while is_separator(menu.selected_index) && menu.selected_index > 0 {
+                            menu.selected_index -= 1;
+                        }
+                    }
+                    cx.notify();
+                }
+                true
+            }
+            Command::MenuSelect => {
+                if let Some(ref mut menu) = self.context_menu {
+                    if menu.filter_submenu_open {
+                        if let Some(action) = filter_submenu_actions
+                            .get(menu.submenu_selected_index)
+                            .copied()
+                        {
+                            self.handle_context_menu_action(action, window, cx);
+                        }
+                    } else if menu.order_submenu_open {
+                        let action = match menu.submenu_selected_index {
+                            0 => ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
+                            1 => ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+                            _ => ContextMenuAction::RemoveOrdering,
+                        };
+                        self.handle_context_menu_action(action, window, cx);
+                    } else if menu.sql_submenu_open {
+                        let action = match menu.submenu_selected_index {
+                            0 => ContextMenuAction::GenerateSelectWhere,
+                            1 => ContextMenuAction::GenerateInsert,
+                            2 => ContextMenuAction::GenerateUpdate,
+                            _ => ContextMenuAction::GenerateDelete,
+                        };
+                        self.handle_context_menu_action(action, window, cx);
+                    } else if menu.copy_query_submenu_open {
+                        let action = match menu.submenu_selected_index {
+                            0 => ContextMenuAction::CopyAsInsert,
+                            1 => ContextMenuAction::CopyAsUpdate,
+                            _ => ContextMenuAction::CopyAsDelete,
+                        };
+                        self.handle_context_menu_action(action, window, cx);
+                    } else if filter_trigger_idx == Some(menu.selected_index) {
+                        menu.filter_submenu_open = true;
+                        menu.order_submenu_open = false;
+                        menu.sql_submenu_open = false;
+                        menu.copy_query_submenu_open = false;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    } else if order_trigger_idx == Some(menu.selected_index) {
+                        menu.order_submenu_open = true;
+                        menu.filter_submenu_open = false;
+                        menu.sql_submenu_open = false;
+                        menu.copy_query_submenu_open = false;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    } else if gen_sql_trigger_idx == Some(menu.selected_index) {
+                        menu.sql_submenu_open = true;
+                        menu.filter_submenu_open = false;
+                        menu.order_submenu_open = false;
+                        menu.copy_query_submenu_open = false;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    } else if copy_query_trigger_idx == Some(menu.selected_index) {
+                        menu.copy_query_submenu_open = true;
+                        menu.filter_submenu_open = false;
+                        menu.order_submenu_open = false;
+                        menu.sql_submenu_open = false;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    } else if menu.selected_index < base_count
+                        && let Some(item) = base_items.get(menu.selected_index)
+                        && let Some(action) = item.action
+                    {
+                        self.handle_context_menu_action(action, window, cx);
+                    }
+                }
+                true
+            }
+            Command::MenuBack | Command::Cancel => {
+                if let Some(ref mut menu) = self.context_menu {
+                    if menu.sql_submenu_open
+                        || menu.copy_query_submenu_open
+                        || menu.filter_submenu_open
+                        || menu.order_submenu_open
+                    {
+                        menu.sql_submenu_open = false;
+                        menu.copy_query_submenu_open = false;
+                        menu.filter_submenu_open = false;
+                        menu.order_submenu_open = false;
+                        cx.notify();
+                    } else {
+                        let is_document_view = menu.is_document_view;
+                        self.context_menu = None;
+                        self.restore_focus_after_context_menu(is_document_view, window, cx);
+                        cx.notify();
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn has_context_menu_row_target(&self, row: usize, is_document_view: bool, cx: &App) -> bool {
+        if is_document_view {
+            return self
+                .document_tree_state
+                .as_ref()
+                .and_then(|state| state.read(cx).get_raw_document(row))
+                .is_some();
+        }
+
+        self.table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).edit_buffer().visual_row_source(row))
+            .is_some()
+    }
+
+    fn context_menu_action_requires_row_target(action: ContextMenuAction) -> bool {
+        matches!(
+            action,
+            ContextMenuAction::Edit
+                | ContextMenuAction::EditInModal
+                | ContextMenuAction::SetDefault
+                | ContextMenuAction::SetNull
+                | ContextMenuAction::DuplicateRow
+                | ContextMenuAction::DeleteRow
+                | ContextMenuAction::GenerateSelectWhere
+                | ContextMenuAction::GenerateInsert
+                | ContextMenuAction::GenerateUpdate
+                | ContextMenuAction::GenerateDelete
+                | ContextMenuAction::CopyAsInsert
+                | ContextMenuAction::CopyAsUpdate
+                | ContextMenuAction::CopyAsDelete
+                | ContextMenuAction::FilterByValue(_)
+        )
+    }
+
+    // === Export ===
+
+    pub fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.result.rows.is_empty()
+            && self.result.text_body.is_none()
+            && self.result.raw_bytes.is_none()
+        {
+            Toast::error("No results to export")
+                .meta_right(now_hms())
+                .action(copy_action("No results to export"))
+                .push(cx);
+            return;
+        }
+
+        let formats = dbflux_export::available_formats(&self.result.shape);
+
+        if formats.len() == 1 {
+            self.export_with_format(formats[0], window, cx);
+        } else {
+            self.export_menu_open = !self.export_menu_open;
+            cx.notify();
+        }
+    }
+
+    pub fn export_with_format(
+        &mut self,
+        format: ExportFormat,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_menu_open = false;
+
+        let result = self.result.clone();
+        let base_name = self.export_base_name();
+        let extension = format.extension();
+        let suggested_name = format!("{}.{}", base_name, extension);
+        let format_name = format.name();
+
+        let entity = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            let file_handle = rfd::AsyncFileDialog::new()
+                .set_title(format!("Export as {}", format_name))
+                .set_file_name(&suggested_name)
+                .add_filter(format_name, &[extension])
+                .save_file()
+                .await;
+
+            let Some(handle) = file_handle else {
+                return;
+            };
+
+            let path = handle.path().to_path_buf();
+
+            let export_result = (|| {
+                let file = File::create(&path)?;
+                let mut writer = BufWriter::new(file);
+                dbflux_export::export(&result, format, &mut writer)?;
+                Ok::<_, dbflux_export::ExportError>(())
+            })();
+
+            let message = match &export_result {
+                Ok(()) => format!("Exported to {}", path.display()),
+                Err(e) => format!("Export failed: {}", e),
+            };
+            let is_error = export_result.is_err();
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    panel.pending_toast = Some(PendingToast { message, is_error });
+                    cx.notify();
+                });
+            })
+            .log_if_dropped();
+        })
+        .detach();
+    }
+
+    fn export_base_name(&self) -> String {
+        match &self.source {
+            DataSource::Table { table, .. } => table.name.clone(),
+            DataSource::Collection { collection, .. } => collection.name.clone(),
+            DataSource::QueryResult { .. } => {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                format!("result_{}", timestamp)
+            }
+        }
+    }
+
+    pub(super) fn build_context_menu_items(
+        is_editable: bool,
+        is_document_view: bool,
+        has_row_target: bool,
+        can_chart: bool,
+    ) -> Vec<ContextMenuItem> {
+        if is_document_view {
+            // Document view menu: Copy, View/Edit Document, CRUD operations
+            let mut items = Vec::new();
+
+            if has_row_target {
+                items.extend([
+                    ContextMenuItem {
+                        label: "Copy",
+                        action: Some(ContextMenuAction::Copy),
+                        icon: Some(AppIcon::Layers),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "View Document",
+                        action: Some(ContextMenuAction::EditInModal),
+                        icon: Some(AppIcon::Maximize2),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                ]);
+            }
+
+            if is_editable {
+                if !items.is_empty() {
+                    items.push(ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    });
+                }
+
+                items.push(ContextMenuItem {
+                    label: "Add Document",
+                    action: Some(ContextMenuAction::AddRow),
+                    icon: Some(AppIcon::Plus),
+                    is_separator: false,
+                    is_danger: false,
+                });
+
+                if has_row_target {
+                    items.extend([
+                        ContextMenuItem {
+                            label: "Duplicate Document",
+                            action: Some(ContextMenuAction::DuplicateRow),
+                            icon: Some(AppIcon::Layers),
+                            is_separator: false,
+                            is_danger: false,
+                        },
+                        ContextMenuItem {
+                            label: "Delete Document",
+                            action: Some(ContextMenuAction::DeleteRow),
+                            icon: Some(AppIcon::Delete),
+                            is_separator: false,
+                            is_danger: true,
+                        },
+                    ]);
+                }
+            }
+
+            return items;
+        }
+
+        // Table view menu
+        let mut items = vec![ContextMenuItem {
+            label: "Copy",
+            action: Some(ContextMenuAction::Copy),
+            icon: Some(AppIcon::Layers),
+            is_separator: false,
+            is_danger: false,
+        }];
+
+        if is_editable {
+            if has_row_target {
+                items.extend([
+                    ContextMenuItem {
+                        label: "Paste",
+                        action: Some(ContextMenuAction::Paste),
+                        icon: Some(AppIcon::Download),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Edit",
+                        action: Some(ContextMenuAction::Edit),
+                        icon: Some(AppIcon::Pencil),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Edit in Modal",
+                        action: Some(ContextMenuAction::EditInModal),
+                        icon: Some(AppIcon::Maximize2),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Set to Default",
+                        action: Some(ContextMenuAction::SetDefault),
+                        icon: Some(AppIcon::RotateCcw),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Set to NULL",
+                        action: Some(ContextMenuAction::SetNull),
+                        icon: Some(AppIcon::X),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "",
+                        action: None,
+                        icon: None,
+                        is_separator: true,
+                        is_danger: false,
+                    },
+                ]);
+            }
+
+            items.push(ContextMenuItem {
+                label: "Add Row",
+                action: Some(ContextMenuAction::AddRow),
+                icon: Some(AppIcon::Plus),
+                is_separator: false,
+                is_danger: false,
+            });
+
+            if has_row_target {
+                items.extend([
+                    ContextMenuItem {
+                        label: "Inspect Row",
+                        action: Some(ContextMenuAction::InspectRow),
+                        icon: Some(AppIcon::Info),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Duplicate Row",
+                        action: Some(ContextMenuAction::DuplicateRow),
+                        icon: Some(AppIcon::Layers),
+                        is_separator: false,
+                        is_danger: false,
+                    },
+                    ContextMenuItem {
+                        label: "Delete Row",
+                        action: Some(ContextMenuAction::DeleteRow),
+                        icon: Some(AppIcon::Delete),
+                        is_separator: false,
+                        is_danger: true,
+                    },
+                ]);
+            }
+        }
+
+        if can_chart {
+            items.push(ContextMenuItem {
+                label: "",
+                action: None,
+                icon: None,
+                is_separator: true,
+                is_danger: false,
+            });
+            items.push(ContextMenuItem {
+                label: "Chart this query",
+                action: Some(ContextMenuAction::ChartThisQuery),
+                icon: Some(AppIcon::ChartSpline),
+                is_separator: false,
+                is_danger: false,
+            });
+        }
+
+        items
+    }
+
+    /// Returns the total number of navigable items in the context menu.
+    /// This includes all visible items plus the Generate SQL trigger (for table view).
+    #[allow(dead_code)]
+    pub(super) fn context_menu_item_count(is_editable: bool, is_document_view: bool) -> usize {
+        let base_items = Self::build_context_menu_items(is_editable, is_document_view, true, false);
+        let base_count = base_items.iter().filter(|i| !i.is_separator).count();
+        // Add 1 for Generate SQL only in table view
+        if is_document_view {
+            base_count
+        } else {
+            base_count + 1
+        }
+    }
+
+    pub(super) fn render_delete_confirm_modal(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let btn_hover = theme.muted;
+
+        let count = self
+            .pending_delete_confirm
+            .as_ref()
+            .map(|c| c.row_indices.len())
+            .unwrap_or(1);
+
+        let (title, description) = if count == 1 {
+            (
+                "Delete row?".to_string(),
+                "This action cannot be undone.".to_string(),
+            )
+        } else {
+            (
+                format!("Delete {} rows?", count),
+                format!(
+                    "{} rows will be permanently deleted. This cannot be undone.",
+                    count
+                ),
+            )
+        };
+
+        // Backdrop with centered modal
+        div()
+            .id("delete-modal-overlay")
+            .absolute()
+            .inset_0()
+            .bg(overlay_bg(theme))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                surface_panel(cx)
+                    .rounded(Radii::MD)
+                    .min_w(px(300.0))
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::MD)
+                    .p(Spacing::MD)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Icon::new(AppIcon::TriangleAlert)
+                                    .medium()
+                                    .color(theme.warning),
+                            )
+                            .child(Text::heading(title)),
+                    )
+                    .child(Text::muted(description))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(Spacing::SM)
+                            .child(
+                                div()
+                                    .id("delete-cancel-btn")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .bg(theme.secondary)
+                                    .hover(|d| d.bg(btn_hover))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.cancel_delete(window, cx);
+                                    }))
+                                    .child(
+                                        Icon::new(AppIcon::X).small().color(theme.muted_foreground),
+                                    )
+                                    .child(Text::caption("Cancel")),
+                            )
+                            .child(
+                                div()
+                                    .id("delete-confirm-btn")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px(Spacing::SM)
+                                    .py(Spacing::XS)
+                                    .rounded(Radii::SM)
+                                    .cursor_pointer()
+                                    .bg(theme.danger)
+                                    .hover(|d| d.opacity(0.9))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm_delete(window, cx);
+                                    }))
+                                    .child(
+                                        Icon::new(AppIcon::Delete).small().color(theme.background),
+                                    )
+                                    .child(Text::caption("Delete").color(theme.background)),
+                            ),
+                    ),
+            )
+    }
+
+    pub(super) fn render_context_menu(
+        &self,
+        menu: &TableContextMenu,
+        is_editable: bool,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let menu_width = px(180.0);
+
+        // Convert window coordinates to panel-relative coordinates
+        let menu_x = menu.position.x - self.panel_origin.x;
+        let menu_y = menu.position.y - self.panel_origin.y;
+
+        // Build visible menu items list for keyboard navigation
+        let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
+        let can_chart = self.can_chart_from_context_menu(cx);
+        let visible_items = Self::build_context_menu_items(
+            is_editable,
+            menu.is_document_view,
+            has_row_target,
+            can_chart,
+        );
+        let selected_index = menu.selected_index;
+        let is_document_view = menu.is_document_view;
+
+        // Build menu items with selection highlighting
+        let mut menu_items: Vec<AnyElement> = Vec::new();
+        let mut visual_index = 0usize;
+
+        for item in &visible_items {
+            if item.is_separator {
+                menu_items.push(
+                    div()
+                        .h(px(1.0))
+                        .mx(Spacing::SM)
+                        .my(Spacing::XS)
+                        .bg(theme.border)
+                        .into_any_element(),
+                );
+                visual_index += 1;
+                continue;
+            }
+
+            let Some(action) = item.action else {
+                visual_index += 1;
+                continue;
+            };
+
+            let is_selected = visual_index == selected_index;
+            let is_danger = item.is_danger;
+            let label = item.label;
+            let icon = item.icon;
+            let current_index = visual_index;
+
+            let label_color = if is_danger {
+                theme.danger
+            } else {
+                theme.foreground
+            };
+
+            menu_items.push(
+                div()
+                    .id(SharedString::from(label))
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .when(is_selected, |d| {
+                        d.bg(if is_danger {
+                            theme.danger.opacity(0.1)
+                        } else {
+                            theme.accent
+                        })
+                    })
+                    .when(!is_selected, |d| {
+                        d.hover(|d| {
+                            d.bg(if is_danger {
+                                theme.danger.opacity(0.1)
+                            } else {
+                                theme.secondary
+                            })
+                        })
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != current_index
+                        {
+                            menu.selected_index = current_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.handle_context_menu_action(action, window, cx);
+                    }))
+                    .when_some(icon, |d, icon| {
+                        d.child(Icon::new(icon).small().color(if is_danger {
+                            theme.danger
+                        } else if is_selected {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        }))
+                    })
+                    .when(icon.is_none(), |d| d.pl(px(20.0)))
+                    .child(Text::caption(label).color(if is_selected {
+                        if is_danger {
+                            theme.danger
+                        } else {
+                            theme.accent_foreground
+                        }
+                    } else {
+                        label_color
+                    }))
+                    .into_any_element(),
+            );
+
+            visual_index += 1;
+        }
+
+        // -- Filter submenu --
+        let backend = self.filter_backend(cx);
+        let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
+        let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+
+        if has_filter {
+            menu_items.push(
+                div()
+                    .h(px(1.0))
+                    .mx(Spacing::SM)
+                    .my(Spacing::XS)
+                    .bg(theme.border)
+                    .into_any_element(),
+            );
+            visual_index += 1;
+
+            let filter_submenu_open = menu.filter_submenu_open;
+            let submenu_bg = theme.popover;
+            let submenu_border = theme.border;
+            let submenu_fg = theme.foreground;
+            let submenu_hover = theme.secondary;
+            let filter_index = visual_index;
+            let filter_selected = selected_index == filter_index;
+            let submenu_selected_index = menu.submenu_selected_index;
+
+            let (_col_name_display, filter_submenu_count, filter_items, value_ops_count) =
+                self.build_filter_items(menu, backend, cx);
+
+            let filter_label_color = if filter_selected && !filter_submenu_open {
+                theme.accent_foreground
+            } else {
+                submenu_fg
+            };
+
+            menu_items.push(
+                div()
+                    .id("filter-trigger")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .when(filter_submenu_open, |d| d.bg(submenu_hover))
+                    .when(filter_selected && !filter_submenu_open, |d| {
+                        d.bg(theme.accent)
+                    })
+                    .when(!filter_selected && !filter_submenu_open, |d| {
+                        d.hover(|d| d.bg(submenu_hover))
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != filter_index
+                            && !menu.filter_submenu_open
+                        {
+                            menu.selected_index = filter_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu {
+                            menu.filter_submenu_open = !menu.filter_submenu_open;
+                            menu.order_submenu_open = false;
+                            menu.sql_submenu_open = false;
+                            menu.copy_query_submenu_open = false;
+                            menu.submenu_selected_index = 0;
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(
+                                Icon::new(AppIcon::ListFilter)
+                                    .small()
+                                    .color(filter_label_color),
+                            )
+                            .child(Text::caption("Filter").color(filter_label_color)),
+                    )
+                    .child(Icon::new(AppIcon::ChevronRight).small().color(
+                        if filter_selected && !filter_submenu_open {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        },
+                    ))
+                    .when(filter_submenu_open, |d: Stateful<Div>| {
+                        let value_section_separator_idx =
+                            (value_ops_count > 0).then_some(value_ops_count);
+                        let remove_separator_idx = filter_submenu_count.saturating_sub(1);
+
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(172.0))
+                                .top(px(-4.0))
+                                .w(px(280.0))
+                                .bg(submenu_bg)
+                                .border_1()
+                                .border_color(submenu_border)
+                                .rounded(Radii::MD)
+                                .shadow_lg()
+                                .py(Spacing::XS)
+                                .occlude()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .when(value_ops_count > 0, |d| {
+                                    d.child(div().px(Spacing::SM).py(Spacing::XS).child(
+                                        Text::caption("Cell value").font_size(FontSizes::XS),
+                                    ))
+                                })
+                                .children(
+                                    filter_items
+                                        .into_iter()
+                                        .enumerate()
+                                        .flat_map(|(idx, (label, action))| {
+                                            let mut elements: Vec<AnyElement> = Vec::new();
+
+                                            // Add separator between value ops and IS NULL section
+                                            if value_section_separator_idx == Some(idx) {
+                                                elements.push(
+                                                    div()
+                                                        .h(px(1.0))
+                                                        .mx(Spacing::SM)
+                                                        .my(Spacing::XS)
+                                                        .bg(submenu_border)
+                                                        .into_any_element(),
+                                                );
+                                            }
+
+                                            // Add separator before "Remove filter"
+                                            if idx == remove_separator_idx {
+                                                elements.push(
+                                                    div()
+                                                        .h(px(1.0))
+                                                        .mx(Spacing::SM)
+                                                        .my(Spacing::XS)
+                                                        .bg(submenu_border)
+                                                        .into_any_element(),
+                                                );
+                                            }
+
+                                            let is_submenu_selected = idx == submenu_selected_index;
+                                            let is_remove =
+                                                matches!(action, ContextMenuAction::RemoveFilter);
+                                            let label_shared =
+                                                SharedString::from(format!("filter-{}", idx));
+
+                                            let item_color = if is_remove {
+                                                theme.danger
+                                            } else if is_submenu_selected {
+                                                theme.accent_foreground
+                                            } else {
+                                                submenu_fg
+                                            };
+
+                                            elements.push(
+                                                div()
+                                                    .id(label_shared)
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(Spacing::SM)
+                                                    .h(Heights::ROW_COMPACT)
+                                                    .px(Spacing::SM)
+                                                    .mx(Spacing::XS)
+                                                    .rounded(Radii::SM)
+                                                    .cursor_pointer()
+                                                    .text_size(FontSizes::SM)
+                                                    .when(is_submenu_selected && !is_remove, |d| {
+                                                        d.bg(theme.accent)
+                                                    })
+                                                    .when(is_submenu_selected && is_remove, |d| {
+                                                        d.bg(theme.danger.opacity(0.1))
+                                                    })
+                                                    .when(!is_submenu_selected, |d| {
+                                                        d.hover(|d| d.bg(submenu_hover))
+                                                    })
+                                                    .on_mouse_move(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            if let Some(ref mut menu) =
+                                                                this.context_menu
+                                                                && menu.submenu_selected_index
+                                                                    != idx
+                                                            {
+                                                                menu.submenu_selected_index = idx;
+                                                                cx.notify();
+                                                            }
+                                                        },
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, window, cx| {
+                                                            this.handle_context_menu_action(
+                                                                action, window, cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                    .child(
+                                                        Text::caption(label.clone())
+                                                            .color(item_color),
+                                                    )
+                                                    .into_any_element(),
+                                            );
+
+                                            elements
+                                        })
+                                        .collect::<Vec<_>>(),
+                                ),
+                        )
+                    })
+                    .into_any_element(),
+            );
+            visual_index += 1;
+        }
+
+        // -- Order submenu (SQL table view only) --
+        if has_order {
+            let submenu_bg = theme.popover;
+            let submenu_border = theme.border;
+            let submenu_fg = theme.foreground;
+            let submenu_hover = theme.secondary;
+            let order_submenu_open = menu.order_submenu_open;
+            let order_index = visual_index;
+            let order_selected = selected_index == order_index;
+            let submenu_selected_index = menu.submenu_selected_index;
+
+            let col_name_for_order = self
+                .result
+                .columns
+                .get(menu.col)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+
+            let order_label_color = if order_selected && !order_submenu_open {
+                theme.accent_foreground
+            } else {
+                submenu_fg
+            };
+
+            menu_items.push(
+                div()
+                    .id("order-trigger")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .when(order_submenu_open, |d| d.bg(submenu_hover))
+                    .when(order_selected && !order_submenu_open, |d| {
+                        d.bg(theme.accent)
+                    })
+                    .when(!order_selected && !order_submenu_open, |d| {
+                        d.hover(|d| d.bg(submenu_hover))
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != order_index
+                            && !menu.order_submenu_open
+                        {
+                            menu.selected_index = order_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu {
+                            menu.order_submenu_open = !menu.order_submenu_open;
+                            menu.filter_submenu_open = false;
+                            menu.sql_submenu_open = false;
+                            menu.copy_query_submenu_open = false;
+                            menu.submenu_selected_index = 0;
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(
+                                Icon::new(AppIcon::ArrowUpDown)
+                                    .small()
+                                    .color(order_label_color),
+                            )
+                            .child(Text::caption("Order").color(order_label_color)),
+                    )
+                    .child(Icon::new(AppIcon::ChevronRight).small().color(
+                        if order_selected && !order_submenu_open {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        },
+                    ))
+                    .when(order_submenu_open, |d: Stateful<Div>| {
+                        let order_items: Vec<(String, ContextMenuAction, AppIcon)> = vec![
+                            (
+                                format!("{} ASC", col_name_for_order),
+                                ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
+                                AppIcon::ArrowUp,
+                            ),
+                            (
+                                format!("{} DESC", col_name_for_order),
+                                ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+                                AppIcon::ArrowDown,
+                            ),
+                            (
+                                "Remove ordering".to_string(),
+                                ContextMenuAction::RemoveOrdering,
+                                AppIcon::X,
+                            ),
+                        ];
+
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(172.0))
+                                .top(px(-4.0))
+                                .w(px(200.0))
+                                .bg(submenu_bg)
+                                .border_1()
+                                .border_color(submenu_border)
+                                .rounded(Radii::MD)
+                                .shadow_lg()
+                                .py(Spacing::XS)
+                                .occlude()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .children(
+                                    order_items
+                                        .into_iter()
+                                        .enumerate()
+                                        .flat_map(|(idx, (label, action, icon))| {
+                                            let mut elements: Vec<AnyElement> = Vec::new();
+
+                                            // Separator before "Remove ordering"
+                                            if idx == 2 {
+                                                elements.push(
+                                                    div()
+                                                        .h(px(1.0))
+                                                        .mx(Spacing::SM)
+                                                        .my(Spacing::XS)
+                                                        .bg(submenu_border)
+                                                        .into_any_element(),
+                                                );
+                                            }
+
+                                            let is_submenu_selected = idx == submenu_selected_index;
+                                            let is_remove =
+                                                matches!(action, ContextMenuAction::RemoveOrdering);
+
+                                            let order_item_color = if is_remove {
+                                                theme.danger
+                                            } else if is_submenu_selected {
+                                                theme.accent_foreground
+                                            } else {
+                                                submenu_fg
+                                            };
+
+                                            elements.push(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "order-{}",
+                                                        idx
+                                                    )))
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(Spacing::SM)
+                                                    .h(Heights::ROW_COMPACT)
+                                                    .px(Spacing::SM)
+                                                    .mx(Spacing::XS)
+                                                    .rounded(Radii::SM)
+                                                    .cursor_pointer()
+                                                    .text_size(FontSizes::SM)
+                                                    .when(is_submenu_selected && !is_remove, |d| {
+                                                        d.bg(theme.accent)
+                                                    })
+                                                    .when(is_submenu_selected && is_remove, |d| {
+                                                        d.bg(theme.danger.opacity(0.1))
+                                                    })
+                                                    .when(!is_submenu_selected, |d| {
+                                                        d.hover(|d| d.bg(submenu_hover))
+                                                    })
+                                                    .on_mouse_move(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            if let Some(ref mut menu) =
+                                                                this.context_menu
+                                                                && menu.submenu_selected_index
+                                                                    != idx
+                                                            {
+                                                                menu.submenu_selected_index = idx;
+                                                                cx.notify();
+                                                            }
+                                                        },
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, window, cx| {
+                                                            this.handle_context_menu_action(
+                                                                action, window, cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                    .child(Icon::new(icon).small().color(
+                                                        if is_remove {
+                                                            theme.danger
+                                                        } else if is_submenu_selected {
+                                                            theme.accent_foreground
+                                                        } else {
+                                                            theme.muted_foreground
+                                                        },
+                                                    ))
+                                                    .child(
+                                                        Text::caption(label)
+                                                            .color(order_item_color),
+                                                    )
+                                                    .into_any_element(),
+                                            );
+
+                                            elements
+                                        })
+                                        .collect::<Vec<_>>(),
+                                ),
+                        )
+                    })
+                    .into_any_element(),
+            );
+            visual_index += 1;
+        }
+
+        // "Generate SQL" submenu (only for table view, not document view)
+        if !is_document_view {
+            // Add separator before "Generate SQL"
+            menu_items.push(
+                div()
+                    .h(px(1.0))
+                    .mx(Spacing::SM)
+                    .my(Spacing::XS)
+                    .bg(theme.border)
+                    .into_any_element(),
+            );
+            visual_index += 1; // Separator takes an index slot
+
+            // "Generate SQL" submenu trigger
+            let sql_submenu_open = menu.sql_submenu_open;
+            let submenu_bg = theme.popover;
+            let submenu_border = theme.border;
+            let submenu_fg = theme.foreground;
+            let submenu_hover = theme.secondary;
+            let gen_sql_index = visual_index; // Index for Generate SQL item
+            let gen_sql_selected = selected_index == gen_sql_index;
+            let submenu_selected_index = menu.submenu_selected_index;
+
+            let gen_sql_label_color = if gen_sql_selected && !sql_submenu_open {
+                theme.accent_foreground
+            } else {
+                submenu_fg
+            };
+
+            menu_items.push(
+                div()
+                    .id("generate-sql-trigger")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .when(sql_submenu_open, |d| d.bg(submenu_hover))
+                    .when(gen_sql_selected && !sql_submenu_open, |d| {
+                        d.bg(theme.accent)
+                    })
+                    .when(!gen_sql_selected && !sql_submenu_open, |d| {
+                        d.hover(|d| d.bg(submenu_hover))
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != gen_sql_index
+                            && !menu.sql_submenu_open
+                        {
+                            menu.selected_index = gen_sql_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu {
+                            menu.sql_submenu_open = !menu.sql_submenu_open;
+                            menu.copy_query_submenu_open = false;
+                            menu.submenu_selected_index = 0;
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(Icon::new(AppIcon::Code).small().color(gen_sql_label_color))
+                            .child(Text::caption("Generate SQL").color(gen_sql_label_color)),
+                    )
+                    .child(Icon::new(AppIcon::ChevronRight).small().color(
+                        if gen_sql_selected && !sql_submenu_open {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        },
+                    ))
+                    // Submenu appears to the right
+                    .when(sql_submenu_open, |d: Stateful<Div>| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(172.0)) // menu_width - some padding
+                                .top(px(-4.0))
+                                .w(px(160.0))
+                                .bg(submenu_bg)
+                                .border_1()
+                                .border_color(submenu_border)
+                                .rounded(Radii::MD)
+                                .shadow_lg()
+                                .py(Spacing::XS)
+                                // Capture clicks within submenu bounds (prevents overlay from closing menu)
+                                .occlude()
+                                // Stop click from bubbling to parent "Generate SQL" trigger
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .children(
+                                    [
+                                        ("SELECT WHERE", ContextMenuAction::GenerateSelectWhere),
+                                        ("INSERT", ContextMenuAction::GenerateInsert),
+                                        ("UPDATE", ContextMenuAction::GenerateUpdate),
+                                        ("DELETE", ContextMenuAction::GenerateDelete),
+                                    ]
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(idx, (label, action))| {
+                                        let is_submenu_selected = idx == submenu_selected_index;
+                                        let sql_item_color = if is_submenu_selected {
+                                            theme.accent_foreground
+                                        } else {
+                                            submenu_fg
+                                        };
+
+                                        div()
+                                            .id(SharedString::from(label))
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::SM)
+                                            .h(Heights::ROW_COMPACT)
+                                            .px(Spacing::SM)
+                                            .mx(Spacing::XS)
+                                            .rounded(Radii::SM)
+                                            .cursor_pointer()
+                                            .text_size(FontSizes::SM)
+                                            .when(is_submenu_selected, |d| d.bg(theme.accent))
+                                            .when(!is_submenu_selected, |d| {
+                                                d.hover(|d| d.bg(submenu_hover))
+                                            })
+                                            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                if let Some(ref mut menu) = this.context_menu
+                                                    && menu.submenu_selected_index != idx
+                                                {
+                                                    menu.submenu_selected_index = idx;
+                                                    cx.notify();
+                                                }
+                                            }))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.handle_context_menu_action(action, window, cx);
+                                            }))
+                                            .child(Icon::new(AppIcon::Code).small().color(
+                                                if is_submenu_selected {
+                                                    theme.accent_foreground
+                                                } else {
+                                                    theme.muted_foreground
+                                                },
+                                            ))
+                                            .child(Text::caption(label).color(sql_item_color))
+                                    })
+                                    .collect::<Vec<_>>(),
+                                ),
+                        )
+                    })
+                    .into_any_element(),
+            );
+        }
+
+        // -- Copy as Query submenu --
+        if self.has_copy_query_support() {
+            menu_items.push(
+                div()
+                    .h(px(1.0))
+                    .mx(Spacing::SM)
+                    .my(Spacing::XS)
+                    .bg(theme.border)
+                    .into_any_element(),
+            );
+            visual_index += 1;
+
+            let copy_query_label = self.copy_query_submenu_label(cx);
+            let copy_submenu_open = menu.copy_query_submenu_open;
+            let submenu_bg = theme.popover;
+            let submenu_border = theme.border;
+            let submenu_fg = theme.foreground;
+            let submenu_hover = theme.secondary;
+            let copy_query_index = visual_index;
+            let copy_query_selected = selected_index == copy_query_index;
+            let submenu_selected_index = menu.submenu_selected_index;
+
+            menu_items.push(
+                div()
+                    .id("copy-query-trigger")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(Heights::ROW_COMPACT)
+                    .px(Spacing::SM)
+                    .mx(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .text_size(FontSizes::SM)
+                    .when(copy_submenu_open, |d| d.bg(submenu_hover))
+                    .when(copy_query_selected && !copy_submenu_open, |d| {
+                        d.bg(theme.accent)
+                    })
+                    .when(!copy_query_selected && !copy_submenu_open, |d| {
+                        d.hover(|d| d.bg(submenu_hover))
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu
+                            && menu.selected_index != copy_query_index
+                            && !menu.copy_query_submenu_open
+                        {
+                            menu.selected_index = copy_query_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(ref mut menu) = this.context_menu {
+                            menu.copy_query_submenu_open = !menu.copy_query_submenu_open;
+                            menu.sql_submenu_open = false;
+                            menu.submenu_selected_index = 0;
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(Icon::new(AppIcon::Columns).small().color(
+                                if copy_query_selected && !copy_submenu_open {
+                                    theme.accent_foreground
+                                } else {
+                                    submenu_fg
+                                },
+                            ))
+                            .child(copy_query_label),
+                    )
+                    .child(Icon::new(AppIcon::ChevronRight).small().color(
+                        if copy_query_selected && !copy_submenu_open {
+                            theme.accent_foreground
+                        } else {
+                            theme.muted_foreground
+                        },
+                    ))
+                    .when(copy_submenu_open, |d: Stateful<Div>| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(172.0))
+                                .top(px(-4.0))
+                                .w(px(140.0))
+                                .bg(submenu_bg)
+                                .border_1()
+                                .border_color(submenu_border)
+                                .rounded(Radii::MD)
+                                .shadow_lg()
+                                .py(Spacing::XS)
+                                .occlude()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .children(
+                                    [
+                                        ("INSERT", ContextMenuAction::CopyAsInsert),
+                                        ("UPDATE", ContextMenuAction::CopyAsUpdate),
+                                        ("DELETE", ContextMenuAction::CopyAsDelete),
+                                    ]
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(idx, (label, action))| {
+                                        let is_submenu_selected = idx == submenu_selected_index;
+                                        let copy_item_color = if is_submenu_selected {
+                                            theme.accent_foreground
+                                        } else {
+                                            submenu_fg
+                                        };
+                                        div()
+                                            .id(SharedString::from(format!("copy-{}", label)))
+                                            .flex()
+                                            .items_center()
+                                            .gap(Spacing::SM)
+                                            .h(Heights::ROW_COMPACT)
+                                            .px(Spacing::SM)
+                                            .mx(Spacing::XS)
+                                            .rounded(Radii::SM)
+                                            .cursor_pointer()
+                                            .text_size(FontSizes::SM)
+                                            .when(is_submenu_selected, |d| d.bg(theme.accent))
+                                            .when(!is_submenu_selected, |d| {
+                                                d.hover(|d| d.bg(submenu_hover))
+                                            })
+                                            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                if let Some(ref mut menu) = this.context_menu
+                                                    && menu.submenu_selected_index != idx
+                                                {
+                                                    menu.submenu_selected_index = idx;
+                                                    cx.notify();
+                                                }
+                                            }))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.handle_context_menu_action(action, window, cx);
+                                            }))
+                                            .child(Icon::new(AppIcon::Columns).small().color(
+                                                if is_submenu_selected {
+                                                    theme.accent_foreground
+                                                } else {
+                                                    theme.muted_foreground
+                                                },
+                                            ))
+                                            .child(Text::caption(label).color(copy_item_color))
+                                    })
+                                    .collect::<Vec<_>>(),
+                                ),
+                        )
+                    })
+                    .into_any_element(),
+            );
+        }
+
+        // Use deferred() to render at window level for correct positioning
+        deferred(
+            div()
+                .id("context-menu-overlay")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .track_focus(&self.context_menu_focus)
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    use dbflux_app::keymap::KeyChord;
+                    use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
+
+                    let chord = key_chord_from_gpui(&event.keystroke);
+                    let keymap = default_keymap();
+
+                    if let Some(cmd) = keymap.resolve(ContextId::ContextMenu, &chord)
+                        && this.dispatch_menu_command(cmd, window, cx)
+                    {
+                        cx.stop_propagation();
+                    }
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        let is_document_view = this
+                            .context_menu
+                            .as_ref()
+                            .map(|menu| menu.is_document_view)
+                            .unwrap_or(false);
+
+                        this.context_menu = None;
+                        this.restore_focus_after_context_menu(is_document_view, window, cx);
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|this, _, window, cx| {
+                        let is_document_view = this
+                            .context_menu
+                            .as_ref()
+                            .map(|menu| menu.is_document_view)
+                            .unwrap_or(false);
+
+                        this.context_menu = None;
+                        this.restore_focus_after_context_menu(is_document_view, window, cx);
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    surface_raised(cx)
+                        .id("context-menu")
+                        .absolute()
+                        .left(menu_x)
+                        .top(menu_y)
+                        .w(menu_width)
+                        .shadow_lg()
+                        .py(Spacing::XS)
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .children(menu_items),
+                ),
+        )
+        .with_priority(1)
+    }
+
+    pub(super) fn handle_context_menu_action(
+        &mut self,
+        action: ContextMenuAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let menu = match self.context_menu.take() {
+            Some(m) => m,
+            None => return,
+        };
+
+        let is_document_view = menu.is_document_view;
+        let backend = self.filter_backend(cx);
+        let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
+
+        if Self::context_menu_action_requires_row_target(action) && !has_row_target {
+            self.restore_focus_after_context_menu(is_document_view, window, cx);
+            cx.notify();
+            return;
+        }
+
+        match action {
+            ContextMenuAction::Copy => {
+                if menu.is_document_view {
+                    self.handle_copy_document(menu.row, cx);
+                } else {
+                    self.handle_copy(window, cx);
+                }
+            }
+            ContextMenuAction::Paste => self.handle_paste(window, cx),
+            ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
+            ContextMenuAction::EditInModal => {
+                if menu.is_document_view {
+                    self.handle_view_document(menu.row, cx);
+                } else {
+                    self.handle_edit_in_modal(menu.row, menu.col, cx);
+                }
+            }
+            ContextMenuAction::SetDefault => self.handle_set_default(menu.row, menu.col, cx),
+            ContextMenuAction::SetNull => self.handle_set_null(menu.row, menu.col, cx),
+            ContextMenuAction::AddRow => self.handle_add_row(menu.row, is_document_view, cx),
+            ContextMenuAction::DuplicateRow => {
+                self.handle_duplicate_row(menu.row, is_document_view, cx)
+            }
+            ContextMenuAction::DeleteRow => {
+                if menu.is_document_view {
+                    self.pending_delete_confirm = Some(PendingDeleteConfirm {
+                        row_indices: vec![menu.row],
+                        is_table: false,
+                    });
+                    cx.notify();
+                } else {
+                    self.handle_delete_row(menu.row, cx);
+                }
+            }
+            ContextMenuAction::GenerateSelectWhere => {
+                self.handle_generate_sql(menu.row, SqlGenerateKind::SelectWhere, cx)
+            }
+            ContextMenuAction::GenerateInsert => {
+                self.handle_generate_sql(menu.row, SqlGenerateKind::Insert, cx)
+            }
+            ContextMenuAction::GenerateUpdate => {
+                self.handle_generate_sql(menu.row, SqlGenerateKind::Update, cx)
+            }
+            ContextMenuAction::GenerateDelete => {
+                self.handle_generate_sql(menu.row, SqlGenerateKind::Delete, cx)
+            }
+            ContextMenuAction::CopyAsInsert
+            | ContextMenuAction::CopyAsUpdate
+            | ContextMenuAction::CopyAsDelete => {
+                self.handle_copy_as_query(menu.row, action, cx);
+            }
+            ContextMenuAction::FilterByValue(op) => match backend {
+                Some(FilterBackend::Mongo) => {
+                    self.handle_mongo_filter_by_value(
+                        &menu.doc_field_path,
+                        &menu.doc_field_value,
+                        op,
+                        window,
+                        cx,
+                    );
+                }
+                _ => {
+                    self.handle_filter_by_value(menu.row, menu.col, op, window, cx);
+                }
+            },
+            ContextMenuAction::FilterIsNull => match backend {
+                Some(FilterBackend::Mongo) => {
+                    self.handle_mongo_filter_null(&menu.doc_field_path, false, window, cx);
+                }
+                _ => {
+                    self.handle_filter_is_null(menu.col, false, window, cx);
+                }
+            },
+            ContextMenuAction::FilterIsNotNull => match backend {
+                Some(FilterBackend::Mongo) => {
+                    self.handle_mongo_filter_null(&menu.doc_field_path, true, window, cx);
+                }
+                _ => {
+                    self.handle_filter_is_null(menu.col, true, window, cx);
+                }
+            },
+            ContextMenuAction::RemoveFilter => {
+                self.handle_remove_filter(window, cx);
+            }
+            ContextMenuAction::Order(direction) => {
+                self.handle_sort_request(menu.col, direction, cx);
+            }
+            ContextMenuAction::RemoveOrdering => {
+                self.handle_sort_clear(cx);
+            }
+            ContextMenuAction::InspectRow => {
+                self.open_row_inspector(menu.row, menu.col, cx);
+            }
+            ContextMenuAction::ChartThisQuery => {
+                let query = self.chart_host_current_query(cx);
+                let connection_id = self.chart_host_connection_id(cx);
+
+                if let Some(query) = query {
+                    cx.emit(DataGridEvent::ChartThisQuery {
+                        query,
+                        connection_id,
+                    });
+                }
+            }
+        }
+
+        // Restore focus to the active view after action
+        self.restore_focus_after_context_menu(is_document_view, window, cx);
+        cx.notify();
+    }
+
+    /// Build an `InspectorSnapshot` from the given row/col and emit
+    /// `DataGridEvent::OpenInspector` so the workspace mounts the content.
+    pub(super) fn open_row_inspector(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        use super::row_inspector::{InspectorCell, InspectorSnapshot, RowInspectorContent};
+        use dbflux_components::components::data_table::model::ColumnKind;
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+        let model = state.model();
+
+        let pk_cols: std::collections::HashSet<usize> =
+            state.pk_columns().iter().copied().collect();
+        let fk_cols = state.fk_columns().clone();
+
+        // Build cell values first so we can cross-reference with FK info below.
+        let cells: Vec<InspectorCell> = model
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(ix, spec)| {
+                let value = model
+                    .cell(row, ix)
+                    .map(|c| self.cell_to_value(c))
+                    .unwrap_or(dbflux_core::Value::Null);
+
+                let type_label = match spec.kind {
+                    ColumnKind::Text => "text",
+                    ColumnKind::Integer => "integer",
+                    ColumnKind::Float => "float",
+                    ColumnKind::Bool => "boolean",
+                    ColumnKind::Bytes => "bytes",
+                    ColumnKind::Json => "json",
+                    ColumnKind::Unknown => "unknown",
+                }
+                .to_string();
+
+                InspectorCell {
+                    name: spec.title.to_string(),
+                    value,
+                    is_primary_key: pk_cols.contains(&ix),
+                    is_foreign_key: fk_cols.contains(&ix),
+                    type_label,
+                    nullable: true, // conservative default; refined when column details are cached
+                }
+            })
+            .collect();
+
+        let row_label = format!("Row {}", row + 1);
+        let snapshot = InspectorSnapshot {
+            cells: cells.clone(),
+            focused_col: col,
+        };
+
+        // Build per-FK reference entries from the cached TableInfo.foreign_keys.
+        let fk_references = self.build_fk_references(&cells, cx);
+        let has_fk_lookups = !fk_references.is_empty();
+
+        // Reuse the existing content entity or create a new one.
+        let content = match &self.row_inspector_content {
+            Some(existing) => {
+                existing.update(cx, |c, cx| c.open(snapshot, cx));
+                existing.clone()
+            }
+            None => {
+                let new_content = cx.new(|cx| RowInspectorContent::new(snapshot, cx));
+                if !has_fk_lookups {
+                    new_content.update(cx, |c, cx| c.set_references(Vec::new(), cx));
+                }
+                self.row_inspector_content = Some(new_content.clone());
+                new_content
+            }
+        };
+
+        // Fire FK resolution against the (possibly reused) content entity.
+        self.fire_fk_resolution(fk_references, content.clone(), cx);
+
+        // Tell the workspace to mount/replace the inspector rail.
+        let title = SharedString::from(row_label);
+        let content_view = AnyView::from(content);
+        cx.emit(DataGridEvent::OpenInspector {
+            title,
+            content: content_view,
+        });
+        cx.notify();
+    }
+
+    /// Build the list of FK lookups for the current row from the schema cache.
+    ///
+    /// Returns one entry per FK constraint whose local columns all have
+    /// non-null values in the current row. Multi-column FKs are skipped
+    /// (not supported by `fetch_row_by_pk`).
+    fn build_fk_references(
+        &self,
+        cells: &[super::row_inspector::InspectorCell],
+        cx: &Context<Self>,
+    ) -> Vec<super::row_inspector::FkReference> {
+        use super::row_inspector::FkReference;
+        use dbflux_components::primitives::LoadingState;
+
+        let (profile_id, table_ref) = match &self.source {
+            super::DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table),
+            _ => return Vec::new(),
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = match state.connections().get(&profile_id) {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (database.to_string(), table_ref.name.clone());
+        let table_info = match connected.table_details.get(&cache_key) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let fk_list = match table_info.foreign_keys.as_deref() {
+            Some(fks) if !fks.is_empty() => fks,
+            _ => return Vec::new(),
+        };
+
+        let mut references = Vec::new();
+
+        for fk in fk_list {
+            // Only handle single-column FKs.
+            if fk.columns.len() != 1 || fk.referenced_columns.len() != 1 {
+                continue;
+            }
+
+            let local_col = &fk.columns[0];
+            let ref_col = &fk.referenced_columns[0];
+
+            // Find the value in the current row.
+            let Some(cell) = cells.iter().find(|c| &c.name == local_col) else {
+                continue;
+            };
+
+            // Skip null FK values.
+            if cell.value.is_null() {
+                continue;
+            }
+
+            references.push(FkReference {
+                column: local_col.clone(),
+                target_schema: fk.referenced_schema.clone(),
+                target_table: fk.referenced_table.clone(),
+                target_pk: ref_col.clone(),
+                value: cell.value.clone(),
+                row: LoadingState::Loading,
+            });
+        }
+
+        references
+    }
+
+    /// Spawn one background task per FK reference and resolve them into the inspector.
+    fn fire_fk_resolution(
+        &self,
+        references: Vec<super::row_inspector::FkReference>,
+        inspector_entity: Entity<super::row_inspector::RowInspectorContent>,
+        cx: &mut Context<Self>,
+    ) {
+        use super::row_inspector::FkReference;
+        use dbflux_components::primitives::LoadingState;
+
+        if references.is_empty() {
+            return;
+        }
+
+        let (profile_id, database, schema) = match &self.source {
+            super::DataSource::Table {
+                profile_id,
+                database,
+                table,
+                ..
+            } => {
+                let db = {
+                    let state = self.app_state.read(cx);
+                    let db = database.clone().or_else(|| {
+                        state
+                            .connections()
+                            .get(profile_id)
+                            .and_then(|c| c.active_database.clone())
+                    });
+                    db.unwrap_or_else(|| "default".to_string())
+                };
+                let schema = table.schema.clone().unwrap_or_else(|| "public".to_string());
+                (*profile_id, db, schema)
+            }
+            _ => return,
+        };
+
+        // Use the per-database connection for the database being viewed.
+        // `state.get_connection` only returns the primary connection (which
+        // for Postgres is bound to a different database), so FK lookups
+        // failed with "relation public.X does not exist".
+        let connection = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                return;
+            };
+            connected.connection_for_database(&database)
+        };
+
+        // Initialise the inspector's reference list with Loading state.
+        let loading_refs: Vec<FkReference> = references
+            .iter()
+            .map(|r| FkReference {
+                column: r.column.clone(),
+                target_schema: r.target_schema.clone(),
+                target_table: r.target_table.clone(),
+                target_pk: r.target_pk.clone(),
+                value: r.value.clone(),
+                row: LoadingState::Loading,
+            })
+            .collect();
+
+        inspector_entity.update(cx, |insp, cx| {
+            insp.set_references(loading_refs, cx);
+        });
+
+        // Spawn one task per FK reference.
+        for (index, fk_ref) in references.into_iter().enumerate() {
+            let connection = connection.clone();
+            let inspector = inspector_entity.clone();
+            let database = database.clone();
+            let default_schema = schema.clone();
+
+            cx.spawn(async move |_this, cx| {
+                // Use the FK's own schema if known, otherwise fall back to
+                // the current table's schema (for same-schema FKs).
+                let resolved_schema = fk_ref
+                    .target_schema
+                    .clone()
+                    .unwrap_or(default_schema.clone());
+
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        connection.fetch_row_by_pk(
+                            &database,
+                            &resolved_schema,
+                            &fk_ref.target_table,
+                            &fk_ref.target_pk,
+                            &fk_ref.value,
+                        )
+                    })
+                    .await;
+
+                cx.update(|cx| {
+                    inspector.update(cx, |insp, cx| match result {
+                        Ok(row_opt) => {
+                            insp.resolve_reference(index, Ok(row_opt), cx);
+                        }
+                        Err(e) => {
+                            insp.resolve_reference(index, Err(e.to_string()), cx);
+                        }
+                    })
+                })
+                .ok();
+            })
+            .detach();
+        }
+    }
+
+    /// Convert a `CellValue` to a `dbflux_core::Value` for the inspector.
+    fn cell_to_value(
+        &self,
+        cell: &dbflux_components::components::data_table::model::CellValue,
+    ) -> dbflux_core::Value {
+        use dbflux_components::components::data_table::model::CellKind;
+
+        match &cell.kind {
+            CellKind::Null => dbflux_core::Value::Null,
+            CellKind::Bool(b) => dbflux_core::Value::Bool(*b),
+            CellKind::Int(i) => dbflux_core::Value::Int(*i),
+            CellKind::Float(f) => dbflux_core::Value::Float(*f),
+            CellKind::Text(s) | CellKind::Json(s) => dbflux_core::Value::Text(s.to_string()),
+            CellKind::Bytes(len) => dbflux_core::Value::Bytes(vec![0u8; *len]),
+            CellKind::AutoGenerated(s) => dbflux_core::Value::Text(s.to_string()),
+            CellKind::Unsupported(s) => dbflux_core::Value::Text(s.to_string()),
+        }
+    }
+
+    pub(super) fn handle_copy(&self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(table_state) = &self.table_state {
+            let text = table_state.read(cx).copy_selection();
+            if let Some(text) = text {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+        }
+    }
+
+    /// Copy entire document as JSON (for document view).
+    pub(super) fn handle_copy_document(&self, doc_index: usize, cx: &mut Context<Self>) {
+        let Some(tree_state) = &self.document_tree_state else {
+            return;
+        };
+
+        if let Some(raw_doc) = tree_state.read(cx).get_raw_document(doc_index) {
+            let json_value = value_to_json(raw_doc);
+            if let Ok(json_str) = serde_json::to_string_pretty(&json_value) {
+                cx.write_to_clipboard(ClipboardItem::new_string(json_str));
+            }
+        }
+    }
+
+    /// Open document preview modal for viewing/editing (for document view).
+    pub(super) fn handle_view_document(&mut self, doc_index: usize, cx: &mut Context<Self>) {
+        let Some(tree_state) = &self.document_tree_state else {
+            return;
+        };
+
+        if let Some(raw_doc) = tree_state.read(cx).get_raw_document(doc_index) {
+            let json_value = value_to_json(raw_doc);
+            let json_str =
+                serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| "{}".to_string());
+
+            self.pending_document_preview = Some(PendingDocumentPreview {
+                doc_index,
+                document_json: json_str,
+            });
+            cx.notify();
+        }
+    }
+
+    /// Copy entire row as TSV (tab-separated values).
+    pub(super) fn handle_copy_row(&self, row: usize, cx: &mut Context<Self>) {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        // Get row data based on visual row source
+        let row_values: Vec<String> = match visual_order.get(row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => self
+                .result
+                .rows
+                .get(base_idx)
+                .map(|r| {
+                    r.iter()
+                        .map(|val| {
+                            dbflux_components::components::data_table::clipboard::format_cell(
+                                &dbflux_components::components::data_table::model::CellValue::from(val),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| {
+                    cells
+                        .iter()
+                        .map(dbflux_components::components::data_table::clipboard::format_cell)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            None => return,
+        };
+
+        if !row_values.is_empty() {
+            let text = row_values.join("\t");
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    pub(super) fn handle_paste(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let clipboard_text = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text().map(|s| s.to_string()));
+
+        let Some(text) = clipboard_text else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            if let Some(coord) = state.selection().active {
+                let cell_value = dbflux_components::components::data_table::model::CellValue::text(&text);
+                state
+                    .edit_buffer_mut()
+                    .set_cell(coord.row, coord.col, cell_value);
+                cx.notify();
+            }
+        });
+    }
+
+    pub(super) fn handle_edit(
+        &mut self,
+        row: usize,
+        col: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(table_state) = &self.table_state {
+            table_state.update(cx, |state, cx| {
+                let coord = dbflux_components::components::data_table::selection::CellCoord::new(row, col);
+                state.start_editing(coord, window, cx);
+            });
+        }
+    }
+
+    pub(super) fn handle_edit_in_modal(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        use dbflux_components::components::data_table::model::{ColumnKind, VisualRowSource};
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let state = table_state.read(cx);
+        if !state.is_editable() {
+            return;
+        }
+
+        let is_json = state
+            .model()
+            .columns
+            .get(col)
+            .map(|c| c.kind == ColumnKind::Json)
+            .unwrap_or(false);
+
+        let visual_order = state.edit_buffer().compute_visual_order();
+        let null_cell = dbflux_components::components::data_table::model::CellValue::null();
+
+        let value = match visual_order.get(row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                let base_cell = state.model().cell(base_idx, col);
+                let base = base_cell.unwrap_or(&null_cell);
+                let cell = state.edit_buffer().get_cell(base_idx, col, base);
+                cell.edit_text()
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                if let Some(insert_data) = state.edit_buffer().get_pending_insert_by_idx(insert_idx)
+                {
+                    if col < insert_data.len() {
+                        insert_data[col].edit_text()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            }
+            None => return,
+        };
+
+        self.pending_modal_open = Some(PendingModalOpen {
+            row,
+            col,
+            value,
+            is_json,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn handle_set_default(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        // Get column default value from table details
+        let default_value = self.get_column_default(col, cx);
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            let visual_order = buffer.compute_visual_order();
+
+            let cell_value = if let Some(default) = default_value {
+                dbflux_components::components::data_table::model::CellValue::text(&default)
+            } else {
+                dbflux_components::components::data_table::model::CellValue::null()
+            };
+
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    buffer.set_cell(base_idx, col, cell_value);
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    buffer.set_insert_cell(insert_idx, col, cell_value);
+                }
+                None => {}
+            }
+
+            cx.notify();
+        });
+    }
+
+    pub(super) fn handle_set_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            let visual_order = buffer.compute_visual_order();
+            let cell_value = dbflux_components::components::data_table::model::CellValue::null();
+
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    buffer.set_cell(base_idx, col, cell_value);
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    buffer.set_insert_cell(insert_idx, col, cell_value);
+                }
+                None => {}
+            }
+
+            cx.notify();
+        });
+    }
+
+    pub(super) fn handle_cell_editor_save(
+        &mut self,
+        row: usize,
+        col: usize,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            let visual_order = buffer.compute_visual_order();
+            let cell_value = dbflux_components::components::data_table::model::CellValue::text(value);
+
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    buffer.set_cell(base_idx, col, cell_value);
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    buffer.set_insert_cell(insert_idx, col, cell_value);
+                }
+                None => {}
+            }
+
+            cx.notify();
+        });
+
+        self.focus_table(window, cx);
+    }
+
+    pub(super) fn handle_document_preview_save(
+        &mut self,
+        doc_index: usize,
+        document_json: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::modals::document_preview::DOC_INDEX_NEW;
+
+        let new_doc: serde_json::Value = match serde_json::from_str(document_json) {
+            Ok(v) => v,
+            Err(e) => {
+                let toast_body = e.to_string();
+                Toast::error("Invalid JSON")
+                    .meta_right(now_hms())
+                    .body(toast_body.clone())
+                    .action(copy_action(format!("Invalid JSON: {}", toast_body)))
+                    .push(cx);
+                return;
+            }
+        };
+
+        let DataSource::Collection {
+            profile_id,
+            collection,
+            ..
+        } = &self.source
+        else {
+            return;
+        };
+
+        // Insert mode: opened via "Add Document" or "Duplicate Document".
+        if doc_index == DOC_INDEX_NEW {
+            let (conn, active_database) = {
+                let state = self.app_state.read(cx);
+                match state.connections().get(profile_id) {
+                    Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
+                    None => (None, None),
+                }
+            };
+
+            let Some(conn) = conn else {
+                Toast::error("Connection not available")
+                    .meta_right(now_hms())
+                    .action(copy_action("Connection not available"))
+                    .push(cx);
+                return;
+            };
+
+            let doc_map = match new_doc {
+                serde_json::Value::Object(m) => m,
+                _ => {
+                    Toast::error("Document must be a JSON object")
+                        .meta_right(now_hms())
+                        .action(copy_action("Document must be a JSON object"))
+                        .push(cx);
+                    return;
+                }
+            };
+
+            let insert = DocumentInsert::one(collection.name.clone(), doc_map.into())
+                .with_database(collection.database.clone());
+
+            let _ = active_database;
+            let entity = cx.entity().clone();
+
+            cx.spawn(async move |_this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { conn.insert_document(&insert) })
+                    .await;
+
+                cx.update(|cx| {
+                    entity.update(cx, |panel, cx| {
+                        match result {
+                            Ok(_) => {
+                                panel.pending_toast = Some(PendingToast {
+                                    message: "Document inserted".to_string(),
+                                    is_error: false,
+                                });
+                                panel.pending_refresh = true;
+                            }
+                            Err(e) => {
+                                panel.pending_toast = Some(PendingToast {
+                                    message: format!("Failed to insert document: {}", e),
+                                    is_error: true,
+                                });
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+                .log_if_dropped();
+            })
+            .detach();
+
+            return;
+        }
+
+        // Update mode: build filter from PK columns in result metadata
+        let pk_columns = extract_pk_columns(&self.result);
+
+        let filter = if pk_columns.is_empty() {
+            // MongoDB fallback: use _id from the edited document
+            match new_doc.get("_id") {
+                Some(id) => DocumentFilter::new(serde_json::json!({"_id": id})),
+                None => {
+                    Toast::error("Document must have an _id field")
+                        .meta_right(now_hms())
+                        .action(copy_action("Document must have an _id field"))
+                        .push(cx);
+                    return;
+                }
+            }
+        } else {
+            // Extract PK values from the current row
+            let Some(table_state) = &self.table_state else {
+                Toast::error("Table state not available")
+                    .meta_right(now_hms())
+                    .action(copy_action("Table state not available"))
+                    .push(cx);
+                return;
+            };
+
+            let state = table_state.read(cx);
+            let model = state.model();
+            let mut filter_obj = serde_json::Map::new();
+
+            for (col_idx, col_name) in &pk_columns {
+                if let Some(cell) = model.cell(doc_index, *col_idx) {
+                    filter_obj.insert(col_name.clone(), value_to_json(&cell.to_value()));
+                }
+            }
+
+            if filter_obj.is_empty() {
+                Toast::error("Could not determine document primary key")
+                    .meta_right(now_hms())
+                    .action(copy_action("Could not determine document primary key"))
+                    .push(cx);
+                return;
+            }
+
+            DocumentFilter::new(serde_json::Value::Object(filter_obj))
+        };
+
+        // Build $set update (skip PK fields)
+        let pk_names: std::collections::HashSet<&str> =
+            pk_columns.iter().map(|(_, name)| name.as_str()).collect();
+
+        let mut set_fields = serde_json::Map::new();
+        if let serde_json::Value::Object(doc_map) = &new_doc {
+            for (key, value) in doc_map {
+                if !pk_names.contains(key.as_str()) {
+                    set_fields.insert(key.clone(), value.clone());
+                }
+            }
+        }
+
+        let update_doc = serde_json::json!({ "$set": set_fields });
+
+        let (conn, _active_database) = {
+            let state = self.app_state.read(cx);
+            match state.connections().get(profile_id) {
+                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
+                None => (None, None),
+            }
+        };
+
+        let Some(conn) = conn else {
+            Toast::error("Connection not available")
+                .meta_right(now_hms())
+                .action(copy_action("Connection not available"))
+                .push(cx);
+            return;
+        };
+
+        let update = DocumentUpdate::new(collection.name.clone(), filter, update_doc)
+            .with_database(collection.database.clone());
+
+        let entity = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { conn.update_document(&update) })
+                .await;
+
+            cx.update(|cx| {
+                entity.update(cx, |panel, cx| {
+                    match result {
+                        Ok(_) => {
+                            panel.pending_toast = Some(PendingToast {
+                                message: "Document updated".to_string(),
+                                is_error: false,
+                            });
+                            panel.pending_refresh = true;
+                        }
+                        Err(e) => {
+                            panel.pending_toast = Some(PendingToast {
+                                message: format!("Failed to update document: {}", e),
+                                is_error: true,
+                            });
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .log_if_dropped();
+        })
+        .detach();
+    }
+
+    pub(super) fn handle_add_row(
+        &mut self,
+        after_visual_row: usize,
+        is_document_view: bool,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+        use dbflux_components::modals::document_preview::DOC_INDEX_NEW;
+
+        let is_table = matches!(self.source, DataSource::Table { .. });
+        let is_collection = matches!(self.source, DataSource::Collection { .. });
+
+        if !is_table && !is_collection {
+            return;
+        }
+
+        // In document view, open the modal with a pre-seeded document so the user
+        // can fill in all fields and confirm. The modal saves via DOC_INDEX_NEW,
+        // which routes to insert_document instead of update_document.
+        if is_document_view && is_collection {
+            let new_doc = self.build_new_document_template();
+            self.pending_document_preview = Some(PendingDocumentPreview {
+                doc_index: DOC_INDEX_NEW,
+                document_json: new_doc,
+            });
+            cx.notify();
+            return;
+        }
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let insert_after_base = {
+            let state = table_state.read(cx);
+            let buffer = state.edit_buffer();
+            let visual_order = buffer.compute_visual_order();
+
+            match visual_order.get(after_visual_row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => base_idx,
+                Some(VisualRowSource::Insert(insert_idx)) => buffer
+                    .pending_inserts()
+                    .get(insert_idx)
+                    .and_then(|pi| pi.insert_after)
+                    .unwrap_or(self.result.rows.len().saturating_sub(1)),
+                None => self.result.rows.len().saturating_sub(1),
+            }
+        };
+
+        let new_row: Vec<dbflux_components::components::data_table::model::CellValue> = if is_collection {
+            self.result
+                .columns
+                .iter()
+                .map(|col| {
+                    if col.is_primary_key {
+                        let new_id = self.generate_new_id_for_column(&col.name);
+                        dbflux_components::components::data_table::model::CellValue::text(&new_id)
+                    } else {
+                        dbflux_components::components::data_table::model::CellValue::null()
+                    }
+                })
+                .collect()
+        } else {
+            let column_defaults = self.get_all_column_defaults(cx);
+            self.result
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| {
+                    if let Some(default_expr) = column_defaults.get(idx).and_then(|d| d.as_ref()) {
+                        dbflux_components::components::data_table::model::CellValue::auto_generated(
+                            default_expr,
+                        )
+                    } else {
+                        dbflux_components::components::data_table::model::CellValue::null()
+                    }
+                })
+                .collect()
+        };
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            buffer.set_base_row_count(self.result.rows.len());
+            buffer.add_pending_insert_after(insert_after_base, new_row);
+            cx.notify();
+        });
+    }
+
+    /// Build an empty document JSON template pre-seeded with generated PK values.
+    fn build_new_document_template(&self) -> String {
+        let mut doc = serde_json::Map::new();
+
+        for col in &self.result.columns {
+            if col.is_primary_key {
+                doc.insert(
+                    col.name.clone(),
+                    serde_json::Value::String(self.generate_new_id_for_column(&col.name)),
+                );
+            }
+        }
+
+        serde_json::to_string_pretty(&serde_json::Value::Object(doc))
+            .unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Generate a new ID: 24-char hex for `_id` (MongoDB ObjectId), full UUID otherwise.
+    fn generate_new_id_for_column(&self, col_name: &str) -> String {
+        if col_name == "_id" {
+            uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string()
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        }
+    }
+
+    pub(super) fn handle_duplicate_row(
+        &mut self,
+        visual_row: usize,
+        is_document_view: bool,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+        use dbflux_components::modals::document_preview::DOC_INDEX_NEW;
+
+        let is_table = matches!(self.source, DataSource::Table { .. });
+        let is_collection = matches!(self.source, DataSource::Collection { .. });
+
+        if !is_table && !is_collection {
+            return;
+        }
+
+        // In document view, open the modal with the source document pre-filled but
+        // with a fresh PK so the user can review and confirm before inserting.
+        if is_document_view && is_collection {
+            if let Some(tree_state) = &self.document_tree_state
+                && let Some(raw_doc) = tree_state.read(cx).get_raw_document(visual_row)
+            {
+                let mut doc_json = value_to_json(raw_doc);
+
+                // Replace PK values with freshly generated IDs.
+                if let serde_json::Value::Object(ref mut map) = doc_json {
+                    for col in &self.result.columns {
+                        if col.is_primary_key {
+                            map.insert(
+                                col.name.clone(),
+                                serde_json::Value::String(
+                                    self.generate_new_id_for_column(&col.name),
+                                ),
+                            );
+                        }
+                    }
+                }
+
+                let json_str =
+                    serde_json::to_string_pretty(&doc_json).unwrap_or_else(|_| "{}".to_string());
+
+                self.pending_document_preview = Some(PendingDocumentPreview {
+                    doc_index: DOC_INDEX_NEW,
+                    document_json: json_str,
+                });
+                cx.notify();
+            }
+            return;
+        }
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        // For collections and tables, find PK columns using is_primary_key metadata
+        let pk_indices: std::collections::HashSet<usize> = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, col)| col.is_primary_key)
+            .map(|(idx, _)| idx)
+            .collect();
+
+        let column_defaults = if is_table {
+            self.get_all_column_defaults(cx)
+        } else {
+            vec![]
+        };
+
+        // Get source row data and determine insert position
+        let base_row_count = self.result.rows.len();
+        let state = table_state.read(cx);
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        // Generate new ID helper: MongoDB-style for "_id", UUID for others
+        let new_id_for_column = |col_name: &str| {
+            if col_name == "_id" {
+                uuid::Uuid::new_v4().to_string().replace("-", "")[..24].to_string()
+            } else {
+                uuid::Uuid::new_v4().to_string()
+            }
+        };
+
+        let (source_values, insert_after_base): (
+            Vec<dbflux_components::components::data_table::model::CellValue>,
+            usize,
+        ) = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                let values = self
+                    .result
+                    .rows
+                    .get(base_idx)
+                    .map(|r| {
+                        r.iter()
+                            .enumerate()
+                            .map(|(idx, val)| {
+                                // Generate new ID for primary key columns
+                                if pk_indices.contains(&idx) {
+                                    let col_name = self.result.columns.get(idx).map(|c| c.name.as_str()).unwrap_or("");
+                                    if is_table {
+                                        // For tables, use default or null
+                                        if let Some(default_expr) = column_defaults.get(idx).and_then(|d| d.as_ref()) {
+                                            dbflux_components::components::data_table::model::CellValue::auto_generated(default_expr)
+                                        } else {
+                                            dbflux_components::components::data_table::model::CellValue::null()
+                                        }
+                                    } else {
+                                        // For collections, generate new ID
+                                        dbflux_components::components::data_table::model::CellValue::text(&new_id_for_column(col_name))
+                                    }
+                                } else {
+                                    dbflux_components::components::data_table::model::CellValue::from(val)
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (values, base_idx)
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                let insert_after = buffer
+                    .pending_inserts()
+                    .get(insert_idx)
+                    .and_then(|pi| pi.insert_after)
+                    .unwrap_or(base_row_count.saturating_sub(1));
+
+                let values = buffer
+                    .get_pending_insert_by_idx(insert_idx)
+                    .map(|insert_data| {
+                        insert_data
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, val)| {
+                                // Generate new ID for primary key columns
+                                if pk_indices.contains(&idx) {
+                                    let col_name = self.result.columns.get(idx).map(|c| c.name.as_str()).unwrap_or("");
+                                    if is_table {
+                                        // For tables, use default or null
+                                        if let Some(default_expr) = column_defaults.get(idx).and_then(|d| d.as_ref()) {
+                                            dbflux_components::components::data_table::model::CellValue::auto_generated(default_expr)
+                                        } else {
+                                            dbflux_components::components::data_table::model::CellValue::null()
+                                        }
+                                    } else {
+                                        // For collections, generate new ID
+                                        dbflux_components::components::data_table::model::CellValue::text(&new_id_for_column(col_name))
+                                    }
+                                } else {
+                                    val.clone()
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (values, insert_after)
+            }
+            None => return,
+        };
+
+        if source_values.is_empty() {
+            return;
+        }
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            buffer.set_base_row_count(base_row_count);
+            buffer.add_pending_insert_after(insert_after_base, source_values);
+            cx.notify();
+        });
+    }
+
+    pub(super) fn handle_delete_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        let is_table = matches!(self.source, DataSource::Table { .. });
+        let is_collection = matches!(self.source, DataSource::Collection { .. });
+
+        if !is_table && !is_collection {
+            return;
+        }
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        let base_row_count = self.result.rows.len();
+
+        table_state.update(cx, |state, cx| {
+            let buffer = state.edit_buffer_mut();
+            buffer.set_base_row_count(base_row_count);
+
+            let visual_order = buffer.compute_visual_order();
+
+            match visual_order.get(row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    buffer.mark_for_delete(base_idx);
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    buffer.remove_pending_insert_by_idx(insert_idx);
+                }
+                None => {}
+            }
+
+            cx.notify();
+        });
+    }
+
+    // === Filter / Order from context menu ===
+
+    /// Resolves the original `Value` for a cell from the result set.
+    fn resolve_cell_value(&self, visual_row: usize, col: usize, cx: &App) -> Option<Value> {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        let table_state = self.table_state.as_ref()?;
+        let ts = table_state.read(cx);
+        let buffer = ts.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => self
+                .result
+                .rows
+                .get(base_idx)
+                .and_then(|r| r.get(col).cloned()),
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .and_then(|cells| cells.get(col).map(|c| self.cell_value_to_value(c))),
+            None => None,
+        }
+    }
+
+    /// Appends `expr` to the WHERE filter input and refreshes.
+    /// Wraps with parentheses — `(old) AND (new)` — to avoid precedence bugs.
+    fn apply_filter_expression(&mut self, expr: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.filter_input.read(cx).value().to_string();
+
+        let new_filter = if current.trim().is_empty() {
+            expr.to_string()
+        } else {
+            format!("({}) AND ({})", current.trim(), expr)
+        };
+
+        self.filter_input
+            .update(cx, |state, cx| state.set_value(&new_filter, window, cx));
+        self.refresh(window, cx);
+    }
+
+    fn handle_filter_by_value(
+        &mut self,
+        visual_row: usize,
+        col: usize,
+        operator: FilterOperator,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return,
+        };
+
+        let conn = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone());
+
+        let Some(conn) = conn else { return };
+        let dialect = conn.dialect();
+
+        let (col_name, col_type_name) = match self.result.columns.get(col) {
+            Some(c) => (
+                dialect.quote_identifier(&c.name),
+                c.type_name.to_ascii_lowercase(),
+            ),
+            None => return,
+        };
+
+        let cell_value = match self.resolve_cell_value(visual_row, col, cx) {
+            Some(v) => v,
+            None => return,
+        };
+
+        let literal = dialect.value_to_literal(&cell_value);
+
+        let op_str = Self::sql_operator_symbol(operator);
+
+        let comparable_column = dialect.comparison_column_expr(&col_name, &col_type_name);
+
+        let expr = if operator == FilterOperator::Like {
+            let raw = match &cell_value {
+                Value::Text(text) => text.clone(),
+                Value::ObjectId(id) => id.clone(),
+                _ => return,
+            };
+
+            let needs_escape = raw.contains('\\') || raw.contains('%') || raw.contains('_');
+
+            let pattern_value = if needs_escape {
+                let escaped = raw
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
+                format!("%{}%", escaped)
+            } else {
+                format!("%{}%", raw)
+            };
+
+            let pattern_literal = dialect.value_to_literal(&Value::Text(pattern_value));
+
+            if needs_escape {
+                format!("{} LIKE {} ESCAPE '\\'", comparable_column, pattern_literal)
+            } else {
+                format!("{} LIKE {}", comparable_column, pattern_literal)
+            }
+        } else if matches!(cell_value, Value::Json(_)) {
+            dialect.json_filter_expr(&col_name, op_str, &literal, &col_type_name)
+        } else {
+            format!("{} {} {}", comparable_column, op_str, literal)
+        };
+
+        self.apply_filter_expression(&expr, window, cx);
+    }
+
+    fn handle_filter_is_null(
+        &mut self,
+        col: usize,
+        is_not_null: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            _ => return,
+        };
+
+        let conn = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone());
+
+        let Some(conn) = conn else { return };
+        let dialect = conn.dialect();
+
+        let col_name = match self.result.columns.get(col) {
+            Some(c) => dialect.quote_identifier(&c.name),
+            None => return,
+        };
+
+        let expr = if is_not_null {
+            format!("{} IS NOT NULL", col_name)
+        } else {
+            format!("{} IS NULL", col_name)
+        };
+
+        self.apply_filter_expression(&expr, window, cx);
+    }
+
+    fn handle_remove_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter_input
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.refresh(window, cx);
+    }
+
+    // === MongoDB filter handlers ===
+
+    fn handle_mongo_filter_by_value(
+        &mut self,
+        field_path: &Option<Vec<String>>,
+        field_value: &Option<dbflux_components::components::document_tree::NodeValue>,
+        operator: FilterOperator,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::components::document_tree::NodeValue;
+
+        let Some(path) = field_path else { return };
+        if path.is_empty() {
+            return;
+        }
+        let field_dot = path.join(".");
+
+        let scalar = match field_value {
+            Some(NodeValue::Scalar(v)) => v,
+            _ => return,
+        };
+
+        let json_val = value_to_json(scalar);
+
+        let filter_obj = match operator {
+            FilterOperator::Eq => serde_json::json!({ &field_dot: json_val }),
+            FilterOperator::NotEq => serde_json::json!({ &field_dot: { "$ne": json_val } }),
+            FilterOperator::Gt => serde_json::json!({ &field_dot: { "$gt": json_val } }),
+            FilterOperator::Gte => serde_json::json!({ &field_dot: { "$gte": json_val } }),
+            FilterOperator::Lt => serde_json::json!({ &field_dot: { "$lt": json_val } }),
+            FilterOperator::Lte => serde_json::json!({ &field_dot: { "$lte": json_val } }),
+            FilterOperator::Like => return,
+        };
+
+        self.apply_mongo_filter(&filter_obj, window, cx);
+    }
+
+    fn handle_mongo_filter_null(
+        &mut self,
+        field_path: &Option<Vec<String>>,
+        is_not_null: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = field_path else { return };
+        if path.is_empty() {
+            return;
+        }
+        let field_dot = path.join(".");
+
+        let filter_obj = if is_not_null {
+            serde_json::json!({
+                "$and": [
+                    { &field_dot: { "$ne": null } },
+                    { &field_dot: { "$exists": true } }
+                ]
+            })
+        } else {
+            serde_json::json!({
+                "$and": [
+                    { &field_dot: null },
+                    { &field_dot: { "$exists": true } }
+                ]
+            })
+        };
+
+        self.apply_mongo_filter(&filter_obj, window, cx);
+    }
+
+    fn apply_mongo_filter(
+        &mut self,
+        new_filter: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.filter_input.read(cx).value().to_string();
+        let current_trimmed = current.trim();
+
+        let composed = if current_trimmed.is_empty() {
+            new_filter.clone()
+        } else {
+            match serde_json::from_str::<serde_json::Value>(current_trimmed) {
+                Ok(existing) => Self::compose_mongo_and(&existing, new_filter),
+                Err(_) => new_filter.clone(),
+            }
+        };
+
+        let serialized = serde_json::to_string(&composed).unwrap_or_default();
+
+        self.filter_input
+            .update(cx, |state, cx| state.set_value(&serialized, window, cx));
+        self.refresh(window, cx);
+    }
+
+    fn compose_mongo_and(
+        existing: &serde_json::Value,
+        new_clause: &serde_json::Value,
+    ) -> serde_json::Value {
+        if let Some(obj) = existing.as_object()
+            && obj.len() == 1
+            && let Some(existing_and) = obj.get("$and")
+            && let Some(arr) = existing_and.as_array()
+        {
+            let mut clauses = arr.clone();
+            clauses.push(new_clause.clone());
+            return serde_json::json!({ "$and": clauses });
+        }
+
+        serde_json::json!({ "$and": [existing, new_clause] })
+    }
+
+    fn sanitize_for_label(s: &str) -> String {
+        s.chars()
+            .map(|c| if c.is_ascii_control() { ' ' } else { c })
+            .collect()
+    }
+
+    fn truncate_for_label(s: &str, max_len: usize) -> String {
+        if s.len() <= max_len {
+            s.to_string()
+        } else {
+            let truncated: String = s.chars().take(max_len).collect();
+            format!("{}...", truncated)
+        }
+    }
+
+    fn value_display_preview(value: &Value) -> String {
+        match value {
+            Value::Null => "NULL".to_string(),
+            Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+            Value::Int(i) => i.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Decimal(s) => s.clone(),
+            Value::Text(s) => format!("'{}'", Self::sanitize_for_label(s)),
+            Value::Json(s) => format!("'{}'", Self::sanitize_for_label(s)),
+            Value::ObjectId(id) => format!("'{}'", id),
+            Value::DateTime(dt) => format!("'{}'", dt.format("%Y-%m-%d %H:%M:%S")),
+            Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
+            Value::Time(t) => format!("'{}'", t.format("%H:%M:%S")),
+            Value::Unsupported(type_name) => format!("UNSUPPORTED<{}>", type_name),
+            Value::Bytes(b) => format!("[{} bytes]", b.len()),
+            Value::Array(_) | Value::Document(_) => "'...'".to_string(),
+        }
+    }
+
+    /// NULL, bytes, complex structures, NaN, and Infinity don't support value operators;
+    /// only IS NULL / IS NOT NULL applies.
+    fn is_value_filterable(value: &Value) -> bool {
+        match value {
+            Value::Null
+            | Value::Bytes(_)
+            | Value::Array(_)
+            | Value::Document(_)
+            | Value::Unsupported(_) => false,
+            Value::Float(f) if f.is_nan() || f.is_infinite() => false,
+            _ => true,
+        }
+    }
+
+    pub(super) fn handle_generate_sql(
+        &mut self,
+        visual_row: usize,
+        kind: SqlGenerateKind,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+        use dbflux_components::{SqlGenerationType, SqlPreviewContext};
+
+        let (profile_id, table_ref) = match &self.source {
+            DataSource::Table {
+                profile_id, table, ..
+            } => (*profile_id, table.clone()),
+            DataSource::Collection { .. } => return,
+            DataSource::QueryResult { .. } => return,
+        };
+
+        let Some(table_state) = &self.table_state else {
+            return;
+        };
+
+        // Get column info including primary keys
+        let state = self.app_state.read(cx);
+        let connected = match state.connections().get(&profile_id) {
+            Some(c) => c,
+            None => return,
+        };
+
+        let database = connected.active_database.as_deref().unwrap_or("default");
+        let cache_key = (database.to_string(), table_ref.name.clone());
+        let table_info = connected.table_details.get(&cache_key);
+        let columns_info = table_info.and_then(|t| t.columns.as_deref());
+
+        let col_names: Vec<String> = self.result.columns.iter().map(|c| c.name.clone()).collect();
+        let ts = table_state.read(cx);
+        let buffer = ts.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        let row_values: Vec<Value> = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.result.rows.get(base_idx).cloned().unwrap_or_default()
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| cells.iter().map(|c| self.cell_value_to_value(c)).collect())
+                .unwrap_or_default(),
+            None => return,
+        };
+
+        if row_values.is_empty() || col_names.len() != row_values.len() {
+            return;
+        }
+
+        // Find primary key columns
+        let pk_indices: Vec<usize> = if let Some(cols) = columns_info {
+            col_names
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, name)| {
+                    cols.iter()
+                        .find(|c| c.name == *name && c.is_primary_key)
+                        .map(|_| idx)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        // Convert SqlGenerateKind to SqlGenerationType
+        let generation_type = match kind {
+            SqlGenerateKind::SelectWhere => SqlGenerationType::SelectWhere,
+            SqlGenerateKind::Insert => SqlGenerationType::Insert,
+            SqlGenerateKind::Update => SqlGenerationType::Update,
+            SqlGenerateKind::Delete => SqlGenerationType::Delete,
+        };
+
+        let context = match generation_type {
+            SqlGenerationType::Insert | SqlGenerationType::Update | SqlGenerationType::Delete => {
+                let action = match generation_type {
+                    SqlGenerationType::Insert => ContextMenuAction::CopyAsInsert,
+                    SqlGenerationType::Update => ContextMenuAction::CopyAsUpdate,
+                    SqlGenerationType::Delete => ContextMenuAction::CopyAsDelete,
+                    _ => unreachable!(),
+                };
+
+                let Some(mutation) = self.build_sql_mutation(visual_row, &table_ref, action, cx)
+                else {
+                    return;
+                };
+
+                SqlPreviewContext::DataMutation {
+                    profile_id,
+                    mutation,
+                }
+            }
+            SqlGenerationType::SelectWhere => SqlPreviewContext::DataTableRow {
+                profile_id,
+                schema_name: table_ref.schema.clone(),
+                table_name: table_ref.name.clone(),
+                column_names: col_names,
+                row_values,
+                pk_indices,
+            },
+            SqlGenerationType::SelectAll => return,
+            SqlGenerationType::CreateTable
+            | SqlGenerationType::Truncate
+            | SqlGenerationType::DropTable => return,
+        };
+
+        cx.emit(DataGridEvent::RequestSqlPreview {
+            context: Box::new(context),
+            generation_type,
+        });
+    }
+
+    // -- Copy as Query --
+
+    fn copy_query_submenu_label(&self, cx: &App) -> &'static str {
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => profile_id,
+            DataSource::Collection { profile_id, .. } => profile_id,
+            DataSource::QueryResult { .. } => return "Copy as Query",
+        };
+
+        let language = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(profile_id)
+            .map(|c| c.connection.metadata().query_language.clone());
+
+        match language {
+            Some(dbflux_core::QueryLanguage::Sql) => "Copy as SQL",
+            Some(dbflux_core::QueryLanguage::MongoQuery) => "Copy as Query",
+            Some(dbflux_core::QueryLanguage::RedisCommands) => "Copy as Command",
+            _ => "Copy as Query",
+        }
+    }
+
+    fn has_copy_query_support(&self) -> bool {
+        matches!(
+            self.source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        )
+    }
+
+    /// Returns true when a "Chart this query" context menu item should be shown.
+    ///
+    /// The item only makes sense when the panel has a non-empty original query (i.e., a
+    /// `QueryResult` source) AND `detect_chart_columns` on the current result returns Ok.
+    fn can_chart_from_context_menu(&self, _cx: &App) -> bool {
+        let has_query = matches!(
+            &self.source,
+            DataSource::QueryResult { original_query, .. } if !original_query.is_empty()
+        );
+
+        if !has_query {
+            return false;
+        }
+
+        matches!(
+            detect_chart_columns(&self.result),
+            dbflux_components::chart::ChartDetection::Ok { .. }
+        )
+    }
+
+    pub(super) fn handle_copy_as_query(
+        &mut self,
+        visual_row: usize,
+        action: ContextMenuAction,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        let profile_id = match &self.source {
+            DataSource::Table { profile_id, .. } => *profile_id,
+            DataSource::Collection { profile_id, .. } => *profile_id,
+            DataSource::QueryResult { .. } => return,
+        };
+
+        let conn = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone());
+
+        let Some(conn) = conn else {
+            return;
+        };
+
+        let Some(generator) = conn.query_generator() else {
+            return;
+        };
+
+        let mutation = match &self.source {
+            DataSource::Table { table, .. } => {
+                self.build_sql_mutation(visual_row, table, action, cx)
+            }
+            DataSource::Collection { collection, .. } => {
+                self.build_document_mutation(visual_row, collection, action, cx)
+            }
+            DataSource::QueryResult { .. } => None,
+        };
+
+        let Some(mutation) = mutation else {
+            return;
+        };
+
+        if let Some(generated) = generator.generate_mutation(&mutation) {
+            cx.write_to_clipboard(ClipboardItem::new_string(generated.text));
+        }
+    }
+
+    fn build_sql_mutation(
+        &self,
+        visual_row: usize,
+        table: &dbflux_core::TableRef,
+        action: ContextMenuAction,
+        cx: &App,
+    ) -> Option<MutationRequest> {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        let table_state = self.table_state.as_ref()?;
+        let state = table_state.read(cx);
+        let model = state.model();
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        let col_names: Vec<String> = self.result.columns.iter().map(|c| c.name.clone()).collect();
+        let col_types: Vec<String> = self
+            .result
+            .columns
+            .iter()
+            .map(|c| c.type_name.clone())
+            .collect();
+
+        let row_values: Vec<Value> = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.result.rows.get(base_idx).cloned().unwrap_or_default()
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| cells.iter().map(|c| self.cell_value_to_value(c)).collect())
+                .unwrap_or_default(),
+            None => return None,
+        };
+
+        if row_values.is_empty() || col_names.len() != row_values.len() {
+            return None;
+        }
+
+        let has_unsupported = row_values
+            .iter()
+            .any(|value| matches!(value, Value::Unsupported(_)));
+
+        let pk_indices = state.pk_columns();
+
+        match action {
+            ContextMenuAction::CopyAsInsert => {
+                if has_unsupported {
+                    return None;
+                }
+
+                let assignments: Vec<dbflux_core::ColumnAssignment> = col_names
+                    .iter()
+                    .zip(row_values.iter())
+                    .zip(col_types.iter())
+                    .map(|((name, value), type_name)| dbflux_core::ColumnAssignment {
+                        name: name.clone(),
+                        value: value.clone(),
+                        type_name: Some(type_name.clone()),
+                    })
+                    .collect();
+
+                let insert = RowInsert::with_typed_assignments(
+                    table.name.clone(),
+                    table.schema.clone(),
+                    assignments,
+                );
+                Some(MutationRequest::SqlInsert(insert))
+            }
+
+            ContextMenuAction::CopyAsUpdate => {
+                if has_unsupported {
+                    return None;
+                }
+
+                if pk_indices.is_empty() {
+                    return None;
+                }
+
+                let pk_columns: Vec<String> = pk_indices
+                    .iter()
+                    .filter_map(|&idx| model.columns.get(idx).map(|c| c.title.to_string()))
+                    .collect();
+
+                let pk_values: Vec<Value> = pk_indices
+                    .iter()
+                    .filter_map(|&idx| row_values.get(idx).cloned())
+                    .collect();
+
+                if pk_values
+                    .iter()
+                    .any(|value| matches!(value, Value::Unsupported(_)))
+                {
+                    return None;
+                }
+
+                let identity = RowIdentity::new(pk_columns, pk_values);
+
+                let changes: Vec<dbflux_core::ColumnAssignment> = col_names
+                    .into_iter()
+                    .zip(row_values)
+                    .zip(col_types)
+                    .enumerate()
+                    .filter(|(idx, _)| !pk_indices.contains(idx))
+                    .map(
+                        |(_, ((name, value), type_name))| dbflux_core::ColumnAssignment {
+                            name,
+                            value,
+                            type_name: Some(type_name),
+                        },
+                    )
+                    .collect();
+
+                let patch = RowPatch::with_typed_changes(
+                    identity,
+                    table.name.clone(),
+                    table.schema.clone(),
+                    changes,
+                );
+                Some(MutationRequest::SqlUpdate(patch))
+            }
+
+            ContextMenuAction::CopyAsDelete => {
+                if pk_indices.is_empty() {
+                    return None;
+                }
+
+                let pk_columns: Vec<String> = pk_indices
+                    .iter()
+                    .filter_map(|&idx| model.columns.get(idx).map(|c| c.title.to_string()))
+                    .collect();
+
+                let pk_values: Vec<Value> = pk_indices
+                    .iter()
+                    .filter_map(|&idx| row_values.get(idx).cloned())
+                    .collect();
+
+                let identity = RowIdentity::new(pk_columns, pk_values);
+                let delete = RowDelete::new(identity, table.name.clone(), table.schema.clone());
+                Some(MutationRequest::SqlDelete(delete))
+            }
+
+            _ => None,
+        }
+    }
+
+    /// Extracts primary key columns from result using `is_primary_key` flag.
+    /// Falls back to `_id` if no PK columns are found.
+    fn extract_pk_filter_for_document(&self, row_values: &[Value]) -> Option<DocumentFilter> {
+        // Try to find PK columns from ColumnMeta
+        let pk_columns: Vec<(usize, &str)> = self
+            .result
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, col)| col.is_primary_key)
+            .map(|(idx, col)| (idx, col.name.as_str()))
+            .collect();
+
+        if !pk_columns.is_empty() {
+            // Build filter from PK columns
+            let mut filter_obj = serde_json::Map::new();
+            for (idx, col_name) in pk_columns {
+                if let Some(value) = row_values.get(idx) {
+                    let json_val = match value {
+                        Value::ObjectId(oid) => serde_json::json!({"$oid": oid}),
+                        Value::Text(s) => serde_json::json!(s),
+                        Value::Int(i) => serde_json::json!(i),
+                        Value::Float(f) => serde_json::json!(f),
+                        Value::Bool(b) => serde_json::json!(b),
+                        _ => continue,
+                    };
+                    filter_obj.insert(col_name.to_string(), json_val);
+                }
+            }
+
+            if !filter_obj.is_empty() {
+                return Some(DocumentFilter::new(serde_json::Value::Object(filter_obj)));
+            }
+        }
+
+        // Fallback to _id column if no PK columns found
+        let id_col_idx = self
+            .result
+            .columns
+            .iter()
+            .position(|c| c.name == "_id")
+            .unwrap_or(0);
+
+        let id_value = row_values.get(id_col_idx).cloned().unwrap_or(Value::Null);
+
+        match &id_value {
+            Value::ObjectId(oid) => Some(DocumentFilter::new(
+                serde_json::json!({"_id": {"$oid": oid}}),
+            )),
+            Value::Text(s) => Some(DocumentFilter::new(serde_json::json!({"_id": s}))),
+            _ => None,
+        }
+    }
+
+    fn build_document_mutation(
+        &self,
+        visual_row: usize,
+        collection: &dbflux_core::CollectionRef,
+        action: ContextMenuAction,
+        cx: &App,
+    ) -> Option<MutationRequest> {
+        use dbflux_components::components::data_table::model::VisualRowSource;
+
+        let table_state = self.table_state.as_ref()?;
+        let state = table_state.read(cx);
+        let buffer = state.edit_buffer();
+        let visual_order = buffer.compute_visual_order();
+
+        let row_values: Vec<Value> = match visual_order.get(visual_row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.result.rows.get(base_idx).cloned().unwrap_or_default()
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .map(|cells| cells.iter().map(|c| self.cell_value_to_value(c)).collect())
+                .unwrap_or_default(),
+            None => return None,
+        };
+
+        if row_values.is_empty() {
+            return None;
+        }
+
+        let has_unsupported = row_values
+            .iter()
+            .any(|value| matches!(value, Value::Unsupported(_)));
+
+        // Extract filter dynamically from PK columns or fallback to _id
+        let filter = self.extract_pk_filter_for_document(&row_values)?;
+
+        match action {
+            ContextMenuAction::CopyAsInsert => {
+                if has_unsupported {
+                    return None;
+                }
+
+                let mut doc = serde_json::Map::new();
+                for (col_idx, val) in row_values.iter().enumerate() {
+                    if let Some(col) = self.result.columns.get(col_idx)
+                        && !matches!(val, Value::Null)
+                    {
+                        doc.insert(col.name.clone(), value_to_json(val));
+                    }
+                }
+
+                let insert = DocumentInsert::one(collection.name.clone(), doc.into())
+                    .with_database(collection.database.clone());
+                Some(MutationRequest::DocumentInsert(insert))
+            }
+
+            ContextMenuAction::CopyAsUpdate => {
+                if has_unsupported {
+                    return None;
+                }
+
+                // Get PK column indices to exclude from update
+                let pk_indices: std::collections::HashSet<usize> = self
+                    .result
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, col)| col.is_primary_key)
+                    .map(|(idx, _)| idx)
+                    .collect();
+
+                // Fallback to _id if no PK columns
+                let id_col_idx = if pk_indices.is_empty() {
+                    Some(
+                        self.result
+                            .columns
+                            .iter()
+                            .position(|c| c.name == "_id")
+                            .unwrap_or(0),
+                    )
+                } else {
+                    None
+                };
+
+                let mut set_fields = serde_json::Map::new();
+                for (col_idx, val) in row_values.iter().enumerate() {
+                    // Skip PK columns or _id column
+                    if pk_indices.contains(&col_idx) || Some(col_idx) == id_col_idx {
+                        continue;
+                    }
+                    if let Some(col) = self.result.columns.get(col_idx) {
+                        set_fields.insert(col.name.clone(), value_to_json(val));
+                    }
+                }
+
+                let update_doc = serde_json::json!({"$set": set_fields});
+                let update = DocumentUpdate::new(collection.name.clone(), filter, update_doc)
+                    .with_database(collection.database.clone());
+                Some(MutationRequest::DocumentUpdate(update))
+            }
+
+            ContextMenuAction::CopyAsDelete => {
+                let delete = DocumentDelete::new(collection.name.clone(), filter)
+                    .with_database(collection.database.clone());
+                Some(MutationRequest::DocumentDelete(delete))
+            }
+
+            _ => None,
+        }
+    }
+
+    pub(super) fn cell_value_to_value(
+        &self,
+        cell: &dbflux_components::components::data_table::model::CellValue,
+    ) -> Value {
+        use dbflux_components::components::data_table::model::CellKind;
+
+        match &cell.kind {
+            CellKind::Null => Value::Null,
+            CellKind::Bool(b) => Value::Bool(*b),
+            CellKind::Int(i) => Value::Int(*i),
+            CellKind::Float(f) => Value::Float(*f),
+            CellKind::Text(s) => Value::Text(s.to_string()),
+            CellKind::Json(s) => Value::Json(s.to_string()),
+            CellKind::Bytes(len) => Value::Bytes(vec![0u8; *len]),
+            CellKind::Unsupported(type_name) => Value::Unsupported(type_name.to_string()),
+            CellKind::AutoGenerated(expr) => Value::Text(format!("DEFAULT({})", expr)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DataGridPanel;
+
+    fn labels(items: &[super::ContextMenuItem]) -> Vec<&'static str> {
+        items
+            .iter()
+            .filter(|item| !item.is_separator)
+            .map(|item| item.label)
+            .collect()
+    }
+
+    #[test]
+    fn empty_table_menu_keeps_insert_actions_but_hides_row_actions() {
+        let items = DataGridPanel::build_context_menu_items(true, false, false, false);
+        let labels = labels(&items);
+
+        assert!(labels.contains(&"Add Row"));
+        assert!(!labels.contains(&"Edit"));
+        assert!(!labels.contains(&"Edit in Modal"));
+        assert!(!labels.contains(&"Duplicate Row"));
+        assert!(!labels.contains(&"Delete Row"));
+    }
+
+    #[test]
+    fn non_editable_table_menu_stays_unchanged_without_row_target() {
+        let items = DataGridPanel::build_context_menu_items(false, false, false, false);
+
+        assert_eq!(labels(&items), vec!["Copy"]);
+    }
+
+    #[test]
+    fn editable_table_menu_with_row_target_keeps_row_actions() {
+        let items = DataGridPanel::build_context_menu_items(true, false, true, false);
+        let labels = labels(&items);
+
+        assert!(labels.contains(&"Edit"));
+        assert!(labels.contains(&"Edit in Modal"));
+        assert!(labels.contains(&"Add Row"));
+        assert!(labels.contains(&"Duplicate Row"));
+        assert!(labels.contains(&"Delete Row"));
+    }
+
+    #[test]
+    fn chart_this_query_absent_when_can_chart_false() {
+        // can_chart = false: item must NOT appear regardless of other flags.
+        let table_items = DataGridPanel::build_context_menu_items(false, false, false, false);
+        assert!(!labels(&table_items).contains(&"Chart this query"));
+
+        let editable_items = DataGridPanel::build_context_menu_items(true, false, true, false);
+        assert!(!labels(&editable_items).contains(&"Chart this query"));
+    }
+
+    #[test]
+    fn chart_this_query_present_only_when_can_chart_true() {
+        // can_chart = true: item must appear.
+        let items = DataGridPanel::build_context_menu_items(false, false, false, true);
+        assert!(labels(&items).contains(&"Chart this query"));
+    }
+
+    #[test]
+    fn chart_this_query_absent_in_document_view_regardless_of_can_chart() {
+        // Document-view menu never shows Chart this query because the source is never
+        // a QueryResult when is_document_view is true.
+        let doc_items = DataGridPanel::build_context_menu_items(false, true, false, true);
+        assert!(!labels(&doc_items).contains(&"Chart this query"));
+    }
+}

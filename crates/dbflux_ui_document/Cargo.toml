@@ -19,8 +19,13 @@ dbflux_core.workspace = true
 dbflux_app.workspace = true
 dbflux_audit.workspace = true
 dbflux_storage.workspace = true
+dbflux_export.workspace = true
 uuid.workspace = true
 log.workspace = true
+serde_json.workspace = true
+lsp-types = "0.97"
+anyhow = "1"
+rfd.workspace = true
 dbflux_mcp = { workspace = true, optional = true }
 dbflux_policy = { workspace = true, optional = true }
 
