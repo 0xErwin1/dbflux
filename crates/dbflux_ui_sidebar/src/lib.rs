@@ -9,6 +9,7 @@ mod render_footer;
 mod render_overlays;
 mod render_tree;
 mod selection;
+mod style_guardrails;
 mod table_loading;
 mod tree_builder;
 

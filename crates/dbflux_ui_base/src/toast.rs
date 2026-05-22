@@ -13,7 +13,7 @@ use gpui_component::ActiveTheme;
 
 use crate::AsyncUpdateResultExt;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 
 /// Wall-clock snapshot used as the default `meta_right` timestamp on toasts.
 /// Captured once at build time — no tick/loop logic.
@@ -418,11 +418,11 @@ impl ToastHost {
         // Title row: icon · title · subtitle · spacer · meta_right · close
         let icon_element = match icon_source {
             IconSource::Svg(path) => Icon::new(IconSource::Svg(path))
-                .size(px(16.0))
+                .size(Heights::ICON_SM)
                 .color(accent)
                 .into_any_element(),
             IconSource::Named(name) => Icon::new(name)
-                .size(px(16.0))
+                .size(Heights::ICON_SM)
                 .color(accent)
                 .into_any_element(),
         };
@@ -460,7 +460,7 @@ impl ToastHost {
             ("toast-close", toast_id),
             IconSource::Svg(AppIcon::X.path().into()),
         )
-        .icon_size(px(12.0))
+        .icon_size(Spacing::MD)
         .on_click(cx.listener(move |host, _, _, cx| {
             host.dismiss(toast_id, cx);
         }));
@@ -483,7 +483,7 @@ impl ToastHost {
             .shadow_lg();
 
         // Left accent stripe — fills the toast height.
-        let stripe = gpui::div().w(px(4.0)).flex_shrink_0().bg(stripe_bg);
+        let stripe = gpui::div().w(Spacing::XS).flex_shrink_0().bg(stripe_bg);
 
         let mut content = gpui::div()
             .flex_1()

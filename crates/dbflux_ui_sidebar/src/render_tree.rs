@@ -96,7 +96,7 @@ pub(super) fn render_tree_item(
                 .py(Spacing::XS)
                 .child(
                     Icon::new(AppIcon::Loader)
-                        .size(px(12.0))
+                        .size(Spacing::MD)
                         .color(theme.muted_foreground),
                 )
                 .child(Text::caption("Loading…").color(theme.muted_foreground)),

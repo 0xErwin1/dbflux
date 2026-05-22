@@ -13,6 +13,8 @@ pub mod sql_preview_modal;
 pub mod sso_wizard;
 pub mod toast;
 
+mod style_guardrails;
+
 #[cfg(feature = "mcp")]
 pub use app_state_entity::McpRuntimeEventRaised;
 pub use app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};

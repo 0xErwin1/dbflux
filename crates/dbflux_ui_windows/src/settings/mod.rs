@@ -31,6 +31,7 @@ use about_section::AboutSection;
 use audit_section::AuditSection;
 use auth_profiles_section::AuthProfilesSection;
 use dbflux_components::components::tree_nav::TreeNav;
+use dbflux_components::tokens::Spacing;
 use dbflux_ui_base::AppStateEntity;
 use drivers_section::DriversSection;
 use general_section::GeneralSection;
@@ -51,7 +52,7 @@ pub use self::section_trait::{SettingsSection, SettingsSectionId};
 const SETTINGS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(220.0);
 const SETTINGS_SIDEBAR_MIN_WIDTH: Pixels = px(180.0);
 const SETTINGS_SIDEBAR_MAX_WIDTH: Pixels = px(420.0);
-const SETTINGS_SIDEBAR_GRIP_WIDTH: Pixels = px(4.0);
+const SETTINGS_SIDEBAR_GRIP_WIDTH: Pixels = Spacing::XS;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsFocus {

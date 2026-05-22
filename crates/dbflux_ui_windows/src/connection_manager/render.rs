@@ -7,7 +7,7 @@ use dbflux_components::primitives::{
     BannerBlock, BannerVariant, Icon as AppIconElement, Label, Text, focus_frame,
 };
 use dbflux_components::semantic::BannerColors as SemBannerColors;
-use dbflux_components::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::typography::{Body, Headline, SubSectionLabel};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use dbflux_ui_base::platform;
@@ -57,7 +57,7 @@ impl ConnectionManagerWindow {
             .child(
                 div()
                     .w(FIELD_LABEL_WIDTH)
-                    .pt(px(6.0))
+                    .pt(Spacing::XXS)
                     .flex_shrink_0()
                     .child(label_el),
             )
@@ -322,7 +322,7 @@ impl ConnectionManagerWindow {
                             .when_some(brand_icon, |el, icon| {
                                 el.child(
                                     AppIconElement::new(icon)
-                                        .size(px(24.0))
+                                        .size(Heights::ICON_LG)
                                         .color(theme.foreground),
                                 )
                             })
@@ -375,7 +375,7 @@ impl ConnectionManagerWindow {
                                 BannerBlock::new(BannerVariant::Info, "Testing connection\u{2026}")
                                     .with_icon(
                                         AppIconElement::new(AppIcon::Loader)
-                                            .size(px(16.0))
+                                            .size(Heights::ICON_SM)
                                             .color(banners.info_fg),
                                     )
                             }
@@ -386,7 +386,7 @@ impl ConnectionManagerWindow {
                                 )
                                 .with_icon(
                                     AppIconElement::new(AppIcon::CircleCheck)
-                                        .size(px(16.0))
+                                        .size(Heights::ICON_SM)
                                         .color(banners.success_fg),
                                 );
                                 if let Some(body) = test_result_body {
@@ -401,7 +401,7 @@ impl ConnectionManagerWindow {
                                     .with_body(message)
                                     .with_icon(
                                         AppIconElement::new(AppIcon::Info)
-                                            .size(px(16.0))
+                                            .size(Heights::ICON_SM)
                                             .color(banners.error_fg),
                                     )
                             }
@@ -765,8 +765,8 @@ impl ConnectionManagerWindow {
                                 )
                                 .child(
                                     div()
-                                        .w(px(16.0))
-                                        .h(px(16.0))
+                                        .w(Heights::ICON_SM)
+                                        .h(Heights::ICON_SM)
                                         .rounded(px(3.0))
                                         .border_2()
                                         .border_color(cx.theme().muted_foreground)
@@ -779,8 +779,8 @@ impl ConnectionManagerWindow {
                                         .when(is_selected, |d| {
                                             d.child(
                                                 div()
-                                                    .w(px(8.0))
-                                                    .h(px(8.0))
+                                                    .w(Spacing::SM)
+                                                    .h(Spacing::SM)
                                                     .rounded(px(1.0))
                                                     .bg(cx.theme().primary_foreground),
                                             )
@@ -1091,8 +1091,8 @@ impl ConnectionManagerWindow {
 
         div()
             .id(toggle_id)
-            .w(px(32.0))
-            .h(px(32.0))
+            .w(Heights::TOOLBAR)
+            .h(Heights::TOOLBAR)
             .flex()
             .items_center()
             .justify_center()
@@ -1101,7 +1101,7 @@ impl ConnectionManagerWindow {
             .hover(move |d| d.bg(secondary))
             .child(
                 AppIconElement::new(icon)
-                    .size(px(16.0))
+                    .size(Heights::ICON_SM)
                     .color(muted_foreground),
             )
     }

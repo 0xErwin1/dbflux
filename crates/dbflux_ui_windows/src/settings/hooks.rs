@@ -3,7 +3,7 @@ use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Label};
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{Heights, Radii, Spacing, Widths};
 use dbflux_components::typography::{Body, MonoCaption, MonoLabel, PanelTitle};
 use dbflux_core::{
     ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
@@ -1281,9 +1281,13 @@ impl HooksSection {
                                     .flex()
                                     .items_start()
                                     .gap_2()
-                                    .child(div().mt(px(2.0)).child(
-                                        Icon::new(AppIcon::SquareTerminal).size(px(16.0)).muted(),
-                                    ))
+                                    .child(
+                                        div().mt(px(2.0)).child(
+                                            Icon::new(AppIcon::SquareTerminal)
+                                                .size(Heights::ICON_SM)
+                                                .muted(),
+                                        ),
+                                    )
                                     .child(
                                         div()
                                             .flex()
@@ -1343,7 +1347,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new("Type"))
-                            .child(div().w(px(220.0)).child(self.hook_kind_dropdown.clone())),
+                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_kind_dropdown.clone())),
                     )
                     .when(hook_kind == HookKindSelection::Command, |container| {
                         container.child(
@@ -1387,7 +1391,7 @@ impl HooksSection {
                                             .child(Label::new("Language"))
                                             .child(
                                                 div()
-                                                    .w(px(220.0))
+                                                    .w(Widths::SETTINGS_FORM_LABEL)
                                                     .child(self.script_language_dropdown.clone()),
                                             ),
                                     )
@@ -1522,7 +1526,7 @@ impl HooksSection {
                             .gap_1()
                             .child(Label::new("Execution Mode"))
                             .child(Body::new("Detached runs in background and does not block connect/disconnect").color(theme.muted_foreground))
-                            .child(div().w(px(220.0)).child(self.hook_execution_mode_dropdown.clone())),
+                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_execution_mode_dropdown.clone())),
                     )
                     })
                     .when(!is_lua && self.selected_hook_execution_mode(cx) == HookExecutionMode::Detached, |container| {
@@ -1582,14 +1586,14 @@ impl HooksSection {
                                     .gap_2()
                                     .px_3()
                                     .py_2()
-                                    .rounded(px(6.0))
+                                    .rounded(Spacing::XXS)
                                     .bg(theme.warning.opacity(0.12))
                                     .border_1()
                                     .border_color(theme.warning.opacity(0.3))
                                     .child(
                                         div().mt(px(1.0)).child(
                                             Icon::new(AppIcon::TriangleAlert)
-                                                .size(px(16.0))
+                                                .size(Heights::ICON_SM)
                                                 .warning(),
                                         ),
                                     )
@@ -1637,7 +1641,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new("On Failure"))
-                            .child(div().w(px(220.0)).child(self.hook_failure_dropdown.clone())),
+                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_failure_dropdown.clone())),
                     )),
             None,
             theme,

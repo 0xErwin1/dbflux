@@ -1,5 +1,6 @@
 use super::*;
 use dbflux_components::primitives::Icon;
+use dbflux_components::tokens::Heights;
 use dbflux_ui_base::platform;
 use gpui_component::scroll::ScrollableElement;
 
@@ -126,7 +127,7 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(Icon::new(AppIcon::Folder).size(px(16.0)).muted())
+                        .child(Icon::new(AppIcon::Folder).size(Heights::ICON_SM).muted())
                         .child("New Folder"),
                 ),
         )
@@ -170,7 +171,7 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(Icon::new(AppIcon::Plug).size(px(16.0)).muted())
+                        .child(Icon::new(AppIcon::Plug).size(Heights::ICON_SM).muted())
                         .child("New Connection"),
                 ),
         )
@@ -204,7 +205,11 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(Icon::new(AppIcon::ScrollText).size(px(16.0)).muted())
+                        .child(
+                            Icon::new(AppIcon::ScrollText)
+                                .size(Heights::ICON_SM)
+                                .muted(),
+                        )
                         .child("New File"),
                 ),
         )
@@ -227,7 +232,7 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(Icon::new(AppIcon::Folder).size(px(16.0)).muted())
+                        .child(Icon::new(AppIcon::Folder).size(Heights::ICON_SM).muted())
                         .child("New Folder"),
                 ),
         )
@@ -250,7 +255,7 @@ impl Sidebar {
                         .flex()
                         .items_center()
                         .gap(Spacing::SM)
-                        .child(Icon::new(AppIcon::Download).size(px(16.0)).muted())
+                        .child(Icon::new(AppIcon::Download).size(Heights::ICON_SM).muted())
                         .child("Import File"),
                 ),
         )
@@ -658,7 +663,7 @@ impl Sidebar {
                                     })
                             })
                             .when(!can_prev, |d| d.opacity(0.5))
-                            .child(Icon::new(AppIcon::ChevronLeft).size(px(12.0)).color(
+                            .child(Icon::new(AppIcon::ChevronLeft).size(Spacing::MD).color(
                                 if can_prev {
                                     theme.foreground
                                 } else {
@@ -707,7 +712,7 @@ impl Sidebar {
                                     theme.muted_foreground
                                 },
                             ))
-                            .child(Icon::new(AppIcon::ChevronRight).size(px(12.0)).color(
+                            .child(Icon::new(AppIcon::ChevronRight).size(Spacing::MD).color(
                                 if can_next {
                                     theme.foreground
                                 } else {

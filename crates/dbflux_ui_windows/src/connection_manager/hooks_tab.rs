@@ -1,6 +1,6 @@
 use super::*;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{Radii, Widths};
 use gpui::prelude::FluentBuilder;
 use gpui_component::ActiveTheme;
 
@@ -100,7 +100,7 @@ impl ConnectionManagerWindow {
                     .child(div().w(px(160.0)).text_sm().child("Pre-connect hook"))
                     .child(
                         div()
-                            .w(px(240.0))
+                            .w(Widths::CM_FORM_DROPDOWN)
                             .child(self.conn_pre_hook_dropdown.clone()),
                     ),
             )
@@ -119,7 +119,7 @@ impl ConnectionManagerWindow {
                     .child(div().w(px(160.0)).text_sm().child("Post-connect hook"))
                     .child(
                         div()
-                            .w(px(240.0))
+                            .w(Widths::CM_FORM_DROPDOWN)
                             .child(self.conn_post_hook_dropdown.clone()),
                     ),
             )
@@ -138,7 +138,7 @@ impl ConnectionManagerWindow {
                     .child(div().w(px(160.0)).text_sm().child("Pre-disconnect hook"))
                     .child(
                         div()
-                            .w(px(240.0))
+                            .w(Widths::CM_FORM_DROPDOWN)
                             .child(self.conn_pre_disconnect_hook_dropdown.clone()),
                     ),
             )
@@ -157,7 +157,7 @@ impl ConnectionManagerWindow {
                     .child(div().w(px(160.0)).text_sm().child("Post-disconnect hook"))
                     .child(
                         div()
-                            .w(px(240.0))
+                            .w(Widths::CM_FORM_DROPDOWN)
                             .child(self.conn_post_disconnect_hook_dropdown.clone()),
                     ),
             )

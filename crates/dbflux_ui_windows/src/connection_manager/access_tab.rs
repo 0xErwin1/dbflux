@@ -3,7 +3,7 @@ use dbflux_components::controls::DropdownItem;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Label, Status, StatusIndicator, Text};
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{Radii, Widths};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -48,7 +48,7 @@ impl ConnectionManagerWindow {
                         .child(Label::new("Access Method"))
                         .child(
                             div()
-                                .min_w(px(240.0))
+                                .min_w(Widths::CM_FORM_DROPDOWN)
                                 .child(self.access_method_dropdown.clone()),
                         ),
                 ),

@@ -7,6 +7,8 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 #[cfg(target_os = "linux")]
 use dbflux_components::tokens::ChromeColors;
+#[cfg(target_os = "linux")]
+use dbflux_components::tokens::{Heights, Spacing};
 use gpui::{
     App, ClickEvent, Decorations, InteractiveElement, IntoElement, ParentElement, SharedString,
     Stateful, Styled, Window, WindowDecorations, WindowKind, WindowOptions, div, px,
@@ -142,7 +144,7 @@ pub fn render_csd_title_bar_with_crumbs(
                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, _cx| {
                     handler(window);
                 })
-                .child(Icon::new(icon).size(px(16.0)).muted())
+                .child(Icon::new(icon).size(Heights::ICON_SM).muted())
         };
 
         let mut title_bar = div()
@@ -182,12 +184,18 @@ pub fn render_csd_title_bar_with_crumbs(
 
         for crumb in crumbs {
             drag_area = drag_area
-                .child(div().w(px(1.0)).h(px(12.0)).bg(sep_color).flex_shrink_0())
+                .child(
+                    div()
+                        .w(px(1.0))
+                        .h(Spacing::MD)
+                        .bg(sep_color)
+                        .flex_shrink_0(),
+                )
                 .child({
-                    let mut crumb_el = div().flex().flex_row().items_center().gap(px(4.0));
+                    let mut crumb_el = div().flex().flex_row().items_center().gap(Spacing::XS);
 
                     if let Some(icon) = crumb.icon {
-                        crumb_el = crumb_el.child(Icon::new(icon).size(px(12.0)).muted());
+                        crumb_el = crumb_el.child(Icon::new(icon).size(Spacing::MD).muted());
                     }
 
                     crumb_el.child(Text::label_sm(crumb.label.clone()))

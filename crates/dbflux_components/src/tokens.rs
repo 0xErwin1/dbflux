@@ -356,6 +356,24 @@ pub struct Widths;
 impl Widths {
     /// Width of the row inspector overlay panel.
     pub const INSPECTOR: Pixels = px(320.0);
+
+    /// Label column width in settings form grid rows (drivers, hooks sections).
+    ///
+    /// Applied to the fixed-width left column that holds field labels and
+    /// dropdown controls in two-column settings forms. (220 px)
+    pub const SETTINGS_FORM_LABEL: Pixels = px(220.0);
+
+    /// Dropdown column width in connection manager form rows.
+    ///
+    /// Applied to dropdown and field-control wrappers in the connection manager
+    /// tabs (hooks, render, access, drivers). (240 px)
+    pub const CM_FORM_DROPDOWN: Pixels = px(240.0);
+
+    /// Left list-panel width in settings sections with a master/detail layout.
+    ///
+    /// Applied to the left panel (`border_r_1`) listing selectable items in
+    /// MCP (clients, roles, policies) and driver settings sections. (300 px)
+    pub const SETTINGS_LIST_PANEL: Pixels = px(300.0);
 }
 
 #[cfg(test)]

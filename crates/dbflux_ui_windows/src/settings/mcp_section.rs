@@ -6,7 +6,7 @@ use dbflux_components::controls::DropdownItem;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::primitives::Label;
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{Radii, Widths};
 use dbflux_components::typography::{Body, FieldLabel, MonoCaption, MonoMeta, SubSectionLabel};
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
 use dbflux_ui_base::keymap::key_chord_from_gpui;
@@ -749,7 +749,7 @@ impl McpSection {
         let selected = self.selected_client_id.clone();
 
         let list = div()
-            .w(px(300.0))
+            .w(Widths::SETTINGS_LIST_PANEL)
             .h_full()
             .border_r_1()
             .border_color(theme.border)
@@ -878,7 +878,7 @@ impl McpSection {
         let selected = self.selected_role_id.clone();
 
         let list = div()
-            .w(px(300.0))
+            .w(Widths::SETTINGS_LIST_PANEL)
             .h_full()
             .border_r_1()
             .border_color(theme.border)
@@ -1015,7 +1015,7 @@ impl McpSection {
         let selected = self.selected_policy_id.clone();
 
         let list = div()
-            .w(px(300.0))
+            .w(Widths::SETTINGS_LIST_PANEL)
             .h_full()
             .border_r_1()
             .border_color(theme.border)
