@@ -140,8 +140,8 @@ impl Render for ModalUnsavedChanges {
                             .when(is_checked, |el| {
                                 el.bg(theme.primary).child(
                                     div()
-                                        .w(px(8.0))
-                                        .h(px(8.0))
+                                        .w(Spacing::SM)
+                                        .h(Spacing::SM)
                                         .text_size(FontSizes::XS)
                                         .text_color(theme.background)
                                         .child("✓"),
@@ -223,7 +223,7 @@ impl Render for ModalUnsavedChanges {
                     .items_center()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
-                    .rounded(px(4.0))
+                    .rounded(px(4.0)) // guardrail-allow: border radius, not spacing
                     .opacity(0.4)
                     .bg(theme.primary)
                     .child(

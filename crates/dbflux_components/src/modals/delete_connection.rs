@@ -1,7 +1,7 @@
 use crate::icons::AppIcon;
 use crate::modals::shell::{ModalShell, ModalVariant};
 use crate::primitives::{Icon, Text, surface_raised};
-use crate::tokens::{FontSizes, Spacing};
+use crate::tokens::{FontSizes, Heights, Spacing};
 use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
@@ -85,7 +85,7 @@ impl Render for ModalDeleteConnection {
                     .flex()
                     .items_start()
                     .gap(Spacing::SM)
-                    .child(Icon::new(AppIcon::TriangleAlert).size(px(16.0)).color(theme.danger))
+                    .child(Icon::new(AppIcon::TriangleAlert).size(Heights::ICON_SM).color(theme.danger))
                     .child(
                         // flex_1 + min_w_0 lets the description wrap to the
                         // modal's width instead of overflowing past the

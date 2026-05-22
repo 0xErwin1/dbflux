@@ -30,6 +30,9 @@ pub mod theme;
 
 pub mod sql_preview;
 
+#[cfg(test)]
+mod style_guardrails;
+
 pub use composites::refresh_split_button;
 pub use saved_chart::{
     SavedChart, SavedChartManager, SavedChartRefreshPolicy, SavedChartStore, TimeRangePreset,
