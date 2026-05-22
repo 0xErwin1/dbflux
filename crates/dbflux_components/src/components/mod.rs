@@ -2,6 +2,7 @@
 // This file grows one line per sub-slice as each component is moved.
 
 pub mod data_table;
+pub mod filter_bar;
 pub mod document_tree;
 pub mod form_renderer;
 pub mod json_editor_view;

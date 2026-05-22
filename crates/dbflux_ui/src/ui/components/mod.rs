@@ -2,7 +2,7 @@ pub mod context_menu;
 pub use dbflux_components::components::data_table;
 pub use dbflux_components::components::document_tree;
 pub mod dropdown;
-pub mod filter_bar;
+pub use dbflux_components::components::filter_bar;
 pub mod form_navigation;
 pub use dbflux_components::components::form_renderer;
 pub use dbflux_components::components::json_editor_view;
