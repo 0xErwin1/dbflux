@@ -6,9 +6,8 @@ use crate::data_view::DataViewMode;
 use crate::result_view::ResultViewMode;
 use dbflux_components::chart::legend::legend_element;
 use dbflux_components::chart::{
-    CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, ChartDetection, ManualChartSelection, SeriesSpec,
-    SeriesStats, count_columns_for_why, format_resolution, format_span, format_x_value,
-    format_y_value,
+    ChartDetection, ManualChartSelection, SeriesSpec, SeriesStats, count_columns_for_why,
+    format_resolution, format_span, format_x_value, format_y_value,
 };
 use dbflux_components::chart::{SourceRowRef, point_inspector_element};
 use dbflux_components::common::time_range::view::TimeRangePanel;
@@ -1689,7 +1688,7 @@ impl DataGridPanel {
 
         let cv = chart_entity.read(cx);
         let series = cv.spec_series().to_vec();
-        let palette = cv.palette_colors().to_vec();
+        let palette = cv.resolved_palette(cx);
         let stats = cv.series_stats().to_vec();
         let focused_idx = cv.focused_series_idx();
 
@@ -1947,6 +1946,7 @@ impl DataGridPanel {
                         } else {
                             "Pick time column…"
                         };
+                        let primary = cx.theme().primary;
                         d.child(
                             div()
                                 .id("cd-pick-column")
@@ -1955,9 +1955,9 @@ impl DataGridPanel {
                                 .rounded(Radii::SM)
                                 .text_size(FontSizes::SM)
                                 .cursor_pointer()
-                                .bg(CHART_ACCENT_PRIMARY.opacity(0.9))
+                                .bg(primary.opacity(0.9))
                                 .text_color(gpui::black())
-                                .hover(|d| d.bg(CHART_ACCENT_PRIMARY))
+                                .hover(move |d| d.bg(primary))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, _, _, cx| {
@@ -1995,6 +1995,8 @@ impl DataGridPanel {
     /// Contains the X-axis column selector, Y-axis checkboxes, and Apply button.
     /// Extracted from the old inline degraded view so the card action button can toggle it.
     fn render_chart_picker_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let primary = cx.theme().primary;
+
         let y_candidates: Vec<(usize, String)> = self
             .result
             .columns
@@ -2166,9 +2168,9 @@ impl DataGridPanel {
             .text_size(FontSizes::SM)
             .when(any_y_checked, |d| {
                 d.cursor_pointer()
-                    .bg(CHART_ACCENT_PRIMARY.opacity(0.9))
+                    .bg(primary.opacity(0.9))
                     .text_color(gpui::black())
-                    .hover(|d| d.bg(CHART_ACCENT_PRIMARY))
+                    .hover(move |d| d.bg(primary))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
@@ -2602,7 +2604,7 @@ impl DataGridPanel {
             let view = cv.read(cx);
             let s = view.series_stats().get(focused_idx).copied().flatten();
             let label = view.series_label(focused_idx).to_string();
-            let color = view.series_color(focused_idx);
+            let color = view.series_color(focused_idx, cx);
             let (x_min, x_max) = view.data_x_bounds();
             let x_is_time = view.x_is_time();
             (s, label, color, x_min, x_max, x_is_time)
@@ -2633,20 +2635,22 @@ impl DataGridPanel {
         let points_count = self.result.rows.len();
 
         // Value color per stat:
-        //   min, max, avg  → CHART_ACCENT_CYAN  (#95E6CB)
-        //   p99            → CHART_ACCENT_PRIMARY (#FFB454 / theme primary)
+        //   min, max, avg  → theme.cyan   (≈ #95E6CB on Dark/Mirage, #4CBF99 on Light)
+        //   p99            → theme.primary (≈ #FFB454 on Dark, varies per theme)
         //   others         → theme.foreground
+        let cyan_color = theme.cyan;
+        let primary_color = theme.primary;
         let cyan_val = |v: f64| -> gpui::AnyElement {
             div()
                 .text_size(px(11.0))
-                .text_color(CHART_ACCENT_CYAN)
+                .text_color(cyan_color)
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
         let primary_val = |v: f64| -> gpui::AnyElement {
             div()
                 .text_size(px(11.0))
-                .text_color(CHART_ACCENT_PRIMARY)
+                .text_color(primary_color)
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };

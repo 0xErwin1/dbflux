@@ -10,9 +10,10 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, TextRun, Window,
-    canvas, div, fill, font, point,
+    AnyElement, App, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, TextRun,
+    Window, canvas, div, fill, font, point,
 };
+use gpui_component::ActiveTheme;
 
 use crate::chart::axis::{TickLabel, ticks_log, ticks_numeric, ticks_time};
 use crate::chart::decimate::{lttb, lttb_with_indices};
@@ -20,6 +21,7 @@ use crate::chart::spec::{AxisKind, ChartSpec, YScale};
 use crate::chart::stats::{
     SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x,
 };
+use crate::semantic::ChartColors;
 use crate::tokens::FontSizes;
 use dbflux_core::{ColumnKind, QueryResult, Value};
 
@@ -44,65 +46,24 @@ pub enum ChartBuildError {
 }
 
 // ---------------------------------------------------------------------------
-// Palette
+// Palette helpers
 // ---------------------------------------------------------------------------
 
-/// Design-aligned palette: exact Ayu Dark chart tokens from `tokens.css`.
+/// Map a color slot index to the active theme's chart palette.
 ///
-/// HSL values computed from the hex palette:
-///   #59C2FF → h=0.578, s=1.0,  l=0.673   (chart-1 cyan)
-///   #AAD94C → h=0.228, s=0.673, l=0.572  (chart-2 lime)
-///   #FFB454 → h=0.097, s=1.0,  l=0.666   (chart-3 amber / primary)
-///   #F07178 → h=0.985, s=0.819, l=0.694  (chart-4 rose)
-///   #D2A6FF → h=0.758, s=1.0,  l=0.826   (chart-5 lavender)
-pub const CHART_PALETTE: &[Hsla] = &[
-    Hsla {
-        h: 0.578,
-        s: 1.0,
-        l: 0.673,
-        a: 1.0,
-    }, // #59C2FF chart-1 cyan
-    Hsla {
-        h: 0.228,
-        s: 0.673,
-        l: 0.572,
-        a: 1.0,
-    }, // #AAD94C chart-2 lime
-    Hsla {
-        h: 0.097,
-        s: 1.0,
-        l: 0.666,
-        a: 1.0,
-    }, // #FFB454 chart-3 amber
-    Hsla {
-        h: 0.985,
-        s: 0.819,
-        l: 0.694,
-        a: 1.0,
-    }, // #F07178 chart-4 rose
-    Hsla {
-        h: 0.758,
-        s: 1.0,
-        l: 0.826,
-        a: 1.0,
-    }, // #D2A6FF chart-5 lavender
-];
-
-/// Accent cyan — #95E6CB (min/max/avg stat values in the Stats dock).
-pub const CHART_ACCENT_CYAN: Hsla = Hsla {
-    h: 0.444,
-    s: 0.618,
-    l: 0.741,
-    a: 1.0,
-};
-
-/// Accent primary — #FFB454 (p99 stat value, matches theme primary).
-pub const CHART_ACCENT_PRIMARY: Hsla = Hsla {
-    h: 0.097,
-    s: 1.0,
-    l: 0.666,
-    a: 1.0,
-};
+/// `slot % 5` selects one of `theme.chart_1..chart_5`. Out-of-bounds slots
+/// (unreachable in practice) fall back to a neutral mid-grey so paint does not
+/// crash even if the series list is somehow malformed.
+#[inline]
+fn theme_chart_color(theme: &gpui_component::theme::Theme, slot: u8) -> Hsla {
+    match slot % 5 {
+        0 => theme.chart_1,
+        1 => theme.chart_2,
+        2 => theme.chart_3,
+        3 => theme.chart_4,
+        _ => theme.chart_5,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // RenderModel
@@ -112,8 +73,8 @@ pub const CHART_ACCENT_PRIMARY: Hsla = Hsla {
 pub(crate) struct RenderModel {
     /// Decimated (x, y) pairs per series — in data space (f64, f64).
     pub decimated: Vec<Vec<(f64, f64)>>,
-    /// Resolved palette colour per series.
-    pub palette_colors: Vec<Hsla>,
+    /// Raw color-slot indices per series (theme-resolved at render time).
+    pub palette_slots: Vec<u8>,
     /// X-axis tick labels rendered below the plot area.
     pub x_ticks: Vec<TickLabel>,
     /// Y-axis tick labels rendered to the left of the plot area.
@@ -378,16 +339,9 @@ impl ChartView {
             ticks_numeric(y_min, y_max, 5)
         };
 
-        // --- Palette colours ---
+        // --- Palette slots (theme-resolved at render time) ---
 
-        let palette_colors: Vec<Hsla> = spec
-            .series
-            .iter()
-            .map(|s| {
-                let idx = s.color_slot as usize % CHART_PALETTE.len();
-                CHART_PALETTE[idx]
-            })
-            .collect();
+        let palette_slots: Vec<u8> = spec.series.iter().map(|s| s.color_slot).collect();
 
         // Compute per-series stats over the post-decimation points.
         let series_stats: Vec<Option<SeriesStats>> = decimated
@@ -397,7 +351,7 @@ impl ChartView {
 
         let render_model = RenderModel {
             decimated,
-            palette_colors,
+            palette_slots,
             x_ticks,
             y_ticks,
             x_min,
@@ -484,13 +438,15 @@ impl ChartView {
         self.spec.x_axis.kind == AxisKind::Time
     }
 
-    /// Resolved palette colour for the series at `idx`. Returns a neutral grey
-    /// when `idx` is out of range.
-    pub fn series_color(&self, idx: usize) -> Hsla {
+    /// Resolved palette colour for the series at `idx`, derived from the active theme.
+    ///
+    /// Returns a neutral grey when `idx` is out of range.
+    pub fn series_color(&self, idx: usize, cx: &App) -> Hsla {
+        let theme = cx.theme();
         self.render_model
-            .palette_colors
+            .palette_slots
             .get(idx)
-            .copied()
+            .map(|&slot| theme_chart_color(theme, slot))
             .unwrap_or(Hsla {
                 h: 0.0,
                 s: 0.0,
@@ -514,9 +470,17 @@ impl ChartView {
         &self.spec.series
     }
 
-    /// Resolved palette colours, indexed parallel to `spec_series()`.
-    pub fn palette_colors(&self) -> &[Hsla] {
-        &self.render_model.palette_colors
+    /// Resolved palette colours for all series, derived from the active theme at call time.
+    ///
+    /// Returns an owned `Vec<Hsla>` since the colours are no longer stored — they are
+    /// derived on demand from `cx.theme()` so they reflect the currently active theme.
+    pub fn resolved_palette(&self, cx: &App) -> Vec<Hsla> {
+        let theme = cx.theme();
+        self.render_model
+            .palette_slots
+            .iter()
+            .map(|&slot| theme_chart_color(theme, slot))
+            .collect()
     }
 
     /// Source row indices, per series, for each decimated point.
@@ -1118,7 +1082,12 @@ impl Render for ChartView {
             0.0
         };
 
-        let palette = model.palette_colors.clone();
+        let theme = cx.theme();
+        let palette: Vec<Hsla> = model
+            .palette_slots
+            .iter()
+            .map(|&slot| theme_chart_color(theme, slot))
+            .collect();
         let decimated = model.decimated.clone();
         let x_is_time = spec.x_axis.kind == AxisKind::Time;
 
@@ -1178,6 +1147,9 @@ impl Render for ChartView {
         // The `spec.legend_visible` field is preserved for future use / API compat.
         let legend: Option<AnyElement> = None;
 
+        // Resolve per-theme chrome colors for the readout overlay.
+        let readout_colors = ChartColors::for_current(cx);
+
         let plot_bounds_for_hover = plot_bounds_rc.clone();
 
         div()
@@ -1234,6 +1206,9 @@ impl Render for ChartView {
                                 let ox = f32::from(b.origin.x);
                                 let oy = f32::from(b.origin.y);
 
+                                // Resolve theme tokens once at the start of each paint pass.
+                                let theme = cx.theme();
+
                                 // Plot area occupies the right portion of the canvas;
                                 // the left MARGIN_LEFT is reserved for Y-axis tick labels.
                                 let plot_x0 = ox + MARGIN_LEFT;
@@ -1279,6 +1254,7 @@ impl Render for ChartView {
                                 // Pie has no axes — skip all gridlines and tick labels.
                                 // `tick.value` is in projection space (log1p or linear);
                                 // use the projection-space mapper, not data_to_screen_y.
+                                let gridline_color = theme.border;
                                 for tick in y_ticks_canvas
                                     .iter()
                                     .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
@@ -1298,7 +1274,7 @@ impl Render for ChartView {
                                                 height: gpui::px(1.0),
                                             },
                                         },
-                                        gpui::hsla(0.0, 0.0, 0.5, 0.18),
+                                        gridline_color,
                                     ));
                                 }
 
@@ -1316,7 +1292,7 @@ impl Render for ChartView {
                                                 height: gpui::px(plot_h),
                                             },
                                         },
-                                        gpui::hsla(0.0, 0.0, 0.5, 0.18),
+                                        gridline_color,
                                     ));
                                 }
 
@@ -1480,12 +1456,16 @@ impl Render for ChartView {
                                 {
                                     let sx = f32::from(hx);
                                     if sx >= plot_x0 && sx <= plot_x0 + plot_w {
+                                        let crosshair_color = Hsla {
+                                            a: 0.7,
+                                            ..theme.primary
+                                        };
                                         paint_dashed_vline(
                                             window,
                                             sx,
                                             plot_y0,
                                             plot_y0 + plot_h,
-                                            gpui::hsla(0.097, 1.0, 0.666, 0.7),
+                                            crosshair_color,
                                             2.0,
                                             3.0,
                                         );
@@ -1557,10 +1537,7 @@ impl Render for ChartView {
                                             );
                                             fill_builder.close();
                                             if let Ok(path) = fill_builder.build() {
-                                                window.paint_path(
-                                                    path,
-                                                    gpui::hsla(0.56, 0.17, 0.07, 1.0),
-                                                );
+                                                window.paint_path(path, theme.background);
                                             }
 
                                             let mut stroke_builder =
@@ -1591,7 +1568,7 @@ impl Render for ChartView {
                                 // --- In-canvas Y-axis tick labels ---
                                 // Right-aligned in the MARGIN_LEFT column.
                                 // Pie has no axes — skip all tick labels.
-                                let tick_color = gpui::hsla(0.0, 0.0, 0.55, 1.0);
+                                let tick_color = theme.muted_foreground;
                                 let tick_font = font("Zed Mono");
                                 let tick_size = gpui::px(10.0);
                                 let line_height = gpui::px(12.0);
@@ -1673,7 +1650,9 @@ impl Render for ChartView {
                         .absolute()
                         .size_full()
                     })
-                    .when_some(readout, |container, r| container.child(readout_overlay(r))),
+                    .when_some(readout, |container, r| {
+                        container.child(readout_overlay(r, readout_colors))
+                    }),
             )
             // Legend row (below canvas)
             .when_some(legend, |d, leg| d.child(leg))
@@ -2448,7 +2427,10 @@ pub fn format_y_value(y: f64) -> String {
 ///
 /// Layout: top 18px fixed; left clamped so the panel stays inside the plot area.
 /// Min-width 200px; one header row (time + optional offset) then one row per series.
-fn readout_overlay(r: HoverReadout) -> impl IntoElement {
+///
+/// `colors` is derived from `ChartColors::for_current(cx)` at the render call site
+/// so the overlay matches the active theme.
+fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
     const PANEL_MIN_WIDTH: f32 = 200.0;
     const PANEL_GAP: f32 = 12.0;
 
@@ -2474,9 +2456,9 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
         .gap(gpui::px(2.0))
         .px(gpui::px(10.0))
         .py(gpui::px(8.0))
-        .bg(gpui::hsla(0.0, 0.0, 0.09, 1.0))
+        .bg(colors.panel_bg)
         .border_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.18))
+        .border_color(colors.panel_border)
         .rounded(gpui::px(6.0))
         .text_size(FontSizes::XS)
         .overflow_hidden()
@@ -2485,18 +2467,14 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
             div()
                 .flex()
                 .items_center()
-                .text_color(gpui::hsla(0.0, 0.0, 0.85, 1.0))
+                .text_color(colors.value_fg)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(r.header_time)
                 .when_some(r.header_offset, |d, offset| {
-                    d.child(
-                        div()
-                            .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                            .child(offset),
-                    )
+                    d.child(div().text_color(colors.label_fg).child(offset))
                 }),
         )
-        // One row per series; focused row gets semibold + slightly brighter bg.
+        // One row per series; focused row gets semibold.
         .children(r.series.into_iter().enumerate().map(move |(idx, entry)| {
             let is_focused = idx == focused_idx;
             div()
@@ -2511,15 +2489,11 @@ fn readout_overlay(r: HoverReadout) -> impl IntoElement {
                 .child(
                     div()
                         .flex_1()
-                        .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                        .text_color(colors.label_fg)
                         .child(entry.label),
                 )
                 // Value (foreground)
-                .child(
-                    div()
-                        .text_color(gpui::hsla(0.0, 0.0, 0.95, 1.0))
-                        .child(entry.y_label),
-                )
+                .child(div().text_color(colors.value_fg).child(entry.y_label))
         }))
 }
 
@@ -2743,7 +2717,7 @@ mod tests {
     }
 
     #[test]
-    fn build_assigns_palette_colors() {
+    fn build_assigns_palette_slots() {
         let rows = vec![vec![Value::Int(0), Value::Float(1.0), Value::Float(2.0)]];
         let result = QueryResult::table(
             vec![
@@ -2757,7 +2731,7 @@ mod tests {
         );
         let spec = simple_spec(0, &[1, 2]);
         let view = ChartView::build(&result, spec).expect("build should succeed");
-        assert_eq!(view.render_model.palette_colors.len(), 2);
+        assert_eq!(view.render_model.palette_slots.len(), 2);
     }
 
     #[test]
@@ -3018,8 +2992,8 @@ mod tests {
             "y_ticks must be non-empty"
         );
 
-        // Palette colours resolved for both series.
-        assert_eq!(view.render_model.palette_colors.len(), 2);
+        // Palette slot indices stored for both series (theme-resolved at render time).
+        assert_eq!(view.render_model.palette_slots.len(), 2);
 
         // Series stats over post-decimation (= all) points.
         let s0 = view.render_model.series_stats[0].expect("series 0 stats present");
