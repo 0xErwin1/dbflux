@@ -2934,6 +2934,8 @@ dependencies = [
  "dbflux_ssh",
  "dbflux_ssm",
  "dbflux_storage",
+ "dbflux_ui_base",
+ "dbflux_ui_document",
  "dirs 5.0.1",
  "env_logger",
  "fuzzy-matcher",
@@ -2948,6 +2950,45 @@ dependencies = [
  "rfd",
  "serde_json",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "dbflux_ui_base"
+version = "0.6.0-dev.7"
+dependencies = [
+ "anyhow",
+ "dbflux_app",
+ "dbflux_components",
+ "dbflux_core",
+ "dbflux_mcp",
+ "dbflux_storage",
+ "gpui",
+ "gpui-component",
+ "log",
+ "uuid",
+]
+
+[[package]]
+name = "dbflux_ui_document"
+version = "0.6.0-dev.7"
+dependencies = [
+ "anyhow",
+ "dbflux_app",
+ "dbflux_audit",
+ "dbflux_components",
+ "dbflux_core",
+ "dbflux_export",
+ "dbflux_mcp",
+ "dbflux_policy",
+ "dbflux_storage",
+ "dbflux_ui_base",
+ "gpui",
+ "gpui-component",
+ "log",
+ "lsp-types",
+ "rfd",
+ "serde_json",
  "uuid",
 ]
 
