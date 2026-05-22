@@ -258,6 +258,19 @@ Returns `Subscription`; store in `_subscriptions: Vec<Subscription>` field.
 
 Architecture details live in `ARCHITECTURE.md`. This file only keeps the agent-facing rules that affect how changes should be made.
 
+### UI crate split (6 crates)
+
+The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate map for the full diagram):
+
+- `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency.
+- `dbflux_ui_base` — AppStateEntity, events, keymap helpers, toast, modal_frame, platform detection, sql_preview_modal, sso_wizard.
+- `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, KeyValueDocument, AuditDocument), data_grid_panel, governance view.
+- `dbflux_ui_sidebar` — connections + scripts sidebar tree.
+- `dbflux_ui_windows` — settings window and connection manager window.
+- `dbflux_ui` — thin integrator (~11.5k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server. Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
+
+`dbflux_ui` has **no per-driver feature flags** and no driver dependencies. Per-driver features live on `dbflux_app` (which registers drivers) and on the `dbflux` binary. The cross-cutting `lua`/`aws`/`mcp` features on UI crates only forward to `dbflux_app` and sibling UI crates.
+
 ### Driver/UI Decoupling
 
 **Never add driver-specific logic in UI code.** The UI must remain agnostic to specific database implementations.
@@ -342,7 +355,7 @@ Key abstractions for UI adaptation:
 - Editor-run Lua scripts use `LuaCapabilities::all_enabled()` and stream live output into a document-owned buffer via channel, not a shared mutex string
 - Failure policies: Disconnect (abort flow), Warn (continue with warning), Ignore (log only)
 - Hooks section in Settings for global definitions; Hooks tab in Connection Manager for per-profile bindings
-- Types and logic in `dbflux_core/src/connection/hook.rs`, UI in `settings/hooks.rs` and `connection_manager/hooks_tab.rs`
+- Types and logic in `dbflux_core/src/connection/hook.rs`, UI in `crates/dbflux_ui_windows/src/settings/hooks.rs` and `crates/dbflux_ui_windows/src/connection_manager/hooks_tab.rs`
 
 ### Adding a New Driver
 
@@ -351,7 +364,7 @@ Key abstractions for UI adaptation:
 3. Define `DriverMetadata` with appropriate `DatabaseCategory`, `QueryLanguage`, and `DriverCapabilities`
 4. Implement `ErrorFormatter` for driver-specific error messages
 5. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
-6. Add feature flag in `crates/dbflux/Cargo.toml`
+6. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag.
 7. Register in `AppState::new()` under `#[cfg(feature = "name")]`
 8. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
 
@@ -375,19 +388,19 @@ Drivers declare their capabilities via `DriverMetadata`:
 
 Documents are open-tab entities managed through a closure-erasing shell. The polymorphism mechanism is `PaneHandle`, not a closed enum. See `ARCHITECTURE.md` § Document System for the full picture.
 
-1. **Shell**: `PaneHandle` (`document/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
-2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`document/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
-3. **Event**: documents emit `DocumentEvent` directly (`document/handle.rs`, 29 LOC). No per-document event enums.
-4. **Dedup**: `DocumentKey` enum (`document/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
+1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
+2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`crates/dbflux_ui_document/src/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
+3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`, 29 LOC). No per-document event enums.
+4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
 5. **Chrome**: `ResultPanel` + `ViewHandle` (`dbflux_components::result_panel`) is the universal chrome host for data-result views. View entities expose `into_view_handle(entity, cx) -> ViewHandle` whose `toolbar_segments` closure returns `ToolbarSegment`s positioned `Left | Center | Right` with `index`. Filter bars, axis bars, range chips all become segments — the chrome row uses `flex_wrap` so segments wrap when narrow.
-6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `code/live_output.rs`.
+6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `crates/dbflux_ui_document/src/code/live_output.rs`.
 7. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus via their own `FocusHandle`.
 
 **Adding a new document type** (zero changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, `handle.rs`):
-1. Create `document/<name>/mod.rs` with the entity
-2. Create `<name>/pane.rs` with `into_pane(entity, cx) -> PaneHandle`
-3. Add a `DocumentKey` variant if dedup is needed
-4. Add `open_<name>` in `workspace/actions.rs`
+1. Create `crates/dbflux_ui_document/src/<name>/mod.rs` with the entity
+2. Create `crates/dbflux_ui_document/src/<name>/pane.rs` with `into_pane(entity, cx) -> PaneHandle`
+3. Add a `DocumentKey` variant in `crates/dbflux_ui_document/src/dedup.rs` if dedup is needed
+4. Add `open_<name>` in `crates/dbflux_ui/src/ui/views/workspace/actions.rs`
 
 **Known constraint**: `KeyValueView` and `LogStreamView` are boundary structs in their `view.rs` files, NOT separate GPUI entities. `impl Render` remains on the host document because GPUI's single-`Context<T>` borrow model with `cx.listener()` closures over `Self` makes entity-level extraction infeasible without relocating all domain state. The boundary is file-level (render helpers + render code in sibling files), not entity-level.
 
@@ -451,10 +464,12 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 ### Platform Detection
 
-`crates/dbflux_ui/src/platform.rs` handles X11/Wayland differences:
+`crates/dbflux_ui_base/src/platform.rs` handles X11/Wayland differences:
 - X11 treats `WindowKind::Floating` as transient dialogs (can cause rendering issues)
 - `floating_window_kind()` returns `None` on X11, `Some(Floating)` elsewhere
 - `apply_window_options()` sets min size so X11 WMs emit `WM_NORMAL_HINTS`
+
+A `pub use dbflux_ui_base::platform::*` shim remains at `crates/dbflux_ui/src/platform.rs` for internal compatibility.
 
 ## Common Pitfalls
 
