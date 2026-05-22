@@ -386,24 +386,6 @@ impl Command {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::Command;
-
-    #[test]
-    fn command_display_names_are_stable() {
-        assert_eq!(
-            Command::ToggleHistoryDropdown.display_name(),
-            "Toggle History Dropdown"
-        );
-        assert_eq!(
-            Command::OpenSavedQueries.display_name(),
-            "Open Saved Queries"
-        );
-        assert_eq!(Command::SaveQuery.display_name(), "Save");
-    }
-}
-
 /// Identifies the current UI context for keybinding resolution.
 ///
 /// Different contexts have different keybindings. When a key is pressed,
@@ -589,7 +571,20 @@ impl ContextId {
 
 #[cfg(test)]
 mod tests {
-    use super::ContextId;
+    use super::{Command, ContextId};
+
+    #[test]
+    fn command_display_names_are_stable() {
+        assert_eq!(
+            Command::ToggleHistoryDropdown.display_name(),
+            "Toggle History Dropdown"
+        );
+        assert_eq!(
+            Command::OpenSavedQueries.display_name(),
+            "Open Saved Queries"
+        );
+        assert_eq!(Command::SaveQuery.display_name(), "Save");
+    }
 
     #[test]
     fn history_modal_is_modal() {
