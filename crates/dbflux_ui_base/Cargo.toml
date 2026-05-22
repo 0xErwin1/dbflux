@@ -19,6 +19,7 @@ dbflux_components.workspace = true
 dbflux_core.workspace = true
 dbflux_mcp = { workspace = true, optional = true }
 uuid.workspace = true
+log.workspace = true
 anyhow = "1"
 
 [features]
