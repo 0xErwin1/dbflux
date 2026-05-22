@@ -1,6 +1,6 @@
 use super::*;
-use crate::ui::overlays::sql_preview_modal::SqlGenerationType;
 use dbflux_core::MutationCategory;
+use dbflux_ui_base::sql_preview_modal::SqlGenerationType;
 
 impl Sidebar {
     pub(super) fn get_code_generators_for_item(

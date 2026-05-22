@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::icons::AppIcon;
+use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
 use dbflux_components::typography::MonoLabel;
 use gpui::FontWeight;

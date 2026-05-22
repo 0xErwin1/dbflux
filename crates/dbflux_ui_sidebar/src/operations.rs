@@ -1,7 +1,4 @@
 use super::*;
-use crate::platform;
-use crate::ui::AsyncUpdateResultExt;
-use crate::ui::components::toast::PendingToast;
 use dbflux_app::hook_executor::CompositeExecutor;
 use dbflux_app::{ExternalDriverDiagnostic, ExternalDriverStage};
 use dbflux_core::observability::actions::{
@@ -16,6 +13,9 @@ use dbflux_core::{
     TaskKind, TaskTarget, detached_process_channel, execute_streaming_process, output_channel,
 };
 use dbflux_ssh::is_passphrase_required_error_str;
+use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_ui_base::platform;
+use dbflux_ui_base::toast::PendingToast;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -2525,7 +2525,7 @@ impl Sidebar {
         .detach();
     }
 
-    pub(crate) fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+    pub fn connect_to_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         self.connect_to_profile_inner(profile_id, None, false, cx);
     }
 
@@ -2533,7 +2533,7 @@ impl Sidebar {
     ///
     /// If this attempt also fails with a passphrase error, the modal will reopen showing
     /// an "Incorrect passphrase" banner (`last_attempt_failed = true`).
-    pub(crate) fn connect_to_profile_with_passphrase(
+    pub fn connect_to_profile_with_passphrase(
         &mut self,
         profile_id: Uuid,
         passphrase: String,
@@ -3131,7 +3131,7 @@ impl Sidebar {
                 TaskKind::Connect,
                 format!("Connecting to {} (pipeline)", profile_name),
             );
-            cx.emit(crate::app::AppStateChanged);
+            cx.emit(dbflux_ui_base::AppStateChanged);
             result
         });
 
@@ -3277,7 +3277,7 @@ impl Sidebar {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
-                            cx.emit(crate::app::AppStateChanged);
+                            cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
@@ -3301,13 +3301,13 @@ impl Sidebar {
                     if let Err(update_error) = cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
-                            cx.emit(crate::app::AppStateChanged);
+                            cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         if cancel_token.is_cancelled() {
                             app_state.update(cx, |state, cx| {
                                 state.finish_pending_operation(profile_id, None);
-                                cx.emit(crate::app::AppStateChanged);
+                                cx.emit(dbflux_ui_base::AppStateChanged);
                             });
 
                             sidebar.update(cx, |sidebar, cx| {
@@ -3320,7 +3320,7 @@ impl Sidebar {
                         app_state.update(cx, |state, cx| {
                             state.fail_task(task_id, "Connection hook cancelled");
                             state.finish_pending_operation(profile_id, None);
-                            cx.emit(crate::app::AppStateChanged);
+                            cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
@@ -3395,7 +3395,7 @@ impl Sidebar {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error_msg.clone());
                             state.finish_pending_operation(profile_id, None);
-                            cx.emit(crate::app::AppStateChanged);
+                            cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
@@ -3502,7 +3502,7 @@ impl Sidebar {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
-                            cx.emit(crate::app::AppStateChanged);
+                            cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
@@ -3548,7 +3548,7 @@ impl Sidebar {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
-                            cx.emit(crate::app::AppStateChanged);
+                            cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
@@ -3572,13 +3572,13 @@ impl Sidebar {
                     if let Err(update_error) = cx.update(|cx| {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
-                            cx.emit(crate::app::AppStateChanged);
+                            cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         if cancel_token.is_cancelled() {
                             app_state.update(cx, |state, cx| {
                                 state.finish_pending_operation(profile_id, None);
-                                cx.emit(crate::app::AppStateChanged);
+                                cx.emit(dbflux_ui_base::AppStateChanged);
                             });
 
                             sidebar.update(cx, |sidebar, cx| {
@@ -3591,7 +3591,7 @@ impl Sidebar {
                         app_state.update(cx, |state, cx| {
                             state.fail_task(task_id, "Post-connect hook cancelled");
                             state.finish_pending_operation(profile_id, None);
-                            cx.emit(crate::app::AppStateChanged);
+                            cx.emit(dbflux_ui_base::AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
@@ -3649,7 +3649,7 @@ impl Sidebar {
                     state.complete_task(task_id);
                     state.finish_pending_operation(profile_id, None);
                     state.apply_connect_profile(profile, connection.into(), schema, tunnel_handle);
-                    cx.emit(crate::app::AppStateChanged);
+                    cx.emit(dbflux_ui_base::AppStateChanged);
                     cx.notify();
                 });
 
@@ -3681,7 +3681,7 @@ impl Sidebar {
         .detach();
     }
 
-    pub(crate) fn disconnect_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+    pub fn disconnect_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         let Some(profile) = self
             .app_state
             .read(cx)
@@ -3959,7 +3959,7 @@ impl Sidebar {
             {
                 log::info!("Deleted profile: {}", removed.name);
             }
-            cx.emit(crate::app::AppStateChanged);
+            cx.emit(dbflux_ui_base::AppStateChanged);
         });
     }
 
