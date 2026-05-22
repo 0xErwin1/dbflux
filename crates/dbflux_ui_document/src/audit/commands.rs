@@ -156,7 +156,7 @@ impl AuditDocument {
         // Keyboard-triggered: approximate position from row index.
         const AUDIT_ROW_HEIGHT: f32 = 30.0;
         let y = row as f32 * AUDIT_ROW_HEIGHT + AUDIT_ROW_HEIGHT;
-        let position = Point::new(px(8.0), px(y));
+        let position = Point::new(px(8.0), px(y)); // guardrail-allow: positional offset, not a spacing/layout token
 
         self.context_menu = Some(super::AuditContextMenuState {
             row,

@@ -360,7 +360,7 @@ impl TabBar {
                 }),
             )
             // Icon
-            .child(Icon::new(icon).size(px(16.0)).color(if is_active {
+            .child(Icon::new(icon).size(Heights::ICON_SM).color(if is_active {
                 cx.theme().foreground
             } else {
                 cx.theme().muted_foreground
@@ -384,8 +384,8 @@ impl TabBar {
                 el.child(
                     div()
                         .id(ElementId::Name(format!("dirty-dot-{}", id.0).into()))
-                        .w(px(6.0))
-                        .h(px(6.0))
+                        .w(Spacing::XXS)
+                        .h(Spacing::XXS)
                         .rounded_full()
                         .bg(dot_color)
                         .flex_shrink_0()
@@ -409,28 +409,28 @@ impl TabBar {
         let muted_fg = cx.theme().muted_foreground;
 
         div()
-            .w(px(16.0))
-            .h(px(16.0))
+            .w(Heights::ICON_SM)
+            .h(Heights::ICON_SM)
             .flex()
             .items_center()
             .justify_center()
             .rounded(Radii::SM)
             .child(if is_executing {
                 Icon::new(AppIcon::Loader)
-                    .size(px(12.0))
+                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                     .color(accent)
                     .into_any_element()
             } else {
                 div()
                     .id(ElementId::Name(format!("tab-close-{}", id.0).into()))
-                    .w(px(16.0))
-                    .h(px(16.0))
+                    .w(Heights::ICON_SM)
+                    .h(Heights::ICON_SM)
                     .rounded(Radii::SM)
                     .flex()
                     .items_center()
                     .justify_center()
                     .hover(move |el| el.bg(secondary))
-                    .child(Icon::new(AppIcon::X).size(px(12.0)).color(muted_fg))
+                    .child(Icon::new(AppIcon::X).size(px(12.0)).color(muted_fg)) // guardrail-allow: 12px icon size, no ICON_XS token
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _event, _window, cx| {
@@ -447,7 +447,7 @@ impl TabBar {
     fn render_new_tab_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("new-tab-btn")
-            .w(px(32.0))
+            .w(px(32.0)) // guardrail-allow: new-tab button width, not a toolbar height token
             .h_full()
             .flex()
             .items_center()

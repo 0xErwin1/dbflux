@@ -534,7 +534,7 @@ impl HistoryModal {
                     })
                     .child(
                         Icon::new(AppIcon::Clock)
-                            .size(px(12.0))
+                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                             .color(text_color_for_active(
                                 self.active_tab == HistoryTab::Recent,
                                 theme,
@@ -570,7 +570,7 @@ impl HistoryModal {
                     })
                     .child(
                         Icon::new(AppIcon::Star)
-                            .size(px(12.0))
+                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                             .color(text_color_for_active(
                                 self.active_tab == HistoryTab::Saved,
                                 theme,

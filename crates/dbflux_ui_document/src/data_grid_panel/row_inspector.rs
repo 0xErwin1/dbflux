@@ -170,7 +170,7 @@ fn render_references_section(
             .py(Spacing::XS)
             .child(
                 Icon::new(AppIcon::Loader)
-                    .size(px(12.0))
+                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                     .color(theme.muted_foreground),
             )
             .child(Text::caption("Loading schema…").color(theme.muted_foreground))
@@ -239,7 +239,7 @@ fn render_fk_reference_entry(
                 .py(Spacing::XS)
                 .child(
                     Icon::new(AppIcon::Loader)
-                        .size(px(12.0))
+                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                         .color(theme.muted_foreground),
                 )
                 .child(Text::caption("Resolving…").color(theme.muted_foreground))

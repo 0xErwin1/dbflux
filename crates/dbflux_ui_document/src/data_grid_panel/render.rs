@@ -274,8 +274,8 @@ impl Render for DataGridPanel {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .w(px(24.0))
-                                .h(px(24.0))
+                                .w(Heights::ICON_LG)
+                                .h(Heights::ICON_LG)
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
                                 .hover(|d| d.bg(theme.secondary))
@@ -298,8 +298,8 @@ impl Render for DataGridPanel {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .w(px(24.0))
-                                .h(px(24.0))
+                                .w(Heights::ICON_LG)
+                                .h(Heights::ICON_LG)
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
                                 .hover(|d| d.bg(theme.secondary))
@@ -348,7 +348,7 @@ impl Render for DataGridPanel {
                                             .gap(Spacing::SM)
                                             .child(
                                                 Icon::new(AppIcon::Loader)
-                                                    .size(px(12.0))
+                                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                                     .color(theme.muted_foreground),
                                             )
                                             .child(Text::muted("Loading…"))
@@ -658,8 +658,8 @@ pub(super) fn render_filter_bar_as_segment(
                         )
                         .child(Text::body(refresh_label)),
                 )
-                .child(div().w(px(1.0)).h_full().bg(theme.input))
-                .child(div().w(px(28.0)).h_full().child(refresh_dropdown)),
+                .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
+                .child(div().w(px(28.0)).h_full().child(refresh_dropdown)), // guardrail-allow: dropdown control width, not a height token
         )
         .into_any()
 }
@@ -829,10 +829,10 @@ impl DataGridPanel {
                             )
                             .child(Text::body(refresh_label)),
                     )
-                    .child(div().w(px(1.0)).h_full().bg(theme.input))
+                    .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
                     .child(
                         div()
-                            .w(px(28.0))
+                            .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
                             .h_full()
                             .child(self.refresh_dropdown.clone()),
                     ),
@@ -916,7 +916,7 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .size(px(28.0))
+                            .size(Heights::BUTTON)
                             .rounded(Radii::MD)
                             .border_1()
                             .when(can_undo, |d| {
@@ -960,7 +960,7 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .size(px(28.0))
+                            .size(Heights::BUTTON)
                             .rounded(Radii::MD)
                             .border_1()
                             .when(can_redo, |d| {
@@ -1005,7 +1005,7 @@ impl DataGridPanel {
                             .items_center()
                             .gap_1()
                             .px(Spacing::MD)
-                            .h(px(28.0))
+                            .h(Heights::BUTTON)
                             .rounded(Radii::MD)
                             .border_1()
                             .when(has_changes, |d| {
@@ -1042,7 +1042,7 @@ impl DataGridPanel {
                             .flex()
                             .items_center()
                             .px(Spacing::MD)
-                            .h(px(28.0))
+                            .h(Heights::BUTTON)
                             .rounded(Radii::MD)
                             .border_1()
                             .border_color(theme.border)
@@ -1427,7 +1427,7 @@ impl DataGridPanel {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .h(px(28.0))
+                    .h(Heights::ROW)
                     .px(Spacing::SM)
                     .bg(theme.tab_bar)
                     .child(axis_row),
@@ -1485,10 +1485,10 @@ impl DataGridPanel {
                 let chart_row = div()
                     .flex_grow()
                     .size_full()
-                    .pt(px(12.0))
-                    .pb(px(8.0))
-                    .pl(px(8.0))
-                    .pr(px(12.0))
+                    .pt(Spacing::MD)
+                    .pb(Spacing::SM)
+                    .pl(Spacing::SM)
+                    .pr(Spacing::MD)
                     .child(chart_area);
 
                 let body = div()
@@ -1749,18 +1749,18 @@ impl DataGridPanel {
                     .bg(theme.secondary)
                     .border_1()
                     .border_color(theme.border)
-                    .p(px(16.0))
+                    .p(Spacing::LG)
                     .w(px(360.0))
                     .flex()
                     .flex_col()
-                    .gap(px(8.0))
+                    .gap(Spacing::SM)
                     .child(Text::label("Save chart"))
                     .child(Input::new(&name_input).placeholder("Chart name"))
                     .child(
                         div()
                             .flex()
                             .flex_row()
-                            .gap(px(6.0))
+                            .gap(Spacing::XXS)
                             .justify_end()
                             .child(
                                 Button::new("cancel-collection-chart-save")
@@ -1850,8 +1850,8 @@ impl DataGridPanel {
                     .py(px(2.0))
                     .rounded(Radii::SM)
                     .text_size(px(10.0))
-                    .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                    .bg(gpui::hsla(0.0, 0.0, 0.5, 0.1))
+                    .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0)) // guardrail-allow: chart degraded-card inline color
+                    .bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)) // guardrail-allow: chart degraded-card inline color
                     .child(chip_label)
                     .into_any_element()
             })
@@ -1860,11 +1860,11 @@ impl DataGridPanel {
         // Card frame.
         let card = div()
             .max_w(px(520.0))
-            .p(px(24.0))
+            .p(Spacing::XL)
             .rounded(Radii::LG)
             .border_1()
-            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.1))
-            .bg(gpui::hsla(0.0, 0.0, 0.12, 1.0))
+            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.1)) // guardrail-allow: chart degraded-card inline color
+            .bg(gpui::hsla(0.0, 0.0, 0.12, 1.0)) // guardrail-allow: chart degraded-card inline color
             .flex()
             .flex_col()
             .gap(Spacing::MD)
@@ -1877,7 +1877,7 @@ impl DataGridPanel {
                     .child(
                         Icon::new(AppIcon::CircleAlert)
                             .size(px(20.0))
-                            .color(gpui::hsla(0.097, 1.0, 0.666, 0.8)),
+                            .color(gpui::hsla(0.097, 1.0, 0.666, 0.8)), // guardrail-allow: chart degraded-card accent color
                     )
                     .child(
                         div()
@@ -1890,7 +1890,7 @@ impl DataGridPanel {
             .child(
                 div()
                     .text_size(FontSizes::SM)
-                    .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                    .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0)) // guardrail-allow: chart degraded-card inline color
                     .child(SharedString::from(body)),
             )
             // Shape preview
@@ -1902,7 +1902,7 @@ impl DataGridPanel {
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+                            .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0)) // guardrail-allow: chart degraded-card inline color
                             .child(shape_label),
                     )
                     .child(
@@ -1929,9 +1929,9 @@ impl DataGridPanel {
                             .text_size(FontSizes::SM)
                             .cursor_pointer()
                             .border_1()
-                            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.15))
-                            .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                            .hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)))
+                            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.15)) // guardrail-allow: chart degraded-card ghost button color
+                            .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0)) // guardrail-allow: chart degraded-card ghost button color
+                            .hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1))) // guardrail-allow: chart degraded-card ghost button hover
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
@@ -2046,8 +2046,8 @@ impl DataGridPanel {
             .p(px(20.0))
             .rounded(Radii::LG)
             .border_1()
-            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.08))
-            .bg(gpui::hsla(0.0, 0.0, 0.10, 1.0))
+            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.08)) // guardrail-allow: chart picker overlay card color
+            .bg(gpui::hsla(0.0, 0.0, 0.10, 1.0)) // guardrail-allow: chart picker overlay card color
             .flex()
             .flex_col()
             .gap(Spacing::MD);
@@ -2076,9 +2076,9 @@ impl DataGridPanel {
                                     .rounded(Radii::SM)
                                     .cursor_pointer()
                                     .text_size(FontSizes::SM)
-                                    .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2)))
+                                    .when(is_selected, |d| d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.2))) // guardrail-allow: chart picker axis-col selected color
                                     .when(!is_selected, |d| {
-                                        d.hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1)))
+                                        d.hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.1))) // guardrail-allow: chart picker axis-col hover color
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -2189,8 +2189,8 @@ impl DataGridPanel {
                     )
             })
             .when(!any_y_checked, |d| {
-                d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.3))
-                    .text_color(gpui::hsla(0.0, 0.0, 0.5, 0.7))
+                d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.3)) // guardrail-allow: chart picker apply-btn disabled bg
+                    .text_color(gpui::hsla(0.0, 0.0, 0.5, 0.7)) // guardrail-allow: chart picker apply-btn disabled fg
             })
             .child("Apply");
 
@@ -2230,7 +2230,7 @@ impl DataGridPanel {
     ) -> impl IntoElement {
         div()
             .px(px(14.0))
-            .py(px(12.0))
+            .py(Spacing::MD)
             .border_b_1()
             .border_color(theme.border)
             .child(content)
@@ -2241,9 +2241,9 @@ impl DataGridPanel {
     fn dock_header(label: &str) -> impl IntoElement {
         div()
             .text_size(px(10.0))
-            .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+            .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0)) // guardrail-allow: chart rail dock header inline color
             .font_weight(gpui::FontWeight::BOLD)
-            .mb(px(6.0))
+            .mb(Spacing::XXS)
             .child(SharedString::from(label.to_uppercase()))
     }
 
@@ -2253,14 +2253,14 @@ impl DataGridPanel {
         div()
             .flex()
             .items_start()
-            .gap(px(8.0))
+            .gap(Spacing::SM)
             .py(px(2.0))
             .child(
                 div()
                     .w(px(96.0))
                     .flex_shrink_0()
                     .text_size(px(10.0))
-                    .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+                    .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0)) // guardrail-allow: chart rail dock kv-row inline color
                     .child(SharedString::from(k.to_string())),
             )
             .child(div().flex_1().text_size(px(11.0)).child(v))
@@ -2365,7 +2365,7 @@ impl DataGridPanel {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(Spacing::XS)
                     .child(Self::dock_header("Why this panel"))
                     .child(
                         div()
@@ -2380,7 +2380,7 @@ impl DataGridPanel {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(Spacing::XS)
                     .child(Self::dock_header("Time column"))
                     .children(x_candidates.iter().enumerate().map(
                         |(cand_idx, (col_idx, col_name))| {
@@ -2389,13 +2389,13 @@ impl DataGridPanel {
                             let label = col_name.clone();
                             div()
                                 .id(ElementId::Name(format!("rail-x-col-{}", col_idx).into()))
-                                .px(px(8.0))
+                                .px(Spacing::SM)
                                 .py(px(3.0))
                                 .rounded(Radii::SM)
                                 .cursor_pointer()
                                 .text_size(px(11.0))
                                 .when(is_selected, |d| {
-                                    d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.18))
+                                    d.bg(gpui::hsla(0.6, 0.7, 0.55, 0.18)) // guardrail-allow: chart rail axis-col selected color
                                         .text_color(theme.foreground)
                                 })
                                 .when(!is_selected, |d| {
@@ -2423,7 +2423,7 @@ impl DataGridPanel {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(6.0))
+                    .gap(Spacing::XXS)
                     .child(Self::dock_header("Series"))
                     .children(y_candidates.iter().enumerate().map(
                         |(cand_idx, (col_idx, col_name))| {
@@ -2553,9 +2553,9 @@ impl DataGridPanel {
                             .text_size(FontSizes::XS)
                             .when(any_y_checked, |d| {
                                 d.cursor_pointer()
-                                    .bg(gpui::hsla(0.6, 0.7, 0.55, 1.0))
+                                    .bg(gpui::hsla(0.6, 0.7, 0.55, 1.0)) // guardrail-allow: chart rail apply-btn active color
                                     .text_color(gpui::white())
-                                    .hover(|d| d.bg(gpui::hsla(0.6, 0.7, 0.50, 1.0)))
+                                    .hover(|d| d.bg(gpui::hsla(0.6, 0.7, 0.50, 1.0))) // guardrail-allow: chart rail apply-btn hover color
                                     .on_mouse_down(
                                         gpui::MouseButton::Left,
                                         cx.listener(|this, _, _, cx| {
@@ -2564,8 +2564,8 @@ impl DataGridPanel {
                                     )
                             })
                             .when(!any_y_checked, |d| {
-                                d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.3))
-                                    .text_color(gpui::hsla(0.0, 0.0, 0.5, 0.7))
+                                d.bg(gpui::hsla(0.0, 0.0, 0.5, 0.3)) // guardrail-allow: chart rail apply-btn disabled color
+                                    .text_color(gpui::hsla(0.0, 0.0, 0.5, 0.7)) // guardrail-allow: chart rail apply-btn disabled color
                             })
                             .child("Apply"),
                     ),
@@ -2685,11 +2685,11 @@ impl DataGridPanel {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(Spacing::SM)
                     .child(div().w(px(10.0)).h(px(10.0)).rounded_sm().bg(color))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(FontSizes::XS)
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(theme.foreground)
                             .child(SharedString::from(label)),
@@ -2915,7 +2915,7 @@ impl DataGridPanel {
                                         }))
                                         .child(
                                             Icon::new(Self::result_mode_icon(mode))
-                                                .size(px(12.0))
+                                                .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                                 .color(icon_color),
                                         )
                                         .child(Self::result_mode_label(mode.label(), is_active))
@@ -2940,7 +2940,7 @@ impl DataGridPanel {
                             .gap_1()
                             .child(
                                 Icon::new(AppIcon::Rows3)
-                                    .size(px(12.0))
+                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                     .color(theme.muted_foreground),
                             )
                             .child(Text::caption(format!("{} rows", row_count))),
@@ -2958,7 +2958,7 @@ impl DataGridPanel {
                                 .gap_1()
                                 .child(
                                     Icon::new(arrow_icon)
-                                        .size(px(12.0))
+                                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                         .color(theme.muted_foreground),
                                 )
                                 .child(Text::caption(format!("{} ({})", col_name, mode))),
@@ -3102,7 +3102,7 @@ impl DataGridPanel {
             .when(formats.len() > 1, |d| {
                 d.child(
                     Icon::new(AppIcon::ChevronDown)
-                        .size(px(12.0))
+                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                         .color(theme.muted_foreground),
                 )
             })
