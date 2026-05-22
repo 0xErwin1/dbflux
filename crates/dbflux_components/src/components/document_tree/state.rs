@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 
-use dbflux_components::controls::{InputEvent, InputState};
+use crate::controls::{InputEvent, InputState};
 use dbflux_core::{QueryResult, Value};
 use gpui::{
     AppContext, Context, EventEmitter, FocusHandle, Focusable, UniformListScrollHandle, Window,

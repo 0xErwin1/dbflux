@@ -24,12 +24,10 @@
 //! 3. Call `state.dispatch()` from `dispatch_command` when toolbar is active.
 //! 4. In render, build the element with `FilterBar::new(&state).render(cx)`.
 
-use dbflux_components::primitives::Icon;
-
-use crate::ui::components::dropdown::Dropdown;
-use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::controls::InputState;
+use crate::controls::{Dropdown, InputState};
+use crate::icons::AppIcon;
+use crate::primitives::Icon;
+use crate::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -209,9 +207,7 @@ impl FilterBarState {
     /// Returns the `Entity<Dropdown>` for the currently focused item, if it is
     /// a `Dropdown` variant. Used by the document to route keyboard commands
     /// (j/k, Enter, Escape) into the open dropdown.
-    pub fn focused_dropdown_entity(
-        &self,
-    ) -> Option<Entity<crate::ui::components::dropdown::Dropdown>> {
+    pub fn focused_dropdown_entity(&self) -> Option<Entity<crate::controls::Dropdown>> {
         match self.items.get(self.focused_index) {
             Some(FilterBarItem::Dropdown { dropdown, .. }) => Some(dropdown.clone()),
             _ => None,
@@ -288,11 +284,11 @@ impl FilterBarState {
     /// after `Exit`.
     pub fn dispatch(
         &mut self,
-        cmd: crate::keymap::Command,
+        cmd: dbflux_core::keymap_types::Command,
         window: &mut Window,
         cx: &mut App,
     ) -> FilterBarDispatch {
-        use crate::keymap::Command;
+        use dbflux_core::keymap_types::Command;
 
         match cmd {
             Command::ColumnLeft | Command::FocusLeft => {
@@ -378,8 +374,8 @@ fn render_item(
     theme: &gpui_component::theme::Theme,
     _cx: &App,
 ) -> AnyElement {
-    use dbflux_components::controls::Input;
-    use dbflux_components::primitives::Text;
+    use crate::controls::Input;
+    use crate::primitives::Text;
 
     match item {
         FilterBarItem::Input { label, input } => div()

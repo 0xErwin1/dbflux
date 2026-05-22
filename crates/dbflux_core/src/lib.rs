@@ -8,6 +8,7 @@ mod core;
 mod data;
 mod driver;
 mod facade;
+pub mod keymap_types;
 pub mod observability;
 pub mod pipeline;
 mod query;

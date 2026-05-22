@@ -1,14 +1,14 @@
 use gpui::{AssetSource, SharedString};
 use std::borrow::Cow;
 
-use crate::ui::icons::ALL_ICONS;
+use crate::ui::icons::{ALL_ICONS, embedded_bytes};
 
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         if let Some(icon) = ALL_ICONS.iter().find(|icon| icon.path() == path) {
-            return Ok(Some(Cow::Borrowed(icon.embedded_bytes())));
+            return Ok(Some(Cow::Borrowed(embedded_bytes(*icon))));
         }
 
         // gpui_component icons resolve via paths like "icons/<file>.svg" without
@@ -20,7 +20,7 @@ impl AssetSource for Assets {
         {
             let aliased = format!("icons/ui/{rest}");
             if let Some(icon) = ALL_ICONS.iter().find(|icon| icon.path() == aliased) {
-                return Ok(Some(Cow::Borrowed(icon.embedded_bytes())));
+                return Ok(Some(Cow::Borrowed(embedded_bytes(*icon))));
             }
         }
 
