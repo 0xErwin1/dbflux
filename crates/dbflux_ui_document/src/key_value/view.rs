@@ -16,8 +16,8 @@
 use super::KeyValueDocument;
 use super::context_menu::{KvContextMenu, KvMenuAction};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -240,7 +240,8 @@ pub(super) fn render_kv_context_menu(
                 let chord = key_chord_from_gpui(&event.keystroke);
                 let keymap = default_keymap();
 
-                if let Some(cmd) = keymap.resolve(dbflux_app::keymap::ContextId::ContextMenu, &chord)
+                if let Some(cmd) =
+                    keymap.resolve(dbflux_app::keymap::ContextId::ContextMenu, &chord)
                     && this.dispatch_menu_command(cmd, window, cx)
                 {
                     cx.stop_propagation();

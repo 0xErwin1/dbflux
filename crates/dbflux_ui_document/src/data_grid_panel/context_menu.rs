@@ -4,19 +4,19 @@ use super::{
     PendingDocumentPreview, PendingModalOpen, PendingToast, SqlGenerateKind, TableContextMenu,
 };
 use dbflux_app::keymap::{Command, ContextId};
-use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_components::chart::detect_chart_columns;
 use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
 use dbflux_components::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
-use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::chart::detect_chart_columns;
 use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
     RowIdentity, RowInsert, RowPatch, Value,
 };
 use dbflux_export::ExportFormat;
+use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
 use gpui_component::ActiveTheme;
@@ -2689,7 +2689,9 @@ impl DataGridPanel {
                     r.iter()
                         .map(|val| {
                             dbflux_components::components::data_table::clipboard::format_cell(
-                                &dbflux_components::components::data_table::model::CellValue::from(val),
+                                &dbflux_components::components::data_table::model::CellValue::from(
+                                    val,
+                                ),
                             )
                         })
                         .collect()
@@ -2728,7 +2730,8 @@ impl DataGridPanel {
 
         table_state.update(cx, |state, cx| {
             if let Some(coord) = state.selection().active {
-                let cell_value = dbflux_components::components::data_table::model::CellValue::text(&text);
+                let cell_value =
+                    dbflux_components::components::data_table::model::CellValue::text(&text);
                 state
                     .edit_buffer_mut()
                     .set_cell(coord.row, coord.col, cell_value);
@@ -2746,7 +2749,8 @@ impl DataGridPanel {
     ) {
         if let Some(table_state) = &self.table_state {
             table_state.update(cx, |state, cx| {
-                let coord = dbflux_components::components::data_table::selection::CellCoord::new(row, col);
+                let coord =
+                    dbflux_components::components::data_table::selection::CellCoord::new(row, col);
                 state.start_editing(coord, window, cx);
             });
         }
@@ -2882,7 +2886,8 @@ impl DataGridPanel {
         table_state.update(cx, |state, cx| {
             let buffer = state.edit_buffer_mut();
             let visual_order = buffer.compute_visual_order();
-            let cell_value = dbflux_components::components::data_table::model::CellValue::text(value);
+            let cell_value =
+                dbflux_components::components::data_table::model::CellValue::text(value);
 
             match visual_order.get(row).copied() {
                 Some(VisualRowSource::Base(base_idx)) => {
@@ -3161,22 +3166,25 @@ impl DataGridPanel {
             }
         };
 
-        let new_row: Vec<dbflux_components::components::data_table::model::CellValue> = if is_collection {
-            self.result
-                .columns
-                .iter()
-                .map(|col| {
-                    if col.is_primary_key {
-                        let new_id = self.generate_new_id_for_column(&col.name);
-                        dbflux_components::components::data_table::model::CellValue::text(&new_id)
-                    } else {
-                        dbflux_components::components::data_table::model::CellValue::null()
-                    }
-                })
-                .collect()
-        } else {
-            let column_defaults = self.get_all_column_defaults(cx);
-            self.result
+        let new_row: Vec<dbflux_components::components::data_table::model::CellValue> =
+            if is_collection {
+                self.result
+                    .columns
+                    .iter()
+                    .map(|col| {
+                        if col.is_primary_key {
+                            let new_id = self.generate_new_id_for_column(&col.name);
+                            dbflux_components::components::data_table::model::CellValue::text(
+                                &new_id,
+                            )
+                        } else {
+                            dbflux_components::components::data_table::model::CellValue::null()
+                        }
+                    })
+                    .collect()
+            } else {
+                let column_defaults = self.get_all_column_defaults(cx);
+                self.result
                 .columns
                 .iter()
                 .enumerate()
@@ -3190,7 +3198,7 @@ impl DataGridPanel {
                     }
                 })
                 .collect()
-        };
+            };
 
         table_state.update(cx, |state, cx| {
             let buffer = state.edit_buffer_mut();

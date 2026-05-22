@@ -10,30 +10,32 @@ use super::result_view::{
     ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
 };
 use super::task_runner::DocumentTaskRunner;
-use dbflux_ui_base::AppStateEntity;
-use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_components::SqlPreviewContext;
+use dbflux_components::chart::{
+    ChartDetection, ChartView, DataPointRef, SourceRowRef, detect_chart_columns,
+};
 use dbflux_components::components::data_table::{
     ContextMenuAction, DataTable, DataTableEvent, DataTableState, SortState as TableSortState,
     TableModel,
 };
-use dbflux_components::components::document_tree::{DocumentTree, DocumentTreeEvent, DocumentTreeState};
+use dbflux_components::components::document_tree::{
+    DocumentTree, DocumentTreeEvent, DocumentTreeState,
+};
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
-use dbflux_ui_base::toast::PendingToast;
+use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::modals::cell_editor::{
     CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
 };
 use dbflux_components::modals::document_preview::{
     DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
-use dbflux_components::SqlPreviewContext;
-use dbflux_components::chart::{
-    ChartDetection, ChartView, DataPointRef, SourceRowRef, detect_chart_columns,
-};
-use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     CollectionRef, DatabaseCategory, OrderByColumn, Pagination, QueryResult, RefreshPolicy,
     SortDirection, TableRef, Value,
 };
+use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_ui_base::toast::PendingToast;
 use gpui::*;
 use gpui_component::Sizable;
 use std::sync::Arc;
@@ -2061,11 +2063,11 @@ impl EventEmitter<DataGridEvent> for DataGridPanel {}
 #[cfg(test)]
 mod tests {
     use super::{DataGridPanel, DataSource};
-    use dbflux_ui_base::AppStateEntity;
-    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use dbflux_components::theme;
     use dbflux_core::{CollectionRef, ColumnKind, ColumnMeta, Pagination, QueryResult, TableRef};
     use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use gpui::{AppContext, TestAppContext};
     use gpui_component::Root;
     use std::cell::RefCell;

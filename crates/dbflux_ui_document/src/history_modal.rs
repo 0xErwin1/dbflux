@@ -2,13 +2,13 @@ use dbflux_app::keymap::ContextId;
 use dbflux_components::actions::{
     Cancel, Delete, Execute, FocusSearch, Rename, SaveQuery, SelectNext, SelectPrev, ToggleFavorite,
 };
-use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::helpers::text_color_for_active;
+use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_modal_container};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{HistoryEntry, SavedQuery};
+use dbflux_ui_base::toast::{Toast, now_hms};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -468,24 +468,18 @@ impl HistoryModal {
             .on_action(cx.listener(|this, _: &Delete, _, cx| {
                 this.delete_selected(cx);
             }))
-            .on_action(
-                cx.listener(|this, _: &ToggleFavorite, _, cx| {
-                    this.toggle_favorite_selected(cx);
-                }),
-            )
+            .on_action(cx.listener(|this, _: &ToggleFavorite, _, cx| {
+                this.toggle_favorite_selected(cx);
+            }))
             .on_action(cx.listener(|this, _: &Rename, window, cx| {
                 this.start_rename_selected(window, cx);
             }))
-            .on_action(
-                cx.listener(|this, _: &FocusSearch, window, cx| {
-                    this.focus_search(window, cx);
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &SaveQuery, window, cx| {
-                    this.save_selected_history(window, cx);
-                }),
-            )
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
+                this.focus_search(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SaveQuery, window, cx| {
+                this.save_selected_history(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &Cancel, _, cx| {
                 this.close(cx);
             }))
@@ -881,15 +875,12 @@ mod source_contract_tests {
     use std::fs;
 
     fn history_modal_source() -> String {
-        fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/history_modal.rs"
-        ))
-        .unwrap_or_else(|error| panic!("failed to read history_modal.rs: {error}"))
-        .split("#[cfg(test)]")
-        .next()
-        .expect("history_modal.rs should contain production code before tests")
-        .to_string()
+        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/history_modal.rs"))
+            .unwrap_or_else(|error| panic!("failed to read history_modal.rs: {error}"))
+            .split("#[cfg(test)]")
+            .next()
+            .expect("history_modal.rs should contain production code before tests")
+            .to_string()
     }
 
     fn history_modal_render_source(function_name: &str) -> String {
