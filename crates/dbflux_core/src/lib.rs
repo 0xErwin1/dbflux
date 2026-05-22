@@ -6,6 +6,7 @@ mod config;
 mod connection;
 mod core;
 mod data;
+pub mod document_id;
 mod driver;
 mod facade;
 pub mod keymap_types;
@@ -18,6 +19,8 @@ mod storage;
 pub mod values;
 
 pub use access::{AccessHandle, AccessKind, AccessManager};
+
+pub use document_id::DocumentId;
 
 pub use auth::{
     AuthFormDef, AuthProfile, AuthProfileSummary, AuthProvider, AuthSession, AuthSessionState,
