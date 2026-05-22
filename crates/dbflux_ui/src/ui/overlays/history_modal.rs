@@ -41,6 +41,16 @@ enum ModalMode {
     Save { sql: String },
 }
 
+// Type aliases for the callback closure signatures used in HistoryModalCallbacks.
+// These keep the struct field types short enough to satisfy the type_complexity lint.
+type HistoryProviderFn = Box<dyn Fn(&App) -> Vec<HistoryEntry>>;
+type SavedProviderFn = Box<dyn Fn(&App) -> Vec<SavedQuery>>;
+type OnSaveFn = Box<dyn Fn(SavedQuery, &mut App)>;
+type OnRenameFn = Box<dyn Fn(Uuid, String, String, &mut App)>;
+type OnDeleteFn = Box<dyn Fn(Uuid, &mut App)>;
+type OnToggleFavoriteFn = Box<dyn Fn(Uuid, &mut App)>;
+type OnMarkUsedFn = Box<dyn Fn(Uuid, &mut App)>;
+
 /// Injected callbacks that give `HistoryModal` read and write access to the
 /// owner's `AppStateEntity` without holding a direct entity reference.
 ///
@@ -48,19 +58,19 @@ enum ModalMode {
 /// `dbflux_ui_document` in Step 3b without dragging the full app-state seam.
 pub struct HistoryModalCallbacks {
     /// Returns a snapshot of the current query history.
-    pub history_provider: Box<dyn Fn(&App) -> Vec<HistoryEntry>>,
+    pub history_provider: HistoryProviderFn,
     /// Returns a snapshot of the current saved queries.
-    pub saved_provider: Box<dyn Fn(&App) -> Vec<SavedQuery>>,
+    pub saved_provider: SavedProviderFn,
     /// Persists a new saved query.
-    pub on_save: Box<dyn Fn(SavedQuery, &mut App)>,
+    pub on_save: OnSaveFn,
     /// Renames a saved query (id, new_name, sql).
-    pub on_rename: Box<dyn Fn(Uuid, String, String, &mut App)>,
+    pub on_rename: OnRenameFn,
     /// Deletes a saved query by id.
-    pub on_delete: Box<dyn Fn(Uuid, &mut App)>,
+    pub on_delete: OnDeleteFn,
     /// Toggles the favorite flag on a saved query by id.
-    pub on_toggle_favorite: Box<dyn Fn(Uuid, &mut App)>,
+    pub on_toggle_favorite: OnToggleFavoriteFn,
     /// Records that a saved query was used (updates last-used timestamp).
-    pub on_mark_used: Box<dyn Fn(Uuid, &mut App)>,
+    pub on_mark_used: OnMarkUsedFn,
 }
 
 pub struct HistoryModal {

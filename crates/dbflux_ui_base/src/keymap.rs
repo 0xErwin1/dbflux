@@ -4,8 +4,8 @@
 //! because they require `dbflux_app::keymap` types, which `dbflux_components`
 //! intentionally does not depend on.
 
-use dbflux_app::keymap::{KeyChord, KeymapStack, Modifiers};
 use dbflux_app::keymap::{Command, ContextId, KeymapLayer};
+use dbflux_app::keymap::{KeyChord, KeymapStack, Modifiers};
 use gpui::Keystroke;
 use std::sync::LazyLock;
 
