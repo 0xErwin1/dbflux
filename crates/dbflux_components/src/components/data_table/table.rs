@@ -814,7 +814,7 @@ impl DataTable {
                             .right_0()
                             .top_0()
                             .bottom_0()
-                            .w(px(6.0))
+                            .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
                             .cursor_col_resize()
                             .hover(|s| s.bg(theme.primary.opacity(0.3)))
                             .on_mouse_down(

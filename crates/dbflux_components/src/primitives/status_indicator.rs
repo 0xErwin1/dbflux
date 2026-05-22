@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, Hsla, SharedString, Window, div, px};
+use gpui::{App, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::tokens::{FontSizes, Spacing};
@@ -53,7 +53,7 @@ impl RenderOnce for StatusIndicator {
             .flex()
             .items_center()
             .gap(Spacing::XS)
-            .child(div().size(px(8.0)).rounded_full().bg(color));
+            .child(div().size(Spacing::SM).rounded_full().bg(color));
 
         if let Some(label) = self.label {
             el = el.child(

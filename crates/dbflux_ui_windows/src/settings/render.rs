@@ -1,8 +1,8 @@
 use dbflux_components::components::tree_nav::{self, FlatRow};
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Icon;
+use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::theme::ghost_border_color;
-use dbflux_components::tokens::BannerColors;
 use dbflux_components::tokens::{Heights, Radii};
 use dbflux_components::typography::{Body, FieldLabel, SidebarGroupLabel};
 use dbflux_ui_base::platform;
@@ -195,7 +195,7 @@ impl SettingsCoordinator {
                 transparent_black()
             })
             .when(show_active, |div| {
-                div.bg(BannerColors::warning_bg(theme))
+                div.bg(SemBannerColors::for_current(cx).warning_bg)
                     .border_l_2()
                     .border_color(theme.primary)
             })

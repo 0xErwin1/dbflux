@@ -4,10 +4,10 @@
 //! `StatusDot` only renders a static colored circle.
 
 use gpui::prelude::*;
-use gpui::{App, Window, div, px};
+use gpui::{App, Window, div};
 use gpui_component::ActiveTheme;
 
-use crate::tokens::{Radii, StatusDotPalette};
+use crate::tokens::{Radii, Spacing, StatusDotPalette};
 
 /// Semantic variant controlling the dot color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +49,7 @@ impl RenderOnce for StatusDot {
             StatusDotVariant::Neutral => StatusDotPalette::neutral(theme),
         };
 
-        div().size(px(8.0)).rounded(Radii::FULL).bg(color)
+        div().size(Spacing::SM).rounded(Radii::FULL).bg(color)
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::controls::{GpuiInput as Input, InputState};
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
-use crate::tokens::{FontSizes, Spacing};
+use crate::tokens::{FontSizes, Heights, Spacing};
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
@@ -123,7 +123,11 @@ impl JsonEditorView {
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
-                    .child(Icon::new(AppIcon::CircleAlert).size(px(16.0)).danger())
+                    .child(
+                        Icon::new(AppIcon::CircleAlert)
+                            .size(Heights::ICON_SM)
+                            .danger(),
+                    )
                     .child(Text::caption(error_msg).font_size(FontSizes::XS).danger()),
             );
         }
