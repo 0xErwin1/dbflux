@@ -15,6 +15,7 @@
 
 pub mod axis;
 pub mod axis_bar;
+pub mod data_source;
 pub mod decimate;
 pub mod detect;
 pub mod engine;
@@ -24,6 +25,7 @@ pub mod spec;
 pub mod stats;
 
 pub use axis_bar::{AxisPill, axis_bar_element};
+pub use data_source::{ChartDataSource, ChartSourceError, TimeWindow, resolve_source};
 pub use detect::{ChartDetection, detect_chart_columns};
 pub use engine::{
     CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, CHART_PALETTE, ChartBuildError, ChartView,
