@@ -149,6 +149,8 @@ impl InfluxConnection {
                     ExecutionSourceContext::CollectionWindow { targets, .. } => {
                         targets.first().cloned()
                     }
+                    // MetricQuery is never produced by InfluxDB; return neutral default.
+                    _ => None,
                 }
             })
     }
@@ -169,6 +171,8 @@ impl InfluxConnection {
                     ExecutionSourceContext::CollectionWindow { query_mode, .. } => {
                         query_mode.as_deref()
                     }
+                    // MetricQuery is never produced by InfluxDB; return neutral default.
+                    _ => None,
                 }
             });
 
@@ -204,6 +208,8 @@ impl InfluxConnection {
                     ExecutionSourceContext::CollectionWindow {
                         start_ms, end_ms, ..
                     } => (Some(*start_ms), Some(*end_ms)),
+                    // MetricQuery is never produced by InfluxDB; return neutral default.
+                    _ => (None, None),
                 }
             })
             .unwrap_or((None, None));

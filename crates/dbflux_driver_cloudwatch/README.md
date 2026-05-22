@@ -4,7 +4,7 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 
 ## Features
 
-- Log-streaming driver classified as `DatabaseCategory::LogStream`; `deployment_class` is `CloudManaged`. The only declared capability is `AUTHENTICATION`.
+- Log-streaming driver classified as `DatabaseCategory::LogStream`; `deployment_class` is `CloudManaged`. The declared capabilities are `AUTHENTICATION` and `METRIC_SERIES`.
 - AWS connection configuration via region, named profile, and optional endpoint override, aligned with the DynamoDB AWS connection flow.
 - Query execution through `StartQuery` + polling `GetQueryResults` (poll interval 500 ms, up to 120 attempts), with an editor-managed source context that supplies the target log groups and time range.
 - Three query syntaxes selectable from the source-context "Syntax" dropdown:
@@ -17,6 +17,7 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 - Log streams are surfaced as paginated collection children (`collection_children` over `fetch_log_stream_page`) and open as event streams (`CollectionPresentation::EventStream`).
 - Event-stream browsing (`browse_event_stream` / `EventStreamTarget`) backed by `FilterLogEvents`, with a default 24-hour browse window and support for filter pattern, stream-name prefix, explicit stream names, and a most-recent toggle.
 - Insights column names are classified into semantic `ColumnKind`s (e.g. `@timestamp`, `@ingestionTime` recognized as timestamps) for chart auto-detection.
+- CloudWatch Metrics via `GetMetricData`: executes a single `MetricDataQuery` per request, maps the response to a two-column (timestamp, value) `QueryResult` ordered ascending by timestamp. Timestamps from AWS (second-precision) are converted to milliseconds. Multi-metric pivot to wide format is supported when multiple `MetricDataResult` entries are returned.
 
 ## Limitations
 
@@ -25,3 +26,5 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 - Editor syntax highlighting remains generic (`query_language` is reported as `Sql` at the metadata level); mode selection drives execution semantics and completion keywords rather than per-mode highlighting.
 - Read-only: no mutation, DDL, transaction, or pagination capabilities are declared (`query`, `mutation`, `ddl`, `transactions`, `limits` are all `None`); `schema_features` is empty.
 - No SSL form (TLS handled by the AWS SDK transport).
+- Metrics execution supports a single `MetricDataQuery` per request in this release (W2); a `ListMetrics`-backed picker for namespace/metric/dimension selection is deferred to a follow-up.
+- Live integration tests for metrics (`live_execute_cloudwatch_metric`) require real AWS credentials and are `#[ignore]`d by default. LocalStack Community does not support the CloudWatch Metrics API.

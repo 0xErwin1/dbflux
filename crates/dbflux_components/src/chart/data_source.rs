@@ -56,7 +56,7 @@ impl std::fmt::Display for ChartSourceError {
         match self {
             ChartSourceError::EmptyQuery => write!(f, "chart query is empty"),
             ChartSourceError::WindowRequired => {
-                write!(f, "a collection source requires a time window")
+                write!(f, "this chart source requires a time window")
             }
             ChartSourceError::Source(msg) => write!(f, "chart source error: {msg}"),
         }
@@ -238,6 +238,58 @@ impl ChartDataSource for CollectionSource {
 }
 
 // ---------------------------------------------------------------------------
+// MetricSource
+// ---------------------------------------------------------------------------
+
+/// A CloudWatch metrics chart source.
+///
+/// Holds the five user-visible parameters that identify a CloudWatch metric
+/// series. The time window (`start_ms`, `end_ms`) is NOT stored here — it is
+/// supplied by the chart engine at `build_plan` time and embedded into the
+/// resulting `MetricQuery` execution context.
+///
+/// A time window is **required**: `GetMetricData` mandates explicit `StartTime`
+/// and `EndTime`, so there is no representation for "metrics without window".
+/// `build_plan(None)` returns `Err(ChartSourceError::WindowRequired)`.
+///
+/// `MetricSource` is constructed directly by the UI entry point (not via
+/// `SavedChartSource`) — same pattern as `AuditSource`.
+pub struct MetricSource {
+    pub namespace: String,
+    pub metric_name: String,
+    /// Ordered (name, value) dimension pairs. Empty for scalar metrics.
+    pub dimensions: Vec<(String, String)>,
+    /// Aggregation period in seconds. Must be > 0; validated by the driver.
+    pub period_s: u32,
+    /// AWS statistic name (e.g. "Average", "Sum", "p99"). Free-form string.
+    pub statistic: String,
+}
+
+impl ChartDataSource for MetricSource {
+    fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
+        // GetMetricData requires explicit StartTime/EndTime — window is mandatory.
+        let w = window.ok_or(ChartSourceError::WindowRequired)?;
+
+        let exec_ctx = ExecutionContext {
+            source: Some(ExecutionSourceContext::MetricQuery {
+                namespace: self.namespace.clone(),
+                metric_name: self.metric_name.clone(),
+                dimensions: self.dimensions.clone(),
+                period_s: self.period_s,
+                statistic: self.statistic.clone(),
+                start_ms: w.start_ms,
+                end_ms: w.end_ms,
+            }),
+            ..ExecutionContext::default()
+        };
+
+        let request = QueryRequest::new(String::new()).with_execution_context(Some(exec_ctx));
+
+        Ok(ChartDataPlan::Driver(request))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AuditSource
 // ---------------------------------------------------------------------------
 
@@ -312,6 +364,19 @@ pub fn resolve_source(source: &SavedChartSource) -> Box<dyn ChartDataSource> {
 mod tests {
     use super::*;
 
+    // --- Display tests ---
+
+    /// ChartSourceError::WindowRequired must display a source-agnostic message
+    /// (not "collection source") so it reads correctly for MetricSource too.
+    #[test]
+    fn window_required_display_is_source_agnostic() {
+        let msg = format!("{}", ChartSourceError::WindowRequired);
+        assert_eq!(
+            msg, "this chart source requires a time window",
+            "WindowRequired Display must be source-agnostic"
+        );
+    }
+
     // --- QuerySource tests ---
 
     /// S-01 / R-04: empty query string must return EmptyQuery error.
@@ -375,6 +440,7 @@ mod tests {
                 assert!(targets.is_empty(), "QuerySource targets must be empty");
                 assert!(query_mode.is_none(), "query_mode must be None");
             }
+            other => panic!("expected CollectionWindow source context, got: {other:?}"),
         }
     }
 
@@ -473,6 +539,7 @@ mod tests {
                     "targets must contain the collection name"
                 );
             }
+            other => panic!("expected CollectionWindow source context, got: {other:?}"),
         }
     }
 
@@ -520,6 +587,7 @@ mod tests {
                 assert_eq!(*end_ms, 1_700_003_600_000, "end_ms must be forwarded");
                 assert!(query_mode.is_none(), "query_mode must be None");
             }
+            other => panic!("expected CollectionWindow source context, got: {other:?}"),
         }
     }
 
@@ -645,6 +713,81 @@ mod tests {
 
         assert_eq!(returned_spec.start_ms, Some(5_000));
         assert_eq!(returned_spec.end_ms, Some(10_000));
+    }
+
+    // --- MetricSource tests (T-1, T-2) ---
+
+    /// T-1: MetricSource::build_plan with a window must return Ok(ChartDataPlan::Driver)
+    /// carrying a MetricQuery execution context with the correct field values and the
+    /// window's start_ms/end_ms.
+    #[test]
+    fn metric_source_build_plan_with_window() {
+        let src = MetricSource {
+            namespace: "AWS/Lambda".to_string(),
+            metric_name: "Invocations".to_string(),
+            dimensions: vec![],
+            period_s: 60,
+            statistic: "Sum".to_string(),
+        };
+
+        let window = TimeWindow {
+            start_ms: 1_000_000,
+            end_ms: 2_000_000,
+        };
+
+        let plan = src
+            .build_plan(Some(window))
+            .expect("build_plan must succeed with a window");
+
+        let ChartDataPlan::Driver(request) = plan else {
+            panic!("expected ChartDataPlan::Driver, got LocalAudit");
+        };
+
+        let ctx = request
+            .execution_context
+            .as_ref()
+            .expect("request must carry an execution context");
+
+        match ctx.source.as_ref().expect("source must be Some") {
+            ExecutionSourceContext::MetricQuery {
+                namespace,
+                metric_name,
+                dimensions,
+                period_s,
+                statistic,
+                start_ms,
+                end_ms,
+            } => {
+                assert_eq!(namespace, "AWS/Lambda");
+                assert_eq!(metric_name, "Invocations");
+                assert!(dimensions.is_empty());
+                assert_eq!(*period_s, 60);
+                assert_eq!(statistic, "Sum");
+                assert_eq!(*start_ms, 1_000_000);
+                assert_eq!(*end_ms, 2_000_000);
+            }
+            other => panic!("expected MetricQuery source context, got: {other:?}"),
+        }
+    }
+
+    /// T-2: MetricSource::build_plan without a window must return Err(WindowRequired).
+    #[test]
+    fn metric_source_build_plan_no_window() {
+        let src = MetricSource {
+            namespace: "AWS/Lambda".to_string(),
+            metric_name: "Invocations".to_string(),
+            dimensions: vec![],
+            period_s: 60,
+            statistic: "Sum".to_string(),
+        };
+
+        let result = src.build_plan(None);
+
+        assert!(
+            matches!(result, Err(ChartSourceError::WindowRequired)),
+            "expected WindowRequired when no window is supplied, got: {:?}",
+            result
+        );
     }
 
     // --- Purity guard ---
