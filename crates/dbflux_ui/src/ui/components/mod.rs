@@ -9,7 +9,7 @@ pub mod json_editor_view;
 pub mod modal_frame;
 pub mod multi_select;
 pub mod toast;
-pub mod tree_nav;
+pub use dbflux_components::components::tree_nav;
 pub mod typography;
 pub mod value_source_selector;
 
