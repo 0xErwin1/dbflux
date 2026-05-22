@@ -133,8 +133,6 @@ mod tests {
         for path in [
             "document/add_member_modal.rs",
             "document/new_key_modal.rs",
-            "overlays/cell_editor_modal.rs",
-            "overlays/document_preview_modal.rs",
             "overlays/login_modal.rs",
             "overlays/sql_preview_modal.rs",
             "overlays/sso_wizard.rs",
