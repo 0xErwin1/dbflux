@@ -462,7 +462,7 @@ impl Render for super::KeyValueDocument {
                         .gap(Spacing::SM)
                         .child(
                             Icon::new(AppIcon::Loader)
-                                .size(px(12.0))
+                                .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                 .color(theme.muted_foreground),
                         )
                         .child(Text::muted("Loading…"))
@@ -571,10 +571,10 @@ impl Render for super::KeyValueDocument {
                                     )
                                     .child(Text::body(refresh_label)),
                             )
-                            .child(div().w(px(1.0)).h_full().bg(theme.input))
+                            .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
                             .child(
                                 div()
-                                    .w(px(28.0))
+                                    .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
                                     .h_full()
                                     .child(self.refresh_dropdown.clone()),
                             ),
@@ -603,12 +603,12 @@ impl Render for super::KeyValueDocument {
                             .gap_1()
                             .child(if self.runner.is_primary_active() {
                                 Icon::new(AppIcon::Loader)
-                                    .size(px(12.0))
+                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                     .color(theme.muted_foreground)
                                     .into_any_element()
                             } else {
                                 Icon::new(AppIcon::Rows3)
-                                    .size(px(12.0))
+                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                     .muted()
                                     .into_any_element()
                             })
@@ -640,13 +640,16 @@ impl Render for super::KeyValueDocument {
                                             }))
                                     })
                                     .when(!can_prev, |d| d.opacity(0.5))
-                                    .child(Icon::new(AppIcon::ChevronLeft).size(px(12.0)).color(
-                                        if can_prev {
+                                    .child({
+                                        let icon_color = if can_prev {
                                             theme.foreground
                                         } else {
                                             theme.muted_foreground
-                                        },
-                                    ))
+                                        };
+                                        Icon::new(AppIcon::ChevronLeft)
+                                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                            .color(icon_color)
+                                    })
                                     .child(Text::caption("Prev").color(if can_prev {
                                         theme.foreground
                                     } else {
@@ -676,13 +679,16 @@ impl Render for super::KeyValueDocument {
                                     } else {
                                         theme.muted_foreground
                                     }))
-                                    .child(Icon::new(AppIcon::ChevronRight).size(px(12.0)).color(
-                                        if can_next {
+                                    .child({
+                                        let icon_color = if can_next {
                                             theme.foreground
                                         } else {
                                             theme.muted_foreground
-                                        },
-                                    )),
+                                        };
+                                        Icon::new(AppIcon::ChevronRight)
+                                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                            .color(icon_color)
+                                    }),
                             ),
                     )
             })

@@ -103,7 +103,7 @@ pub(super) fn render_delete_confirm_modal(
                                     this.pending_member_delete = None;
                                     cx.notify();
                                 }))
-                                .child(Icon::new(AppIcon::X).size(px(16.0)).muted())
+                                .child(Icon::new(AppIcon::X).size(Heights::ICON_SM).muted())
                                 .child(Text::caption("Cancel")),
                         )
                         .child(
@@ -127,7 +127,7 @@ pub(super) fn render_delete_confirm_modal(
                                 }))
                                 .child(
                                     Icon::new(AppIcon::Delete)
-                                        .size(px(16.0))
+                                        .size(Heights::ICON_SM)
                                         .color(theme.background),
                                 )
                                 .child(Text::caption("Delete").color(theme.background)),
@@ -213,7 +213,7 @@ pub(super) fn render_kv_context_menu(
                         this.execute_menu_action(action, target, window, cx);
                     }
                 }))
-                .child(Icon::new(icon).size(px(16.0)).color(if is_danger {
+                .child(Icon::new(icon).size(Heights::ICON_SM).color(if is_danger {
                     theme.danger
                 } else if is_selected {
                     theme.accent_foreground

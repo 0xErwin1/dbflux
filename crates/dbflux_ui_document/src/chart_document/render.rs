@@ -373,7 +373,7 @@ impl ChartDocument {
             .flex()
             .flex_row()
             .items_center()
-            .h(px(28.0))
+            .h(Heights::ROW)
             .px(Spacing::SM)
             .border_b_1()
             .border_color(theme.border)
