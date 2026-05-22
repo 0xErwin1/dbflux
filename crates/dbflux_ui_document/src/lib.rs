@@ -12,6 +12,7 @@ mod data_grid_panel;
 mod data_view;
 pub mod data_view_trait;
 pub mod dedup;
+mod style_guardrails;
 
 #[cfg(feature = "mcp")]
 mod governance;

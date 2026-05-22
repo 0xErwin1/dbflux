@@ -178,7 +178,7 @@ impl AuditDocument {
                     .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
                     // Icon or indent to keep label alignment consistent.
                     .when_some(icon, |d, icon| {
-                        d.child(Icon::new(icon).size(px(16.0)).color(icon_color))
+                        d.child(Icon::new(icon).size(Heights::ICON_SM).color(icon_color))
                     })
                     .when(icon.is_none(), |d| d.pl(px(20.0)))
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -474,7 +474,7 @@ impl AuditDocument {
                     }))
                     .child(
                         Icon::new(AppIcon::ChartSpline)
-                            .size(px(12.0))
+                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                             .color(theme.foreground),
                     )
                     .child(Text::caption(toggle_label));
@@ -685,7 +685,7 @@ impl AuditDocument {
                         } else {
                             AppIcon::ChevronRight
                         })
-                        .size(px(12.0))
+                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                         .muted(),
                     )
                     .child(Text::code(timestamp))
@@ -1034,9 +1034,13 @@ impl AuditDocument {
             .on_click(cx.listener(|this, _, _, cx| {
                 this.toggle_export_menu(cx);
             }))
-            .child(Icon::new(AppIcon::FileSpreadsheet).size(px(16.0)).muted())
+            .child(
+                Icon::new(AppIcon::FileSpreadsheet)
+                    .size(Heights::ICON_SM)
+                    .muted(),
+            )
             .child(Text::caption("Export"))
-            .child(Icon::new(AppIcon::ChevronDown).size(px(12.0)).muted())
+            .child(Icon::new(AppIcon::ChevronDown).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
             .when(menu_open, |trigger| {
                 trigger.child(self.render_export_menu(theme, cx))
             })
@@ -1117,7 +1121,7 @@ impl AuditDocument {
                 .flex()
                 .items_center()
                 .gap_1()
-                .child(Icon::new(AppIcon::Rows3).size(px(12.0)).muted())
+                .child(Icon::new(AppIcon::Rows3).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
                 .child(Text::caption(row_count_label))
         };
 
@@ -1207,7 +1211,7 @@ impl AuditDocument {
                             .gap(Spacing::SM)
                             .child(
                                 Icon::new(AppIcon::Loader)
-                                    .size(px(12.0))
+                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                     .color(theme.muted_foreground),
                             )
                             .child(Text::dim("Loading…")),

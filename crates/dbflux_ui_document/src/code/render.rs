@@ -137,7 +137,7 @@ impl CodeDocument {
                         .child(Text::caption(refresh_label)),
                     div()
                         .id("sql-refresh-control")
-                        .w(px(28.0))
+                        .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
                         .h_full()
                         .child(self.refresh_dropdown.clone()),
                     cx,
@@ -465,7 +465,7 @@ impl CodeDocument {
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.close_result_tab(tab_id, cx);
                                     }))
-                                    .child(Icon::new(AppIcon::X).size(px(12.0)).muted()),
+                                    .child(Icon::new(AppIcon::X).size(px(12.0)).muted()), // guardrail-allow: 12px icon size, no ICON_XS token
                             )
                     })),
             )
@@ -565,7 +565,7 @@ impl CodeDocument {
     }
 
     fn render_loading_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let icon = Icon::new(AppIcon::Loader).size(px(12.0));
+        let icon = Icon::new(AppIcon::Loader).size(px(12.0)); // guardrail-allow: 12px icon size, no ICON_XS token
         div().p(Spacing::MD).size_full().child(
             BannerBlock::new(BannerVariant::Info, "Running…")
                 .with_icon(icon)
@@ -574,7 +574,7 @@ impl CodeDocument {
     }
 
     fn render_error_state(&self, error: &str, _cx: &mut Context<Self>) -> impl IntoElement {
-        let icon = Icon::new(AppIcon::CircleX).size(px(16.0));
+        let icon = Icon::new(AppIcon::CircleX).size(Heights::ICON_SM);
         div().p(Spacing::MD).size_full().overflow_y_hidden().child(
             BannerBlock::new(BannerVariant::Danger, "Query Error")
                 .with_icon(icon)

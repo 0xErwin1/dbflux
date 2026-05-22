@@ -1242,7 +1242,7 @@ impl CodeDocument {
                     .flex_none()
                     .items_center()
                     .gap_1()
-                    .child(Icon::new(AppIcon::Database).size(px(12.0)).muted())
+                    .child(Icon::new(AppIcon::Database).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
                     .child(Text::caption("Connection:")),
             )
             .child(
