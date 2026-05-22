@@ -1,6 +1,6 @@
 use super::*;
-use crate::ui::AsyncUpdateResultExt;
 use dbflux_core::TaskKind;
+use dbflux_ui_base::AsyncUpdateResultExt;
 
 const COLLECTION_CHILDREN_PAGE_SIZE: u32 = 50;
 
@@ -242,8 +242,10 @@ impl Sidebar {
     ) -> bool
     where
         R: Send + 'static,
-        F: Fn(&Entity<crate::app::AppStateEntity>, R, &mut App) + Send + 'static,
-        G: Fn(&Entity<crate::app::AppStateEntity>, &mut App) + Send + 'static,
+        F: Fn(&Entity<dbflux_ui_base::app_state_entity::AppStateEntity>, R, &mut App)
+            + Send
+            + 'static,
+        G: Fn(&Entity<dbflux_ui_base::app_state_entity::AppStateEntity>, &mut App) + Send + 'static,
     {
         let item_id = pending_action.item_id().to_string();
         self.pending_actions.insert(item_id.clone(), pending_action);

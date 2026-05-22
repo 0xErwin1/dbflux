@@ -1,6 +1,6 @@
 use super::*;
-use crate::platform;
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
+use dbflux_ui_base::platform;
 
 impl Sidebar {
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -80,13 +80,13 @@ impl Sidebar {
 
                                 cx.subscribe(
                                     &settings,
-                                    move |_settings, event: &crate::ui::windows::settings::SettingsEvent, cx| {
+                                    move |_settings, event: &dbflux_ui_windows::settings::SettingsEvent, cx| {
                                         sidebar.update(cx, |_this, cx| {
                                             match event {
-                                                crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
+                                                dbflux_ui_windows::settings::SettingsEvent::OpenScript { path } => {
                                                     cx.emit(SidebarEvent::OpenScript { path: path.clone() });
                                                 }
-                                                crate::ui::windows::settings::SettingsEvent::OpenLoginModal { .. } => {}
+                                                dbflux_ui_windows::settings::SettingsEvent::OpenLoginModal { .. } => {}
                                             }
                                         });
                                     },

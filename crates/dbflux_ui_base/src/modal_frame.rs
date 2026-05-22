@@ -132,9 +132,10 @@ mod tests {
 
     #[test]
     fn planned_modal_adopters_continue_to_flow_through_the_modal_frame_shim() {
-        // sso_wizard.rs has migrated to dbflux_ui_base and imports ModalFrame
-        // directly; only the remaining dbflux_ui-local overlays are checked here.
-        for path in ["overlays/login_modal.rs", "overlays/sql_preview_modal.rs"] {
+        // sso_wizard.rs and sql_preview_modal.rs have migrated to dbflux_ui_base
+        // and import ModalFrame directly; only the remaining dbflux_ui-local
+        // overlays are checked here.
+        for path in ["overlays/login_modal.rs"] {
             let source = read_feature_file(path);
 
             assert!(
