@@ -71,7 +71,7 @@ impl RenderOnce for Badge {
         let is_dot = self.dot_mode || self.label.is_empty();
 
         if is_dot {
-            div().size(px(8.0)).rounded_full().bg(text_color)
+            div().size(Spacing::SM).rounded_full().bg(text_color)
         } else {
             div()
                 .px(Spacing::XS)

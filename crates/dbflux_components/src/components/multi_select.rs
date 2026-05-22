@@ -1,5 +1,5 @@
 use crate::primitives::Text;
-use crate::tokens::Heights;
+use crate::tokens::{Heights, Spacing};
 use gpui::prelude::*;
 use gpui::{
     Corner, ElementId, EventEmitter, IntoElement, MouseButton, ParentElement, Render, ScrollHandle,
@@ -238,7 +238,7 @@ impl MultiSelect {
         deferred(
             anchored()
                 .anchor(Corner::TopLeft)
-                .offset(point(px(0.0), px(4.0)))
+                .offset(point(px(0.0), Spacing::XS))
                 .snap_to_window()
                 .child(menu),
         )

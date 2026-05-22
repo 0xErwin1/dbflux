@@ -4,6 +4,7 @@ use crate::controls::InputState;
 use crate::icon::IconSource;
 use crate::icons::AppIcon;
 use crate::primitives::Icon;
+use crate::tokens::Heights;
 use dbflux_core::keymap_types::ContextId;
 use gpui::*;
 
@@ -172,7 +173,7 @@ impl Render for CellEditorModal {
         ModalFrame::new("cell-editor-modal", &self.focus_handle, close)
             .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .close_icon(IconSource::Svg(AppIcon::X.path().into()))
-            .header_leading(Icon::new(AppIcon::Pencil).size(px(16.0)).primary())
+            .header_leading(Icon::new(AppIcon::Pencil).size(Heights::ICON_SM).primary())
             .title(if is_json { "Edit JSON" } else { "Edit Text" })
             .width(px(900.0))
             .height(px(600.0))

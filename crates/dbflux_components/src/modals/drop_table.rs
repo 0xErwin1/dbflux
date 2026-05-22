@@ -278,7 +278,7 @@ impl Render for ModalDropTable {
                     .items_center()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
-                    .rounded(px(4.0))
+                    .rounded(px(4.0)) // guardrail-allow: border radius, not spacing
                     .opacity(0.4)
                     .bg(theme.danger)
                     .cursor(gpui::CursorStyle::default())

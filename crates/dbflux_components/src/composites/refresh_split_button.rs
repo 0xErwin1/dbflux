@@ -80,13 +80,17 @@ pub fn refresh_split_button(
                 .on_click(move |_, window, cx| {
                     on_refresh(window, cx);
                 })
-                .child(Icon::new(refresh_icon).size(px(16.0)).color(foreground))
+                .child(
+                    Icon::new(refresh_icon)
+                        .size(Heights::ICON_SM)
+                        .color(foreground),
+                )
                 .child(Text::caption(refresh_label)),
         )
-        .child(div().w(px(1.0)).h_full().bg(input_color))
+        .child(div().w(px(1.0)).h_full().bg(input_color)) // guardrail-allow: 1px separator div width
         .child(
             div()
-                .w(px(28.0))
+                .w(px(28.0)) // guardrail-allow: dropdown panel width, not a spacing value
                 .h_full()
                 .rounded_r(Radii::SM)
                 .when(ring_policy, |d| d.border_1().border_color(ring_color))

@@ -6,7 +6,7 @@ use super::types::{DocumentId, DocumentMetaSnapshot, DocumentState};
 use dbflux_components::composites::MenuItem;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::BannerColors;
+use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_components::typography::MonoMeta;
 use gpui::prelude::FluentBuilder;
@@ -374,7 +374,7 @@ impl TabBar {
             // Dirty indicator: amber dot when the document has unsaved changes.
             // Shows the change summary in a tooltip on hover.
             .when(is_dirty, |el| {
-                let dot_color = BannerColors::warning_bg(cx.theme());
+                let dot_color = SemBannerColors::for_current(cx).warning_bg;
                 let tooltip_text: SharedString = change_summary
                     .as_deref()
                     .unwrap_or("Unsaved changes")

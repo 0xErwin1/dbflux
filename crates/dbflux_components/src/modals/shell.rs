@@ -1,7 +1,8 @@
 use crate::icon::IconSource;
 use crate::icons::AppIcon;
 use crate::primitives::{IconButton, overlay_bg, surface_modal_container};
-use crate::tokens::{BannerColors, ChromeEdgeRole, FontSizes, Heights, Spacing};
+use crate::semantic::BannerColors as SemBannerColors;
+use crate::tokens::{ChromeEdgeRole, FontSizes, Heights, Spacing};
 use gpui::prelude::*;
 use gpui::{AnyElement, App, MouseButton, Pixels, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
@@ -79,7 +80,7 @@ impl RenderOnce for ModalShell {
 
         // Danger accent: 2 px red top-border.
         let danger_accent = if self.variant == ModalVariant::Danger {
-            Some(BannerColors::danger_fg(theme))
+            Some(SemBannerColors::for_current(cx).error_fg)
         } else {
             None
         };

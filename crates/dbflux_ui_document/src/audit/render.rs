@@ -16,7 +16,7 @@ use dbflux_components::controls::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
-use dbflux_components::tokens::BannerColors;
+use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_storage::repositories::audit::AuditEventDto;
 use gpui::prelude::*;
@@ -60,21 +60,29 @@ impl AuditDocument {
     /// - warn  → Warning (amber)
     /// - info  → Info (blue)
     /// - debug/trace/other → Neutral (muted)
-    pub(super) fn level_color(level: Option<&str>, theme: &gpui_component::Theme) -> Hsla {
+    pub(super) fn level_color(
+        level: Option<&str>,
+        banners: &SemBannerColors,
+        theme: &gpui_component::Theme,
+    ) -> Hsla {
         match level {
-            Some("error") => BannerColors::danger_fg(theme),
-            Some("warn") => BannerColors::warning_fg(theme),
-            Some("info") => BannerColors::info_fg(theme),
+            Some("error") => banners.error_fg,
+            Some("warn") => banners.warning_fg,
+            Some("info") => banners.info_fg,
             _ => theme.muted_foreground,
         }
     }
 
     /// Background tint for a level chip, sourced from `BannerColors`.
-    pub(super) fn level_bg_color(level: Option<&str>, theme: &gpui_component::Theme) -> Hsla {
+    pub(super) fn level_bg_color(
+        level: Option<&str>,
+        banners: &SemBannerColors,
+        theme: &gpui_component::Theme,
+    ) -> Hsla {
         match level {
-            Some("error") => BannerColors::danger_bg(theme),
-            Some("warn") => BannerColors::warning_bg(theme),
-            Some("info") => BannerColors::info_bg(theme),
+            Some("error") => banners.error_bg,
+            Some("warn") => banners.warning_bg,
+            Some("info") => banners.info_bg,
             _ => {
                 let mut neutral = theme.muted_foreground;
                 neutral.a = 0.15;
@@ -607,6 +615,7 @@ impl AuditDocument {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let banners = SemBannerColors::for_current(cx);
         let event_id = event.id;
         let is_expanded = self.expanded_event_ids.contains(&event_id);
         // Only highlight the selected row when this document has GPUI focus.
@@ -704,12 +713,12 @@ impl AuditDocument {
                                 .px_1p5()
                                 .py_px()
                                 .rounded(px(3.0))
-                                .bg(Self::level_bg_color(Some(l), &theme))
+                                .bg(Self::level_bg_color(Some(l), &banners, &theme))
                                 .flex_shrink_0()
                                 .child(
                                     Text::label_sm(l.to_uppercase())
                                         .font_size(FontSizes::XS)
-                                        .color(Self::level_color(Some(l), &theme)),
+                                        .color(Self::level_color(Some(l), &banners, &theme)),
                                 )
                                 .into_any_element(),
                             None => Self::null_display(&theme)

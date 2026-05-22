@@ -5,7 +5,7 @@ use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 #[cfg(test)]
 use dbflux_components::helpers::text_color_for_selected;
 use dbflux_components::primitives::{Chord, Icon, overlay_bg, surface_modal_container};
-use dbflux_components::tokens::BannerColors;
+use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::typography::{Body, MonoCaption, MonoLabel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
@@ -740,6 +740,7 @@ impl CommandPalette {
         item: &PaletteItem,
         is_selected: bool,
         theme: &gpui_component::theme::Theme,
+        warning_bg: gpui::Hsla,
     ) -> Stateful<Div> {
         let (category, name) = item.display_label();
 
@@ -780,8 +781,7 @@ impl CommandPalette {
             .cursor_pointer()
             .border_l_2()
             .when(is_selected, |d| {
-                d.bg(BannerColors::warning_bg(theme))
-                    .border_color(theme.primary)
+                d.bg(warning_bg).border_color(theme.primary)
             })
             .when(!is_selected, |d| {
                 d.border_color(gpui::transparent_black())
@@ -809,6 +809,7 @@ impl Render for CommandPalette {
         }
 
         let theme = cx.theme();
+        let warning_bg = SemBannerColors::for_current(cx).warning_bg;
         let input_state = self.input_state.clone();
 
         // Build the windowed list (scroll_offset..+VISIBLE_ITEMS) then group
@@ -961,6 +962,7 @@ impl Render for CommandPalette {
                                             &item,
                                             is_selected,
                                             theme,
+                                            warning_bg,
                                         )
                                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                             cx.stop_propagation();

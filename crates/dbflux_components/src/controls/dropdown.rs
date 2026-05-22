@@ -531,7 +531,7 @@ impl Dropdown {
         deferred(
             anchored()
                 .anchor(Corner::TopLeft)
-                .offset(point(px(0.0), px(4.0)))
+                .offset(point(px(0.0), Spacing::XS))
                 .snap_to_window()
                 .child(menu),
         )
