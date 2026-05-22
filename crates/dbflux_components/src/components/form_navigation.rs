@@ -1,9 +1,8 @@
-use crate::ui::tokens::Radii;
-use dbflux_components::controls::{InputEvent, InputState};
+use crate::controls::{InputEvent, InputState};
+use crate::tokens::Radii;
+use dbflux_core::keymap_types::Command;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-
-use crate::keymap::Command;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum FormEditState {
@@ -14,12 +13,12 @@ pub enum FormEditState {
 }
 
 #[allow(dead_code)]
-pub(crate) trait FormField: Copy + PartialEq {
+pub trait FormField: Copy + PartialEq {
     fn is_input(&self) -> bool;
 }
 
 #[allow(dead_code)]
-pub(crate) trait FormNavigation: Sized + 'static {
+pub trait FormNavigation: Sized + 'static {
     type Focus: FormField;
 
     fn edit_state(&self) -> FormEditState;
@@ -117,7 +116,7 @@ pub(crate) trait FormNavigation: Sized + 'static {
 }
 
 /// Wire Enter (exit + move down) and Blur (exit) on a form input.
-pub(crate) fn subscribe_form_input<T: FormNavigation>(
+pub fn subscribe_form_input<T: FormNavigation>(
     cx: &mut Context<T>,
     window: &mut Window,
     input: &Entity<InputState>,
@@ -139,7 +138,7 @@ pub(crate) fn subscribe_form_input<T: FormNavigation>(
     )
 }
 
-pub(crate) fn focus_ring(focused: bool, ring_color: Hsla) -> Div {
+pub fn focus_ring(focused: bool, ring_color: Hsla) -> Div {
     div()
         .rounded(Radii::SM)
         .border_2()

@@ -5,7 +5,10 @@ use gpui::{SharedString, TestAppContext, Window, hsla};
 use gpui_component::theme::Theme;
 use std::fs;
 
-const THEME_SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ui/theme.rs");
+const THEME_SOURCE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../dbflux_components/src/theme.rs"
+);
 
 fn rgb_to_hsla(hex: u32) -> gpui::Hsla {
     let r = ((hex >> 16) & 0xFF) as f32 / 255.0;
@@ -192,7 +195,7 @@ fn theme_ghost_border_forward_matches_component_token() {
 fn theme_module_keeps_palette_and_font_mapping_but_not_shared_chrome_helpers() {
     let source = read_theme_source();
 
-    assert!(source.contains("pub use dbflux_components::typography::AppFonts;"));
+    assert!(source.contains("pub use crate::typography::AppFonts;"));
     assert!(source.contains("load_bundled_fonts(cx);"));
     assert!(source.contains("ThemeSetting::Mirage"));
     assert!(source.contains("apply_ayu_mirage(style, cx);"));

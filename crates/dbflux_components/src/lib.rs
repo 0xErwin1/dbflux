@@ -16,12 +16,16 @@ pub mod tokens;
 pub mod typography;
 
 pub mod chart;
+pub mod common;
+pub mod components;
 pub mod composites;
 pub mod controls;
+pub mod icons;
 pub mod primitives;
 pub mod result_panel;
 pub mod result_view;
 pub mod saved_chart;
+pub mod theme;
 
 pub use saved_chart::{
     SavedChart, SavedChartManager, SavedChartRefreshPolicy, SavedChartStore, TimeRangePreset,

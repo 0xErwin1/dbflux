@@ -1,2 +1,2 @@
 pub mod refresh_split_button;
-pub mod time_range;
+pub use dbflux_components::common::time_range;
