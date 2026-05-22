@@ -8,11 +8,11 @@ fn read_workspace_file(relative_path: &str) -> String {
 
 #[test]
 fn ui_contains_trusted_client_and_connection_policy_controls() {
-    let mcp_settings = read_workspace_file("../dbflux_ui/src/ui/windows/settings/mcp_section.rs");
+    let mcp_settings = read_workspace_file("../dbflux_ui_windows/src/settings/mcp_section.rs");
     let connection_form =
-        read_workspace_file("../dbflux_ui/src/ui/windows/connection_manager/form.rs");
+        read_workspace_file("../dbflux_ui_windows/src/connection_manager/form.rs");
     let connection_tabs =
-        read_workspace_file("../dbflux_ui/src/ui/windows/connection_manager/render_tabs.rs");
+        read_workspace_file("../dbflux_ui_windows/src/connection_manager/render_tabs.rs");
 
     assert!(mcp_settings.contains("mcp-client-save"));
     assert!(mcp_settings.contains("mcp-client-toggle-active"));
