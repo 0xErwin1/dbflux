@@ -1,6 +1,7 @@
 #![allow(clippy::result_large_err)]
 
 pub mod access;
+pub mod keymap_types;
 pub mod auth;
 mod config;
 mod connection;
