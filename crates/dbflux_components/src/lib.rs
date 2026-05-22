@@ -21,6 +21,7 @@ pub mod controls;
 pub mod primitives;
 pub mod result_panel;
 pub mod result_view;
+pub mod icons;
 pub mod saved_chart;
 pub mod theme;
 
