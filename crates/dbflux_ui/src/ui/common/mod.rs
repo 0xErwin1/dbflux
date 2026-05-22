@@ -1,1 +1,1 @@
-pub mod time_range;
+pub use dbflux_components::common::time_range;

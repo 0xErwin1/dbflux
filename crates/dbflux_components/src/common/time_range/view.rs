@@ -9,7 +9,7 @@
 //! accessible via accessors so that embedders (e.g. `AuditDocument`) can
 //! still reference them in `FilterBarItem` lists for keyboard navigation.
 
-use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use crate::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use gpui::prelude::*;
 use gpui::{App, Entity, EventEmitter, Subscription, Window};
 use gpui_component::calendar::Date;
