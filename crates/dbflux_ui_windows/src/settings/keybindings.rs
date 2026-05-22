@@ -2,7 +2,7 @@ use dbflux_app::keymap::{ContextId, KeyChord};
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Chord, Icon as FluxIcon};
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_components::typography::{Body, FieldLabel, MonoCaption};
 use dbflux_ui_base::keymap::default_keymap;
 use gpui::prelude::*;
@@ -150,7 +150,7 @@ impl KeybindingsSection {
                         .gap_2()
                         .child(
                             FluxIcon::new(AppIcon::Search)
-                                .size(px(16.0))
+                                .size(Heights::ICON_SM)
                                 .color(muted_foreground),
                         )
                         .child(
@@ -217,7 +217,7 @@ impl KeybindingsSection {
                                     // Chevron icon
                                     .child(
                                         div()
-                                            .w(px(16.0))
+                                            .w(Heights::ICON_SM)
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -227,7 +227,7 @@ impl KeybindingsSection {
                                                 } else {
                                                     AppIcon::ChevronRight
                                                 })
-                                                .size(px(16.0))
+                                                .size(Heights::ICON_SM)
                                                 .color(muted_foreground),
                                             ),
                                     )
@@ -313,7 +313,7 @@ impl KeybindingsSection {
             .items_center()
             .py_1()
             .px_2()
-            .rounded_r(px(4.0))
+            .rounded_r(Spacing::XS)
             .gap_4()
             .cursor_pointer()
             .bg(if is_selected {

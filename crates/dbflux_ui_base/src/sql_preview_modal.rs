@@ -3,7 +3,7 @@ use crate::modal_frame::ModalFrame;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 // SqlGenerationType and SqlPreviewContext now live in dbflux_components;
 // re-export here so existing call-sites via this module path are unchanged.
 pub use dbflux_components::{SqlGenerationType, SqlPreviewContext};
@@ -616,7 +616,11 @@ impl Render for SqlPreviewModal {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.regenerate_sql(window, cx);
                     }))
-                    .child(Icon::new(AppIcon::RefreshCcw).size(px(16.0)).muted())
+                    .child(
+                        Icon::new(AppIcon::RefreshCcw)
+                            .size(Heights::ICON_SM)
+                            .muted(),
+                    )
                     .child(Text::body("Refresh").font_size(FontSizes::SM)),
             );
         }
@@ -641,7 +645,7 @@ impl Render for SqlPreviewModal {
                     }))
                     .child(
                         Icon::new(AppIcon::Layers)
-                            .size(px(16.0))
+                            .size(Heights::ICON_SM)
                             .color(theme.primary_foreground),
                     )
                     .child(Text::caption("Copy").color(theme.primary_foreground)),

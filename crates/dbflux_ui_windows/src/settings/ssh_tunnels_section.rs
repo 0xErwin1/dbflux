@@ -10,7 +10,7 @@ use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label};
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{Heights, Radii};
 use dbflux_components::typography::{Body, MonoCaption, MonoMeta, PanelTitle};
 use dbflux_core::SshTunnelProfile;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -325,7 +325,7 @@ impl SshTunnelsSection {
             })
             .child(
                 FluxIcon::new(icon_name)
-                    .size(px(16.0))
+                    .size(Heights::ICON_SM)
                     .color(theme.muted_foreground),
             )
     }

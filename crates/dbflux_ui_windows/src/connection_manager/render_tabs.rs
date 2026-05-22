@@ -4,7 +4,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
     FilePicker, Icon as AppIconElement, Label, SegmentedControl, SegmentedItem, Text,
 };
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{Radii, Widths};
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
@@ -658,7 +658,7 @@ impl ConnectionManagerWindow {
                                                     default_val
                                                 ))),
                                         )
-                                        .child(div().w(px(240.0)).child(dropdown))
+                                        .child(div().w(Widths::CM_FORM_DROPDOWN).child(dropdown))
                                         .into_any_element(),
                                 )
                             }
