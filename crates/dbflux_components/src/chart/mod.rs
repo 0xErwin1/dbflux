@@ -25,7 +25,10 @@ pub mod spec;
 pub mod stats;
 
 pub use axis_bar::{AxisPill, axis_bar_element};
-pub use data_source::{ChartDataSource, ChartSourceError, TimeWindow, resolve_source};
+pub use data_source::{
+    AuditAggregateSpec, AuditGroupBy, AuditSource, ChartDataPlan, ChartDataSource,
+    ChartSourceError, MetricSource, TimeWindow, resolve_source,
+};
 pub use detect::{ChartDetection, detect_chart_columns};
 pub use engine::{
     CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, CHART_PALETTE, ChartBuildError, ChartView,
@@ -34,7 +37,7 @@ pub use engine::{
 pub use point_inspector::{DataPointRef, SourceRowRef, point_inspector_element};
 pub use spec::{
     AggKind, AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, ManualChartSelection,
-    SeriesSpec,
+    SeriesSpec, YScale,
 };
 pub use stats::{
     SeriesStats, compute_series_stats, count_columns_for_why, format_resolution, format_span,

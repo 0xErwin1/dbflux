@@ -3,6 +3,19 @@
 use dbflux_core::ColumnKind;
 use serde::{Deserialize, Serialize};
 
+/// Y-axis scale mode.
+///
+/// `Linear` is the default and preserves existing behavior byte-for-byte.
+/// `Log` applies `ln(y + 1)` (log1p) before projecting data values to screen
+/// coordinates.  Using `y + 1` instead of `y` avoids `ln(0) = -∞` for
+/// zero-count buckets, which is the common case in audit time-series charts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum YScale {
+    #[default]
+    Linear,
+    Log,
+}
+
 /// Chart rendering kinds. `Line`, `Bar`, and `Scatter` are all fully
 /// implemented and share the same kind-agnostic render model.
 ///
@@ -138,6 +151,13 @@ pub struct ChartSpec {
     /// charts leave this `false` to avoid the memory overhead.
     #[serde(default)]
     pub track_source_indices: bool,
+    /// Y-axis scale mode. Defaults to `Linear` when absent in older JSON.
+    ///
+    /// When set to `Log`, the engine applies `ln(y + 1)` before mapping data
+    /// values to screen coordinates and generates log-spaced Y ticks with
+    /// original-scale labels.
+    #[serde(default)]
+    pub y_scale: YScale,
 }
 
 fn default_decimation_threshold() -> usize {
@@ -218,6 +238,7 @@ impl ChartSpec {
             decimation_threshold,
             binding: bindings.clone(),
             track_source_indices: false,
+            y_scale: YScale::Linear,
         })
     }
 
@@ -275,6 +296,7 @@ impl ChartSpec {
             decimation_threshold,
             binding,
             track_source_indices: false,
+            y_scale: YScale::Linear,
         })
     }
 
@@ -342,6 +364,7 @@ impl ChartSpec {
             decimation_threshold,
             binding,
             track_source_indices: false,
+            y_scale: YScale::Linear,
         })
     }
 }
@@ -353,6 +376,40 @@ impl ChartSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn y_scale_defaults_to_linear() {
+        assert_eq!(YScale::default(), YScale::Linear);
+    }
+
+    #[test]
+    fn y_scale_serde_round_trip() {
+        for scale in [YScale::Linear, YScale::Log] {
+            let json = serde_json::to_string(&scale).expect("serialize");
+            let back: YScale = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(scale, back, "round-trip failed for {:?}", scale);
+        }
+    }
+
+    /// Old JSON without a `y_scale` field must deserialize to `YScale::Linear`
+    /// so that existing persisted chart specs are not broken.
+    #[test]
+    fn chart_spec_without_y_scale_field_deserializes_as_linear() {
+        let json = r#"{
+            "x_axis": {"column_index": 0, "label": "t", "kind": "Time", "unit": null},
+            "series": [],
+            "legend_visible": false,
+            "decimation_threshold": 10000,
+            "binding": {"x": 0, "y": [], "aggregation": "None"}
+        }"#;
+
+        let spec: ChartSpec = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(
+            spec.y_scale,
+            YScale::Linear,
+            "missing 'y_scale' should default to Linear"
+        );
+    }
 
     #[test]
     fn chart_kind_defaults_to_line() {

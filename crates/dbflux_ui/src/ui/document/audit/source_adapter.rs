@@ -6,6 +6,8 @@
 //! API and enables future sources (CloudWatch, Loki) to be swapped in without
 //! changing the document logic.
 
+use dbflux_audit::{AuditAggregateParams, AuditGroupColumn, pivot_long_to_wide};
+use dbflux_core::QueryResult;
 use dbflux_core::observability::query::EventDetail;
 use dbflux_core::observability::source::{EventSource as _, EventSourceError};
 use dbflux_core::observability::{
@@ -183,6 +185,24 @@ impl AuditSourceAdapter {
             .count_filtered(filter)
             .map(|count| count.max(0) as u64)
             .map_err(|e| format!("audit count failed: {}", e))
+    }
+
+    /// Aggregates audit events into time buckets and returns a wide-format `QueryResult`
+    /// directly consumable by the chart engine.
+    ///
+    /// Delegates pivot logic to `dbflux_audit::pivot_long_to_wide` so the wide-format
+    /// schema is defined in exactly one place.
+    pub fn aggregate(&self, params: &AuditAggregateParams) -> Result<QueryResult, String> {
+        use std::time::Instant;
+
+        let started = Instant::now();
+        let raw = self
+            .repo
+            .aggregate(params)
+            .map_err(|e| format!("audit aggregate failed: {e}"))?;
+        let elapsed = started.elapsed();
+
+        Ok(pivot_long_to_wide(raw, elapsed))
     }
 
     /// Queries using the `EventQuery` abstraction and returns an `EventPage`.

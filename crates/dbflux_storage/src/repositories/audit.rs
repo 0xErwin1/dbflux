@@ -708,6 +708,103 @@ impl AuditRepository {
     }
 }
 
+/// Column to group by in aggregate queries.
+///
+/// Maps to a fixed SQL column identifier — never derived from user input, so
+/// there is no SQL injection risk from this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditGroupColumn {
+    Category,
+    Outcome,
+    Level,
+}
+
+impl AuditGroupColumn {
+    /// Returns the exact SQL column name for this group column.
+    pub fn column(&self) -> &'static str {
+        match self {
+            AuditGroupColumn::Category => "category",
+            AuditGroupColumn::Outcome => "outcome",
+            AuditGroupColumn::Level => "level",
+        }
+    }
+}
+
+/// Parameters for the audit aggregate query.
+#[derive(Debug, Clone)]
+pub struct AuditAggregateParams {
+    /// Time bucket size in milliseconds. Must be > 0.
+    pub bucket_ms: i64,
+    /// Column to group results by within each bucket.
+    pub group_by: AuditGroupColumn,
+    /// Filter restricting which events are included.
+    pub filter: AuditQueryFilter,
+}
+
+impl AuditRepository {
+    /// Aggregates audit events into time buckets grouped by a chosen column.
+    ///
+    /// Returns `(bucket_ms, group_label, count)` tuples ordered by bucket
+    /// ascending. NULL values in the group column are coalesced to `"unknown"`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError` if `params.bucket_ms <= 0` (would cause a
+    /// division-by-zero in SQLite) or if the underlying query fails.
+    pub fn aggregate(
+        &self,
+        params: &AuditAggregateParams,
+    ) -> Result<Vec<(i64, String, i64)>, RepositoryError> {
+        if params.bucket_ms <= 0 {
+            return Err(RepositoryError::Validation(format!(
+                "bucket_ms must be > 0, got {}",
+                params.bucket_ms
+            )));
+        }
+
+        let conn = self.conn.lock().map_err(|e| RepositoryError::Sqlite {
+            source: rusqlite::Error::InvalidParameterName(e.to_string()),
+        })?;
+
+        // group_col is a fixed identifier from the enum — not user input.
+        let group_col = params.group_by.column();
+
+        let (where_clause, where_values) = Self::build_where_clause(&params.filter);
+
+        let sql = format!(
+            "SELECT (created_at_epoch_ms / ?) * ? AS bucket_ms, \
+                    COALESCE({group_col}, 'unknown') AS group_label, \
+                    COUNT(*) AS count \
+             FROM aud_audit_events\
+             {where_clause} \
+             GROUP BY bucket_ms, group_label \
+             ORDER BY bucket_ms ASC, group_label ASC"
+        );
+
+        // Bucket value binds come first (two placeholders for the division and
+        // the multiplication), then the filter params from build_where_clause.
+        let mut all_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        all_values.push(Box::new(params.bucket_ms));
+        all_values.push(Box::new(params.bucket_ms));
+        all_values.extend(where_values);
+
+        let mut stmt = conn.prepare(&sql)?;
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            all_values.iter().map(|v| v.as_ref()).collect();
+        let mut rows = stmt.query(params_refs.as_slice())?;
+
+        let mut results = Vec::new();
+        while let Some(row) = rows.next()? {
+            let bucket: i64 = row.get(0)?;
+            let label: String = row.get(1)?;
+            let count: i64 = row.get(2)?;
+            results.push((bucket, label, count));
+        }
+
+        Ok(results)
+    }
+}
+
 impl Repository for AuditRepository {
     type Entity = AuditEventDto;
     type Id = i64;
@@ -990,6 +1087,312 @@ mod tests {
             })
             .expect("failure query should succeed");
         assert!(failure_query.is_empty());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // --- Helper used by aggregate tests ---
+
+    fn insert_event(
+        repo: &AuditRepository,
+        ts_ms: i64,
+        category: Option<&str>,
+        outcome: Option<&str>,
+        level: Option<&str>,
+    ) {
+        repo.append_extended(AppendAuditEventExtended {
+            actor_id: "test",
+            tool_id: "test_tool",
+            decision: "allow",
+            reason: None,
+            profile_id: None,
+            classification: None,
+            duration_ms: None,
+            created_at_epoch_ms: ts_ms,
+            level,
+            category,
+            action: Some("test_action"),
+            outcome,
+            actor_type: Some("user"),
+            source_id: Some("local"),
+            summary: Some("test event"),
+            connection_id: None,
+            database_name: None,
+            driver_id: None,
+            object_type: None,
+            object_id: None,
+            details_json: None,
+            error_code: None,
+            error_message: None,
+            session_id: None,
+            correlation_id: None,
+        })
+        .expect("insert should succeed");
+    }
+
+    #[test]
+    fn group_column_names() {
+        assert_eq!(AuditGroupColumn::Category.column(), "category");
+        assert_eq!(AuditGroupColumn::Outcome.column(), "outcome");
+        assert_eq!(AuditGroupColumn::Level.column(), "level");
+    }
+
+    #[test]
+    fn aggregate_zero_bucket_returns_error() {
+        let path = temp_db("aggregate_zero_bucket");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrations should run");
+
+        let repo = AuditRepository::new(Arc::new(Mutex::new(conn)));
+
+        let params = AuditAggregateParams {
+            bucket_ms: 0,
+            group_by: AuditGroupColumn::Category,
+            filter: AuditQueryFilter::default(),
+        };
+
+        let err = repo
+            .aggregate(&params)
+            .expect_err("should reject bucket_ms <= 0");
+        assert!(
+            matches!(err, RepositoryError::Validation(_)),
+            "expected Validation variant, got {:?}",
+            err
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn aggregate_empty_result() {
+        let path = temp_db("aggregate_empty");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrations should run");
+
+        let repo = AuditRepository::new(Arc::new(Mutex::new(conn)));
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Category,
+            filter: AuditQueryFilter {
+                start_epoch_ms: Some(9_000_000_000),
+                ..Default::default()
+            },
+        };
+
+        let results = repo.aggregate(&params).expect("aggregate should succeed");
+        assert!(results.is_empty());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn aggregate_buckets_by_category() {
+        let path = temp_db("aggregate_buckets_category");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrations should run");
+
+        let repo = AuditRepository::new(Arc::new(Mutex::new(conn)));
+
+        // bucket_ms = 60_000; bucket 0 = ts [0, 60_000), bucket 1 = ts [60_000, 120_000)
+        // Insert 3 events in bucket 0 (category=query)
+        insert_event(&repo, 0, Some("query"), Some("success"), Some("info"));
+        insert_event(&repo, 10_000, Some("query"), Some("success"), Some("info"));
+        insert_event(&repo, 50_000, Some("query"), Some("success"), Some("info"));
+
+        // Insert 2 events in bucket 1 (category=connection)
+        insert_event(
+            &repo,
+            60_000,
+            Some("connection"),
+            Some("success"),
+            Some("info"),
+        );
+        insert_event(
+            &repo,
+            90_000,
+            Some("connection"),
+            Some("success"),
+            Some("info"),
+        );
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Category,
+            filter: AuditQueryFilter::default(),
+        };
+
+        let results = repo.aggregate(&params).expect("aggregate should succeed");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], (0, "query".to_string(), 3));
+        assert_eq!(results[1], (60_000, "connection".to_string(), 2));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn aggregate_null_group_becomes_unknown() {
+        let path = temp_db("aggregate_null_group");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrations should run");
+
+        let repo = AuditRepository::new(Arc::new(Mutex::new(conn)));
+
+        // NULL category — should appear as "unknown"
+        insert_event(&repo, 0, None, Some("success"), Some("info"));
+        insert_event(&repo, 1_000, None, Some("success"), Some("info"));
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Category,
+            filter: AuditQueryFilter::default(),
+        };
+
+        let results = repo.aggregate(&params).expect("aggregate should succeed");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, "unknown");
+        assert_eq!(results[0].2, 2);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn aggregate_time_filter() {
+        let path = temp_db("aggregate_time_filter");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrations should run");
+
+        let repo = AuditRepository::new(Arc::new(Mutex::new(conn)));
+
+        insert_event(&repo, 100, Some("query"), Some("success"), Some("info"));
+        insert_event(&repo, 200, Some("query"), Some("success"), Some("info"));
+        insert_event(&repo, 300, Some("query"), Some("success"), Some("info"));
+
+        // Only the event at ts=200 should match [150, 250]
+        let params = AuditAggregateParams {
+            bucket_ms: 1_000,
+            group_by: AuditGroupColumn::Category,
+            filter: AuditQueryFilter {
+                start_epoch_ms: Some(150),
+                end_epoch_ms: Some(250),
+                ..Default::default()
+            },
+        };
+
+        let results = repo.aggregate(&params).expect("aggregate should succeed");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].2, 1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn aggregate_group_by_outcome() {
+        let path = temp_db("aggregate_group_by_outcome");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrations should run");
+
+        let repo = AuditRepository::new(Arc::new(Mutex::new(conn)));
+
+        insert_event(&repo, 0, Some("query"), Some("success"), Some("info"));
+        insert_event(&repo, 1_000, Some("query"), Some("failure"), Some("error"));
+        // NULL outcome -> "unknown"
+        insert_event(&repo, 2_000, Some("query"), None, Some("info"));
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Outcome,
+            filter: AuditQueryFilter::default(),
+        };
+
+        let results = repo.aggregate(&params).expect("aggregate should succeed");
+
+        assert_eq!(results.len(), 3);
+
+        // Results are ordered by bucket_ms ASC, group_label ASC.
+        // All events fall in bucket 0; labels sorted: "failure", "success", "unknown".
+        let labels: Vec<&str> = results.iter().map(|(_, l, _)| l.as_str()).collect();
+        assert!(labels.contains(&"success"));
+        assert!(labels.contains(&"failure"));
+        assert!(labels.contains(&"unknown"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn aggregate_group_by_level() {
+        let path = temp_db("aggregate_group_by_level");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrations should run");
+
+        let repo = AuditRepository::new(Arc::new(Mutex::new(conn)));
+
+        insert_event(&repo, 0, Some("query"), Some("success"), Some("info"));
+        insert_event(&repo, 1_000, Some("query"), Some("failure"), Some("error"));
+        insert_event(&repo, 2_000, Some("query"), Some("success"), Some("warn"));
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Level,
+            filter: AuditQueryFilter::default(),
+        };
+
+        let results = repo.aggregate(&params).expect("aggregate should succeed");
+
+        assert_eq!(results.len(), 3);
+
+        let labels: Vec<&str> = results.iter().map(|(_, l, _)| l.as_str()).collect();
+        assert!(labels.contains(&"info"));
+        assert!(labels.contains(&"error"));
+        assert!(labels.contains(&"warn"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn aggregate_ordering_ascending() {
+        let path = temp_db("aggregate_ordering");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migrations should run");
+
+        let repo = AuditRepository::new(Arc::new(Mutex::new(conn)));
+
+        // Insert in reverse order to verify sorting is by bucket_ms ASC.
+        insert_event(&repo, 120_000, Some("query"), Some("success"), Some("info"));
+        insert_event(&repo, 60_000, Some("query"), Some("success"), Some("info"));
+        insert_event(&repo, 0, Some("query"), Some("success"), Some("info"));
+
+        let params = AuditAggregateParams {
+            bucket_ms: 60_000,
+            group_by: AuditGroupColumn::Category,
+            filter: AuditQueryFilter::default(),
+        };
+
+        let results = repo.aggregate(&params).expect("aggregate should succeed");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0, 0);
+        assert_eq!(results[1].0, 60_000);
+        assert_eq!(results[2].0, 120_000);
 
         let _ = std::fs::remove_file(&path);
     }

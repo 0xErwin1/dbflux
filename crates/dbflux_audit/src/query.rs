@@ -1,3 +1,5 @@
+pub use dbflux_storage::repositories::audit::{AuditAggregateParams, AuditGroupColumn};
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuditQueryFilter {
     pub actor_id: Option<String>,

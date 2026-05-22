@@ -1268,13 +1268,18 @@ impl DataGridPanel {
         // Capture clones for the handlers before borrowing self mutably.
         let shell_for_stats = chart_shell.clone();
         let shell_for_kind = chart_shell.clone();
-        let time_range_panel_for_preset = self.chart_source_time_range_panel.clone();
+
+        let dropdown_time_range = self
+            .chart_source_time_range_panel
+            .as_ref()
+            .map(|p| p.read(cx).dropdown_time_range.clone());
 
         let ctx = ChartToolbarContext {
             theme,
             chart_shell,
-            refresh_dropdown: Some(self.refresh_dropdown.clone()),
-            time_range_panel: self.chart_source_time_range_panel.clone(),
+            refresh_policy: self.refresh_policy,
+            refresh_dropdown: self.refresh_dropdown.clone(),
+            dropdown_time_range,
             row_count: self.result.row_count(),
             resolved_window,
             source_supports_save: true,
@@ -1282,11 +1287,15 @@ impl DataGridPanel {
 
         let weak_panel = cx.weak_entity();
         let weak_panel_for_save = cx.weak_entity();
+        let weak_panel_for_refresh = cx.weak_entity();
 
         let handlers = ChartToolbarHandlers {
-            on_select_range_preset: Arc::new(move |i, _window, cx| {
-                if let Some(ref panel) = time_range_panel_for_preset {
-                    panel.update(cx, |p, cx| p.select_preset(i, cx));
+            on_refresh: Arc::new(move |_window, cx| {
+                if let Some(panel) = weak_panel_for_refresh.upgrade() {
+                    panel.update(cx, |this, cx| {
+                        this.pending_refresh = true;
+                        cx.notify();
+                    });
                 }
             }),
             on_toggle_stats_rail: Arc::new(move |_window, cx| {
