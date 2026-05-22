@@ -25,7 +25,7 @@ fn ui_contains_trusted_client_and_connection_policy_controls() {
 
 #[test]
 fn ui_contains_approval_and_audit_controls_with_workspace_wiring() {
-    let governance_view = read_workspace_file("../dbflux_ui/src/ui/document/governance.rs");
+    let governance_view = read_workspace_file("../dbflux_ui_document/src/governance.rs");
     let workspace_actions = read_workspace_file("../dbflux_ui/src/ui/views/workspace/actions.rs");
     let workspace_dispatch = read_workspace_file("../dbflux_ui/src/ui/views/workspace/dispatch.rs");
     let workspace_mod = read_workspace_file("../dbflux_ui/src/ui/views/workspace/mod.rs");
@@ -47,7 +47,7 @@ fn ui_contains_approval_and_audit_controls_with_workspace_wiring() {
 
 #[test]
 fn audit_workspace_actions_retarget_existing_document_and_close_governance_overlay() {
-    let audit_document = read_workspace_file("../dbflux_ui/src/ui/document/audit/mod.rs");
+    let audit_document = read_workspace_file("../dbflux_ui_document/src/audit/mod.rs");
     let workspace_actions = read_workspace_file("../dbflux_ui/src/ui/views/workspace/actions.rs");
 
     assert!(audit_document.contains("pub fn set_category_filter"));
@@ -61,7 +61,7 @@ fn audit_workspace_actions_retarget_existing_document_and_close_governance_overl
 
 #[test]
 fn approvals_view_surfaces_failures_instead_of_swallowing_them() {
-    let governance_view = read_workspace_file("../dbflux_ui/src/ui/document/governance.rs");
+    let governance_view = read_workspace_file("../dbflux_ui_document/src/governance.rs");
 
     assert!(!governance_view.contains("let _ = state.approve_mcp_pending_execution"));
     assert!(!governance_view.contains("let _ = state.reject_mcp_pending_execution"));

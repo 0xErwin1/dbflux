@@ -7,6 +7,8 @@
 pub mod app_state_entity;
 pub mod async_ext;
 pub mod keymap;
+pub mod modal_frame;
+pub mod toast;
 
 #[cfg(feature = "mcp")]
 pub use app_state_entity::McpRuntimeEventRaised;
