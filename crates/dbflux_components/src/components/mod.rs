@@ -6,3 +6,4 @@ pub mod document_tree;
 pub mod json_editor_view;
 pub mod multi_select;
 pub mod tree_nav;
+pub mod value_source_selector;

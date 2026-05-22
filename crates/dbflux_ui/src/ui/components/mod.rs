@@ -11,7 +11,7 @@ pub use dbflux_components::components::multi_select;
 pub mod toast;
 pub use dbflux_components::components::tree_nav;
 pub mod typography;
-pub mod value_source_selector;
+pub use dbflux_components::components::value_source_selector;
 
 #[cfg(test)]
 mod tests {
