@@ -9,6 +9,7 @@ pub mod async_ext;
 pub mod keymap;
 pub mod modal_frame;
 pub mod platform;
+pub mod sql_preview_modal;
 pub mod sso_wizard;
 pub mod toast;
 

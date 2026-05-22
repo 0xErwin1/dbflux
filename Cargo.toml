@@ -6,6 +6,7 @@ members = [
     "crates/dbflux_ui_base",
     "crates/dbflux_ui_document",
     "crates/dbflux_ui_windows",
+    "crates/dbflux_ui_sidebar",
     "crates/dbflux_components",
     "crates/dbflux_core",
     "crates/dbflux_lua",
@@ -79,6 +80,7 @@ dbflux_components = { path = "crates/dbflux_components" }
 dbflux_ui_base = { path = "crates/dbflux_ui_base" }
 dbflux_ui_document = { path = "crates/dbflux_ui_document" }
 dbflux_ui_windows = { path = "crates/dbflux_ui_windows" }
+dbflux_ui_sidebar = { path = "crates/dbflux_ui_sidebar" }
 dbflux_ui = { path = "crates/dbflux_ui" }
 mysql = "25"
 

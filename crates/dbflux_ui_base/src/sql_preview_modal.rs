@@ -1,0 +1,673 @@
+use crate::app_state_entity::AppStateEntity;
+use crate::modal_frame::ModalFrame;
+use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::{FontSizes, Radii, Spacing};
+// SqlGenerationType and SqlPreviewContext now live in dbflux_components;
+// re-export here so existing call-sites via this module path are unchanged.
+pub use dbflux_components::{SqlGenerationType, SqlPreviewContext};
+use dbflux_core::{
+    ColumnInfo, MutationRequest, MutationTemplateOperation, MutationTemplateRequest, QueryLanguage,
+    ReadTemplateOperation, ReadTemplateRequest, SqlGenerationOptions, SqlGenerationRequest,
+    SqlOperation, SqlValueMode, TableInfo, Value,
+};
+use gpui::*;
+use gpui_component::ActiveTheme;
+use gpui_component::Sizable;
+use gpui_component::checkbox::Checkbox;
+use uuid::Uuid;
+
+/// Settings for SQL generation.
+#[derive(Clone)]
+pub struct SqlPreviewSettings {
+    pub use_fully_qualified_names: bool,
+    pub compact_sql: bool,
+}
+
+impl Default for SqlPreviewSettings {
+    fn default() -> Self {
+        Self {
+            use_fully_qualified_names: true,
+            compact_sql: false,
+        }
+    }
+}
+
+/// SQL mode: regeneration + options panel.
+/// Generic mode (`query_language` set): static text, no options.
+pub struct SqlPreviewModal {
+    app_state: Entity<AppStateEntity>,
+    visible: bool,
+    context: Option<SqlPreviewContext>,
+    generation_type: SqlGenerationType,
+    settings: SqlPreviewSettings,
+    sql_display: Entity<InputState>,
+    generated_sql: String,
+    focus_handle: FocusHandle,
+
+    query_language: Option<QueryLanguage>,
+    badge_label: Option<String>,
+}
+
+impl SqlPreviewModal {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let sql_display = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor("sql")
+                .line_number(true)
+                .soft_wrap(true)
+        });
+
+        Self {
+            app_state,
+            visible: false,
+            context: None,
+            generation_type: SqlGenerationType::SelectWhere,
+            settings: SqlPreviewSettings::default(),
+            sql_display,
+            generated_sql: String::new(),
+            focus_handle: cx.focus_handle(),
+            query_language: None,
+            badge_label: None,
+        }
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Open in SQL mode with the given context and generation type.
+    pub fn open(
+        &mut self,
+        context: SqlPreviewContext,
+        generation_type: SqlGenerationType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.query_language.is_some() {
+            self.query_language = None;
+            self.badge_label = None;
+            self.sql_display = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .code_editor("sql")
+                    .line_number(true)
+                    .soft_wrap(true)
+            });
+        }
+
+        self.context = Some(context);
+        self.generation_type = generation_type;
+        self.visible = true;
+        self.regenerate_sql(window, cx);
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    /// Open in generic mode with static query text.
+    pub fn open_query_preview(
+        &mut self,
+        language: QueryLanguage,
+        badge: &str,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.context = None;
+        let editor_mode = language.editor_mode();
+        self.query_language = Some(language);
+        self.badge_label = Some(badge.to_string());
+        self.visible = true;
+
+        self.generated_sql = query.clone();
+
+        self.sql_display = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .code_editor(editor_mode)
+                .line_number(true)
+                .soft_wrap(true);
+            state.set_value(&query, window, cx);
+            state
+        });
+
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    pub fn close(&mut self, cx: &mut Context<Self>) {
+        self.visible = false;
+        self.context = None;
+        self.query_language = None;
+        self.badge_label = None;
+        self.generated_sql.clear();
+        cx.notify();
+    }
+
+    fn regenerate_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(context) = &self.context else {
+            return;
+        };
+
+        let sql = match context {
+            SqlPreviewContext::DataTableRow {
+                profile_id,
+                schema_name,
+                table_name,
+                column_names,
+                row_values,
+                pk_indices,
+            } => self.generate_from_row_data(
+                *profile_id,
+                schema_name.as_deref(),
+                table_name,
+                column_names,
+                row_values,
+                pk_indices,
+                cx,
+            ),
+            SqlPreviewContext::DataMutation {
+                profile_id,
+                mutation,
+            } => self.generate_from_mutation(*profile_id, mutation, cx),
+            SqlPreviewContext::SidebarTable {
+                profile_id,
+                table_info,
+            } => self.generate_from_table_info(*profile_id, table_info, cx),
+        };
+
+        self.generated_sql = sql.clone();
+        self.sql_display.update(cx, |state, cx| {
+            state.set_value(&sql, window, cx);
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn generate_from_row_data(
+        &self,
+        profile_id: Uuid,
+        schema_name: Option<&str>,
+        table_name: &str,
+        column_names: &[String],
+        row_values: &[Value],
+        pk_indices: &[usize],
+        cx: &App,
+    ) -> String {
+        let connection = self.app_state.read(cx).get_connection(profile_id);
+
+        let columns: Vec<ColumnInfo> = column_names
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| ColumnInfo {
+                name: name.clone(),
+                type_name: String::new(),
+                nullable: true,
+                is_primary_key: pk_indices.contains(&idx),
+                default_value: None,
+                enum_values: None,
+            })
+            .collect();
+
+        let operation = match self.generation_type {
+            SqlGenerationType::SelectAll => {
+                return "-- SELECT * is not supported from row context".to_string();
+            }
+            SqlGenerationType::SelectWhere => SqlOperation::SelectWhere,
+            SqlGenerationType::Insert => SqlOperation::Insert,
+            SqlGenerationType::Update => SqlOperation::Update,
+            SqlGenerationType::Delete => SqlOperation::Delete,
+            // DDL operations are not supported from row data context
+            SqlGenerationType::CreateTable
+            | SqlGenerationType::Truncate
+            | SqlGenerationType::DropTable => {
+                return format!(
+                    "-- {} is not supported from row context",
+                    self.generation_type.label()
+                );
+            }
+        };
+
+        let request = SqlGenerationRequest {
+            operation,
+            schema: schema_name,
+            table: table_name,
+            columns: &columns,
+            values: SqlValueMode::WithValues(row_values),
+            pk_indices,
+            options: SqlGenerationOptions {
+                fully_qualified: self.settings.use_fully_qualified_names,
+                compact: self.settings.compact_sql,
+            },
+        };
+
+        if let Some(conn) = connection {
+            match conn.generate_sql(&request) {
+                Ok(sql) => sql,
+                Err(e) => format!("-- Error generating SQL: {}", e),
+            }
+        } else {
+            dbflux_core::generate_sql(&dbflux_core::DefaultSqlDialect, &request)
+        }
+    }
+
+    fn generate_from_table_info(
+        &self,
+        profile_id: Uuid,
+        table_info: &TableInfo,
+        cx: &App,
+    ) -> String {
+        let connection = self.app_state.read(cx).get_connection(profile_id);
+
+        // DDL operations use the driver directly
+        if let Some(generator_id) = self.generation_type.driver_generator_id() {
+            if let Some(conn) = connection {
+                match conn.generate_code(generator_id, table_info) {
+                    Ok(sql) => return sql,
+                    Err(e) => return format!("-- Error generating SQL: {}", e),
+                }
+            } else {
+                return format!(
+                    "-- Error: DDL generation requires an active connection for {}",
+                    self.generation_type.label()
+                );
+            }
+        }
+
+        if matches!(
+            self.generation_type,
+            SqlGenerationType::Insert | SqlGenerationType::Update | SqlGenerationType::Delete
+        ) {
+            let Some(conn) = connection else {
+                return "-- Error: DML preview requires an active connection".to_string();
+            };
+
+            let Some(generator) = conn.query_generator() else {
+                return "-- Error: query generation is not supported for this driver".to_string();
+            };
+
+            let Some(columns) = table_info.columns.as_deref() else {
+                return "-- Error: table columns are required for mutation preview".to_string();
+            };
+
+            let operation = match self.generation_type {
+                SqlGenerationType::Insert => MutationTemplateOperation::Insert,
+                SqlGenerationType::Update => MutationTemplateOperation::Update,
+                SqlGenerationType::Delete => MutationTemplateOperation::Delete,
+                _ => unreachable!(),
+            };
+
+            return match generator.generate_template(&MutationTemplateRequest {
+                operation,
+                schema: table_info.schema.as_deref(),
+                table: &table_info.name,
+                columns,
+                options: SqlGenerationOptions {
+                    fully_qualified: self.settings.use_fully_qualified_names,
+                    compact: self.settings.compact_sql,
+                },
+            }) {
+                Some(generated) => generated.text,
+                None => "-- Error: driver could not generate this mutation preview".to_string(),
+            };
+        }
+
+        if self.generation_type == SqlGenerationType::SelectWhere {
+            let Some(conn) = connection else {
+                return "-- Error: query preview requires an active connection".to_string();
+            };
+
+            let Some(generator) = conn.query_generator() else {
+                return "-- Error: query generation is not supported for this driver".to_string();
+            };
+
+            let Some(columns) = table_info.columns.as_deref() else {
+                return "-- Error: table columns are required for query preview".to_string();
+            };
+
+            return match generator.generate_read_template(&ReadTemplateRequest {
+                operation: ReadTemplateOperation::SelectWhere,
+                schema: table_info.schema.as_deref(),
+                table: &table_info.name,
+                columns,
+                options: SqlGenerationOptions {
+                    fully_qualified: self.settings.use_fully_qualified_names,
+                    compact: self.settings.compact_sql,
+                },
+            }) {
+                Some(generated) => generated.text,
+                None => "-- Error: driver could not generate this query preview".to_string(),
+            };
+        }
+
+        if self.generation_type == SqlGenerationType::SelectAll {
+            let Some(conn) = connection else {
+                return "-- Error: query preview requires an active connection".to_string();
+            };
+
+            let Some(generator) = conn.query_generator() else {
+                return "-- Error: query generation is not supported for this driver".to_string();
+            };
+
+            let columns = table_info.columns.as_deref().unwrap_or(&[]);
+
+            return match generator.generate_read_template(&ReadTemplateRequest {
+                operation: ReadTemplateOperation::SelectAll,
+                schema: table_info.schema.as_deref(),
+                table: &table_info.name,
+                columns,
+                options: SqlGenerationOptions {
+                    fully_qualified: self.settings.use_fully_qualified_names,
+                    compact: self.settings.compact_sql,
+                },
+            }) {
+                Some(generated) => generated.text,
+                None => "-- Error: driver could not generate this query preview".to_string(),
+            };
+        }
+
+        // Legacy fallback path for non-DML/non-DDL SQL preview types.
+        let columns: Vec<ColumnInfo> = table_info.columns.clone().unwrap_or_else(|| {
+            vec![
+                ColumnInfo {
+                    name: "column1".to_string(),
+                    type_name: String::new(),
+                    nullable: true,
+                    is_primary_key: true,
+                    default_value: None,
+                    enum_values: None,
+                },
+                ColumnInfo {
+                    name: "column2".to_string(),
+                    type_name: String::new(),
+                    nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    enum_values: None,
+                },
+            ]
+        });
+
+        let pk_indices: Vec<usize> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.is_primary_key)
+            .map(|(idx, _)| idx)
+            .collect();
+
+        let operation = match self.generation_type {
+            SqlGenerationType::SelectAll => {
+                log::error!(
+                    "[SQL Preview] Unexpected SelectAll generation type in legacy generator path"
+                );
+                return "-- Error: unsupported SQL generation type for this preview".to_string();
+            }
+            SqlGenerationType::SelectWhere => SqlOperation::SelectWhere,
+            SqlGenerationType::Insert => SqlOperation::Insert,
+            SqlGenerationType::Update => SqlOperation::Update,
+            SqlGenerationType::Delete => SqlOperation::Delete,
+            // DDL operations are handled above
+            SqlGenerationType::CreateTable
+            | SqlGenerationType::Truncate
+            | SqlGenerationType::DropTable => {
+                log::error!(
+                    "[SQL Preview] Unexpected DDL generation type in DML generator path: {:?}",
+                    self.generation_type
+                );
+                return "-- Error: unsupported SQL generation type for this preview".to_string();
+            }
+        };
+
+        let request = SqlGenerationRequest {
+            operation,
+            schema: table_info.schema.as_deref(),
+            table: &table_info.name,
+            columns: &columns,
+            values: SqlValueMode::WithPlaceholders,
+            pk_indices: &pk_indices,
+            options: SqlGenerationOptions {
+                fully_qualified: self.settings.use_fully_qualified_names,
+                compact: self.settings.compact_sql,
+            },
+        };
+
+        if let Some(conn) = connection {
+            match conn.generate_sql(&request) {
+                Ok(sql) => sql,
+                Err(e) => format!("-- Error generating SQL: {}", e),
+            }
+        } else {
+            dbflux_core::generate_sql(&dbflux_core::DefaultSqlDialect, &request)
+        }
+    }
+
+    fn generate_from_mutation(
+        &self,
+        profile_id: Uuid,
+        mutation: &MutationRequest,
+        cx: &App,
+    ) -> String {
+        let connection = self.app_state.read(cx).get_connection(profile_id);
+
+        let Some(conn) = connection else {
+            return "-- Error: DML preview requires an active connection".to_string();
+        };
+
+        let Some(generator) = conn.query_generator() else {
+            return "-- Error: query generation is not supported for this driver".to_string();
+        };
+
+        match generator.generate_mutation(mutation) {
+            Some(generated) => generated.text,
+            None => "-- Error: driver could not generate this mutation preview".to_string(),
+        }
+    }
+
+    fn copy_to_clipboard(&self, cx: &mut Context<Self>) {
+        if !self.generated_sql.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(self.generated_sql.clone()));
+        }
+    }
+
+    fn toggle_fully_qualified(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.use_fully_qualified_names = !self.settings.use_fully_qualified_names;
+        self.regenerate_sql(window, cx);
+    }
+
+    fn toggle_compact(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.compact_sql = !self.settings.compact_sql;
+        self.regenerate_sql(window, cx);
+    }
+}
+
+impl Render for SqlPreviewModal {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.visible {
+            return div().into_any_element();
+        }
+
+        let theme = cx.theme();
+        let sql_display = self.sql_display.clone();
+        let is_generic = self.query_language.is_some();
+
+        let entity = cx.entity().downgrade();
+        let close = move |_window: &mut Window, cx: &mut App| {
+            entity.update(cx, |this, cx| this.close(cx)).ok();
+        };
+
+        // -- Title & badge --
+
+        let title = if is_generic {
+            "Query Preview"
+        } else {
+            "SQL Preview"
+        };
+
+        let badge_text: SharedString = if let Some(label) = &self.badge_label {
+            label.clone().into()
+        } else {
+            self.generation_type.label().into()
+        };
+
+        let type_badge = div()
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .rounded(Radii::SM)
+            .bg(theme.secondary)
+            .child(Text::caption(badge_text).font_size(FontSizes::XS));
+
+        let mut frame = ModalFrame::new("sql-preview-modal", &self.focus_handle, close)
+            .title(title)
+            .icon(AppIcon::Code)
+            .width(px(1000.0))
+            .max_height(px(800.0))
+            .header_extra(type_badge)
+            .child(
+                div()
+                    .flex_1()
+                    .p(Spacing::MD)
+                    .min_h(px(200.0))
+                    .max_h(px(300.0))
+                    .overflow_hidden()
+                    .child(Input::new(&sql_display).w_full().h_full()),
+            );
+
+        // -- Options (SQL mode, DML only) --
+
+        let supports_sql_options = matches!(
+            self.context,
+            Some(SqlPreviewContext::DataTableRow { .. } | SqlPreviewContext::SidebarTable { .. })
+        );
+
+        if !is_generic && !self.generation_type.is_ddl() && supports_sql_options {
+            let use_fqn = self.settings.use_fully_qualified_names;
+            let compact = self.settings.compact_sql;
+
+            frame = frame.child(
+                div()
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::LG)
+                    .child(Text::label_sm("Options").muted_foreground())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(
+                                Checkbox::new("fqn-checkbox")
+                                    .checked(use_fqn)
+                                    .small()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_fully_qualified(window, cx);
+                                    })),
+                            )
+                            .child(Text::body("Fully qualified names")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .child(
+                                Checkbox::new("compact-checkbox")
+                                    .checked(compact)
+                                    .small()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_compact(window, cx);
+                                    })),
+                            )
+                            .child(Text::body("Compact SQL")),
+                    ),
+            );
+        }
+
+        // -- Footer --
+
+        let mut footer = div()
+            .px(Spacing::MD)
+            .py(Spacing::SM)
+            .border_t_1()
+            .border_color(theme.border)
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(Spacing::SM);
+
+        if !is_generic {
+            footer = footer.child(
+                div()
+                    .id("refresh-btn")
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(theme.secondary)
+                    .hover(|d| d.bg(theme.muted))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.regenerate_sql(window, cx);
+                    }))
+                    .child(Icon::new(AppIcon::RefreshCcw).size(px(16.0)).muted())
+                    .child(Text::body("Refresh").font_size(FontSizes::SM)),
+            );
+        }
+
+        footer = footer
+            .child(
+                div()
+                    .id("copy-btn")
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(theme.primary)
+                    .hover(|d| d.opacity(0.9))
+                    .text_size(FontSizes::SM)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.copy_to_clipboard(cx);
+                        this.close(cx);
+                    }))
+                    .child(
+                        Icon::new(AppIcon::Layers)
+                            .size(px(16.0))
+                            .color(theme.primary_foreground),
+                    )
+                    .child(Text::caption("Copy").color(theme.primary_foreground)),
+            )
+            .child(
+                div()
+                    .id("close-footer-btn")
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .px(Spacing::MD)
+                    .py(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(theme.secondary)
+                    .hover(|d| d.bg(theme.muted))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close(cx);
+                    }))
+                    .child(Text::body("Close").font_size(FontSizes::SM)),
+            );
+
+        frame = frame.child(footer);
+
+        frame.render(cx)
+    }
+}
+
+impl EventEmitter<()> for SqlPreviewModal {}
