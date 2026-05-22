@@ -109,6 +109,11 @@ pub enum Command {
     // === Charts ===
     /// Open the saved-chart fuzzy overlay (lists all SavedCharts for the current profile).
     OpenSavedChart,
+    /// Open a metrics chart for the active connection when it advertises METRIC_SERIES.
+    ///
+    /// Visibility is gated solely on `DriverCapabilities::METRIC_SERIES`; no
+    /// driver_id or DatabaseCategory branching is permitted in the handler.
+    OpenMetricsChart,
 }
 
 impl Command {
@@ -145,6 +150,7 @@ impl Command {
             #[cfg(feature = "mcp")]
             "refresh_mcp_governance" => Some(Command::RefreshMcpGovernance),
             "open_saved_chart" => Some(Command::OpenSavedChart),
+            "open_metrics_chart" => Some(Command::OpenMetricsChart),
             _ => None,
         }
     }
@@ -242,6 +248,7 @@ impl Command {
             #[cfg(feature = "mcp")]
             Command::RefreshMcpGovernance => "Refresh MCP Governance",
             Command::OpenSavedChart => "Open Chart...",
+            Command::OpenMetricsChart => "Open Metrics Chart",
         }
     }
 
@@ -335,7 +342,7 @@ impl Command {
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals | Command::RefreshMcpGovernance => "View",
 
-            Command::OpenSavedChart => "Charts",
+            Command::OpenSavedChart | Command::OpenMetricsChart => "Charts",
         }
     }
 

@@ -15,8 +15,9 @@ use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::app::AppStateEntity;
 use crate::keymap::{Command, ContextId};
+use crate::ui::common::time_range::state::TimeRange;
 use crate::ui::common::time_range::view::TimeRangePanel;
-use crate::ui::components::dropdown::{Dropdown, DropdownItem};
+use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use crate::ui::components::toast::PendingToast;
 use dbflux_components::chart::{
     ChartDataSource, ChartDetection, ChartSourceError, TimeWindow, detect_chart_columns,
@@ -93,6 +94,10 @@ pub struct ChartDocument {
     // Toolbar controls
     time_range_panel: Option<Entity<TimeRangePanel>>,
     _time_range_sub: Option<Subscription>,
+    /// Mirrors `TimeRangePanel::selected_time_range` so the render path can
+    /// decide whether to show the custom date/time picker row without calling
+    /// `panel.read(cx)` on every frame.
+    selected_time_range: Option<TimeRange>,
     refresh_dropdown: Entity<Dropdown>,
     refresh_policy: RefreshPolicy,
     _refresh_subscriptions: Vec<Subscription>,
@@ -145,17 +150,26 @@ impl ChartDocument {
             ChartShell::new_standalone(cx)
         });
 
+        let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
                 .iter()
-                .map(|policy| DropdownItem::new(policy.label()))
+                .map(|p| DropdownItem::new(p.label()))
                 .collect();
 
             Dropdown::new("chart-doc-refresh")
                 .items(items)
-                .selected_index(Some(RefreshPolicy::default().index()))
+                .selected_index(Some(default_refresh.index()))
                 .compact_trigger(true)
         });
+
+        let refresh_policy_sub = cx.subscribe(
+            &refresh_dropdown,
+            |this: &mut Self, _, event: &DropdownSelectionChanged, cx| {
+                let policy = RefreshPolicy::from_index(event.index);
+                this.set_refresh_policy(policy, cx);
+            },
+        );
 
         let mut runner = DocumentTaskRunner::new(app_state.clone());
         if let Some(pid) = profile_id {
@@ -187,9 +201,10 @@ impl ChartDocument {
             chart_shell,
             time_range_panel: None,
             _time_range_sub: None,
+            selected_time_range: None,
             refresh_dropdown,
-            refresh_policy: RefreshPolicy::default(),
-            _refresh_subscriptions: Vec::new(),
+            refresh_policy: default_refresh,
+            _refresh_subscriptions: vec![refresh_policy_sub],
             _refresh_timer: None,
             pending_time_window: None,
             pending_chart_reexecute: false,
@@ -242,6 +257,85 @@ impl ChartDocument {
         doc.title = saved.name.clone();
         doc.saved_chart_id = Some(saved.id);
         Ok(doc)
+    }
+
+    /// Create a `ChartDocument` with an explicitly supplied `ChartDataSource`.
+    ///
+    /// Used when the caller already holds a fully-constructed source (e.g.
+    /// `MetricSource`) and does not want to go through `resolve_source`. The
+    /// document title defaults to `"Untitled chart"` and can be overridden by
+    /// the caller after construction.
+    ///
+    /// `pending_run_on_first_render` is always `true`: the document auto-executes
+    /// on first render, which seeds the initial time window from `TimeRangePanel`
+    /// and fires the first data request.
+    pub fn new_with_source(
+        profile_id: Option<Uuid>,
+        title: String,
+        data_source: Box<dyn ChartDataSource>,
+        app_state: Entity<AppStateEntity>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let chart_shell = cx.new(ChartShell::new_standalone);
+
+        let default_refresh = RefreshPolicy::default();
+        let refresh_dropdown = cx.new(|_cx| {
+            let items = RefreshPolicy::ALL
+                .iter()
+                .map(|p| DropdownItem::new(p.label()))
+                .collect();
+
+            Dropdown::new("chart-doc-refresh")
+                .items(items)
+                .selected_index(Some(default_refresh.index()))
+                .compact_trigger(true)
+        });
+
+        let refresh_policy_sub = cx.subscribe(
+            &refresh_dropdown,
+            |this: &mut Self, _, event: &DropdownSelectionChanged, cx| {
+                let policy = RefreshPolicy::from_index(event.index);
+                this.set_refresh_policy(policy, cx);
+            },
+        );
+
+        let mut runner = DocumentTaskRunner::new(app_state.clone());
+        if let Some(pid) = profile_id {
+            runner.set_profile_id(pid);
+        }
+
+        Self {
+            id: DocumentId::new(),
+            title,
+            state: DocumentState::Clean,
+            exec_state: ExecState::Idle,
+            profile_id,
+            query: String::new(),
+            data_source,
+            last_result: None,
+            runner,
+            app_state,
+            pending_result: None,
+            pending_run_on_first_render: true,
+            chart_shell,
+            time_range_panel: None,
+            _time_range_sub: None,
+            selected_time_range: None,
+            refresh_dropdown,
+            refresh_policy: default_refresh,
+            _refresh_subscriptions: vec![refresh_policy_sub],
+            _refresh_timer: None,
+            pending_time_window: None,
+            pending_chart_reexecute: false,
+            saved_chart_id: None,
+            name_prompt: None,
+            pending_toast: None,
+            result_panel: None,
+            focus_handle: cx.focus_handle(),
+            focus_mode: ChartDocFocus::default(),
+            _subscriptions: Vec::new(),
+        }
     }
 
     /// Check whether a `SavedChart` source is compatible with `ChartDocument`.
@@ -331,8 +425,19 @@ impl ChartDocument {
             end_ms: e,
         });
 
-        let request = match self.data_source.build_request(window) {
-            Ok(r) => r,
+        // Build the execution plan through the data source seam, then extract the
+        // Driver request. Query/Collection sources always yield ChartDataPlan::Driver;
+        // the non-Driver arm is a defensive guard for any future source kind that
+        // somehow reaches ChartDocument (which should not happen by design).
+        let request = match self.data_source.build_plan(window) {
+            Ok(dbflux_components::chart::ChartDataPlan::Driver(r)) => r,
+            Ok(_non_driver) => {
+                // Non-Driver plans are not executable by ChartDocument; this path
+                // is unreachable with Query/Collection sources but is handled
+                // defensively to avoid a silent no-op.
+                log::warn!("[chart-doc] build_plan returned a non-Driver plan; ignoring");
+                return;
+            }
             Err(ChartSourceError::EmptyQuery) => return,
             Err(e) => {
                 self.pending_toast = Some(PendingToast {
@@ -449,16 +554,50 @@ impl ChartDocument {
     ///
     /// Stashes the resolved window and schedules a re-execution on the next
     /// render cycle, mirroring how `CodeDocument` reacts to range changes.
+    /// Also mirrors `selected_time_range` from the panel so the render path
+    /// knows whether to keep the custom picker row visible after Apply.
     pub fn on_time_range_changed(
         &mut self,
         start_ms: Option<i64>,
         end_ms: Option<i64>,
         cx: &mut Context<Self>,
     ) {
+        // Mirror the panel's selected range so the custom picker row stays
+        // visible after the user applies a custom window.
+        if let Some(panel) = &self.time_range_panel {
+            self.selected_time_range = panel.read(cx).selected_time_range;
+        }
+
         if let (Some(start), Some(end)) = (start_ms, end_ms) {
             self.pending_time_window = Some((start, end));
             self.pending_chart_reexecute = true;
             cx.notify();
+        }
+    }
+
+    /// Apply the custom date/time picker values and trigger a chart re-execution.
+    ///
+    /// Called by the Apply button in the custom picker row. Delegates to the
+    /// panel's `apply_custom_range`, which validates the inputs, emits
+    /// `TimeRangeChanged` (handled by `on_time_range_changed`), and notifies.
+    /// On validation failure a toast is shown.
+    pub(super) fn apply_custom_range(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.time_range_panel.clone() else {
+            return;
+        };
+
+        match panel.update(cx, |p, cx| p.apply_custom_range(cx)) {
+            Ok(_) => {
+                // `TimeRangeChanged` is emitted by the panel; `on_time_range_changed`
+                // handles the window stash and re-execution scheduling.
+            }
+            Err(error) => {
+                self.pending_toast = Some(PendingToast {
+                    message: error,
+                    is_error: true,
+                });
+                cx.notify();
+            }
         }
     }
 
@@ -543,6 +682,7 @@ impl ChartDocument {
                 decimation_threshold: 10_000,
                 binding: dbflux_components::chart::BindingSpec::default(),
                 track_source_indices: false,
+                y_scale: dbflux_components::chart::YScale::Linear,
             });
 
         let bindings = spec.binding.clone();
@@ -780,12 +920,13 @@ mod tests {
 
     /// T-DS-01 / R-03: `resolve_source` with a Query source and a time window
     /// produces a request carrying the window. This mirrors the exact path
-    /// `request_reexecute` takes: `self.data_source.build_request(window)`.
+    /// `request_reexecute` takes: `self.data_source.build_plan(window)` and
+    /// destructures `ChartDataPlan::Driver(request)`.
     ///
     /// Tested without a GPUI runtime by calling the seam directly.
     #[test]
-    fn data_source_build_request_with_window_produces_collection_window_context() {
-        use dbflux_components::chart::{ChartSourceError, TimeWindow, resolve_source};
+    fn data_source_build_plan_with_window_produces_driver_plan_with_collection_window_context() {
+        use dbflux_components::chart::{ChartDataPlan, TimeWindow, resolve_source};
         use dbflux_components::saved_chart::SavedChartSource;
         use dbflux_core::ExecutionSourceContext;
 
@@ -798,9 +939,13 @@ mod tests {
             end_ms: 2_000,
         };
 
-        let request = source
-            .build_request(Some(window))
-            .expect("non-empty query with window must produce Ok request");
+        let plan = source
+            .build_plan(Some(window))
+            .expect("non-empty query with window must produce Ok plan");
+
+        let ChartDataPlan::Driver(request) = plan else {
+            panic!("expected ChartDataPlan::Driver");
+        };
 
         let ctx = request
             .execution_context
@@ -811,16 +956,17 @@ mod tests {
             ExecutionSourceContext::CollectionWindow {
                 start_ms, end_ms, ..
             } => {
-                assert_eq!(*start_ms, 1_000);
-                assert_eq!(*end_ms, 2_000);
+                assert_eq!(start_ms, &1_000_i64);
+                assert_eq!(end_ms, &2_000_i64);
             }
+            other => panic!("expected CollectionWindow source context, got: {other:?}"),
         }
     }
 
     /// T-DS-02 / R-03, R-07: empty query via data source returns `EmptyQuery`.
     /// This corresponds to the early-return branch in `request_reexecute`.
     #[test]
-    fn data_source_build_request_empty_query_returns_empty_query_error() {
+    fn data_source_build_plan_empty_query_returns_empty_query_error() {
         use dbflux_components::chart::{ChartSourceError, resolve_source};
         use dbflux_components::saved_chart::SavedChartSource;
 
@@ -828,7 +974,7 @@ mod tests {
             query: String::new(),
         });
 
-        let result = source.build_request(None);
+        let result = source.build_plan(None);
 
         assert!(
             matches!(result, Err(ChartSourceError::EmptyQuery)),
@@ -836,21 +982,25 @@ mod tests {
         );
     }
 
-    /// T-DS-03 / R-03: data source without a window produces no source context.
-    /// Verifies the no-window branch preserves the pre-seam behavior (no
-    /// `CollectionWindow` injected when `pending_time_window` is `None`).
+    /// T-DS-03 / R-03: data source without a window produces a Driver plan with
+    /// no source context. Verifies the no-window branch preserves the pre-seam
+    /// behavior (no `CollectionWindow` injected when `pending_time_window` is `None`).
     #[test]
-    fn data_source_build_request_without_window_produces_no_source_context() {
-        use dbflux_components::chart::resolve_source;
+    fn data_source_build_plan_without_window_produces_driver_plan_with_no_source_context() {
+        use dbflux_components::chart::{ChartDataPlan, resolve_source};
         use dbflux_components::saved_chart::SavedChartSource;
 
         let source = resolve_source(&SavedChartSource::Query {
             query: "SELECT 1".to_string(),
         });
 
-        let request = source
-            .build_request(None)
-            .expect("non-empty query without window must produce Ok request");
+        let plan = source
+            .build_plan(None)
+            .expect("non-empty query without window must produce Ok plan");
+
+        let ChartDataPlan::Driver(request) = plan else {
+            panic!("expected ChartDataPlan::Driver");
+        };
 
         let has_source = request
             .execution_context

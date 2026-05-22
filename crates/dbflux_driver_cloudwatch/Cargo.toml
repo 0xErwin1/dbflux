@@ -19,6 +19,7 @@ workspace = true
 dbflux_core.workspace = true
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-cloudwatchlogs = "1"
+aws-sdk-cloudwatch = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 serde_json = "1"
 log = "0.4"

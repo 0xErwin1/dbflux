@@ -174,6 +174,10 @@ fn source_input_values_from_context(source: &ExecutionSourceContext) -> Option<(
             format_source_datetime_input(*start_ms),
             format_source_datetime_input(*end_ms),
         )),
+        // MetricQuery sources carry their time bounds in the variant itself rather
+        // than being driven by the log-group source bar; return None so the source
+        // controls are not populated for metric sources.
+        _ => None,
     }
 }
 
