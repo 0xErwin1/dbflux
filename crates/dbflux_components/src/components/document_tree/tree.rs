@@ -15,7 +15,7 @@ use super::state::{DocumentTreeState, DocumentViewMode};
 pub const TREE_ROW_HEIGHT: Pixels = px(26.0);
 
 /// Indentation per depth level.
-const INDENT_WIDTH: Pixels = px(16.0);
+const INDENT_WIDTH: Pixels = px(16.0); // guardrail-allow: domain const, tree indentation step
 
 actions!(
     document_tree,
@@ -467,7 +467,7 @@ fn render_toolbar(
                     } else {
                         AppIcon::Rows3
                     })
-                    .size(px(16.0))
+                    .size(Heights::ICON_SM)
                     .muted(),
                 ),
         )
@@ -499,7 +499,7 @@ fn render_search_bar(
         .border_b_1()
         .border_color(theme.border)
         .bg(theme.secondary.opacity(0.3))
-        .child(Icon::new(AppIcon::Search).size(px(16.0)).muted())
+        .child(Icon::new(AppIcon::Search).size(Heights::ICON_SM).muted())
         .child(div().flex_1().child(Input::new(&input).small().w_full()))
         .child(Text::caption(match_text).font_size(FontSizes::XS))
         .child(
@@ -517,7 +517,7 @@ fn render_search_bar(
                         state.update(cx, |s, cx| s.close_search(cx));
                     }
                 })
-                .child(Icon::new(AppIcon::X).size(px(12.0)).muted()),
+                .child(Icon::new(AppIcon::X).size(px(12.0)).muted()), // guardrail-allow: 12px icon size, no ICON_XS token
         )
 }
 
@@ -671,8 +671,8 @@ fn render_chevron(
     node_id: NodeId,
 ) -> Div {
     let chevron = div()
-        .w(px(16.0))
-        .h(px(16.0))
+        .w(Heights::ICON_SM)
+        .h(Heights::ICON_SM)
         .flex()
         .items_center()
         .justify_center();
@@ -685,7 +685,7 @@ fn render_chevron(
         };
 
         chevron
-            .child(Icon::new(icon).size(px(12.0)).color(muted_color))
+            .child(Icon::new(icon).size(px(12.0)).color(muted_color)) // guardrail-allow: 12px icon size, no ICON_XS token
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 cx.stop_propagation();
@@ -700,16 +700,16 @@ fn get_type_color(value: &NodeValue, theme: &gpui_component::Theme) -> Hsla {
     match value {
         NodeValue::Scalar(v) => match v {
             dbflux_core::Value::Null => theme.muted_foreground,
-            dbflux_core::Value::Bool(_) => hsla(280.0 / 360.0, 0.6, 0.6, 1.0),
-            dbflux_core::Value::Int(_) => hsla(120.0 / 360.0, 0.5, 0.5, 1.0),
+            dbflux_core::Value::Bool(_) => hsla(280.0 / 360.0, 0.6, 0.6, 1.0), // guardrail-allow: JSON type color, no semantic token
+            dbflux_core::Value::Int(_) => hsla(120.0 / 360.0, 0.5, 0.5, 1.0), // guardrail-allow: JSON type color
             dbflux_core::Value::Float(_) | dbflux_core::Value::Decimal(_) => {
-                hsla(150.0 / 360.0, 0.5, 0.5, 1.0)
+                hsla(150.0 / 360.0, 0.5, 0.5, 1.0) // guardrail-allow: JSON type color
             }
-            dbflux_core::Value::Text(_) => hsla(30.0 / 360.0, 0.7, 0.6, 1.0),
+            dbflux_core::Value::Text(_) => hsla(30.0 / 360.0, 0.7, 0.6, 1.0), // guardrail-allow: JSON type color
             dbflux_core::Value::ObjectId(_) => theme.primary,
             dbflux_core::Value::DateTime(_)
             | dbflux_core::Value::Date(_)
-            | dbflux_core::Value::Time(_) => hsla(200.0 / 360.0, 0.6, 0.5, 1.0),
+            | dbflux_core::Value::Time(_) => hsla(200.0 / 360.0, 0.6, 0.5, 1.0), // guardrail-allow: JSON type color
             dbflux_core::Value::Bytes(_) => theme.warning,
             dbflux_core::Value::Json(_) => theme.muted_foreground,
             _ => theme.foreground,

@@ -5,7 +5,7 @@ use std::time::Duration;
 use dbflux_components::controls::Button;
 use dbflux_components::icon::IconSource;
 use dbflux_components::primitives::{Icon, IconButton, Text};
-use dbflux_components::tokens::BannerColors;
+use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, Global, Hsla, SharedString, Window, px, rems};
@@ -59,24 +59,24 @@ impl ToastKind {
 
     /// Foreground / accent fill color (icon, stripe, progress fill where appropriate).
     fn accent(self, cx: &App) -> Hsla {
-        let theme = cx.theme();
+        let b = SemBannerColors::for_current(cx);
         match self {
-            Self::Success => BannerColors::success_fg(theme),
-            Self::Info => BannerColors::info_fg(theme),
-            Self::Warning => BannerColors::warning_fg(theme),
-            Self::Error => BannerColors::danger_fg(theme),
+            Self::Success => b.success_fg,
+            Self::Info => b.info_fg,
+            Self::Warning => b.warning_fg,
+            Self::Error => b.error_fg,
         }
     }
 
     /// Background tint applied to the toast card. Kept subtle so the accent
     /// stripe and theme chrome carry the variant signal.
     fn background(self, cx: &App) -> Hsla {
-        let theme = cx.theme();
+        let b = SemBannerColors::for_current(cx);
         match self {
-            Self::Success => BannerColors::success_bg(theme),
-            Self::Info => BannerColors::info_bg(theme),
-            Self::Warning => BannerColors::warning_bg(theme),
-            Self::Error => BannerColors::danger_bg(theme),
+            Self::Success => b.success_bg,
+            Self::Info => b.info_bg,
+            Self::Warning => b.warning_bg,
+            Self::Error => b.error_bg,
         }
     }
 }

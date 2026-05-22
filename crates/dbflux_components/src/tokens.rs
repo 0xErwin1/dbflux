@@ -3,6 +3,10 @@ use gpui::{BoxShadow, Hsla, Pixels, Point, px, rgb};
 pub struct Spacing;
 
 impl Spacing {
+    /// Half-step below XS — form-row label padding, chart pills. (6 px)
+    ///
+    /// Note: XXS (6) > XS (4); non-monotonic by design, locked to px(6.).
+    pub const XXS: Pixels = px(6.0);
     pub const XS: Pixels = px(4.0);
     pub const SM: Pixels = px(8.0);
     pub const MD: Pixels = px(12.0);
@@ -67,6 +71,17 @@ impl Radii {
     pub const LG: Pixels = px(0.0);
     /// Full radius — pill shapes, avatars, status dots.
     pub const FULL: Pixels = px(9999.0);
+}
+
+/// Border-width tokens. WIDTH context only — `.border_*` widths, stripe
+/// thicknesses. Do NOT use for margins, paddings, or radii.
+pub struct Borders;
+
+impl Borders {
+    /// Hairline border — default control/separator edge. (1 px)
+    pub const THIN: Pixels = px(1.0);
+    /// Emphasis border — danger accents, active-state edges. (2 px)
+    pub const MEDIUM: Pixels = px(2.0);
 }
 
 /// Centralized box-shadow definitions.
@@ -285,60 +300,6 @@ impl RowColors {
     }
 }
 
-/// Banner background and foreground colors for status banners.
-///
-/// Values are sourced from the design-token sheet (`tokens.css --c-banner-*`).
-/// `info` maps to `--c-banner-wait-*`, `success` to `--c-banner-ok-*`, and
-/// `danger` to `--c-banner-err-*`. `warning` derives from the theme's primary
-/// amber at reduced alpha (no separate token in tokens.css).
-pub struct BannerColors;
-
-impl BannerColors {
-    /// Info/wait banner background: `#1E3A5F`.
-    pub fn info_bg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x1E3A5F).into()
-    }
-
-    /// Info/wait banner foreground: `#93C5FD`.
-    pub fn info_fg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x93C5FD).into()
-    }
-
-    /// Success banner background: `#14532D`.
-    pub fn success_bg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x14532D).into()
-    }
-
-    /// Success banner foreground: `#86EFAC`.
-    pub fn success_fg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x86EFAC).into()
-    }
-
-    /// Warning banner background: theme primary at 0.20 alpha.
-    pub fn warning_bg(theme: &gpui_component::Theme) -> Hsla {
-        let mut color = theme.primary;
-        color.a = 0.20;
-        color
-    }
-
-    /// Warning banner foreground: theme primary at full opacity.
-    pub fn warning_fg(theme: &gpui_component::Theme) -> Hsla {
-        let mut color = theme.primary;
-        color.a = 1.0;
-        color
-    }
-
-    /// Danger banner background: `#7F1D1D`.
-    pub fn danger_bg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0x7F1D1D).into()
-    }
-
-    /// Danger banner foreground: `#FCA5A5`.
-    pub fn danger_fg(_theme: &gpui_component::Theme) -> Hsla {
-        rgb(0xFCA5A5).into()
-    }
-}
-
 /// Status-dot palette colors for connection/task indicators.
 ///
 /// The palette returns the dot color only — animation (pulsing) is the
@@ -399,7 +360,10 @@ impl Widths {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Radii, Shadows};
+    use super::{
+        Borders, ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Radii, Shadows,
+        Spacing,
+    };
     use gpui::px;
 
     // Static-constant baseline: matches AppStyle::Default (project's flat,
@@ -469,5 +433,20 @@ mod tests {
         assert_eq!(popover.background, ChromeColorSlot::Popover);
         assert_eq!(popover.edge, ChromeEdgeRole::Popover);
         assert_eq!(popover.radius, Radii::MD);
+    }
+
+    #[test]
+    fn spacing_xxs_equals_px_6() {
+        assert_eq!(Spacing::XXS, px(6.0));
+    }
+
+    #[test]
+    fn borders_thin_equals_px_1() {
+        assert_eq!(Borders::THIN, px(1.0));
+    }
+
+    #[test]
+    fn borders_medium_equals_px_2() {
+        assert_eq!(Borders::MEDIUM, px(2.0));
     }
 }

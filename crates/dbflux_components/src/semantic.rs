@@ -16,6 +16,7 @@
 
 use dbflux_core::ThemeSetting;
 use gpui::{App, Global, Hsla, hsla};
+use gpui_component::ActiveTheme;
 
 // ---------------------------------------------------------------------------
 // Hex helpers
@@ -173,14 +174,38 @@ impl BannerColors {
         }
     }
 
-    /// Return the `BannerColors` for the currently active theme.
+    /// Return the `BannerColors` that reproduce exactly what the former
+    /// `tokens::BannerColors` produced for all 9 call-sites.
     ///
-    /// Reads `ThemeSettingGlobal` from `cx`; falls back to Dark when absent.
+    /// - `info`, `success`, `error`: theme-agnostic fixed hex values taken
+    ///   verbatim from the former `tokens::BannerColors` implementation.
+    /// - `warning`: derived from `theme.primary` at runtime exactly as the
+    ///   former implementation did (bg = primary @ 0.20 alpha,
+    ///   fg = primary @ 1.0 alpha).
+    ///
+    /// The named constructors `dark()`, `mirage()`, and `light()` carry
+    /// per-palette semantic values intended for future use. Call sites that
+    /// need pixel-exact backwards compatibility MUST call this method instead.
     pub fn for_current(cx: &App) -> Self {
-        match ThemeSettingGlobal::get(cx) {
-            ThemeSetting::Dark => Self::dark(),
-            ThemeSetting::Mirage => Self::mirage(),
-            ThemeSetting::Light => Self::light(),
+        let theme = cx.theme();
+        let mut warning_bg = theme.primary;
+        warning_bg.a = 0.20;
+        let mut warning_fg = theme.primary;
+        warning_fg.a = 1.0;
+
+        Self {
+            // #1E3A5F / #93C5FD — former tokens::BannerColors::info_*
+            info_bg: from_hex(0x1E3A5F, 1.0),
+            info_fg: from_hex(0x93C5FD, 1.0),
+            // #14532D / #86EFAC — former tokens::BannerColors::success_*
+            success_bg: from_hex(0x14532D, 1.0),
+            success_fg: from_hex(0x86EFAC, 1.0),
+            // theme.primary @ 0.20 / 1.0 — former tokens::BannerColors::warning_*
+            warning_bg,
+            warning_fg,
+            // #7F1D1D / #FCA5A5 — former tokens::BannerColors::danger_*
+            error_bg: from_hex(0x7F1D1D, 1.0),
+            error_fg: from_hex(0xFCA5A5, 1.0),
         }
     }
 }
@@ -284,20 +309,53 @@ mod tests {
         });
     }
 
+    /// `for_current` returns the former `tokens::BannerColors` fixed values
+    /// for info/success/error across all themes, and derives warning from
+    /// `theme.primary`. The per-palette constructors (`dark`, `mirage`, `light`)
+    /// are distinct and carry per-theme semantic values for future use.
     #[gpui::test]
-    fn banner_colors_for_current_dispatches_to_correct_theme(cx: &mut TestAppContext) {
+    fn banner_colors_for_current_returns_legacy_pixel_exact_values(cx: &mut TestAppContext) {
+        // gpui_component::init registers the Theme global required by cx.theme().
+        cx.update(gpui_component::init);
         cx.update(|cx| {
+            // info/success/error are theme-agnostic (same across all themes).
             ThemeSettingGlobal::set(cx, ThemeSetting::Dark);
-            let dark = BannerColors::for_current(cx);
-            assert_eq!(dark, BannerColors::dark());
-
+            let colors_dark = BannerColors::for_current(cx);
             ThemeSettingGlobal::set(cx, ThemeSetting::Mirage);
-            let mirage = BannerColors::for_current(cx);
-            assert_eq!(mirage, BannerColors::mirage());
-
+            let colors_mirage = BannerColors::for_current(cx);
             ThemeSettingGlobal::set(cx, ThemeSetting::Light);
-            let light = BannerColors::for_current(cx);
-            assert_eq!(light, BannerColors::light());
+            let colors_light = BannerColors::for_current(cx);
+
+            // Fixed hex values taken from former tokens::BannerColors.
+            // info_bg = #1E3A5F at full opacity.
+            assert_eq!(colors_dark.info_bg, colors_mirage.info_bg);
+            assert_eq!(colors_dark.info_bg, colors_light.info_bg);
+            assert_eq!(colors_dark.info_fg, colors_mirage.info_fg);
+
+            // success_bg = #14532D at full opacity.
+            assert_eq!(colors_dark.success_bg, colors_mirage.success_bg);
+            assert_eq!(colors_dark.success_fg, colors_mirage.success_fg);
+
+            // error_bg = #7F1D1D at full opacity.
+            assert_eq!(colors_dark.error_bg, colors_mirage.error_bg);
+            assert_eq!(colors_dark.error_fg, colors_mirage.error_fg);
+
+            // All fg colors must be fully opaque.
+            assert_eq!(colors_dark.info_fg.a, 1.0);
+            assert_eq!(colors_dark.success_fg.a, 1.0);
+            assert_eq!(colors_dark.error_fg.a, 1.0);
+        });
+    }
+
+    #[gpui::test]
+    fn banner_colors_for_current_warning_derives_from_theme_primary(cx: &mut TestAppContext) {
+        // gpui_component::init registers the Theme global required by cx.theme().
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            // warning_bg = theme.primary @ 0.20, warning_fg = theme.primary @ 1.0.
+            let colors = BannerColors::for_current(cx);
+            assert!((colors.warning_bg.a - 0.20).abs() < 0.001);
+            assert!((colors.warning_fg.a - 1.0).abs() < 0.001);
         });
     }
 

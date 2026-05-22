@@ -6,6 +6,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
     BannerBlock, BannerVariant, Icon as AppIconElement, Label, Text, focus_frame,
 };
+use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::tokens::{FontSizes, Radii, Spacing};
 use dbflux_components::typography::{Body, Headline, SubSectionLabel};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
@@ -368,15 +369,14 @@ impl ConnectionManagerWindow {
                     .border_t_1()
                     .border_color(border_color)
                     .when(test_status != TestStatus::None, |d| {
+                        let banners = SemBannerColors::for_current(cx);
                         let banner = match test_status {
                             TestStatus::Testing => {
                                 BannerBlock::new(BannerVariant::Info, "Testing connection\u{2026}")
                                     .with_icon(
-                                        AppIconElement::new(AppIcon::Loader).size(px(16.0)).color(
-                                            dbflux_components::tokens::BannerColors::info_fg(
-                                                cx.theme(),
-                                            ),
-                                        ),
+                                        AppIconElement::new(AppIcon::Loader)
+                                            .size(px(16.0))
+                                            .color(banners.info_fg),
                                     )
                             }
                             TestStatus::Success => {
@@ -387,11 +387,7 @@ impl ConnectionManagerWindow {
                                 .with_icon(
                                     AppIconElement::new(AppIcon::CircleCheck)
                                         .size(px(16.0))
-                                        .color(
-                                            dbflux_components::tokens::BannerColors::success_fg(
-                                                cx.theme(),
-                                            ),
-                                        ),
+                                        .color(banners.success_fg),
                                 );
                                 if let Some(body) = test_result_body {
                                     banner = banner.with_body(body);
@@ -404,11 +400,9 @@ impl ConnectionManagerWindow {
                                 BannerBlock::new(BannerVariant::Danger, "Connection failed")
                                     .with_body(message)
                                     .with_icon(
-                                        AppIconElement::new(AppIcon::Info).size(px(16.0)).color(
-                                            dbflux_components::tokens::BannerColors::danger_fg(
-                                                cx.theme(),
-                                            ),
-                                        ),
+                                        AppIconElement::new(AppIcon::Info)
+                                            .size(px(16.0))
+                                            .color(banners.error_fg),
                                     )
                             }
                             TestStatus::None => unreachable!("guarded by when condition"),

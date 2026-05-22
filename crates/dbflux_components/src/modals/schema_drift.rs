@@ -1,7 +1,8 @@
 use crate::icons::AppIcon;
 use crate::modals::shell::{ModalShell, ModalVariant};
 use crate::primitives::Icon;
-use crate::tokens::{BannerColors, FontSizes, Spacing};
+use crate::semantic::BannerColors as SemBannerColors;
+use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::{ColumnSnapshot, QueryTableRef, SchemaChange, SchemaDriftDetected};
 use gpui::*;
@@ -83,7 +84,7 @@ impl Render for ModalSchemaDrift {
         let theme = cx.theme();
         let border_color = theme.border;
         let muted = theme.muted_foreground;
-        let warning_bg = BannerColors::warning_bg(theme);
+        let warning_bg = SemBannerColors::for_current(cx).warning_bg;
 
         // Build the body: one section per drifted table.
         let mut body = div().flex().flex_col().gap(Spacing::MD);
@@ -190,7 +191,7 @@ impl Render for ModalSchemaDrift {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(Icon::new(AppIcon::Loader).size(px(12.0)).muted())
+                    .child(Icon::new(AppIcon::Loader).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
                     .child(
                         div()
                             .text_size(FontSizes::SM)

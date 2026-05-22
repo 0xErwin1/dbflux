@@ -444,7 +444,7 @@ fn render_item(
                 .cursor_pointer()
                 .hover(|d| d.bg(theme.accent.opacity(0.08)))
                 .when_some(*icon, |d, icon| {
-                    d.child(Icon::new(icon).size(px(16.0)).muted())
+                    d.child(Icon::new(icon).size(Heights::ICON_SM).muted())
                 })
                 .child(Text::body(label.clone()).font_size(FontSizes::SM))
                 .into_any_element()

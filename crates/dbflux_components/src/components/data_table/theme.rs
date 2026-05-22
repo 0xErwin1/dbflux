@@ -1,17 +1,17 @@
 use gpui::{Pixels, px};
 
 /// Height of each data row.
-pub const ROW_HEIGHT: Pixels = px(28.0);
+pub const ROW_HEIGHT: Pixels = px(28.0); // guardrail-allow: domain const, mirrors Heights::ROW
 
 /// Height of the header row.
-pub const HEADER_HEIGHT: Pixels = px(32.0);
+pub const HEADER_HEIGHT: Pixels = px(32.0); // guardrail-allow: domain const, mirrors Heights::TOOLBAR
 
 /// Horizontal padding inside cells.
-pub const CELL_PADDING_X: Pixels = px(8.0);
+pub const CELL_PADDING_X: Pixels = px(8.0); // guardrail-allow: domain const, do not fold into Spacing
 
 /// Vertical padding inside cells.
 #[allow(dead_code)]
-pub const CELL_PADDING_Y: Pixels = px(4.0);
+pub const CELL_PADDING_Y: Pixels = px(4.0); // guardrail-allow: domain const, do not fold into Spacing
 
 /// Minimum width for a column.
 #[allow(dead_code)]
@@ -21,7 +21,7 @@ pub const MIN_COLUMN_WIDTH: f32 = 50.0;
 pub const DEFAULT_COLUMN_WIDTH: f32 = 120.0;
 
 /// Width of the scrollbar.
-pub const SCROLLBAR_WIDTH: Pixels = px(12.0);
+pub const SCROLLBAR_WIDTH: Pixels = px(12.0); // guardrail-allow: domain const, scrollbar width
 
 /// Sort indicator for ascending sort.
 pub const SORT_INDICATOR_ASC: &str = "↑";
