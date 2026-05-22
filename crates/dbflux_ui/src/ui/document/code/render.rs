@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
+use crate::ui::document::chrome::{ToolbarButton, ToolbarButtonVariant, compact_top_bar};
 use dbflux_components::composites::split_toolbar_action;
 use dbflux_components::controls::Button;
 use dbflux_components::helpers::text_color_for_active;
@@ -8,7 +9,6 @@ use dbflux_components::primitives::{
     surface_panel,
 };
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::tooltip::Tooltip;
 
 fn code_pane_is_focused(focus_mode: SqlQueryFocus, pane: SqlQueryFocus) -> bool {
     focus_mode == pane
@@ -16,7 +16,7 @@ fn code_pane_is_focused(focus_mode: SqlQueryFocus, pane: SqlQueryFocus) -> bool 
 
 impl CodeDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let is_executing = self.state == DocumentState::Executing;
         let is_preflight = self.drift_preflight_running;
         let is_db_language = self.query_language.supports_connection_context();
@@ -44,16 +44,8 @@ impl CodeDocument {
             (AppIcon::Play, "Run", true)
         };
 
-        let btn_bg = theme.secondary;
-        let secondary_hover = theme.secondary_hover;
-        let primary = theme.primary;
         let accent = theme.accent;
         let fg = theme.foreground;
-        let bg = theme.background;
-        let muted_fg = theme.muted_foreground;
-        let danger = theme.danger;
-        let border = theme.border;
-        let tab_bar = theme.tab_bar;
 
         let execution_time = self
             .active_execution_index
@@ -78,87 +70,44 @@ impl CodeDocument {
             "Ctrl+Enter"
         };
 
-        div()
+        compact_top_bar(&theme, std::iter::empty::<AnyElement>())
             .id("sql-toolbar")
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
-            .px(Spacing::SM)
-            .py(Spacing::XS)
-            .border_b_1()
-            .border_color(border)
-            .bg(tab_bar)
             .when(!is_read_only, |el| {
                 el.child(
-                    div()
-                        .id("run-query-btn")
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px(Spacing::SM)
-                        .py(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .when(run_enabled, |d| {
-                            d.bg(if is_executing { danger } else { primary })
-                                .hover(|d| d.opacity(0.9))
+                    ToolbarButton::new("run-query-btn")
+                        .icon(run_icon)
+                        .label(run_label)
+                        .variant(if is_executing {
+                            ToolbarButtonVariant::Danger
+                        } else {
+                            ToolbarButtonVariant::Primary
                         })
-                        .when(!run_enabled, |d| d.bg(btn_bg).cursor_not_allowed())
+                        .disabled(!run_enabled)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if this.state == DocumentState::Executing {
                                 this.cancel_query(cx);
                             } else {
                                 this.run_query(window, cx);
                             }
-                        }))
-                        .child(Icon::new(run_icon).size(px(12.0)).color(if run_enabled {
-                            bg
-                        } else {
-                            muted_fg
-                        }))
-                        .child(if run_enabled {
-                            Text::caption(run_label).color(bg)
-                        } else {
-                            Text::caption(run_label).muted_foreground()
-                        }),
+                        })),
                 )
             })
             .when(!is_read_only && is_db_language && !is_executing, |el| {
                 el.child(
-                    div()
-                        .id("run-in-new-tab-btn")
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px(Spacing::SM)
-                        .py(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(btn_bg)
-                        .hover(|d| d.bg(secondary_hover))
+                    ToolbarButton::new("run-in-new-tab-btn")
+                        .icon(AppIcon::SquarePlay)
+                        .label("New tab")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_query_in_new_tab(window, cx);
-                        }))
-                        .child(Icon::new(AppIcon::SquarePlay).size(px(12.0)).color(fg))
-                        .child(Text::body("New tab").font_size(FontSizes::SM)),
+                        })),
                 )
                 .child(
-                    div()
-                        .id("run-selection-btn")
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px(Spacing::SM)
-                        .py(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(btn_bg)
-                        .hover(|d| d.bg(secondary_hover))
+                    ToolbarButton::new("run-selection-btn")
+                        .icon(AppIcon::ScrollText)
+                        .label("Selection")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_selected_query(window, cx);
-                        }))
-                        .child(Icon::new(AppIcon::ScrollText).size(px(12.0)).color(fg))
-                        .child(Text::body("Selection").font_size(FontSizes::SM)),
+                        })),
                 )
             })
             .when(!is_read_only, |el| el.child(Text::caption(shortcut_hint)))
@@ -184,8 +133,8 @@ impl CodeDocument {
                                 this.run_query(window, cx);
                             }
                         }))
-                        .child(Icon::new(refresh_icon).size(px(12.0)).color(fg))
-                        .child(Text::body(refresh_label)),
+                        .child(Icon::new(refresh_icon).small().color(fg))
+                        .child(Text::caption(refresh_label)),
                     div()
                         .id("sql-refresh-control")
                         .w(px(28.0))
@@ -209,13 +158,6 @@ impl CodeDocument {
         is_read_only: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
-        let secondary = theme.secondary;
-        let secondary_hover = theme.secondary_hover;
-        let muted_fg = theme.muted_foreground;
-        let fg = theme.foreground;
-
-        let is_file_backed = self.is_file_backed();
         let is_db_language = self.query_language.supports_connection_context();
 
         div()
@@ -225,65 +167,33 @@ impl CodeDocument {
             // Save button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
-                    div()
-                        .id("toolbar-save-btn")
-                        .h(Heights::BUTTON)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(secondary)
-                        .hover(|d| d.bg(secondary_hover))
+                    ToolbarButton::new("toolbar-save-btn")
+                        .icon(AppIcon::Save)
+                        .tooltip("Save")
                         .on_click(cx.listener(|this, _, window, cx| {
                             if this.is_file_backed() {
                                 this.save_file(window, cx);
                             } else {
                                 this.save_file_as(window, cx);
                             }
-                        }))
-                        .tooltip(|window, cx| Tooltip::new("Save").build(window, cx))
-                        .child(
-                            Icon::new(AppIcon::Save)
-                                .size(px(12.0))
-                                .color(if is_file_backed { fg } else { muted_fg }),
-                        ),
+                        })),
                 )
             })
             // Format button — hidden for read-only documents (no formatter available)
             .when(!is_read_only, |el| {
                 el.child(
-                    div()
-                        .id("toolbar-format-btn")
-                        .h(Heights::BUTTON)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .cursor_not_allowed()
-                        .bg(secondary)
-                        .tooltip(|window, cx| {
-                            Tooltip::new("Formatter unavailable").build(window, cx)
-                        })
-                        .child(Icon::new(AppIcon::Zap).size(px(12.0)).color(muted_fg)),
+                    ToolbarButton::new("toolbar-format-btn")
+                        .icon(AppIcon::Zap)
+                        .tooltip("Formatter unavailable")
+                        .disabled(true),
                 )
             })
             // History button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
-                    div()
-                        .id("toolbar-history-btn")
-                        .h(Heights::BUTTON)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(secondary)
-                        .hover(|d| d.bg(secondary_hover))
+                    ToolbarButton::new("toolbar-history-btn")
+                        .icon(AppIcon::History)
+                        .tooltip("Query history")
                         .on_click(cx.listener(|this, _, window, cx| {
                             let is_open = this.history_modal.read(cx).is_visible();
                             if is_open {
@@ -292,53 +202,29 @@ impl CodeDocument {
                                 this.history_modal
                                     .update(cx, |modal, cx| modal.open(window, cx));
                             }
-                        }))
-                        .tooltip(|window, cx| Tooltip::new("Query history").build(window, cx))
-                        .child(Icon::new(AppIcon::History).size(px(12.0)).color(fg)),
+                        })),
                 )
             })
             // Explain button — hidden for read-only documents
             .when(!is_read_only && is_db_language, |el| {
                 el.child(
-                    div()
-                        .id("toolbar-explain-btn")
-                        .h(Heights::BUTTON)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(secondary)
-                        .hover(|d| d.bg(secondary_hover))
+                    ToolbarButton::new("toolbar-explain-btn")
+                        .icon(AppIcon::Info)
+                        .tooltip("Explain query")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_explain(window, cx);
-                        }))
-                        .tooltip(|window, cx| Tooltip::new("Explain query").build(window, cx))
-                        .child(Icon::new(AppIcon::Info).size(px(12.0)).color(fg)),
+                        })),
                 )
             })
             // Chart button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
-                    div()
-                        .id("toolbar-chart-btn")
-                        .h(Heights::BUTTON)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(secondary)
-                        .hover(|d| d.bg(secondary_hover))
+                    ToolbarButton::new("toolbar-chart-btn")
+                        .icon(AppIcon::ChartSpline)
+                        .tooltip("Open current query in a chart document")
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.emit_chart_this_query(cx);
-                        }))
-                        .tooltip(|window, cx| {
-                            Tooltip::new("Open current query in a chart document").build(window, cx)
-                        })
-                        .child(Icon::new(AppIcon::ChartSpline).size(px(12.0)).color(fg)),
+                        })),
                 )
             })
     }
