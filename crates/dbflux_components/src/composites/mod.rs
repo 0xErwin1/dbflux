@@ -4,6 +4,7 @@ mod field_row;
 mod menu_item;
 mod modal_frame;
 mod panel_header;
+mod refresh_split_button;
 mod section_header;
 mod split_toolbar_action;
 mod tab_strip;
@@ -31,5 +32,6 @@ pub use section_header::{
     SectionHeaderInspection, SectionHeaderVariant, inspect_section_header, section_header,
     section_header_variant, section_header_variant_with_action, section_header_with_action,
 };
+pub use refresh_split_button::refresh_split_button;
 pub use split_toolbar_action::split_toolbar_action;
 pub use tab_strip::tab_strip;
