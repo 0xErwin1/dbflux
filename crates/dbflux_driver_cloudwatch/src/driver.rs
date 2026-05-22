@@ -3,6 +3,9 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aws_config::{BehaviorVersion, Region};
+use aws_sdk_cloudwatch::config::Builder as CloudWatchMetricsConfigBuilder;
+use aws_sdk_cloudwatch::primitives::DateTime as MetricsDateTime;
+use aws_sdk_cloudwatch::types::{Dimension, Metric, MetricDataQuery, MetricStat};
 use aws_sdk_cloudwatchlogs::Client;
 use aws_sdk_cloudwatchlogs::config::Builder as CloudWatchConfigBuilder;
 use dbflux_core::secrecy::SecretString;
@@ -25,7 +28,7 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     category: DatabaseCategory::LogStream,
     deployment_class: Some(DeploymentClass::CloudManaged),
     query_language: QueryLanguage::Sql,
-    capabilities: DriverCapabilities::AUTHENTICATION,
+    capabilities: DriverCapabilities::AUTHENTICATION.union(DriverCapabilities::METRIC_SERIES),
     default_port: None,
     uri_scheme: "cloudwatch".into(),
     icon: Icon::Logs,
@@ -71,6 +74,7 @@ struct CloudWatchCollectionFilter {
 
 struct CloudWatchConnection {
     client: Client,
+    metrics_client: aws_sdk_cloudwatch::Client,
     config: CloudWatchProfileConfig,
 }
 
@@ -160,16 +164,20 @@ impl DbDriver for CloudWatchDriver {
         _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = profile_config(&profile.config)?;
-        let client = build_client(&config)?;
+        let (client, metrics_client) = build_clients(&config)?;
 
         probe_connection(&client, &config)?;
 
-        Ok(Box::new(CloudWatchConnection { client, config }))
+        Ok(Box::new(CloudWatchConnection {
+            client,
+            metrics_client,
+            config,
+        }))
     }
 
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
         let config = profile_config(&profile.config)?;
-        let client = build_client(&config)?;
+        let (client, _) = build_clients(&config)?;
 
         probe_connection(&client, &config)
     }
@@ -199,12 +207,37 @@ impl Connection for CloudWatchConnection {
                 DbError::query_failed("CloudWatch execution requires structured source context")
             })?;
 
-        let ExecutionSourceContext::CollectionWindow {
-            targets: log_groups,
-            start_ms,
-            end_ms,
-            query_mode,
-        } = source;
+        // Route on source context: existing logs path for CollectionWindow; the
+        // MetricQuery path (GetMetricData) is implemented in the next slice.
+        let (log_groups, start_ms, end_ms, query_mode) = match source {
+            ExecutionSourceContext::CollectionWindow {
+                targets: log_groups,
+                start_ms,
+                end_ms,
+                query_mode,
+            } => (log_groups, start_ms, end_ms, query_mode),
+            ExecutionSourceContext::MetricQuery {
+                namespace,
+                metric_name,
+                dimensions,
+                period_s,
+                statistic,
+                start_ms,
+                end_ms,
+            } => {
+                return execute_metric_query(
+                    &self.metrics_client,
+                    namespace,
+                    metric_name,
+                    dimensions,
+                    *period_s,
+                    statistic,
+                    *start_ms,
+                    *end_ms,
+                    started,
+                );
+            }
+        };
 
         let query_mode = query_mode.as_deref().unwrap_or(CLOUDWATCH_QUERY_MODE_CWLI);
 
@@ -991,7 +1024,14 @@ fn profile_config(config: &DbConfig) -> Result<CloudWatchProfileConfig, DbError>
     })
 }
 
-fn build_client(config: &CloudWatchProfileConfig) -> Result<Client, DbError> {
+/// Build both the Logs and Metrics CloudWatch clients from a shared `sdk_config`.
+///
+/// Both clients share the same region, credentials, profile, and optional
+/// custom endpoint. Loading the SDK config once and building two clients avoids
+/// a redundant async config-load.
+fn build_clients(
+    config: &CloudWatchProfileConfig,
+) -> Result<(Client, aws_sdk_cloudwatch::Client), DbError> {
     let mut loader =
         aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
 
@@ -1002,15 +1042,257 @@ fn build_client(config: &CloudWatchProfileConfig) -> Result<Client, DbError> {
     let sdk_config = runtime()?.block_on(loader.load());
 
     if config.endpoint.is_none() {
-        return Ok(Client::new(&sdk_config));
+        let logs_client = Client::new(&sdk_config);
+        let metrics_client = aws_sdk_cloudwatch::Client::new(&sdk_config);
+        return Ok((logs_client, metrics_client));
     }
 
-    let mut builder = CloudWatchConfigBuilder::from(&sdk_config);
+    let mut logs_builder = CloudWatchConfigBuilder::from(&sdk_config);
+    let mut metrics_builder = CloudWatchMetricsConfigBuilder::from(&sdk_config);
+
     if let Some(endpoint) = &config.endpoint {
-        builder = builder.endpoint_url(endpoint);
+        logs_builder = logs_builder.endpoint_url(endpoint);
+        metrics_builder = metrics_builder.endpoint_url(endpoint);
     }
 
-    Ok(Client::from_conf(builder.build()))
+    let logs_client = Client::from_conf(logs_builder.build());
+    let metrics_client = aws_sdk_cloudwatch::Client::from_conf(metrics_builder.build());
+
+    Ok((logs_client, metrics_client))
+}
+
+/// Guard: reject period_s == 0 before any network I/O.
+///
+/// CloudWatch GetMetricData requires a positive period. A period of zero
+/// would produce an AWS API error, but we catch it locally for a cleaner
+/// error message and to avoid an unnecessary network round-trip.
+pub(crate) fn check_period_nonzero(period_s: u32) -> Result<(), DbError> {
+    if period_s == 0 {
+        return Err(DbError::query_failed(
+            "MetricQuery period_s must be greater than 0",
+        ));
+    }
+    Ok(())
+}
+
+/// Execute a CloudWatch GetMetricData call and return a `QueryResult`.
+///
+/// Builds a single-metric `MetricDataQuery` from the provided parameters,
+/// calls GetMetricData via the blocking runtime pattern used elsewhere in
+/// this driver, then maps the output to a `QueryResult` via the pure mapper.
+#[allow(clippy::too_many_arguments)]
+fn execute_metric_query(
+    client: &aws_sdk_cloudwatch::Client,
+    namespace: &str,
+    metric_name: &str,
+    dimensions: &[(String, String)],
+    period_s: u32,
+    statistic: &str,
+    start_ms: i64,
+    end_ms: i64,
+    started: Instant,
+) -> Result<QueryResult, DbError> {
+    check_period_nonzero(period_s)?;
+
+    let sdk_dimensions = dimensions
+        .iter()
+        .map(|(name, value)| Dimension::builder().name(name).value(value).build())
+        .collect::<Vec<_>>();
+
+    let metric = Metric::builder()
+        .namespace(namespace)
+        .metric_name(metric_name)
+        .set_dimensions(Some(sdk_dimensions))
+        .build();
+
+    let metric_stat = MetricStat::builder()
+        .metric(metric)
+        .period(period_s as i32)
+        .stat(statistic)
+        .build();
+
+    let query = MetricDataQuery::builder()
+        .id("m0")
+        .metric_stat(metric_stat)
+        .return_data(true)
+        .build();
+
+    let start_time = MetricsDateTime::from_millis(start_ms);
+    let end_time = MetricsDateTime::from_millis(end_ms);
+
+    let output = runtime()?
+        .block_on(
+            client
+                .get_metric_data()
+                .start_time(start_time)
+                .end_time(end_time)
+                .metric_data_queries(query)
+                .send(),
+        )
+        .map_err(|error| {
+            DbError::query_failed(format!("CloudWatch GetMetricData failed: {error}"))
+        })?;
+
+    let mut result = metric_data_output_to_query_result(&output, "m0");
+    result.execution_time = started.elapsed();
+    Ok(result)
+}
+
+/// Map a `GetMetricDataOutput` to a `QueryResult`.
+///
+/// For a single `MetricDataResult`: two columns (`timestamp`, `<result_id>`)
+/// ordered ascending by timestamp. For multiple results: wide pivot keyed by
+/// timestamp with one Float column per result id; timestamps present in some
+/// but not all results yield `Value::Null` for the missing series.
+///
+/// Timestamps from the SDK are second-precision; this function converts them
+/// to milliseconds (×1000) and stores them as `Value::Int`.
+pub(crate) fn metric_data_output_to_query_result(
+    output: &aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput,
+    metric_id: &str,
+) -> QueryResult {
+    let results = output.metric_data_results();
+
+    match results {
+        [] => build_empty_metric_result(metric_id),
+        [single] => build_single_metric_result(single, metric_id),
+        multiple => build_wide_metric_result(multiple),
+    }
+}
+
+/// Return an empty `QueryResult` with the standard metric column schema.
+fn build_empty_metric_result(metric_id: &str) -> QueryResult {
+    let columns = vec![
+        ColumnMeta {
+            name: "timestamp".to_string(),
+            type_name: "bigint".to_string(),
+            kind: ColumnKind::Timestamp,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: metric_id.to_string(),
+            type_name: "double".to_string(),
+            kind: ColumnKind::Float,
+            nullable: true,
+            is_primary_key: false,
+        },
+    ];
+
+    QueryResult::table(columns, vec![], None, Duration::ZERO)
+}
+
+/// Build a two-column ascending `QueryResult` from a single `MetricDataResult`.
+fn build_single_metric_result(
+    result: &aws_sdk_cloudwatch::types::MetricDataResult,
+    metric_id: &str,
+) -> QueryResult {
+    let id = result.id().unwrap_or(metric_id);
+
+    let timestamps = result.timestamps();
+    let values = result.values();
+
+    // Pair timestamps and values, then sort ascending by timestamp.
+    let mut pairs: Vec<(i64, f64)> = timestamps
+        .iter()
+        .zip(values.iter())
+        .map(|(ts, val)| (ts.secs() * 1000, *val))
+        .collect();
+
+    pairs.sort_unstable_by_key(|(ts, _)| *ts);
+
+    let columns = vec![
+        ColumnMeta {
+            name: "timestamp".to_string(),
+            type_name: "bigint".to_string(),
+            kind: ColumnKind::Timestamp,
+            nullable: false,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: id.to_string(),
+            type_name: "double".to_string(),
+            kind: ColumnKind::Float,
+            nullable: true,
+            is_primary_key: false,
+        },
+    ];
+
+    let rows = pairs
+        .into_iter()
+        .map(|(ts, val)| vec![Value::Int(ts), Value::Float(val)])
+        .collect();
+
+    QueryResult::table(columns, rows, None, Duration::ZERO)
+}
+
+/// Build a wide-format `QueryResult` from multiple `MetricDataResult`s.
+///
+/// Pivots on timestamp: one row per unique timestamp, one Float column per
+/// result id. Missing values for a given series at a given timestamp are
+/// represented as `Value::Null`.
+fn build_wide_metric_result(
+    results: &[aws_sdk_cloudwatch::types::MetricDataResult],
+) -> QueryResult {
+    // Collect all unique timestamps (in seconds, sorted ascending).
+    let mut all_timestamps: Vec<i64> = results
+        .iter()
+        .flat_map(|r| r.timestamps().iter().map(|ts| ts.secs()))
+        .collect();
+
+    all_timestamps.sort_unstable();
+    all_timestamps.dedup();
+
+    // Build an index from timestamp_s → column value for each result.
+    let series: Vec<(String, HashMap<i64, f64>)> = results
+        .iter()
+        .map(|r| {
+            let id = r.id().unwrap_or("").to_string();
+            let map: HashMap<i64, f64> = r
+                .timestamps()
+                .iter()
+                .zip(r.values().iter())
+                .map(|(ts, val)| (ts.secs(), *val))
+                .collect();
+            (id, map)
+        })
+        .collect();
+
+    let mut columns = vec![ColumnMeta {
+        name: "timestamp".to_string(),
+        type_name: "bigint".to_string(),
+        kind: ColumnKind::Timestamp,
+        nullable: false,
+        is_primary_key: false,
+    }];
+
+    for (id, _) in &series {
+        columns.push(ColumnMeta {
+            name: id.clone(),
+            type_name: "double".to_string(),
+            kind: ColumnKind::Float,
+            nullable: true,
+            is_primary_key: false,
+        });
+    }
+
+    let rows = all_timestamps
+        .into_iter()
+        .map(|ts_s| {
+            let mut row = vec![Value::Int(ts_s * 1000)];
+            for (_, map) in &series {
+                let value = map
+                    .get(&ts_s)
+                    .copied()
+                    .map(Value::Float)
+                    .unwrap_or(Value::Null);
+                row.push(value);
+            }
+            row
+        })
+        .collect();
+
+    QueryResult::table(columns, rows, None, Duration::ZERO)
 }
 
 fn probe_connection(client: &Client, config: &CloudWatchProfileConfig) -> Result<(), DbError> {
@@ -1210,8 +1492,14 @@ fn fetch_log_stream_page(
 
 #[cfg(test)]
 mod tests {
-    use super::{CloudWatchCollectionFilter, CloudWatchDriver};
-    use dbflux_core::{DbConfig, DbDriver};
+    use super::{
+        CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
+        metric_data_output_to_query_result,
+    };
+    use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
+    use aws_sdk_cloudwatch::primitives::DateTime;
+    use aws_sdk_cloudwatch::types::MetricDataResult;
+    use dbflux_core::{ColumnKind, DbConfig, DbDriver, DriverCapabilities, Value};
 
     #[test]
     fn cloudwatch_driver_uses_builtin_form_and_key() {
@@ -1250,5 +1538,139 @@ mod tests {
             DbConfig::default_cloudwatch_logs(),
             DbConfig::CloudWatchLogs { .. }
         ));
+    }
+
+    // T-6: single MetricDataResult → two-column ascending QueryResult
+    // Verifies: column names (timestamp / result id), ColumnKind assignments,
+    // row ordering (ascending), and second→ms conversion (×1000).
+    #[test]
+    fn get_metric_data_output_single_metric() {
+        let t1 = DateTime::from_secs(1000);
+        let t2 = DateTime::from_secs(2000);
+        let t3 = DateTime::from_secs(3000);
+
+        // AWS returns data descending — supply in descending order to exercise the sort.
+        let result = MetricDataResult::builder()
+            .id("m0")
+            .set_timestamps(Some(vec![t3, t2, t1]))
+            .set_values(Some(vec![3.0_f64, 2.0_f64, 1.0_f64]))
+            .build();
+
+        let output = GetMetricDataOutput::builder()
+            .metric_data_results(result)
+            .build();
+
+        let qr = metric_data_output_to_query_result(&output, "m0");
+
+        assert_eq!(qr.columns.len(), 2);
+        assert_eq!(qr.columns[0].name, "timestamp");
+        assert_eq!(qr.columns[0].kind, ColumnKind::Timestamp);
+        assert_eq!(qr.columns[1].name, "m0");
+        assert_eq!(qr.columns[1].kind, ColumnKind::Float);
+
+        assert_eq!(qr.rows.len(), 3);
+
+        // Row 0 corresponds to t1 (ascending order after sort)
+        assert_eq!(qr.rows[0][0], Value::Int(1000 * 1000));
+        assert_eq!(qr.rows[0][1], Value::Float(1.0));
+
+        assert_eq!(qr.rows[1][0], Value::Int(2000 * 1000));
+        assert_eq!(qr.rows[1][1], Value::Float(2.0));
+
+        assert_eq!(qr.rows[2][0], Value::Int(3000 * 1000));
+        assert_eq!(qr.rows[2][1], Value::Float(3.0));
+    }
+
+    // T-7: empty GetMetricDataOutput → empty rows, no panic
+    #[test]
+    fn get_metric_data_output_empty() {
+        let output = GetMetricDataOutput::builder().build();
+        let qr = metric_data_output_to_query_result(&output, "m0");
+
+        assert_eq!(qr.rows.len(), 0, "expected zero rows for empty output");
+    }
+
+    // T-8: period_s == 0 must return Err, never panic.
+    //
+    // The guard fires before any network I/O, so this test is credential-free.
+    // We exercise it by calling `check_period` (the extracted guard fn) directly.
+    #[test]
+    fn execute_metric_query_period_zero_errors() {
+        use super::check_period_nonzero;
+
+        let result = check_period_nonzero(0);
+        assert!(result.is_err(), "period_s == 0 must return Err");
+
+        let ok = check_period_nonzero(60);
+        assert!(ok.is_ok(), "period_s == 60 must be Ok");
+    }
+
+    // T-9: live integration test — requires real AWS credentials
+    #[test]
+    #[ignore]
+    fn live_execute_cloudwatch_metric() {
+        use dbflux_core::{
+            ColumnKind, DbConfig, DbDriver, ExecutionContext, ExecutionSourceContext, QueryRequest,
+        };
+
+        // Requires: AWS credentials in environment / ~/.aws, region set,
+        // and a metric that has data in the given window.
+        let profile = dbflux_core::ConnectionProfile::new(
+            "test",
+            DbConfig::CloudWatchLogs {
+                region: std::env::var("AWS_DEFAULT_REGION")
+                    .unwrap_or_else(|_| "us-east-1".to_string()),
+                profile: std::env::var("AWS_PROFILE").ok(),
+                endpoint: None,
+            },
+        );
+
+        let driver = CloudWatchDriver::new();
+        let conn = driver
+            .connect_with_secrets(&profile, None, None)
+            .expect("connection failed — check AWS credentials");
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        let req = QueryRequest::new(String::new()).with_execution_context(Some(ExecutionContext {
+            source: Some(ExecutionSourceContext::MetricQuery {
+                namespace: "AWS/Lambda".to_string(),
+                metric_name: "Invocations".to_string(),
+                dimensions: vec![],
+                period_s: 300,
+                statistic: "Sum".to_string(),
+                start_ms: now_ms - 24 * 3600 * 1000,
+                end_ms: now_ms,
+            }),
+            ..ExecutionContext::default()
+        }));
+
+        let result = conn.execute(&req).expect("execute failed");
+
+        assert!(result.columns.len() >= 2);
+        assert_eq!(result.columns[0].kind, ColumnKind::Timestamp);
+        assert_eq!(result.columns[1].kind, ColumnKind::Float);
+
+        // Rows may be zero if no invocations in the window — that is valid.
+        // Just assert no panic and correct column shape.
+        for row in &result.rows {
+            assert_eq!(row.len(), result.columns.len());
+        }
+    }
+
+    // T-5: CLOUDWATCH_METADATA must advertise METRIC_SERIES.
+    //
+    // This test is RED until TASK-3.2 adds the flag to CLOUDWATCH_METADATA.
+    #[test]
+    fn cloudwatch_metadata_has_metric_series() {
+        assert!(
+            CLOUDWATCH_METADATA
+                .capabilities
+                .contains(DriverCapabilities::METRIC_SERIES),
+            "CLOUDWATCH_METADATA must advertise METRIC_SERIES capability"
+        );
     }
 }

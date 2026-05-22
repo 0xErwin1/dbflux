@@ -4,6 +4,23 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Audit event charts** — the Audit document now has a Table/Chart view
+  toggle that visualizes the currently filtered audit events as counts
+  over time, with one series per group value (grouped by category, outcome,
+  or level). The chart honors the document's active time range and
+  auto-refresh. Charts are ephemeral (a view mode, not a saved artifact).
+* **Logarithmic Y axis for charts** — charts can switch the Y axis between
+  linear and logarithmic (log1p) scale, so large spikes no longer flatten
+  the rest of the data. Exposed in the audit chart toolbar.
+* **CloudWatch metric charts** — CloudWatch connections can graph real
+  metrics (via `GetMetricData`) as a time-series chart. An "Open Metrics
+  Chart" command is available whenever the active driver advertises the
+  generic metric-series capability; the chart refreshes over the active
+  time window. The metric is currently fixed (AWS/Lambda Invocations,
+  average over 5-minute periods); an in-app metric picker is a follow-up.
+
 ### Fixed
 
 * **Audit SQLite "database is locked" errors under contention** — the

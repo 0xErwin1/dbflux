@@ -6,11 +6,13 @@
 
 use std::collections::HashMap;
 
+use super::chart_view::AuditViewMode;
 use super::filters::{TimeRange, format_timestamp_ms};
 use super::{AuditContextMenuAction, AuditDocument, AuditDocumentSource, ToolbarSlot};
 use crate::ui::document::handle::DocumentEvent;
 use crate::ui::icons::AppIcon;
 use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::chart::YScale;
 use dbflux_components::controls::{
     GpuiInput as Input, InputState, ReadonlyTextView, SelectableText,
 };
@@ -28,6 +30,7 @@ use super::super::chrome::{
     ToolbarButton, ToolbarButtonVariant, compact_top_bar, workspace_footer_bar,
 };
 use super::super::types::DocumentState;
+use crate::ui::common::refresh_split_button::refresh_split_button;
 
 impl AuditDocument {
     /// Renders a null placeholder matching the DataTable convention: italic muted "NULL".
@@ -383,63 +386,26 @@ impl AuditDocument {
             })
             .child(self.multi_select_outcome.clone());
 
-        // Refresh split button.
-        let refresh_label = if self.refresh_policy.is_auto() {
-            self.refresh_policy.label()
-        } else {
-            "Refresh"
-        };
-        let refresh_icon = if self.refresh_policy.is_auto() {
-            AppIcon::Clock
-        } else {
-            AppIcon::RefreshCcw
-        };
-
-        let refresh_btn = div()
-            .id("audit-refresh-control")
-            .h(Heights::BUTTON)
-            .flex()
-            .items_center()
-            .gap_0()
-            .rounded(Radii::SM)
-            .bg(theme.background)
-            .border_1()
-            .border_color(if self.slot_has_ring(ToolbarSlot::Refresh) {
-                theme.ring
-            } else {
-                theme.input
-            })
-            .child(
-                div()
-                    .id("audit-refresh-action")
-                    .h_full()
-                    .px(Spacing::SM)
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.load_events(cx);
-                    }))
-                    .child(
-                        Icon::new(refresh_icon)
-                            .size(px(16.0))
-                            .color(theme.foreground),
-                    )
-                    .child(Text::caption(refresh_label)),
-            )
-            .child(div().w(px(1.0)).h_full().bg(theme.input))
-            .child(
-                div()
-                    .w(px(28.0))
-                    .h_full()
-                    .rounded_r(Radii::SM)
-                    .when(self.slot_has_ring(ToolbarSlot::RefreshPolicy), |d| {
-                        d.border_1().border_color(theme.ring)
-                    })
-                    .child(self.refresh_dropdown.clone()),
-            );
+        // Refresh split button — shared helper keeps this identical to the
+        // chart toolbar's refresh control.
+        let refresh_dropdown = self.refresh_dropdown.clone();
+        let refresh_ring = self.slot_has_ring(ToolbarSlot::Refresh);
+        let refresh_policy_ring = self.slot_has_ring(ToolbarSlot::RefreshPolicy);
+        let refresh_policy = self.refresh_policy;
+        let weak_self = cx.weak_entity();
+        let refresh_btn = refresh_split_button(
+            "audit-refresh-control",
+            refresh_policy,
+            refresh_ring,
+            refresh_policy_ring,
+            refresh_dropdown,
+            move |_window, cx| {
+                if let Some(doc) = weak_self.upgrade() {
+                    doc.update(cx, |this, cx| this.load_events(cx));
+                }
+            },
+            &theme,
+        );
 
         // Clear button.
         let clear_btn = ToolbarButton::new("audit-clear-btn")
@@ -469,6 +435,89 @@ impl AuditDocument {
                     category_control.into_any_element(),
                     outcome_control.into_any_element(),
                 ]);
+            }
+
+            // View-mode toggle and chart group-by selector (Internal source only).
+            if !self.is_external_event_stream() {
+                let is_chart = matches!(self.view_mode, AuditViewMode::Chart);
+
+                let toggle_label = if is_chart { "Table" } else { "Chart" };
+                let view_toggle = div()
+                    .id("audit-view-toggle")
+                    .h(Heights::BUTTON)
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .bg(theme.secondary)
+                    .hover(|d| d.bg(theme.secondary_hover))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if is_chart {
+                            this.view_mode = AuditViewMode::Table;
+                        } else {
+                            this.view_mode = AuditViewMode::Chart;
+                            if this.chart.last_result.is_none() {
+                                this.trigger_chart_aggregate(cx);
+                            }
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        Icon::new(AppIcon::ChartSpline)
+                            .size(px(12.0))
+                            .color(theme.foreground),
+                    )
+                    .child(Text::caption(toggle_label));
+
+                items.push(view_toggle.into_any_element());
+
+                if is_chart {
+                    // Fixed-width container prevents the dropdown from consuming
+                    // the full toolbar row width.  The "Group:" label distinguishes
+                    // this selector from the Level/Category/Outcome filter chips.
+                    let group_by_control = div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .w(px(148.0))
+                        .child(Text::caption("Group:"))
+                        .child(div().flex_1().child(self.dropdown_chart_group_by.clone()));
+                    items.push(group_by_control.into_any_element());
+
+                    // Y-scale toggle: "Y: Linear" / "Y: Log".
+                    // Fixed-width so it does not stretch the toolbar row.
+                    let current_y_scale = self.chart.chart_shell.read(cx).y_scale();
+                    let y_scale_label = match current_y_scale {
+                        YScale::Linear => "Y: Linear",
+                        YScale::Log => "Y: Log",
+                    };
+                    let y_scale_toggle = div()
+                        .id("audit-y-scale-toggle")
+                        .h(Heights::BUTTON)
+                        .w(px(80.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .px(Spacing::SM)
+                        .rounded(Radii::SM)
+                        .border_1()
+                        .border_color(theme.input)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.secondary))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let next_scale = match current_y_scale {
+                                YScale::Linear => YScale::Log,
+                                YScale::Log => YScale::Linear,
+                            };
+                            this.chart.chart_shell.update(cx, |shell, cx| {
+                                shell.set_y_scale(next_scale, cx);
+                            });
+                        }))
+                        .child(Text::caption(y_scale_label));
+                    items.push(y_scale_toggle.into_any_element());
+                }
             }
 
             items.extend([

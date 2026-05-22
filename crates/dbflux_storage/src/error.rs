@@ -38,6 +38,9 @@ pub enum RepositoryError {
     #[error("entity not found: {0}")]
     NotFound(String),
 
+    #[error("validation error: {0}")]
+    Validation(String),
+
     #[error("serialization error: {source}")]
     Serialization { source: serde_json::Error },
 }
@@ -102,6 +105,7 @@ impl From<RepositoryError> for StorageError {
                 source,
             },
             RepositoryError::NotFound(msg) => StorageError::Data(msg),
+            RepositoryError::Validation(msg) => StorageError::Data(msg),
             RepositoryError::Serialization { source } => {
                 StorageError::Data(format!("serialization error: {}", source))
             }

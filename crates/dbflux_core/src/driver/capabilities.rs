@@ -504,6 +504,11 @@ bitflags! {
         /// functions) through the schema_routines seam. When set, the sidebar renders
         /// a Routines folder for each schema.
         const ROUTINES = 1 << 47;
+
+        /// Driver can execute CloudWatch GetMetricData requests and return time-series
+        /// metric data as a `QueryResult`. The UI uses this flag to gate the metrics
+        /// chart entry point — no driver_id or category checks are needed.
+        const METRIC_SERIES = 1 << 49;
     }
 }
 
@@ -2622,6 +2627,76 @@ mod tests {
         assert_eq!(all.len(), 7);
         for _variant in all {
             assert!(matches!(_variant, _));
+        }
+    }
+
+    // T-4: METRIC_SERIES bit must be a power of two and must not collide with
+    // any existing flag. Guards against accidental bit reuse.
+    #[test]
+    fn metric_series_capability_bit_unique() {
+        let bits = DriverCapabilities::METRIC_SERIES.bits();
+
+        // A power-of-two value has exactly one bit set.
+        assert_eq!(bits.count_ones(), 1, "METRIC_SERIES must be a power of two");
+
+        // Must not equal any other defined flag.
+        let all_others = [
+            DriverCapabilities::MULTIPLE_DATABASES,
+            DriverCapabilities::SCHEMAS,
+            DriverCapabilities::SSH_TUNNEL,
+            DriverCapabilities::SSL,
+            DriverCapabilities::AUTHENTICATION,
+            DriverCapabilities::QUERY_CANCELLATION,
+            DriverCapabilities::QUERY_TIMEOUT,
+            DriverCapabilities::TRANSACTIONS,
+            DriverCapabilities::PREPARED_STATEMENTS,
+            DriverCapabilities::VIEWS,
+            DriverCapabilities::FOREIGN_KEYS,
+            DriverCapabilities::INDEXES,
+            DriverCapabilities::CHECK_CONSTRAINTS,
+            DriverCapabilities::UNIQUE_CONSTRAINTS,
+            DriverCapabilities::CUSTOM_TYPES,
+            DriverCapabilities::TRIGGERS,
+            DriverCapabilities::STORED_PROCEDURES,
+            DriverCapabilities::SEQUENCES,
+            DriverCapabilities::INSERT,
+            DriverCapabilities::UPDATE,
+            DriverCapabilities::DELETE,
+            DriverCapabilities::RETURNING,
+            DriverCapabilities::PAGINATION,
+            DriverCapabilities::SORTING,
+            DriverCapabilities::FILTERING,
+            DriverCapabilities::EXPORT_CSV,
+            DriverCapabilities::EXPORT_JSON,
+            DriverCapabilities::NESTED_DOCUMENTS,
+            DriverCapabilities::ARRAYS,
+            DriverCapabilities::AGGREGATION,
+            DriverCapabilities::KV_SCAN,
+            DriverCapabilities::KV_GET,
+            DriverCapabilities::KV_SET,
+            DriverCapabilities::KV_DELETE,
+            DriverCapabilities::KV_EXISTS,
+            DriverCapabilities::KV_TTL,
+            DriverCapabilities::KV_KEY_TYPES,
+            DriverCapabilities::KV_VALUE_SIZE,
+            DriverCapabilities::KV_RENAME,
+            DriverCapabilities::KV_BULK_GET,
+            DriverCapabilities::KV_STREAM_RANGE,
+            DriverCapabilities::KV_STREAM_ADD,
+            DriverCapabilities::KV_STREAM_DELETE,
+            DriverCapabilities::PUBSUB,
+            DriverCapabilities::GRAPH_TRAVERSAL,
+            DriverCapabilities::EDGE_PROPERTIES,
+            DriverCapabilities::TRANSACTIONAL_DDL,
+        ];
+
+        for other in all_others {
+            assert_ne!(
+                bits,
+                other.bits(),
+                "METRIC_SERIES bit ({bits}) collides with an existing flag ({})",
+                other.bits()
+            );
         }
     }
 }

@@ -11,6 +11,23 @@ pub enum ExecutionSourceContext {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query_mode: Option<String>,
     },
+    /// A CloudWatch GetMetricData request. Carries the full set of metric
+    /// parameters plus the time bounds required by the GetMetricData API.
+    /// `start_ms` and `end_ms` are epoch milliseconds.
+    MetricQuery {
+        namespace: String,
+        metric_name: String,
+        /// Ordered (name, value) dimension pairs. May be empty for scalar metrics.
+        dimensions: Vec<(String, String)>,
+        /// Aggregation period in seconds. Must be > 0; validated by the driver.
+        period_s: u32,
+        /// AWS statistic name (e.g. "Average", "Sum", "p99"). Free-form string.
+        statistic: String,
+        /// Query window start, epoch milliseconds (UTC).
+        start_ms: i64,
+        /// Query window end, epoch milliseconds (UTC).
+        end_ms: i64,
+    },
 }
 
 /// Per-document execution context (connection, database, schema).
