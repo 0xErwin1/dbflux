@@ -79,7 +79,7 @@ pub enum NewKeyValue {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(clippy::upper_case_acronyms)]
-pub(crate) enum ModalFocus {
+pub enum ModalFocus {
     KeyType,
     TTL,
     KeyName,
