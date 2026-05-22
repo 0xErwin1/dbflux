@@ -1,5 +1,5 @@
 pub mod context_menu;
-pub mod data_table;
+pub use dbflux_components::components::data_table;
 pub mod document_tree;
 pub mod dropdown;
 pub mod filter_bar;
