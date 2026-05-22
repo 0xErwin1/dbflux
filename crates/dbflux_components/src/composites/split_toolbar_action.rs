@@ -17,14 +17,14 @@ pub fn split_toolbar_action(
         .h(Heights::BUTTON)
         .rounded(Radii::SM)
         .border_1()
-        .border_color(theme.border)
+        .border_color(theme.input)
         .bg(theme.background)
         .child(div().flex_1().h_full().child(main))
         .child(
             div()
                 .h_full()
                 .border_l_1()
-                .border_color(theme.border)
+                .border_color(theme.input)
                 .child(trailing),
         )
 }

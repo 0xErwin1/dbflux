@@ -4,6 +4,7 @@ use super::{
 use crate::ui::common::time_range::view::TimeRangePanel;
 use crate::ui::components::data_table::SortState as TableSortState;
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
+use crate::ui::document::chrome::compact_top_bar;
 use crate::ui::document::data_view::DataViewMode;
 use crate::ui::document::result_view::ResultViewMode;
 use crate::ui::icons::AppIcon;
@@ -684,16 +685,7 @@ impl DataGridPanel {
             "Refresh"
         };
 
-        div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(Spacing::SM)
-            .min_h(Heights::TOOLBAR)
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
+        compact_top_bar(theme, std::iter::empty::<AnyElement>())
             .child(
                 div()
                     .flex()
@@ -791,7 +783,7 @@ impl DataGridPanel {
             .child(
                 div()
                     .id("refresh-action-btn")
-                    .h(Heights::ROW_COMPACT)
+                    .h(Heights::CONTROL)
                     .flex()
                     .items_center()
                     .gap_0()
