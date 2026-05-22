@@ -1,9 +1,9 @@
 use crate::components::json_editor_view::{self, JsonEditorView};
 use crate::composites::ModalFrame;
+use crate::controls::InputState;
 use crate::icon::IconSource;
 use crate::icons::AppIcon;
 use crate::primitives::Icon;
-use crate::controls::InputState;
 use dbflux_core::keymap_types::ContextId;
 use gpui::*;
 
