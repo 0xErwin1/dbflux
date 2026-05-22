@@ -3,6 +3,7 @@ members = [
     "crates/dbflux",
     "crates/dbflux_app",
     "crates/dbflux_ui",
+    "crates/dbflux_ui_base",
     "crates/dbflux_components",
     "crates/dbflux_core",
     "crates/dbflux_lua",
@@ -73,6 +74,7 @@ dbflux_storage = { path = "crates/dbflux_storage" }
 dbflux_driver_influxdb = { path = "crates/dbflux_driver_influxdb" }
 dbflux_app = { path = "crates/dbflux_app" }
 dbflux_components = { path = "crates/dbflux_components" }
+dbflux_ui_base = { path = "crates/dbflux_ui_base" }
 dbflux_ui = { path = "crates/dbflux_ui" }
 mysql = "25"
 

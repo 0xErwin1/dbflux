@@ -1,4 +1,3 @@
-use crate::app::AppStateEntity;
 use crate::keymap::ContextId;
 use crate::ui::components::toast::{Toast, now_hms};
 use crate::ui::icons::AppIcon;
@@ -42,8 +41,40 @@ enum ModalMode {
     Save { sql: String },
 }
 
+// Type aliases for the callback closure signatures used in HistoryModalCallbacks.
+// These keep the struct field types short enough to satisfy the type_complexity lint.
+type HistoryProviderFn = Box<dyn Fn(&App) -> Vec<HistoryEntry>>;
+type SavedProviderFn = Box<dyn Fn(&App) -> Vec<SavedQuery>>;
+type OnSaveFn = Box<dyn Fn(SavedQuery, &mut App)>;
+type OnRenameFn = Box<dyn Fn(Uuid, String, String, &mut App)>;
+type OnDeleteFn = Box<dyn Fn(Uuid, &mut App)>;
+type OnToggleFavoriteFn = Box<dyn Fn(Uuid, &mut App)>;
+type OnMarkUsedFn = Box<dyn Fn(Uuid, &mut App)>;
+
+/// Injected callbacks that give `HistoryModal` read and write access to the
+/// owner's `AppStateEntity` without holding a direct entity reference.
+///
+/// This decouples `HistoryModal` from `AppStateEntity` so it can move into
+/// `dbflux_ui_document` in Step 3b without dragging the full app-state seam.
+pub struct HistoryModalCallbacks {
+    /// Returns a snapshot of the current query history.
+    pub history_provider: HistoryProviderFn,
+    /// Returns a snapshot of the current saved queries.
+    pub saved_provider: SavedProviderFn,
+    /// Persists a new saved query.
+    pub on_save: OnSaveFn,
+    /// Renames a saved query (id, new_name, sql).
+    pub on_rename: OnRenameFn,
+    /// Deletes a saved query by id.
+    pub on_delete: OnDeleteFn,
+    /// Toggles the favorite flag on a saved query by id.
+    pub on_toggle_favorite: OnToggleFavoriteFn,
+    /// Records that a saved query was used (updates last-used timestamp).
+    pub on_mark_used: OnMarkUsedFn,
+}
+
 pub struct HistoryModal {
-    app_state: Entity<AppStateEntity>,
+    callbacks: HistoryModalCallbacks,
     visible: bool,
     active_tab: HistoryTab,
     selected_index: Option<usize>,
@@ -57,7 +88,7 @@ pub struct HistoryModal {
 
 impl HistoryModal {
     pub fn new(
-        app_state: Entity<AppStateEntity>,
+        callbacks: HistoryModalCallbacks,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -100,7 +131,7 @@ impl HistoryModal {
         .detach();
 
         Self {
-            app_state,
+            callbacks,
             visible: false,
             active_tab: HistoryTab::default(),
             selected_index: None,
@@ -220,10 +251,10 @@ impl HistoryModal {
                     HistoryTab::Saved => {
                         let entries = self.filtered_saved_queries(cx);
                         if let Some(entry) = entries.get(idx) {
-                            self.app_state.update(cx, |state, _| {
-                                state.update_saved_query_last_used(entry.id);
-                            });
-                            (entry.sql.clone(), Some(entry.name.clone()), Some(entry.id))
+                            let id = entry.id;
+                            let result = (entry.sql.clone(), Some(entry.name.clone()), Some(id));
+                            (self.callbacks.on_mark_used)(id, cx);
+                            result
                         } else {
                             (String::new(), None, None)
                         }
@@ -257,9 +288,7 @@ impl HistoryModal {
 
         if let Some(entry) = entries.get(idx) {
             let entry_id = entry.id;
-            self.app_state.update(cx, |state, _| {
-                state.remove_saved_query(entry_id);
-            });
+            (self.callbacks.on_delete)(entry_id, cx);
 
             let new_count = self.filtered_saved_queries(cx).len();
             self.selected_index = if new_count == 0 {
@@ -282,9 +311,7 @@ impl HistoryModal {
         };
 
         if let Some(entry) = entries.get(idx) {
-            self.app_state.update(cx, |state, _| {
-                state.toggle_saved_query_favorite(entry.id);
-            });
+            (self.callbacks.on_toggle_favorite)(entry.id, cx);
             cx.notify();
         }
     }
@@ -350,18 +377,13 @@ impl HistoryModal {
             return;
         }
 
-        let sql = self
-            .app_state
-            .read(cx)
-            .saved_queries()
-            .iter()
+        let sql = (self.callbacks.saved_provider)(cx)
+            .into_iter()
             .find(|q| q.id == id)
-            .map(|q| q.sql.clone());
+            .map(|q| q.sql);
 
         if let Some(sql) = sql {
-            self.app_state.update(cx, |state, _| {
-                state.update_saved_query(id, new_name.to_string(), sql);
-            });
+            (self.callbacks.on_rename)(id, new_name.to_string(), sql, cx);
         }
 
         self.editing_id = None;
@@ -386,9 +408,7 @@ impl HistoryModal {
         let name = name.to_string();
         let query = SavedQuery::new(name.clone(), sql.clone(), None);
         let id = query.id;
-        self.app_state.update(cx, |state, _| {
-            state.add_saved_query(query);
-        });
+        (self.callbacks.on_save)(query, cx);
         cx.emit(QuerySaved { id, name });
         Toast::success("Saved query").meta_right(now_hms()).push(cx);
         self.close(cx);
@@ -402,15 +422,13 @@ impl HistoryModal {
     }
 
     fn filtered_history_entries(&self, cx: &Context<Self>) -> Vec<HistoryEntry> {
-        filter_history_entries(
-            self.app_state.read(cx).history_entries(),
-            &self.search_query,
-            50,
-        )
+        let entries = (self.callbacks.history_provider)(cx);
+        filter_history_entries(entries.as_slice(), &self.search_query, 50)
     }
 
     fn filtered_saved_queries(&self, cx: &Context<Self>) -> Vec<SavedQuery> {
-        filter_saved_queries(self.app_state.read(cx).saved_queries(), &self.search_query)
+        let queries = (self.callbacks.saved_provider)(cx);
+        filter_saved_queries(queries.as_slice(), &self.search_query)
     }
 
     fn render_browse(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -683,9 +701,7 @@ impl HistoryModal {
                                     name: Some(entry_name.clone()),
                                     saved_query_id: Some(id),
                                 });
-                                this.app_state.update(cx, |state, _| {
-                                    state.update_saved_query_last_used(id);
-                                });
+                                (this.callbacks.on_mark_used)(id, cx);
                                 this.close(cx);
                             }))
                             .child(
@@ -719,9 +735,7 @@ impl HistoryModal {
                                                 .rounded(Radii::SM)
                                                 .hover(|d| d.bg(theme.secondary))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.app_state.update(cx, |state, _| {
-                                                        state.toggle_saved_query_favorite(id);
-                                                    });
+                                                    (this.callbacks.on_toggle_favorite)(id, cx);
                                                     cx.notify();
                                                 }))
                                                 .child(

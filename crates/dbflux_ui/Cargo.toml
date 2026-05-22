@@ -14,6 +14,7 @@ license.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 dbflux_components.workspace = true
+dbflux_ui_base.workspace = true
 dbflux_core.workspace = true
 dbflux_storage.workspace = true
 dbflux_app.workspace = true
@@ -97,9 +98,9 @@ redis = ["dbflux_driver_redis", "dbflux_mcp_server?/redis"]
 dynamodb = ["dbflux_driver_dynamodb", "dbflux_mcp_server?/dynamodb"]
 cloudwatch = ["dbflux_driver_cloudwatch"]
 mssql = ["dbflux_driver_mssql"]
-lua = ["dbflux_lua", "dbflux_app/lua"]
-aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws", "dbflux_app/aws"]
-mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp"]
+lua = ["dbflux_lua", "dbflux_app/lua", "dbflux_ui_base/lua"]
+aws = ["dbflux_aws", "dbflux_ssm", "dbflux_mcp_server?/aws", "dbflux_app/aws", "dbflux_ui_base/aws"]
+mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp", "dbflux_ui_base/mcp"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]
