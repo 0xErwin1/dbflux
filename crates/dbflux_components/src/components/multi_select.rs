@@ -1,5 +1,5 @@
-use crate::ui::tokens::Heights;
-use dbflux_components::primitives::Text;
+use crate::primitives::Text;
+use crate::tokens::Heights;
 use gpui::prelude::*;
 use gpui::{
     Corner, ElementId, EventEmitter, IntoElement, MouseButton, ParentElement, Render, ScrollHandle,
@@ -8,7 +8,7 @@ use gpui::{
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
 
-use super::dropdown::DropdownItem;
+use crate::controls::DropdownItem;
 
 /// Emitted whenever the set of selected values changes.
 #[derive(Clone, Debug)]

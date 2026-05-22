@@ -7,7 +7,7 @@ pub mod form_navigation;
 pub mod form_renderer;
 pub use dbflux_components::components::json_editor_view;
 pub mod modal_frame;
-pub mod multi_select;
+pub use dbflux_components::components::multi_select;
 pub mod toast;
 pub use dbflux_components::components::tree_nav;
 pub mod typography;
