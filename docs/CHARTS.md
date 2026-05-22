@@ -25,7 +25,7 @@ pipeline:
    the canvas.
 
 The standalone chart document UI lives in
-`crates/dbflux_ui/src/ui/document/chart_document/` (`mod.rs`, `render.rs`,
+`crates/dbflux_ui_document/src/chart_document/` (`mod.rs`, `render.rs`,
 `pane.rs`). A `ChartDocument` owns a query, a connection, a chart spec, and a
 `ChartShell`, and hosts its rendering through the shared `ResultPanel` chrome
 in `crates/dbflux_components/src/result_panel/`.
@@ -161,7 +161,7 @@ is never stored.
 
 Open chart documents are deduplicated through the `DocumentKey::Chart {
 saved_chart_id: Uuid }` variant in
-`crates/dbflux_ui/src/ui/document/dedup.rs`. Before opening a saved chart,
+`crates/dbflux_ui_document/src/dedup.rs`. Before opening a saved chart,
 `open_saved_chart` calls `tab_manager.find_by_key(&DocumentKey::Chart { ... })`
 and activates the existing tab instead of opening a duplicate. A chart document
 created from an ad-hoc "Chart this query" action is not yet linked to a saved ID
@@ -175,7 +175,7 @@ There are two entry points.
 
 A data grid's context menu offers a "Chart this query" item. The item is gated
 by `can_chart_from_context_menu` in
-`crates/dbflux_ui/src/ui/document/data_grid_panel/context_menu.rs`, which
+`crates/dbflux_ui_document/src/data_grid_panel/context_menu.rs`, which
 requires both:
 
 1. The panel's source is a `QueryResult` with a non-empty original query, and
