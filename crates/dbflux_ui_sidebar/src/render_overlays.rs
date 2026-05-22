@@ -1,6 +1,6 @@
 use super::*;
-use crate::platform;
 use dbflux_components::primitives::Icon;
+use dbflux_ui_base::platform;
 use gpui_component::scroll::ScrollableElement;
 
 fn format_child_timestamp(timestamp_ms: Option<i64>) -> String {
