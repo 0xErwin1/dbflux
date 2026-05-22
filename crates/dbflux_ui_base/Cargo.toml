@@ -18,6 +18,7 @@ dbflux_storage.workspace = true
 dbflux_components.workspace = true
 dbflux_core.workspace = true
 dbflux_mcp = { workspace = true, optional = true }
+dbflux_aws = { workspace = true, optional = true }
 uuid.workspace = true
 log.workspace = true
 anyhow = "1"
@@ -26,4 +27,4 @@ anyhow = "1"
 default = []
 mcp = ["dbflux_mcp", "dbflux_app/mcp"]
 lua = ["dbflux_app/lua"]
-aws = ["dbflux_app/aws"]
+aws = ["dbflux_aws", "dbflux_app/aws"]

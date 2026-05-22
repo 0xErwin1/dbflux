@@ -93,8 +93,10 @@ fn postgres_config_pattern_is_confined_to_core_and_driver() {
 
     let allowed_core = workspace.join("crates/dbflux_core");
     let allowed_postgres_driver = workspace.join("crates/dbflux_driver_postgres");
+    // form.rs may legitimately match against DbConfig::Postgres; it now lives in the
+    // extracted dbflux_ui_windows crate.
     let allowed_connection_form =
-        workspace.join("crates/dbflux_ui/src/ui/windows/connection_manager/form.rs");
+        workspace.join("crates/dbflux_ui_windows/src/connection_manager/form.rs");
     let allowed_test_support = workspace.join("crates/dbflux_test_support");
     // dbflux_mcp_server and dbflux_storage may use DbConfig::Postgres directly in tests only
     let allowed_mcp_server = workspace.join("crates/dbflux_mcp_server");
