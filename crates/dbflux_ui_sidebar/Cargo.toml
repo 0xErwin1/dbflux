@@ -29,8 +29,9 @@ anyhow = "1"
 [features]
 default = []
 # Passthroughs: sidebar code has no direct mcp/lua/aws gates, but these must
-# forward to dbflux_app/dbflux_ui_base so dbflux_app is not compiled twice
-# with mismatched feature sets across the workspace.
-mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp"]
-lua = ["dbflux_app/lua", "dbflux_ui_base/lua"]
-aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]
+# forward to every dependency that also exposes them (dbflux_app, dbflux_ui_base,
+# dbflux_ui_windows) so the feature set stays unified regardless of build entry
+# point and dbflux_app is never compiled twice with mismatched features.
+mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp", "dbflux_ui_windows/mcp"]
+lua = ["dbflux_app/lua", "dbflux_ui_base/lua", "dbflux_ui_windows/lua"]
+aws = ["dbflux_app/aws", "dbflux_ui_base/aws", "dbflux_ui_windows/aws"]
