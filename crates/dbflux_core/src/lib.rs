@@ -1,7 +1,6 @@
 #![allow(clippy::result_large_err)]
 
 pub mod access;
-pub mod keymap_types;
 pub mod auth;
 mod config;
 mod connection;
@@ -9,6 +8,7 @@ mod core;
 mod data;
 mod driver;
 mod facade;
+pub mod keymap_types;
 pub mod observability;
 pub mod pipeline;
 mod query;

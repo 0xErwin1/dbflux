@@ -5,8 +5,10 @@ use gpui::{SharedString, TestAppContext, Window, hsla};
 use gpui_component::theme::Theme;
 use std::fs;
 
-const THEME_SOURCE: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../dbflux_components/src/theme.rs");
+const THEME_SOURCE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../dbflux_components/src/theme.rs"
+);
 
 fn rgb_to_hsla(hex: u32) -> gpui::Hsla {
     let r = ((hex >> 16) & 0xFF) as f32 / 255.0;

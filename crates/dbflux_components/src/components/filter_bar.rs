@@ -207,9 +207,7 @@ impl FilterBarState {
     /// Returns the `Entity<Dropdown>` for the currently focused item, if it is
     /// a `Dropdown` variant. Used by the document to route keyboard commands
     /// (j/k, Enter, Escape) into the open dropdown.
-    pub fn focused_dropdown_entity(
-        &self,
-    ) -> Option<Entity<crate::controls::Dropdown>> {
+    pub fn focused_dropdown_entity(&self) -> Option<Entity<crate::controls::Dropdown>> {
         match self.items.get(self.focused_index) {
             Some(FilterBarItem::Dropdown { dropdown, .. }) => Some(dropdown.clone()),
             _ => None,
