@@ -24,7 +24,9 @@ use gpui_component::Sizable;
 use gpui_component::button::ButtonVariants;
 use gpui_component::scroll::ScrollableElement;
 
-use super::super::chrome::{compact_top_bar, workspace_footer_bar};
+use super::super::chrome::{
+    ToolbarButton, ToolbarButtonVariant, compact_top_bar, workspace_footer_bar,
+};
 use super::super::types::DocumentState;
 
 impl AuditDocument {
@@ -292,28 +294,13 @@ impl AuditDocument {
             .child(self.dropdown_timestamp_mode.clone());
 
         let can_apply_custom_time_range = self.can_apply_custom_time_range(cx);
-        let custom_apply_button = div()
-            .id("audit-custom-time-apply")
-            .h(Heights::BUTTON)
-            .flex()
-            .items_center()
-            .px(Spacing::SM)
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(if self.slot_has_ring(ToolbarSlot::CustomApply) {
-                theme.ring
-            } else {
-                theme.input
-            })
-            .when(can_apply_custom_time_range, |d| {
-                d.cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.apply_custom_time_range(cx);
-                    }))
-            })
-            .when(!can_apply_custom_time_range, |d| d.opacity(0.45))
-            .child(Text::caption("Apply"));
+        let custom_apply_button = ToolbarButton::new("audit-custom-time-apply")
+            .label("Apply")
+            .focused(self.slot_has_ring(ToolbarSlot::CustomApply))
+            .disabled(!can_apply_custom_time_range)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.apply_custom_time_range(cx);
+            }));
 
         let custom_time_controls = div()
             .flex()
@@ -455,25 +442,13 @@ impl AuditDocument {
             );
 
         // Clear button.
-        let clear_btn = div()
-            .id("audit-clear-btn")
-            .h(Heights::BUTTON)
-            .flex()
-            .items_center()
-            .px(Spacing::SM)
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(if self.slot_has_ring(ToolbarSlot::Clear) {
-                theme.ring
-            } else {
-                gpui::transparent_black()
-            })
-            .cursor_pointer()
-            .hover(|d| d.bg(theme.secondary))
+        let clear_btn = ToolbarButton::new("audit-clear-btn")
+            .label("Clear")
+            .variant(ToolbarButtonVariant::Ghost)
+            .focused(self.slot_has_ring(ToolbarSlot::Clear))
             .on_click(cx.listener(|this, _, window, cx| {
                 this.clear_filters(window, cx);
-            }))
-            .child(Text::caption("Clear"));
+            }));
 
         let _ = window;
 
