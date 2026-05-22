@@ -8,6 +8,8 @@ pub mod app_state_entity;
 pub mod async_ext;
 pub mod keymap;
 pub mod modal_frame;
+pub mod platform;
+pub mod sso_wizard;
 pub mod toast;
 
 #[cfg(feature = "mcp")]
