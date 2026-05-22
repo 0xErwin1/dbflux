@@ -2,25 +2,23 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel};
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
-use dbflux_ui_base::{AppStateChanged, AppStateEntity};
-use dbflux_app::keymap::{Command, ContextId};
-use dbflux_components::common::time_range::state::TimeRange;
-use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
-use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
-use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
-use dbflux_components::icons::AppIcon;
 use crate::history_modal::{
     HistoryModal, HistoryModalCallbacks, HistoryModalClosed, HistoryQuerySelected,
 };
-use dbflux_components::modals::schema_drift::{
-    ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
-};
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::common::time_range::state::TimeRange;
+use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
+use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
 use dbflux_components::controls::{
     Button, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
 };
+use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::schema_drift::{
+    ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
+};
 use dbflux_components::result_panel::ResultPanel;
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
     AuditAction, AuditContext, EventActorType, EventCategory, EventOrigin, EventOutcome,
@@ -33,6 +31,8 @@ use dbflux_core::{
     RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget, ValidationResult,
     check_schema_drift, detect_dangerous_query,
 };
+use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -1519,11 +1519,11 @@ impl EventEmitter<DocumentEvent> for CodeDocument {}
 #[cfg(test)]
 mod tests {
     use super::{CodeDocument, diff_stats_from_pair, source_input_values_from_context};
-    use dbflux_ui_base::AppStateEntity;
-    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use dbflux_components::theme;
     use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use gpui::{AppContext, TestAppContext};
     use gpui_component::Root;
     use std::cell::RefCell;

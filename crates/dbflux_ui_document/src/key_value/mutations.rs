@@ -2,7 +2,6 @@ use super::add_member_modal::AddMemberEvent;
 use super::new_key_modal::{NewKeyCreatedEvent, NewKeyType, NewKeyValue};
 use super::parsing::{MemberEntry, parse_database_name};
 use super::{KeyValueFocusMode, PendingKeyDelete, PendingMemberDelete};
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{
     DbError, HashDeleteRequest, HashSetRequest, KeyDeleteRequest, KeyRenameRequest, KeySetRequest,
@@ -10,6 +9,7 @@ use dbflux_core::{
     SetCondition, SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId, TaskKind,
     ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
+use dbflux_ui_base::AsyncUpdateResultExt;
 use gpui::*;
 
 impl super::KeyValueDocument {

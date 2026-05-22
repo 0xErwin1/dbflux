@@ -10,9 +10,9 @@
 //! host requires one new variant and a delegation arm — both local changes
 //! to this file.
 
-use dbflux_components::common::time_range::view::TimeRangePanel;
 use crate::data_grid_panel::DataGridPanel;
 use dbflux_components::chart::{DataPointRef, SourceRowRef};
+use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::controls::Dropdown;
 use dbflux_core::QueryResult;
 use gpui::prelude::*;

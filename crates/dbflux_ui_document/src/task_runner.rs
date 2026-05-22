@@ -1,5 +1,5 @@
-use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use dbflux_core::{CancelToken, TaskId, TaskKind, TaskSlot, TaskTarget};
+use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::*;
 use uuid::Uuid;
 

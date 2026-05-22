@@ -1,6 +1,6 @@
-use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_components::icon::IconSource;
 use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::{Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;

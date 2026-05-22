@@ -10,14 +10,14 @@ use super::chart_view::AuditViewMode;
 use super::filters::{TimeRange, format_timestamp_ms};
 use super::{AuditContextMenuAction, AuditDocument, AuditDocumentSource, ToolbarSlot};
 use crate::handle::DocumentEvent;
-use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::chart::YScale;
 use dbflux_components::controls::{
     GpuiInput as Input, InputState, ReadonlyTextView, SelectableText,
 };
+use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_components::tokens::BannerColors;
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_storage::repositories::audit::AuditEventDto;
 use gpui::prelude::*;
 use gpui::*;

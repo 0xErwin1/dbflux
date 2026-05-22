@@ -1,5 +1,4 @@
 use super::*;
-use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use crate::chrome::{ToolbarButton, ToolbarButtonVariant, compact_top_bar};
 use dbflux_components::composites::split_toolbar_action;
 use dbflux_components::controls::Button;
@@ -8,6 +7,7 @@ use dbflux_components::primitives::{
     Badge, BadgeVariant, BannerBlock, BannerVariant, Icon, Text, focus_frame, overlay_bg,
     surface_panel,
 };
+use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui_component::scroll::ScrollableElement;
 
 fn code_pane_is_focused(focus_mode: SqlQueryFocus, pane: SqlQueryFocus) -> bool {

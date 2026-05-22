@@ -8,9 +8,7 @@ use super::DataDocument;
 use crate::dedup::DocumentKey;
 use crate::handle::DocumentEvent;
 use crate::pane::{BoxedDocEventCallback, PaneHandle};
-use crate::types::{
-    DataSourceKind, DocumentIcon, DocumentKind, DocumentMetaSnapshot,
-};
+use crate::types::{DataSourceKind, DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
 impl DataDocument {

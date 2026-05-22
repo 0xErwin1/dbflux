@@ -15,20 +15,20 @@ pub use view::LogStreamView;
 
 use std::collections::{HashMap, HashSet};
 
-use dbflux_ui_base::AppStateEntity;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::components::filter_bar::{FilterBarItem, FilterBarMode, FilterBarState};
 use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
-use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
-use dbflux_components::icons::AppIcon;
+use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::icons::AppIcon;
 use dbflux_core::{
     CollectionRef, EventQuery, EventRecord, EventStreamTarget, Pagination, RefreshPolicy,
     observability::{EventCategory, EventOutcome, EventSeverity},
 };
 use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter};
+use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;

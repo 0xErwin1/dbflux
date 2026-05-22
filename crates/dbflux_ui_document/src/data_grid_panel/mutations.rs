@@ -1,12 +1,12 @@
 use super::utils::{extract_pk_columns, value_to_json};
 use super::{DataGridPanel, DataSource, PendingBatchRemaining, PendingDeleteConfirm, PendingToast};
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_components::components::document_tree::NodeId;
-use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_core::{
     CollectionRef, ColumnAssignment, DocumentFilter, DocumentUpdate, Pagination, QueryResult,
     RowDelete, RowIdentity, RowInsert, RowPatch, RowState, TableRef, TaskKind, Value,
 };
+use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::*;
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -360,8 +360,10 @@ impl DataGridPanel {
                 .collect::<Vec<_>>()
         };
 
-        let changes_ref: Vec<(usize, &dbflux_components::components::data_table::model::CellValue)> =
-            changes.iter().map(|(idx, cell)| (*idx, cell)).collect();
+        let changes_ref: Vec<(
+            usize,
+            &dbflux_components::components::data_table::model::CellValue,
+        )> = changes.iter().map(|(idx, cell)| (*idx, cell)).collect();
 
         match &self.source {
             DataSource::Table {
@@ -396,7 +398,10 @@ impl DataGridPanel {
         database: Option<String>,
         table_ref: TableRef,
         row_idx: usize,
-        changes: &[(usize, &dbflux_components::components::data_table::model::CellValue)],
+        changes: &[(
+            usize,
+            &dbflux_components::components::data_table::model::CellValue,
+        )],
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.table_state else {
@@ -549,7 +554,10 @@ impl DataGridPanel {
         profile_id: Uuid,
         collection: CollectionRef,
         row_idx: usize,
-        changes: &[(usize, &dbflux_components::components::data_table::model::CellValue)],
+        changes: &[(
+            usize,
+            &dbflux_components::components::data_table::model::CellValue,
+        )],
         cx: &mut Context<Self>,
     ) {
         let Some(table_state) = &self.table_state else {

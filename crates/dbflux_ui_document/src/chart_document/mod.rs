@@ -13,21 +13,21 @@ use super::chart::{ChartHost, ChartShell, HostAdapter};
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
-use dbflux_ui_base::AppStateEntity;
 use dbflux_app::keymap::{Command, ContextId};
-use dbflux_components::common::time_range::state::TimeRange;
-use dbflux_components::common::time_range::view::TimeRangePanel;
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
-use dbflux_ui_base::toast::PendingToast;
 use dbflux_components::chart::{
     ChartDataSource, ChartDetection, ChartSourceError, TimeWindow, detect_chart_columns,
     resolve_source,
 };
+use dbflux_components::common::time_range::state::TimeRange;
+use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::controls::InputState;
+use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::result_panel::{ResultPanel, SegmentPosition, ToolbarSegment, ViewHandle};
 use dbflux_components::result_view::ResultViewMode;
 use dbflux_components::saved_chart::{SavedChart, SavedChartSource};
 use dbflux_core::{QueryResult, RefreshPolicy};
+use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::toast::PendingToast;
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Task, Window};
 use std::sync::Arc;
@@ -752,8 +752,8 @@ impl ChartDocument {
     /// - `Left/1`: Run / Running… primary button
     /// - `Right/0`: Save button
     fn header_segments(entity: Entity<Self>, _cx: &App) -> Vec<ToolbarSegment> {
-        use dbflux_components::tokens::Spacing;
         use dbflux_components::primitives::Text;
+        use dbflux_components::tokens::Spacing;
         use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
         use gpui_component::{Disableable, Sizable};
 

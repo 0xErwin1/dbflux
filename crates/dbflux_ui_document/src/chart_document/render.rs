@@ -18,19 +18,17 @@
 //! the `ViewHandle::render` closure built by `into_view_handle`.
 
 use super::ChartDocument;
+use crate::chart::ChartRailTab;
+use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
+use dbflux_components::chart::{ChartDetection, axis_bar_element};
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::controls::DropdownSelectionChanged;
-use dbflux_ui_base::toast::{PendingToast, flush_pending_toast, now_hms};
-use crate::chart::ChartRailTab;
-use crate::chart::toolbar::{
-    ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar,
-};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
-use dbflux_components::chart::{ChartDetection, axis_bar_element};
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::Text;
 use dbflux_components::result_panel::ResultPanel;
+use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_ui_base::toast::{PendingToast, flush_pending_toast, now_hms};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};

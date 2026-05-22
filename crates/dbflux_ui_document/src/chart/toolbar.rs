@@ -15,12 +15,12 @@
 //! assembled separately in each caller.
 
 use super::shell::{ChartRailTab, ChartShell};
+use dbflux_components::chart::{ChartKind, format_resolution, format_x_value};
 use dbflux_components::composites::refresh_split_button;
 use dbflux_components::controls::Dropdown;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Radii, Spacing};
-use dbflux_components::chart::{ChartKind, format_resolution, format_x_value};
 use dbflux_components::primitives::Icon;
+use dbflux_components::tokens::{FontSizes, Radii, Spacing};
 use dbflux_core::RefreshPolicy;
 use gpui::prelude::*;
 use gpui::*;

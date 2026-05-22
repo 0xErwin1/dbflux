@@ -1,8 +1,8 @@
 use super::*;
-use dbflux_ui_base::AsyncUpdateResultExt;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
 use dbflux_components::primitives::{Icon, Text, focus_frame};
+use dbflux_ui_base::AsyncUpdateResultExt;
 
 fn context_dropdown_min_width(index: usize) -> Pixels {
     match index {

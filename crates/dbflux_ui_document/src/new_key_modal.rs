@@ -1,13 +1,13 @@
 use dbflux_app::keymap::{Command, ContextId};
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::components::form_navigation::{
     FormEditState, FormField, FormNavigation, focus_ring, subscribe_form_input,
 };
-use dbflux_ui_base::modal_frame::ModalFrame;
-use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_ui_base::modal_frame::ModalFrame;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};

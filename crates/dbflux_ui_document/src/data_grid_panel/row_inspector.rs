@@ -20,8 +20,8 @@
 //! - **REFERENCES** — FK-resolved values; each FK resolves asynchronously.
 
 use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::Spacing;
 use dbflux_components::primitives::{Icon, LoadingState, Text};
+use dbflux_components::tokens::Spacing;
 use dbflux_core::Value;
 use gpui::prelude::FluentBuilder;
 use gpui::*;

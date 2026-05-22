@@ -1,14 +1,9 @@
 use super::{
     ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
 };
-use dbflux_components::common::time_range::view::TimeRangePanel;
-use dbflux_components::components::data_table::SortState as TableSortState;
-use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use crate::chrome::compact_top_bar;
 use crate::data_view::DataViewMode;
 use crate::result_view::ResultViewMode;
-use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::chart::legend::legend_element;
 use dbflux_components::chart::{
     CHART_ACCENT_CYAN, CHART_ACCENT_PRIMARY, ChartDetection, ManualChartSelection, SeriesSpec,
@@ -16,9 +11,14 @@ use dbflux_components::chart::{
     format_y_value,
 };
 use dbflux_components::chart::{SourceRowRef, point_inspector_element};
+use dbflux_components::common::time_range::view::TimeRangePanel;
+use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_components::controls::{Checkbox, Input, InputState};
+use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{ColumnKind, Pagination, QueryResultShape, SortDirection, Value};
+use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;

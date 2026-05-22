@@ -1,9 +1,9 @@
-use dbflux_ui_base::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
-use dbflux_components::tokens::Radii;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Text;
+use dbflux_components::tokens::Radii;
 use dbflux_components::typography::{MonoCaption, MonoLabel};
 use dbflux_mcp::{PendingExecutionDetail, PendingExecutionSummary};
+use dbflux_ui_base::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;

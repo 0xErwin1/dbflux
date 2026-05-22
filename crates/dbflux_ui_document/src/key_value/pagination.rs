@@ -1,6 +1,6 @@
 use super::parsing::parse_database_name;
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_core::{DbError, KeyGetRequest, KeyScanRequest, TaskKind};
+use dbflux_ui_base::AsyncUpdateResultExt;
 use gpui::*;
 
 impl super::KeyValueDocument {
