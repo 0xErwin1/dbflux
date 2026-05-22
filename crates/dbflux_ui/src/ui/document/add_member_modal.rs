@@ -27,7 +27,7 @@ pub struct AddMemberEvent {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum AddMemberFocus {
+pub enum AddMemberFocus {
     RowField(usize),
     RowValue(usize),
     RowDelete(usize),

@@ -2,7 +2,7 @@ mod gutter;
 
 pub use gutter::{GutterInfo, render_gutter, tree_line_color};
 
-use crate::ui::icons::AppIcon;
+use crate::icons::AppIcon;
 use gpui::SharedString;
 use std::collections::HashSet;
 
@@ -269,7 +269,7 @@ impl TreeNavNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::icons::AppIcon;
+    use crate::icons::AppIcon;
 
     fn make_test_tree() -> Vec<TreeNavNode> {
         vec![

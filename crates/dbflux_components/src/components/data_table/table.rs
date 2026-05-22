@@ -1,10 +1,9 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use crate::ui::tokens::FontSizes;
-use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::RowColors;
+use crate::controls::{GpuiInput as Input, InputState};
+use crate::primitives::Text;
+use crate::tokens::{FontSizes, RowColors};
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -925,7 +924,7 @@ fn render_rows(
     selection: &SelectionState,
     editing_cell: Option<CellCoord>,
     cell_input: Option<&Entity<InputState>>,
-    enum_dropdown: Option<&Entity<crate::ui::components::dropdown::Dropdown>>,
+    enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
     edit_buffer: &super::model::EditBuffer,
     total_width: f32,
     theme: &gpui_component::theme::Theme,

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use dbflux_components::controls::{InputEvent, InputState};
+use crate::controls::{InputEvent, InputState};
 use gpui::{
     AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
     Size, UniformListScrollHandle, Window, px,
@@ -12,9 +12,7 @@ use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, TableModel};
 use super::selection::{CellCoord, SelectionState};
 use super::theme::{DEFAULT_COLUMN_WIDTH, MIN_COLUMN_WIDTH, SCROLLBAR_WIDTH};
-use crate::ui::components::dropdown::{
-    Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged,
-};
+use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 
 /// Main state for the DataTable component.
 pub struct DataTableState {
@@ -966,7 +964,7 @@ impl Focusable for DataTableState {
 #[cfg(test)]
 mod tests {
     use super::next_sort_state;
-    use crate::ui::components::data_table::events::SortState;
+    use crate::components::data_table::events::SortState;
 
     #[test]
     fn next_sort_state_cycles_none_asc_desc_none() {

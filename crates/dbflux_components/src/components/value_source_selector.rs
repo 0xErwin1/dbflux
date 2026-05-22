@@ -1,9 +1,7 @@
-use dbflux_components::controls::InputState;
+use crate::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
+use dbflux_core::values::ValueRef;
 use gpui::prelude::*;
 use gpui::*;
-
-use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionChanged};
-use dbflux_core::values::ValueRef;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ValueSourceKind {

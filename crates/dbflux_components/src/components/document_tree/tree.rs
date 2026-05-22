@@ -1,12 +1,11 @@
-use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use crate::controls::{GpuiInput as Input, InputEvent, InputState};
+use crate::icons::AppIcon;
+use crate::primitives::{Icon, Text};
+use crate::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-
-use crate::ui::icons::AppIcon;
-use crate::ui::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::primitives::{Icon, Text};
 
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
