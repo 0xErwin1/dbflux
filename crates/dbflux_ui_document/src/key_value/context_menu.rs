@@ -184,14 +184,14 @@ impl super::KeyValueDocument {
             KvMenuTarget::Key => {
                 let row_index = self.selected_index.unwrap_or(0) as f32;
                 Point {
-                    x: self.panel_origin.x + px(12.0),
+                    x: self.panel_origin.x + px(12.0), // guardrail-allow: positional offset, not a spacing/layout token
                     y: self.panel_origin.y + left_header + Heights::ROW * row_index,
                 }
             }
             KvMenuTarget::Value => {
                 let row_index = self.selected_member_index.unwrap_or(0) as f32;
                 Point {
-                    x: self.panel_origin.x + px(240.0) + px(12.0),
+                    x: self.panel_origin.x + px(240.0) + px(12.0), // guardrail-allow: positional offset, not a spacing/layout token
                     y: self.panel_origin.y + right_header + Heights::ROW * row_index,
                 }
             }
