@@ -10,7 +10,9 @@ use crate::ui::components::dropdown::{Dropdown, DropdownItem, DropdownSelectionC
 use crate::ui::components::multi_select::{MultiSelect, MultiSelectChanged};
 use crate::ui::components::toast::{Toast, copy_action, now_hms};
 use crate::ui::icons::AppIcon;
-use crate::ui::overlays::history_modal::{HistoryModal, HistoryModalClosed, HistoryQuerySelected};
+use crate::ui::overlays::history_modal::{
+    HistoryModal, HistoryModalCallbacks, HistoryModalClosed, HistoryQuerySelected,
+};
 use crate::ui::overlays::modals::schema_drift::{
     ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
 };
@@ -462,8 +464,66 @@ impl CodeDocument {
             },
         );
 
-        // Create history modal
-        let history_modal = cx.new(|cx| HistoryModal::new(app_state.clone(), window, cx));
+        // Create history modal — each closure captures a clone of app_state and
+        // reproduces the exact AppStateEntity mutation the modal previously called
+        // directly, preserving behavior byte-for-byte (ADR-6).
+        let history_modal = cx.new(|cx| {
+            let app = app_state.clone();
+            HistoryModal::new(
+                HistoryModalCallbacks {
+                    history_provider: {
+                        let a = app.clone();
+                        Box::new(move |cx: &App| a.read(cx).history_entries().to_vec())
+                    },
+                    saved_provider: {
+                        let a = app.clone();
+                        Box::new(move |cx: &App| a.read(cx).saved_queries().to_vec())
+                    },
+                    on_save: {
+                        let a = app.clone();
+                        Box::new(move |q, cx| {
+                            a.update(cx, |s, _| {
+                                s.add_saved_query(q);
+                            });
+                        })
+                    },
+                    on_rename: {
+                        let a = app.clone();
+                        Box::new(move |id, name, sql, cx| {
+                            a.update(cx, |s, _| {
+                                s.update_saved_query(id, name, sql);
+                            });
+                        })
+                    },
+                    on_delete: {
+                        let a = app.clone();
+                        Box::new(move |id, cx| {
+                            a.update(cx, |s, _| {
+                                s.remove_saved_query(id);
+                            });
+                        })
+                    },
+                    on_toggle_favorite: {
+                        let a = app.clone();
+                        Box::new(move |id, cx| {
+                            a.update(cx, |s, _| {
+                                s.toggle_saved_query_favorite(id);
+                            });
+                        })
+                    },
+                    on_mark_used: {
+                        let a = app.clone();
+                        Box::new(move |id, cx| {
+                            a.update(cx, |s, _| {
+                                s.update_saved_query_last_used(id);
+                            });
+                        })
+                    },
+                },
+                window,
+                cx,
+            )
+        });
 
         // Subscribe to history modal events
         let query_selected_sub = cx.subscribe(

@@ -1,6 +1,41 @@
+//! Keymap helpers that depend on both GPUI and `dbflux_app::keymap`.
+//!
+//! These helpers live in `dbflux_ui_base` rather than `dbflux_components`
+//! because they require `dbflux_app::keymap` types, which `dbflux_components`
+//! intentionally does not depend on.
+
+use dbflux_app::keymap::{Command, ContextId, KeymapLayer};
+use dbflux_app::keymap::{KeyChord, KeymapStack, Modifiers};
+use gpui::Keystroke;
 use std::sync::LazyLock;
 
-use super::{Command, ContextId, KeyChord, KeymapLayer, KeymapStack, Modifiers};
+// ============================================================================
+// GPUI keystroke conversion helpers
+// ============================================================================
+
+/// Creates a [`KeyChord`] from a GPUI [`Keystroke`].
+#[allow(dead_code)]
+pub fn key_chord_from_gpui(keystroke: &Keystroke) -> KeyChord {
+    KeyChord {
+        key: keystroke.key.clone(),
+        modifiers: modifiers_from_gpui(&keystroke.modifiers),
+    }
+}
+
+/// Creates [`Modifiers`] from a GPUI [`gpui::Modifiers`] struct.
+#[allow(dead_code)]
+pub fn modifiers_from_gpui(mods: &gpui::Modifiers) -> Modifiers {
+    Modifiers {
+        ctrl: mods.control,
+        alt: mods.alt,
+        shift: mods.shift,
+        platform: mods.platform,
+    }
+}
+
+// ============================================================================
+// Default keymap
+// ============================================================================
 
 static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     let mut stack = KeymapStack::new();
@@ -24,7 +59,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack
 });
 
-/// Returns a reference to the default KeymapStack with all default keybindings.
+/// Returns a reference to the default [`KeymapStack`] with all default keybindings.
 pub fn default_keymap() -> &'static KeymapStack {
     &DEFAULT_KEYMAP
 }

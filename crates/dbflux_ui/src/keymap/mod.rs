@@ -7,8 +7,6 @@
 //! - `chord_ext` — GPUI keystroke conversion utilities
 
 mod actions;
-mod chord_ext;
-mod defaults;
 mod dispatcher;
 
 // Re-export pure keymap types from dbflux_app
@@ -24,8 +22,8 @@ pub use dbflux_components::actions::Cancel;
 
 // GPUI-coupled types that stay in dbflux_ui
 pub use actions::*;
-pub use defaults::default_keymap;
 pub use dispatcher::CommandDispatcher;
 
-// Re-export GPUUI conversion helpers
-pub use chord_ext::key_chord_from_gpui;
+// Keymap helpers re-exported from dbflux_ui_base
+pub use dbflux_ui_base::keymap::default_keymap;
+pub use dbflux_ui_base::keymap::key_chord_from_gpui;
