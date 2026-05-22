@@ -5,7 +5,7 @@ pub mod dropdown;
 pub mod filter_bar;
 pub mod form_navigation;
 pub mod form_renderer;
-pub mod json_editor_view;
+pub use dbflux_components::components::json_editor_view;
 pub mod modal_frame;
 pub mod multi_select;
 pub mod toast;
