@@ -569,10 +569,10 @@ fn render_config_footer(state: &MetricPickerState, cx: &mut Context<ChartShell>)
                 .small()
                 .disabled(!can_apply)
                 .on_click(cx.listener(|shell, _, _, cx| {
-                    if let Some(picker) = &shell.metric_picker {
-                        if let Some(source) = picker.build_metric_source() {
-                            cx.emit(ChartShellEvent::MetricPickerApplied(Box::new(source)));
-                        }
+                    if let Some(picker) = &shell.metric_picker
+                        && let Some(source) = picker.build_metric_source()
+                    {
+                        cx.emit(ChartShellEvent::MetricPickerApplied(Box::new(source)));
                     }
                 })),
         )

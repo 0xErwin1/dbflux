@@ -4,6 +4,17 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Metric picker rail tab for chart documents** — CloudWatch metric charts now
+  open with an interactive picker rail (320 px overlay) that lets users browse
+  namespaces, metrics, and dimension combinations fetched live via
+  `ListMetrics` pagination. Selecting a metric and pressing Apply swaps the
+  chart's data source and auto-runs the query. Results are cached for the
+  session by `MetricCatalogCache`. No driver names or categories are hardcoded
+  in the UI layer; the Metric tab is gated solely on the generic
+  `METRIC_CATALOG` capability bit (#96).
+
 ## [0.6.0-dev.8] - 2026-05-23
 
 ### Added

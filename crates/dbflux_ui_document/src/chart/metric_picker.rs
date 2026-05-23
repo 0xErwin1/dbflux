@@ -15,6 +15,12 @@
 //! two locations: `toolbar.rs` (render guard) and `actions.rs::open_metrics_chart`.
 //! No `driver_id` strings anywhere — capability bit + trait accessor only.
 
+// `DbError` is a large type defined in `dbflux_core`; we cannot change its size.
+// Background task closures that call into MetricCatalog return Option<Result<_, DbError>>,
+// which triggers clippy::result_large_err. Suppressed here since boxing DbError is not
+// an option in this codebase.
+#![allow(clippy::result_large_err)]
+
 use dbflux_app::{MetricCatalogCache, MetricsPageView};
 use dbflux_components::chart::MetricSource;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
