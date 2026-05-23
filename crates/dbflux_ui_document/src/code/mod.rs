@@ -273,6 +273,12 @@ pub struct CodeDocument {
     /// Set by chart-driven RANGE chip changes or auto-refresh ticks; the next
     /// render reads it and calls `run_query` so updates land without a manual Run.
     pending_chart_reexecute: bool,
+    /// Window emitted by the source `TimeRangePanel` that must win over the
+    /// (potentially stale) `source_start_input` / `source_end_input` text fields
+    /// on the very next `run_query`. Taken by `run_query_text`; rebuilds
+    /// `exec_ctx.source` from these epoch-ms bounds and bypasses
+    /// `current_source_context`. Mirrors `ChartDocument::pending_time_window`.
+    pending_window_override: Option<(i64, i64)>,
 
     // Layout/focus
     layout: SqlQueryLayout,
@@ -774,6 +780,7 @@ impl CodeDocument {
             pending_set_query: None,
             pending_history_focus_restore: false,
             pending_chart_reexecute: false,
+            pending_window_override: None,
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
