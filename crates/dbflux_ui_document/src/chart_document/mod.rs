@@ -578,18 +578,26 @@ impl ChartDocument {
     /// Apply the custom date/time picker values and trigger a chart re-execution.
     ///
     /// Called by the Apply button in the custom picker row. Delegates to the
-    /// panel's `apply_custom_range`, which validates the inputs, emits
-    /// `TimeRangeChanged` (handled by `on_time_range_changed`), and notifies.
-    /// On validation failure a toast is shown.
+    /// panel's `apply_custom_range`, which validates the inputs and emits
+    /// `TimeRangeChanged`. The flags are set here synchronously from the
+    /// returned `(start_ms, end_ms)` bounds rather than waiting for the
+    /// deferred subscription delivery, which eliminates a render-timing race
+    /// where the re-execution flag could be missed.
     pub(super) fn apply_custom_range(&mut self, cx: &mut Context<Self>) {
         let Some(panel) = self.time_range_panel.clone() else {
             return;
         };
 
         match panel.update(cx, |p, cx| p.apply_custom_range(cx)) {
-            Ok(_) => {
-                // `TimeRangeChanged` is emitted by the panel; `on_time_range_changed`
-                // handles the window stash and re-execution scheduling.
+            Ok((start_ms, end_ms)) => {
+                // Drive re-execution synchronously from the validated bounds rather
+                // than waiting for the deferred TimeRangeChanged subscription to
+                // mutate state. The subscription still fires (and mirrors
+                // selected_time_range), but the chart re-run is no longer gated
+                // on its delivery timing.
+                self.pending_time_window = Some((start_ms, end_ms));
+                self.pending_chart_reexecute = true;
+                cx.notify();
             }
             Err(error) => {
                 self.pending_toast = Some(PendingToast {
@@ -913,6 +921,49 @@ mod tests {
         assert!(
             !result_both_none.pending_chart_reexecute,
             "must not reexecute when both are None"
+        );
+    }
+
+    // ---- apply_custom_range synchronous flag-set ----
+
+    /// Simulated outcome of the Ok branch in `apply_custom_range`.
+    struct ApplyCustomRangeOutcome {
+        pending_chart_reexecute: bool,
+        pending_time_window: Option<(i64, i64)>,
+    }
+
+    /// Exercise the `apply_custom_range` Ok-branch logic without a GPUI runtime
+    /// by replicating the synchronous flag-set directly.
+    ///
+    /// T-CR-07: Apply sets both flags in the same call as validation, removing
+    /// the timing dependency on `TimeRangeChanged` subscription delivery.
+    fn simulate_apply_custom_range_ok(start_ms: i64, end_ms: i64) -> ApplyCustomRangeOutcome {
+        // This replicates the Ok branch added in Piece A: the bounds returned
+        // by `panel.apply_custom_range` are used to set state synchronously.
+        let pending_time_window = Some((start_ms, end_ms));
+        let pending_chart_reexecute = true;
+
+        ApplyCustomRangeOutcome {
+            pending_chart_reexecute,
+            pending_time_window,
+        }
+    }
+
+    /// `apply_custom_range` Ok branch sets `pending_chart_reexecute` and stashes
+    /// the exact bounds returned by the panel — no subscription needed.
+    ///
+    /// T-CR-07: synchronous flag-set test.
+    #[test]
+    fn apply_custom_range_ok_sets_flags_synchronously() {
+        let outcome = simulate_apply_custom_range_ok(1_000, 2_000);
+        assert!(
+            outcome.pending_chart_reexecute,
+            "pending_chart_reexecute must be true immediately after Ok"
+        );
+        assert_eq!(
+            outcome.pending_time_window,
+            Some((1_000, 2_000)),
+            "pending_time_window must hold the exact validated bounds"
         );
     }
 

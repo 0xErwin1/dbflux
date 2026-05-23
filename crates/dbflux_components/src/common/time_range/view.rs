@@ -354,6 +354,57 @@ impl TimeRangePanel {
         Ok((start_ms, end_ms))
     }
 
+    /// Returns the individual sub-elements of the custom picker row as a struct.
+    ///
+    /// Each element is pre-sized (date picker at `date_picker_width`, time
+    /// dropdowns at `px(72)`) but NOT wrapped with outer chrome (ring borders,
+    /// background, padding) — callers compose them into a row with whatever
+    /// decoration they need.
+    ///
+    /// Use this when per-slot decoration is required (e.g. audit's keyboard-focus
+    /// ring guards that wrap each individual control). Use `render_custom_picker_row`
+    /// when the standard gap-1 flex row layout suffices.
+    ///
+    /// Both APIs render the same underlying sub-entities: `render_custom_picker_row`
+    /// calls this method internally and assembles the result into the standard row.
+    pub fn custom_picker_slots(
+        &self,
+        date_picker_width: gpui::Pixels,
+        _cx: &gpui::App,
+    ) -> CustomPickerSlots {
+        use gpui::{div, px};
+
+        CustomPickerSlots {
+            date_picker: div()
+                .w(date_picker_width)
+                .child(
+                    DatePicker::new(&self.custom_date_range_picker)
+                        .small()
+                        .placeholder("Select date range")
+                        .number_of_months(2),
+                )
+                .into_any_element(),
+            from_label: Text::caption("from").into_any_element(),
+            start_hour: div()
+                .w(px(72.0))
+                .child(self.custom_start_hour_dropdown.clone())
+                .into_any_element(),
+            start_minute: div()
+                .w(px(72.0))
+                .child(self.custom_start_minute_dropdown.clone())
+                .into_any_element(),
+            to_label: Text::caption("to").into_any_element(),
+            end_hour: div()
+                .w(px(72.0))
+                .child(self.custom_end_hour_dropdown.clone())
+                .into_any_element(),
+            end_minute: div()
+                .w(px(72.0))
+                .child(self.custom_end_minute_dropdown.clone())
+                .into_any_element(),
+        }
+    }
+
     /// Render the shared custom date+time picker row used by chart and code hosts
     /// when the user has selected the Custom preset.
     ///
@@ -370,48 +421,52 @@ impl TimeRangePanel {
     /// `date_picker_width` is parameterized because chart uses `px(260)` and code
     /// uses `px(320)`. Standardizing is a visible change and out of scope for this
     /// refactor. The `_cx` parameter is reserved for future theme-aware tweaks.
+    ///
+    /// Internally delegates to `custom_picker_slots` so both APIs render the same
+    /// sub-elements with guaranteed structural parity.
     pub fn render_custom_picker_row(
         &self,
         date_picker_width: gpui::Pixels,
-        _cx: &gpui::App,
+        cx: &gpui::App,
     ) -> impl gpui::IntoElement {
-        use gpui::{div, px};
+        use gpui::div;
+
+        let slots = self.custom_picker_slots(date_picker_width, cx);
 
         div()
             .flex()
             .items_center()
             .gap_1()
-            .child(
-                div().w(date_picker_width).child(
-                    DatePicker::new(&self.custom_date_range_picker)
-                        .small()
-                        .placeholder("Select date range")
-                        .number_of_months(2),
-                ),
-            )
-            .child(Text::caption("from"))
-            .child(
-                div()
-                    .w(px(72.0))
-                    .child(self.custom_start_hour_dropdown.clone()),
-            )
-            .child(
-                div()
-                    .w(px(72.0))
-                    .child(self.custom_start_minute_dropdown.clone()),
-            )
-            .child(Text::caption("to"))
-            .child(
-                div()
-                    .w(px(72.0))
-                    .child(self.custom_end_hour_dropdown.clone()),
-            )
-            .child(
-                div()
-                    .w(px(72.0))
-                    .child(self.custom_end_minute_dropdown.clone()),
-            )
+            .child(slots.date_picker)
+            .child(slots.from_label)
+            .child(slots.start_hour)
+            .child(slots.start_minute)
+            .child(slots.to_label)
+            .child(slots.end_hour)
+            .child(slots.end_minute)
     }
+}
+
+/// Individual picker elements returned by [`TimeRangePanel::custom_picker_slots`].
+///
+/// Hosts that need per-slot decoration (e.g. audit's keyboard-focus ring guards)
+/// receive each element separately and compose them into a row. All elements
+/// are pre-sized but carry no outer chrome.
+pub struct CustomPickerSlots {
+    /// Date-range picker at the caller-specified width.
+    pub date_picker: gpui::AnyElement,
+    /// The "from" label between the date picker and start-time dropdowns.
+    pub from_label: gpui::AnyElement,
+    /// Start-hour dropdown at `px(72)`.
+    pub start_hour: gpui::AnyElement,
+    /// Start-minute dropdown at `px(72)`.
+    pub start_minute: gpui::AnyElement,
+    /// The "to" label between start and end dropdowns.
+    pub to_label: gpui::AnyElement,
+    /// End-hour dropdown at `px(72)`.
+    pub end_hour: gpui::AnyElement,
+    /// End-minute dropdown at `px(72)`.
+    pub end_minute: gpui::AnyElement,
 }
 
 impl EventEmitter<TimeRangeChanged> for TimeRangePanel {}
