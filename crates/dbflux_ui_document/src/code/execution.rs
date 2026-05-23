@@ -1,6 +1,33 @@
 use super::*;
 use dbflux_core::observability::actions as audit_actions;
 
+/// Resolve the `ExecutionSourceContext` for the next query, giving precedence
+/// to a panel-emitted override window over the input-field fallback.
+///
+/// When `override_bounds` is `Some`, the result is a `CollectionWindow` built
+/// from those bounds and the current `targets` / `query_mode`. The `fallback`
+/// is discarded — including its `Err`, since panel bounds are authoritative
+/// and must not be blocked by stale input text.
+///
+/// When `override_bounds` is `None`, the result is whatever the input-driven
+/// `fallback` produced.
+fn resolve_source_context(
+    override_bounds: Option<(i64, i64)>,
+    targets: Vec<String>,
+    query_mode: Option<String>,
+    fallback: Result<dbflux_core::ExecutionSourceContext, &'static str>,
+) -> Result<dbflux_core::ExecutionSourceContext, &'static str> {
+    if let Some((start_ms, end_ms)) = override_bounds {
+        return Ok(dbflux_core::ExecutionSourceContext::CollectionWindow {
+            targets,
+            start_ms,
+            end_ms,
+            query_mode,
+        });
+    }
+    fallback
+}
+
 fn evaluate_dangerous_with_effective_settings(
     kind: dbflux_core::DangerousQueryKind,
     is_suppressed: bool,
@@ -301,7 +328,15 @@ impl CodeDocument {
         }
 
         if self.should_show_source_controls(cx) {
-            match self.current_source_context(cx) {
+            let override_bounds = self.pending_window_override.take();
+            let targets = self.current_source_targets(cx);
+            let query_mode = self.current_source_query_mode_value(cx);
+            // Compute the input-driven fallback eagerly so the precedence rule
+            // lives in a single pure helper. The fallback's `Err` is only
+            // surfaced when no override is present — a panel-emitted window
+            // already has valid bounds and must not be blocked by stale inputs.
+            let fallback = self.current_source_context(cx);
+            match resolve_source_context(override_bounds, targets, query_mode, fallback) {
                 Ok(source) => {
                     self.exec_ctx.source = Some(source);
                 }
@@ -1804,10 +1839,100 @@ impl CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::query_request_for_execution;
+    use super::{query_request_for_execution, resolve_source_context};
     use crate::code::build_source_window_context;
     use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryLanguage};
     use uuid::Uuid;
+
+    /// A panel-emitted override window wins over the input-field fallback,
+    /// even when the fallback would have returned a different valid window.
+    /// This guards the chart-toolbar regression where stale input text
+    /// silently clobbered the panel's preset selection.
+    #[test]
+    fn override_window_wins_over_fallback_collection_window() {
+        let fallback = build_source_window_context(
+            Some("cwli".to_string()),
+            &["/aws/lambda/app".to_string()],
+            Some(1_000),
+            Some(2_000),
+        );
+
+        let resolved = resolve_source_context(
+            Some((5_000, 6_000)),
+            vec!["/aws/lambda/app".to_string()],
+            Some("cwli".to_string()),
+            fallback,
+        )
+        .expect("override path must succeed");
+
+        match resolved {
+            ExecutionSourceContext::CollectionWindow {
+                start_ms, end_ms, ..
+            } => {
+                assert_eq!(start_ms, 5_000);
+                assert_eq!(end_ms, 6_000);
+            }
+            other => panic!("expected CollectionWindow, got {other:?}"),
+        }
+    }
+
+    /// The override path also wins when the fallback errored (e.g. inputs are
+    /// blank or invalid). A panel selection has authoritative bounds and must
+    /// not be blocked by input-validation failures from a control the user
+    /// did not interact with.
+    #[test]
+    fn override_window_wins_when_fallback_errors() {
+        let resolved = resolve_source_context(
+            Some((100, 200)),
+            vec!["bucket".to_string()],
+            None,
+            Err("Start time is required"),
+        )
+        .expect("override path must succeed despite fallback Err");
+
+        match resolved {
+            ExecutionSourceContext::CollectionWindow {
+                targets,
+                start_ms,
+                end_ms,
+                query_mode,
+            } => {
+                assert_eq!(targets, vec!["bucket".to_string()]);
+                assert_eq!(start_ms, 100);
+                assert_eq!(end_ms, 200);
+                assert!(query_mode.is_none());
+            }
+            other => panic!("expected CollectionWindow, got {other:?}"),
+        }
+    }
+
+    /// Without an override, the input-driven fallback is returned verbatim.
+    #[test]
+    fn fallback_passes_through_when_no_override() {
+        let fallback =
+            build_source_window_context(None, &["telegraf".to_string()], Some(10), Some(20));
+
+        let resolved = resolve_source_context(None, vec!["telegraf".to_string()], None, fallback)
+            .expect("fallback must succeed");
+
+        match resolved {
+            ExecutionSourceContext::CollectionWindow {
+                start_ms, end_ms, ..
+            } => {
+                assert_eq!(start_ms, 10);
+                assert_eq!(end_ms, 20);
+            }
+            other => panic!("expected CollectionWindow, got {other:?}"),
+        }
+    }
+
+    /// Without an override, a fallback error propagates unchanged.
+    #[test]
+    fn fallback_error_propagates_when_no_override() {
+        let err = resolve_source_context(None, vec![], None, Err("Select at least one source"))
+            .unwrap_err();
+        assert_eq!(err, "Select at least one source");
+    }
 
     #[test]
     fn source_window_execution_request_uses_latest_editor_context() {
