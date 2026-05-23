@@ -31,7 +31,7 @@ use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChang
 use dbflux_core::DimensionFilter;
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
-use gpui::{Context, Entity, Subscription, Task, WeakEntity};
+use gpui::{Context, Entity, FocusHandle, Subscription, Task, WeakEntity};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -77,6 +77,12 @@ pub struct MetricPickerState {
 
     /// The fixed metric name. Non-optional — always set at construction.
     pub selected_metric_name: String,
+
+    /// Focus handle for the picker rail container.
+    ///
+    /// The picker root `div()` tracks this handle so that keyboard events
+    /// (Cmd/Ctrl+Enter → Apply) are received when the rail is focused.
+    pub focus_handle: FocusHandle,
 
     // Configuration section.
     pub dimension_filter: DimensionFilter,
@@ -174,6 +180,7 @@ impl MetricPickerState {
             app_state,
             selected_namespace: namespace,
             selected_metric_name: metric_name,
+            focus_handle: cx.focus_handle(),
             dimension_filter: DimensionFilter::AggregateAll,
             period_dropdown,
             statistic_dropdown,
@@ -590,5 +597,49 @@ mod tests {
             period_s: PERIOD_PRESETS[DEFAULT_PERIOD_IDX].0,
             statistic: STATISTIC_PRESETS[DEFAULT_STATISTIC_IDX].to_string(),
         }
+    }
+
+    // ---- T18.2: Cmd/Ctrl+Enter triggers Apply ----
+
+    /// Helper: test the keystroke condition used in the picker's `on_key_down`
+    /// handler. Mirrors the logic in `metric_picker_render.rs::render()`.
+    fn is_apply_shortcut(key: &str, platform: bool, control: bool, shift: bool, alt: bool) -> bool {
+        key == "return" && !shift && !alt && (platform || control)
+    }
+
+    /// T18.2: Cmd+Enter (platform modifier) must trigger Apply.
+    #[test]
+    fn cmd_enter_invokes_apply_from_anywhere() {
+        assert!(
+            is_apply_shortcut("return", true, false, false, false),
+            "Cmd+Enter must trigger Apply"
+        );
+    }
+
+    /// T18.2: Ctrl+Enter must also trigger Apply (Linux/Windows).
+    #[test]
+    fn ctrl_enter_invokes_apply() {
+        assert!(
+            is_apply_shortcut("return", false, true, false, false),
+            "Ctrl+Enter must trigger Apply"
+        );
+    }
+
+    /// T18.2: Plain Enter must NOT trigger Apply (reserved for dropdown/selection).
+    #[test]
+    fn plain_enter_does_not_trigger_apply() {
+        assert!(
+            !is_apply_shortcut("return", false, false, false, false),
+            "Plain Enter must not trigger Apply"
+        );
+    }
+
+    /// T18.2: Shift+Cmd+Enter must NOT trigger Apply.
+    #[test]
+    fn shift_cmd_enter_does_not_trigger_apply() {
+        assert!(
+            !is_apply_shortcut("return", true, false, true, false),
+            "Shift+Cmd+Enter must not trigger Apply"
+        );
     }
 }

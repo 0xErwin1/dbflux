@@ -23,7 +23,7 @@ use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{Heights, Spacing};
 use dbflux_core::DimensionFilter;
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, SharedString, Window, div, px};
+use gpui::{AnyElement, Context, KeyDownEvent, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
 use std::sync::Arc;
 
@@ -67,11 +67,28 @@ impl<'a> MetricPickerView<'a> {
         let dimensions_section = render_dimensions_section(self.state, cx);
         let config_footer = render_config_footer(self.state, cx);
 
+        let focus_handle = self.state.focus_handle.clone();
+
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(theme.popover)
+            // Track focus so on_key_down receives keyboard events when the rail
+            // is active. Clicking inside the picker focuses this handle.
+            .track_focus(&focus_handle)
+            // Cmd/Ctrl+Enter from anywhere in the picker triggers Apply.
+            .on_key_down(cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
+                let ks = &event.keystroke;
+                let is_apply = ks.key == "return"
+                    && !ks.modifiers.shift
+                    && !ks.modifiers.alt
+                    && (ks.modifiers.platform || ks.modifiers.control);
+                if is_apply && let Some(picker) = &shell.metric_picker {
+                    let source = picker.build_metric_source();
+                    cx.emit(ChartShellEvent::MetricPickerApplied(Box::new(source)));
+                }
+            }))
             // Header: pinned namespace + metric name.
             .child(header)
             // Divider.

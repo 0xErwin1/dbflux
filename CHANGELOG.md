@@ -15,6 +15,22 @@ All notable changes to DBFlux will be documented in this file.
   in the UI layer; the Metric tab is gated solely on the generic
   `METRIC_CATALOG` capability bit (#96).
 
+### Changed
+
+* **Metric chart entry point moved to the sidebar** — Clicking a metric leaf
+  in the connection sidebar (Metrics > Namespace > Metric) opens a chart
+  pre-populated with defaults (Average statistic / 5 min period / aggregate
+  across all dimensions) and immediately executes it. The picker rail opens
+  alongside for refinement of dimensions, period, and statistic. Duplicate
+  clicks on the same metric leaf focus the existing tab (#96).
+
+### Removed
+
+* `open_metrics_chart` workspace action and command-palette entry — the sidebar
+  tree is now the single entry point for metric charts.
+* `ChartDocument::new_empty_metric_chart` constructor — replaced by
+  `new_with_source` with a pre-built `MetricSource` and `setup_metric_picker`.
+
 ## [0.6.0-dev.8] - 2026-05-23
 
 ### Added

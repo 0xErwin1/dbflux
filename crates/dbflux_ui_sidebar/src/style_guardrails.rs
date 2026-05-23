@@ -138,4 +138,28 @@ mod style_guardrails {
             violations.join("\n")
         );
     }
+
+    // ---- T19.2: Decoupling guardrail ----
+
+    /// T19.2: Sidebar code must not branch on driver IDs or specific `DatabaseCategory`
+    /// values in conditional expressions.
+    ///
+    /// Allowlist: file-level `FILE_EXEMPT_FRAGMENTS` still applies. Lines containing
+    /// `// guardrail-allow` are permitted. Construction of `DatabaseCategory::X` values
+    /// (i.e. in match arms that return them) is allowed; only comparison / conditional
+    /// branching is targeted.
+    ///
+    /// Patterns checked (heuristic; not an AST analysis):
+    /// - `driver_id ==` or `driver_id !=` — string comparison on driver ID
+    /// - `match driver_id` — branching on driver ID string
+    #[test]
+    fn sidebar_has_no_driver_id_branching() {
+        let forbidden: &[&str] = &["driver_id ==", "driver_id !=", "match driver_id"];
+        let violations = check_violations(forbidden);
+        assert!(
+            violations.is_empty(),
+            "Sidebar code must not branch on driver_id strings (use DriverCapabilities or DatabaseCategory instead):\n{}",
+            violations.join("\n")
+        );
+    }
 }

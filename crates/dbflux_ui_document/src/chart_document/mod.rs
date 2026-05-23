@@ -384,6 +384,26 @@ impl ChartDocument {
         self.saved_chart_id
     }
 
+    /// Check whether this document's data source is a `MetricSource` with the
+    /// given `(profile_id, namespace, metric_name)` identity.
+    ///
+    /// Used by the `DocumentKey::MetricChart` dedup path in `into_pane`.
+    pub fn matches_metric_source(
+        &self,
+        profile_id: Uuid,
+        namespace: &str,
+        metric_name: &str,
+    ) -> bool {
+        if self.profile_id != Some(profile_id) {
+            return false;
+        }
+
+        self.data_source
+            .as_any()
+            .and_then(|a| a.downcast_ref::<dbflux_components::chart::MetricSource>())
+            .is_some_and(|src| src.namespace == namespace && src.metric_name == metric_name)
+    }
+
     pub fn refresh_policy(&self) -> RefreshPolicy {
         self.refresh_policy
     }
@@ -410,6 +430,39 @@ impl ChartDocument {
     }
 
     pub fn set_active_tab(&mut self, _active: bool) {}
+
+    /// Open the Metric rail and initialize the picker with a pre-populated
+    /// `(namespace, metric_name)`.
+    ///
+    /// Called after construction when the chart is opened from the sidebar tree
+    /// (user clicked a metric leaf). The picker shows dimensions, period, and
+    /// statistic for refinement; namespace/metric are pinned.
+    pub fn setup_metric_picker(
+        &mut self,
+        namespace: String,
+        metric_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        use super::chart::ChartRailTab;
+        use super::chart::metric_picker::MetricPickerState;
+
+        let profile_id = match self.profile_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let app_state_clone = self.app_state.clone();
+        self.chart_shell.update(cx, |shell, cx| {
+            shell.set_initial_rail(ChartRailTab::Metric, true);
+            shell.metric_picker = Some(MetricPickerState::new_pre_populated(
+                profile_id,
+                app_state_clone,
+                namespace,
+                metric_name,
+                cx,
+            ));
+        });
+    }
 
     pub fn change_summary(&self, _cx: &App) -> Option<String> {
         None
@@ -443,66 +496,6 @@ impl ChartDocument {
         cx.emit(DocumentEvent::DataSourceChanged);
         cx.emit(DocumentEvent::MetaChanged);
         cx.notify();
-    }
-
-    /// Create a `ChartDocument` pre-configured for interactive metric browsing.
-    ///
-    /// The document opens with an `EmptyChartSource` (no auto-run on first
-    /// render) and the rail tab set to `ChartRailTab::Metric` so the picker
-    /// is immediately visible. The caller is expected to provide a `profile_id`
-    /// for a connection that has `DriverCapabilities::METRIC_CATALOG`.
-    ///
-    /// Once the user selects a metric and presses Apply, `ChartShellEvent::MetricPickerApplied`
-    /// causes the source to be swapped via `pending_data_source` in the render loop.
-    pub fn new_empty_metric_chart(
-        profile_id: uuid::Uuid,
-        app_state: Entity<AppStateEntity>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        use dbflux_components::chart::EmptyChartSource;
-
-        let mut doc = Self::new_with_source(
-            Some(profile_id),
-            "Metrics chart".to_string(),
-            Box::new(EmptyChartSource),
-            app_state,
-            window,
-            cx,
-        );
-
-        // EmptyChartSource has nothing to execute — suppress the auto-run that
-        // new_with_source always enables.
-        doc.pending_run_on_first_render = false;
-
-        // Open the Metric rail tab immediately so the picker is visible on load.
-        // Also initialize the MetricPickerState so the first render can start
-        // namespace fetching without an extra round-trip through shell.update.
-        let app_state_clone = doc.app_state.clone();
-        doc.chart_shell.update(cx, |shell, cx| {
-            shell.set_initial_rail(super::chart::ChartRailTab::Metric, true);
-            shell.metric_picker = Some(super::chart::metric_picker::MetricPickerState::new(
-                profile_id,
-                app_state_clone,
-                cx,
-            ));
-        });
-
-        // Subscribe to MetricPickerApplied so the document can swap its source.
-        // The subscription stores the new source in pending_data_source and requests
-        // a render; the render loop calls set_data_source with a Window reference.
-        let sub = cx.subscribe(
-            &doc.chart_shell,
-            |this: &mut Self, _shell, event: &super::chart::shell::ChartShellEvent, _cx| {
-                use super::chart::shell::ChartShellEvent;
-                let ChartShellEvent::MetricPickerApplied(src) = event;
-                this.pending_data_source = Some(src.clone_box());
-                this.pending_chart_reexecute = true;
-            },
-        );
-        doc._subscriptions.push(sub);
-
-        doc
     }
 
     // ---- execution ----
@@ -1204,7 +1197,7 @@ mod tests {
         );
     }
 
-    // ---- Phase 5: set_data_source + new_empty_metric_chart (TDD RED) ----
+    // ---- Phase 5: set_data_source ----
 
     /// T-DS-10: `DocumentEvent::DataSourceChanged` variant must exist.
     ///
@@ -1287,28 +1280,6 @@ mod tests {
         assert!(
             title.contains("Invocations"),
             "title must include metric name: got {title:?}"
-        );
-    }
-
-    /// T-DS-14: `new_empty_metric_chart` must not schedule an auto-run.
-    ///
-    /// Verifies the `pending_run_on_first_render = false` contract.
-    /// The test exercises the same logic guard in `new_with_source` plus the
-    /// explicit override applied by `new_empty_metric_chart`.
-    #[test]
-    fn new_empty_metric_chart_has_no_pending_run() {
-        // `new_with_source` always sets pending_run_on_first_render = true.
-        // `new_empty_metric_chart` must override it to false.
-        let base_pending = true; // as set by new_with_source
-        let after_override = false; // as new_empty_metric_chart applies
-        assert!(
-            !after_override,
-            "new_empty_metric_chart must reset pending_run_on_first_render to false"
-        );
-        // Also verify the override is distinct from the base value.
-        assert_ne!(
-            base_pending, after_override,
-            "override must differ from new_with_source default"
         );
     }
 

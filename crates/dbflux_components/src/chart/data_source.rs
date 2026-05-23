@@ -190,6 +190,32 @@ pub trait ChartDataSource: Send + 'static {
     /// `ChartDocument` stashes the source in a `pending_data_source` field;
     /// `clone_box` lets that field be cloned without knowing the concrete type.
     fn clone_box(&self) -> Box<dyn ChartDataSource>;
+
+    /// Expose the concrete type as `Any` for downcasting.
+    ///
+    /// Required by the `DocumentKey::MetricChart` deduplication path: the
+    /// `matches_dedup_key` closure downcasts `&dyn ChartDataSource` to
+    /// `&MetricSource` to compare `(namespace, metric_name)`.
+    ///
+    /// Default implementation always returns `None`; only `MetricSource`
+    /// overrides it.
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
+
+    /// Returns `true` when the source is self-contained and auto-executes
+    /// without requiring the user to type or confirm a query.
+    ///
+    /// `MetricSource` returns `true`: clicking a metric leaf auto-runs the chart.
+    /// `QuerySource` and `EmptyChartSource` return `false` (default) because
+    /// the chart stays idle until the user provides a query or presses Run.
+    ///
+    /// Used by render code to select the appropriate empty-state copy:
+    /// - `is_self_executing() == true` + idle/empty → "No data points for the selected window"
+    /// - `is_self_executing() == false` → "Run the query to populate the chart."
+    fn is_self_executing(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +361,14 @@ impl ChartDataSource for MetricSource {
         ChartSourceDescription {
             title: Some(format!("{} / {}", self.namespace, self.metric_name)),
         }
+    }
+
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
+    fn is_self_executing(&self) -> bool {
+        true
     }
 
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
@@ -964,6 +998,34 @@ mod tests {
         assert!(
             matches!(cloned.build_plan(None), Err(ChartSourceError::EmptyQuery)),
             "cloned EmptyChartSource must also return EmptyQuery"
+        );
+    }
+
+    // ---- T17.1: is_self_executing ----
+
+    /// T17.1: `MetricSource::is_self_executing` must return `true`.
+    #[test]
+    fn metric_source_is_self_executing() {
+        let src = MetricSource {
+            namespace: "AWS/EC2".to_string(),
+            metric_name: "CPUUtilization".to_string(),
+            dimensions: vec![],
+            period_s: 300,
+            statistic: "Average".to_string(),
+        };
+        assert!(
+            src.is_self_executing(),
+            "MetricSource must report is_self_executing() == true"
+        );
+    }
+
+    /// T17.1: `EmptyChartSource::is_self_executing` must return `false` (default).
+    #[test]
+    fn empty_chart_source_is_not_self_executing() {
+        let src = EmptyChartSource;
+        assert!(
+            !src.is_self_executing(),
+            "EmptyChartSource must report is_self_executing() == false"
         );
     }
 

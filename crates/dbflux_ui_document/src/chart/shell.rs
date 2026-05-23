@@ -175,8 +175,8 @@ impl ChartShell {
 
     /// Set the initial rail tab and open state without touching subscriptions.
     ///
-    /// Used by `ChartDocument::new_empty_metric_chart` to open the Metric rail
-    /// tab immediately after construction.
+    /// Called during `ChartDocument` construction to open the Metric rail tab
+    /// immediately when a chart is opened from the sidebar tree.
     pub fn set_initial_rail(&mut self, tab: ChartRailTab, open: bool) {
         self.chart_rail_tab = tab;
         self.chart_rail_open = open;

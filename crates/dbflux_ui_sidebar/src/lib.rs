@@ -1878,4 +1878,79 @@ mod tests {
         assert!(filtered[0].children[0].is_expanded());
         assert!(filtered[0].children[0].children[0].is_expanded());
     }
+
+    // ---- T18.1: tree filter works for metric node variants ----
+
+    /// T18.1: Verify that `apply_tree_filter` correctly includes/excludes
+    /// metric tree items by label.
+    ///
+    /// Since `gpui_component::tree` handles arbitrary `TreeItem`s, metric node
+    /// variants (MetricsFolder, MetricNamespaceFolder, MetricLeaf) work with the
+    /// existing tree infrastructure without special-casing.
+    #[test]
+    fn tree_nav_handles_metric_variants() {
+        let profile_id = test_uuid();
+        let database = "logs".to_string();
+
+        let metrics_folder_id = SchemaNodeId::MetricsFolder {
+            profile_id,
+            database: database.clone(),
+        }
+        .to_string();
+
+        let ns_folder_id = SchemaNodeId::MetricNamespaceFolder {
+            profile_id,
+            database: database.clone(),
+            namespace: "AWS/EC2".to_string(),
+        }
+        .to_string();
+
+        let leaf_id = SchemaNodeId::MetricLeaf {
+            profile_id,
+            database: database.clone(),
+            namespace: "AWS/EC2".to_string(),
+            metric_name: "CPUUtilization".to_string(),
+        }
+        .to_string();
+
+        let items = vec![
+            TreeItem::new(metrics_folder_id.clone(), "Metrics".to_string())
+                .expanded(true)
+                .children(vec![
+                    TreeItem::new(ns_folder_id.clone(), "AWS/EC2".to_string())
+                        .expanded(true)
+                        .children(vec![TreeItem::new(
+                            leaf_id.clone(),
+                            "CPUUtilization".to_string(),
+                        )]),
+                ]),
+        ];
+
+        // Filter for "cpu" — should find CPUUtilization and preserve ancestors.
+        let filtered = Sidebar::apply_tree_filter(items.clone(), "cpu");
+        assert_eq!(filtered.len(), 1, "Metrics folder must be preserved");
+        assert_eq!(
+            filtered[0].label.as_ref(),
+            "Metrics",
+            "root must be Metrics folder"
+        );
+        assert_eq!(filtered[0].children.len(), 1);
+        assert_eq!(filtered[0].children[0].label.as_ref(), "AWS/EC2");
+        assert_eq!(filtered[0].children[0].children.len(), 1);
+        assert_eq!(
+            filtered[0].children[0].children[0].label.as_ref(),
+            "CPUUtilization"
+        );
+
+        // Filter for "nonexistent" — should return empty.
+        let filtered_empty = Sidebar::apply_tree_filter(items, "nonexistent");
+        assert!(
+            filtered_empty.is_empty(),
+            "Non-matching filter must prune all items"
+        );
+
+        // Verify the metric leaf ID round-trips through SchemaNodeId.
+        let parsed_leaf: SchemaNodeId = leaf_id.parse().expect("MetricLeaf ID must parse");
+        assert_eq!(parsed_leaf.kind(), SchemaNodeKind::MetricLeaf);
+    }
 }
