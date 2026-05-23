@@ -17,7 +17,7 @@
 //! The chart content area is rendered by `render_chart_content`, called from
 //! the `ViewHandle::render` closure built by `into_view_handle`.
 
-use super::ChartDocument;
+use super::{ChartDocument, ExecState};
 use crate::chart::ChartRailTab;
 use crate::chart::metric_picker_render::MetricPickerView;
 use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
@@ -227,8 +227,21 @@ impl ChartDocument {
             div().size_full().child(chart_entity).into_any_element()
         } else {
             // Degraded state: show a placeholder based on detection result.
+            // For self-executing sources (MetricSource) the copy is tailored to
+            // metric charts; for query/empty sources the generic copy is shown.
+            let is_metric = self.data_source.is_self_executing();
             let msg = match &chart_detection {
-                Some(ChartDetection::EmptyResult) | None => "Run the query to populate the chart.",
+                Some(ChartDetection::EmptyResult) | None => {
+                    if is_metric {
+                        if self.exec_state == ExecState::Running {
+                            "Loading metric data…"
+                        } else {
+                            "No data points for the selected window."
+                        }
+                    } else {
+                        "Run the query to populate the chart."
+                    }
+                }
                 Some(ChartDetection::NoTimeColumn) => "No time column detected in result.",
                 Some(ChartDetection::NoNumericSeries) => "No numeric series detected in result.",
                 Some(ChartDetection::Ok { .. }) => "Chart build failed.",
@@ -474,12 +487,10 @@ impl ChartDocument {
                 let has_picker = self.chart_shell.read(cx).metric_picker.is_some();
                 if has_picker {
                     let cache = self.app_state.read(cx).metric_catalog_cache().clone();
-                    let app_state_entity = self.app_state.clone();
                     let rail_element = self.chart_shell.update(cx, |shell, cx| {
                         let picker = shell.metric_picker.as_mut().unwrap();
                         MetricPickerView {
                             state: picker,
-                            app_state: &app_state_entity,
                             cache: &cache,
                         }
                         .render(window, cx)

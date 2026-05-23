@@ -5,34 +5,25 @@
 //! `ChartShell` (a GPUI entity), render code lives here (a plain struct with
 //! borrowed references), never a GPUI entity itself.
 //!
-//! Layout (three horizontal bands inside the 320px rail):
+//! Layout (dimensions + config):
 //!
 //!   ┌──────────────────────────────────────────┐
-//!   │ ← left column → │ ← metrics column ────→ │  (row 1, flex-1)
-//!   │  filter input    │  filter input           │
-//!   │  namespace rows  │  metric rows            │
-//!   │  (scrollable)    │  load-more button       │
-//!   │                  │  (scrollable)           │
-//!   ├──────────────────┴─────────────────────────┤
-//!   │ Dimensions  (filtered by selected metric)  │  (row 2)
-//!   ├────────────────────────────────────────────┤
-//!   │ Period  [dropdown]  Stat [dropdown]  Apply │  (row 3)
-//!   └────────────────────────────────────────────┘
+//!   │ Header: <Namespace> / <MetricName>       │
+//!   ├──────────────────────────────────────────┤
+//!   │ Dimensions  (loaded from cache)          │
+//!   ├──────────────────────────────────────────┤
+//!   │ Period  [dropdown]  Stat [dropdown] Apply │
+//!   └──────────────────────────────────────────┘
 
-// All render helpers are wired in Phase 8 (entry point). Until then the
-// compiler sees them as dead code; suppress to keep CI clean.
-#![allow(dead_code)]
-
-use super::metric_picker::{MetricPickerState, MetricsState, NamespaceState};
+use super::metric_picker::{DimensionsState, MetricPickerState};
 use super::shell::{ChartShell, ChartShellEvent};
 use dbflux_app::MetricCatalogCache;
-use dbflux_components::controls::{Button, Input};
+use dbflux_components::controls::Button;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{Heights, Spacing};
-use dbflux_core::{DimensionFilter, MetricDescriptor, MetricNamespace};
-use dbflux_ui_base::AppStateEntity;
+use dbflux_core::DimensionFilter;
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, SharedString, Window, div, px};
+use gpui::{AnyElement, Context, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
 use std::sync::Arc;
 
@@ -46,46 +37,33 @@ use std::sync::Arc;
 /// This avoids a split-borrow conflict when extracting `state` from the shell.
 pub struct MetricPickerView<'a> {
     pub state: &'a mut MetricPickerState,
-    pub app_state: &'a Entity<AppStateEntity>,
     pub cache: &'a Arc<MetricCatalogCache>,
 }
 
 impl<'a> MetricPickerView<'a> {
     /// Render the metric picker rail content.
     ///
-    /// Layout (Phase 7):
-    ///   ┌─────────────────────────────────────┐
-    ///   │ Namespace column (left, ~160px)     │
-    ///   │ Metrics column   (right, flex)      │
-    ///   ├─────────────────────────────────────┤
-    ///   │ Dimensions section                  │
-    ///   ├─────────────────────────────────────┤
-    ///   │ Config section (period, stat, apply)│
-    ///   └─────────────────────────────────────┘
+    /// Layout:
+    ///   ┌─────────────────────────────────────────┐
+    ///   │ Header: Namespace / Metric name (pinned) │
+    ///   ├─────────────────────────────────────────┤
+    ///   │ Dimensions section (from cache)         │
+    ///   ├─────────────────────────────────────────┤
+    ///   │ Config section (period, stat, apply)    │
+    ///   └─────────────────────────────────────────┘
     pub fn render(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<ChartShell>,
     ) -> impl IntoElement {
-        // Ensure filter inputs are created now that we have a Window.
-        self.state.ensure_inputs_created(window, cx);
-
-        // Kick namespace fetch if not started.
+        // Kick dimensions fetch if not started.
         let shell_weak = cx.weak_entity();
         let cache = self.cache.clone();
-        self.state.ensure_namespaces_loaded(shell_weak, cache, cx);
-
-        // Kick metrics fetch if a namespace is selected but not yet loaded.
-        let shell_weak2 = cx.weak_entity();
-        let cache2 = self.cache.clone();
-        self.state.ensure_metrics_loaded(shell_weak2, cache2, cx);
+        self.state.ensure_dimensions_loaded(shell_weak, cache, cx);
 
         let theme = cx.theme().clone();
 
-        // Render all sections — each call consumes the cx borrow in its closure
-        // scope and converts to AnyElement before the next call.
-        let namespace_col = render_namespace_column(self.state, self.cache, cx);
-        let metrics_col = render_metrics_column(self.state, self.cache, cx);
+        let header = render_metric_header(self.state, cx);
         let dimensions_section = render_dimensions_section(self.state, cx);
         let config_footer = render_config_footer(self.state, cx);
 
@@ -94,17 +72,8 @@ impl<'a> MetricPickerView<'a> {
             .flex()
             .flex_col()
             .bg(theme.popover)
-            // Top area: namespace + metrics side by side.
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_h_0()
-                    .child(namespace_col)
-                    .child(div().w(px(1.0)).flex_shrink_0().bg(theme.border))
-                    .child(metrics_col),
-            )
+            // Header: pinned namespace + metric name.
+            .child(header)
             // Divider.
             .child(div().h(px(1.0)).bg(theme.border))
             // Dimensions section.
@@ -117,328 +86,36 @@ impl<'a> MetricPickerView<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Namespace column (left, fixed ~160px)
+// Header: pinned namespace + metric name
 // ---------------------------------------------------------------------------
 
-fn render_namespace_column(
-    state: &MetricPickerState,
-    _cache: &Arc<MetricCatalogCache>,
-    cx: &mut Context<ChartShell>,
-) -> AnyElement {
+fn render_metric_header(state: &MetricPickerState, cx: &mut Context<ChartShell>) -> AnyElement {
     let theme = cx.theme().clone();
-    // Pre-extract Hsla values (Copy) so closures in map() can capture them
-    // without moving `theme` itself (which is not Copy).
-    let c_border = theme.border;
-    let c_secondary = theme.secondary;
-    let c_accent = theme.accent;
-    let c_popover = theme.popover;
-    let c_foreground = theme.foreground;
-    let c_muted_fg = theme.muted_foreground;
-
-    let filter_text = state
-        .namespace_filter
-        .as_ref()
-        .map(|ns| ns.read(cx).value().to_string().to_lowercase());
-
-    let filter_element: Option<AnyElement> = state.namespace_filter.as_ref().map(|ns| {
-        div()
-            .h(Heights::INPUT)
-            .border_b_1()
-            .border_color(c_border)
-            .child(Input::new(ns).small().cleanable(true))
-            .into_any_element()
-    });
-
-    let list_body: AnyElement = match &state.namespace_state {
-        NamespaceState::NotFetched | NamespaceState::Loading => div()
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Text::muted("Loading…"))
-            .into_any_element(),
-
-        NamespaceState::Error(msg) => {
-            let msg = msg.clone();
-            div()
-                .flex_1()
-                .p(Spacing::SM)
-                .child(Text::muted(format!("Error: {msg}")))
-                .into_any_element()
-        }
-
-        NamespaceState::Loaded(namespaces) => {
-            let filter = filter_text.unwrap_or_default();
-            let selected = state.selected_namespace.clone();
-
-            let rows: Vec<AnyElement> = namespaces
-                .iter()
-                .filter(|ns| filter.is_empty() || ns.to_lowercase().contains(&filter))
-                .enumerate()
-                .map(|(i, ns)| {
-                    let is_selected = selected.as_deref() == Some(ns.as_str());
-                    let ns_label: SharedString = SharedString::from(ns.clone());
-                    let ns_for_click: MetricNamespace = ns.clone();
-
-                    let row_bg = if is_selected { c_accent } else { c_popover };
-                    let row_fg = if is_selected {
-                        c_foreground
-                    } else {
-                        c_muted_fg
-                    };
-
-                    div()
-                        .id(("ns-row", i))
-                        .h(Heights::ROW_COMPACT)
-                        .flex()
-                        .items_center()
-                        .px(Spacing::SM)
-                        .bg(row_bg)
-                        .cursor_pointer()
-                        .hover(move |d| if !is_selected { d.bg(c_secondary) } else { d })
-                        .on_click(cx.listener(move |shell, _, _, cx| {
-                            if let Some(picker) = &mut shell.metric_picker {
-                                picker.on_namespace_selected(ns_for_click.clone());
-                            }
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .flex_1()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .text_color(row_fg)
-                                .child(ns_label),
-                        )
-                        .into_any_element()
-                })
-                .collect();
-
-            if rows.is_empty() {
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .p(Spacing::SM)
-                    .child(Text::dim("No namespaces"))
-                    .into_any_element()
-            } else {
-                div()
-                    .id("mp-namespace-scroll")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .children(rows)
-                    .into_any_element()
-            }
-        }
-    };
+    let namespace: SharedString = SharedString::from(state.selected_namespace.clone());
+    let metric_name: SharedString = SharedString::from(state.selected_metric_name.clone());
 
     div()
-        .w(px(160.0))
-        .flex_shrink_0()
+        .h(Heights::TOOLBAR)
         .flex()
         .flex_col()
-        .when_some(filter_element, |d, fe| d.child(fe))
-        .child(list_body)
-        .into_any_element()
-}
-
-// ---------------------------------------------------------------------------
-// Metrics column (right, flex-1)
-// ---------------------------------------------------------------------------
-
-fn render_metrics_column(
-    state: &MetricPickerState,
-    cache: &Arc<MetricCatalogCache>,
-    cx: &mut Context<ChartShell>,
-) -> AnyElement {
-    let theme = cx.theme().clone();
-    let c_border = theme.border;
-
-    if state.selected_namespace.is_none() {
-        return div()
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .p(Spacing::SM)
-            .child(Text::muted("Select a namespace"))
-            .into_any_element();
-    }
-
-    let filter_element: Option<AnyElement> = state.metrics_filter.as_ref().map(|mf| {
-        div()
-            .h(Heights::INPUT)
-            .border_b_1()
-            .border_color(c_border)
-            .child(Input::new(mf).small().cleanable(true))
-            .into_any_element()
-    });
-
-    let list_body: AnyElement = match &state.metrics_state {
-        MetricsState::NotFetched | MetricsState::Loading => div()
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Text::muted("Loading…"))
-            .into_any_element(),
-
-        MetricsState::Error(msg) => {
-            let msg = msg.clone();
+        .justify_center()
+        .px(Spacing::SM)
+        .bg(theme.secondary)
+        .child(
             div()
-                .flex_1()
-                .p(Spacing::SM)
-                .child(Text::muted(format!("Error: {msg}")))
-                .into_any_element()
-        }
-
-        MetricsState::Loaded {
-            accumulated,
-            fully_loaded: fl,
-        } => render_metrics_list(state, cache, accumulated.clone(), *fl, false, cx),
-
-        MetricsState::LoadingMore { accumulated } => {
-            render_metrics_list(state, cache, accumulated.clone(), false, true, cx)
-        }
-    };
-
-    div()
-        .flex_1()
-        .flex()
-        .flex_col()
-        .when_some(filter_element, |d, fe| d.child(fe))
-        .child(list_body)
-        .into_any_element()
-}
-
-/// Render the metric rows list with optional load-more footer.
-fn render_metrics_list(
-    state: &MetricPickerState,
-    cache: &Arc<MetricCatalogCache>,
-    accumulated: Arc<Vec<MetricDescriptor>>,
-    fully_loaded: bool,
-    is_loading_more: bool,
-    cx: &mut Context<ChartShell>,
-) -> AnyElement {
-    let theme = cx.theme().clone();
-    // Pre-extract Hsla (Copy) so map() closures can capture without moving theme.
-    let c_secondary = theme.secondary;
-    let c_accent = theme.accent;
-    let c_popover = theme.popover;
-    let c_foreground = theme.foreground;
-    let c_muted_fg = theme.muted_foreground;
-
-    let filter = state
-        .metrics_filter
-        .as_ref()
-        .map(|mf| mf.read(cx).value().to_string().to_lowercase())
-        .unwrap_or_default();
-
-    let selected = state.selected_metric.clone();
-
-    let rows: Vec<AnyElement> = accumulated
-        .iter()
-        .filter(|m| filter.is_empty() || m.metric_name.to_lowercase().contains(&filter))
-        .enumerate()
-        .map(|(i, m)| {
-            let is_selected = selected
-                .as_ref()
-                .map(|s| s.metric_name == m.metric_name)
-                .unwrap_or(false);
-            let name: SharedString = SharedString::from(m.metric_name.clone());
-            let metric_for_click = m.clone();
-
-            let row_bg = if is_selected { c_accent } else { c_popover };
-            let row_fg = if is_selected {
-                c_foreground
-            } else {
-                c_muted_fg
-            };
-
+                .text_size(px(10.0))
+                .text_color(theme.muted_foreground)
+                .font_weight(gpui::FontWeight::BOLD)
+                .child(namespace),
+        )
+        .child(
             div()
-                .id(("metric-row", i))
-                .h(Heights::ROW_COMPACT)
-                .flex()
-                .items_center()
-                .px(Spacing::SM)
-                .bg(row_bg)
-                .cursor_pointer()
-                .hover(move |d| if !is_selected { d.bg(c_secondary) } else { d })
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    if let Some(picker) = &mut shell.metric_picker {
-                        picker.on_metric_selected(metric_for_click.clone());
-                    }
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .flex_1()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .text_color(row_fg)
-                        .child(name),
-                )
-                .into_any_element()
-        })
-        .collect();
-
-    let load_more_element: Option<AnyElement> = if !fully_loaded {
-        let cache_for_click = cache.clone();
-        let lm = if is_loading_more {
-            div()
-                .h(Heights::ROW_COMPACT)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(Text::muted("Loading more…"))
-                .into_any_element()
-        } else {
-            div()
-                .id("metric-load-more")
-                .h(Heights::ROW_COMPACT)
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .hover(move |d| d.bg(c_secondary))
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    let weak = cx.weak_entity();
-                    if let Some(picker) = &mut shell.metric_picker {
-                        picker.load_more_metrics(weak, cache_for_click.clone(), cx);
-                    }
-                    cx.notify();
-                }))
-                .child(Text::caption("Load more…"))
-                .into_any_element()
-        };
-        Some(lm)
-    } else {
-        None
-    };
-
-    if rows.is_empty() {
-        return div()
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .p(Spacing::SM)
-            .child(Text::dim(if filter.is_empty() {
-                "No metrics"
-            } else {
-                "No match"
-            }))
-            .into_any_element();
-    }
-
-    div()
-        .id("mp-metrics-scroll")
-        .flex_1()
-        .overflow_y_scroll()
-        .children(rows)
-        .when_some(load_more_element, |d, lm| d.child(lm))
+                .text_size(px(12.0))
+                .text_color(theme.foreground)
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(metric_name),
+        )
         .into_any_element()
 }
 
@@ -451,20 +128,6 @@ fn render_dimensions_section(
     cx: &mut Context<ChartShell>,
 ) -> AnyElement {
     let theme = cx.theme().clone();
-
-    let selected_metric = match &state.selected_metric {
-        Some(m) => m.clone(),
-        None => {
-            return div()
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .child(Text::dim("No metric selected"))
-                .into_any_element();
-        }
-    };
-
-    let dims = selected_metric.dimensions.clone();
-    let current_filter = &state.dimension_filter;
 
     let header = div()
         .h(Heights::ROW_COMPACT)
@@ -481,63 +144,120 @@ fn render_dimensions_section(
                 .child(SharedString::from("DIMENSIONS")),
         );
 
-    // AggregateAll row — always shown at the top.
-    // Convert immediately to AnyElement to release the `cx` borrow before
-    // calling dim_radio_row a second time.
-    let is_agg_selected = matches!(current_filter, DimensionFilter::AggregateAll);
-    let agg_row: AnyElement = dim_radio_row(
-        0,
-        SharedString::from("Aggregate all"),
-        is_agg_selected,
-        &theme,
-        cx,
-        |shell, _, _, cx| {
-            if let Some(picker) = &mut shell.metric_picker {
-                picker.dimension_filter = DimensionFilter::AggregateAll;
-            }
-            cx.notify();
-        },
-    )
-    .into_any_element();
+    let body: AnyElement = match &state.dimensions_state {
+        DimensionsState::NotFetched | DimensionsState::Loading => div()
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .py(Spacing::SM)
+            .child(Text::muted("Loading dimensions…"))
+            .into_any_element(),
 
-    // Per-dimension-set row (one row per unique dimension combo in the descriptor).
-    let dim_rows: Vec<AnyElement> = if dims.is_empty() {
-        vec![]
-    } else {
-        let label = SharedString::from(
-            dims.iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-        let is_filter_selected = match current_filter {
-            DimensionFilter::FilterTo(d) => d == &dims,
-            _ => false,
-        };
-        let dims_for_click = dims.clone();
-        let row: AnyElement = dim_radio_row(
-            1,
-            label,
-            is_filter_selected,
-            &theme,
-            cx,
-            move |shell, _, _, cx| {
-                if let Some(picker) = &mut shell.metric_picker {
-                    picker.dimension_filter = DimensionFilter::FilterTo(dims_for_click.clone());
-                }
-                cx.notify();
-            },
-        )
-        .into_any_element();
-        vec![row]
+        DimensionsState::Error(msg) => {
+            let msg = msg.clone();
+            div()
+                .flex()
+                .flex_col()
+                .p(Spacing::SM)
+                .gap(Spacing::XS)
+                .child(Text::muted(format!("Error: {msg}")))
+                .child(
+                    Button::new("metric-picker-dim-retry", "Retry")
+                        .small()
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            if let Some(picker) = &mut shell.metric_picker {
+                                picker.dimensions_state = DimensionsState::NotFetched;
+                                picker.dimensions_task = None;
+                            }
+                            cx.notify();
+                        })),
+                )
+                .into_any_element()
+        }
+
+        DimensionsState::Loaded(combos) => {
+            let current_filter = &state.dimension_filter;
+
+            // AggregateAll row — always shown at the top.
+            let is_agg_selected = matches!(current_filter, DimensionFilter::AggregateAll);
+            let agg_row: AnyElement = dim_radio_row(
+                0,
+                SharedString::from("Aggregate all"),
+                is_agg_selected,
+                &theme,
+                cx,
+                |shell, _, _, cx| {
+                    if let Some(picker) = &mut shell.metric_picker {
+                        picker.dimension_filter = DimensionFilter::AggregateAll;
+                    }
+                    cx.notify();
+                },
+            )
+            .into_any_element();
+
+            let dim_rows: Vec<AnyElement> = combos
+                .iter()
+                .enumerate()
+                .map(|(i, combo)| {
+                    let label = SharedString::from(
+                        combo
+                            .iter()
+                            .map(|(k, v)| format!("{k}={v}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                    let is_filter_selected = match current_filter {
+                        DimensionFilter::FilterTo(d) => d == combo,
+                        _ => false,
+                    };
+                    let combo_for_click = combo.clone();
+                    dim_radio_row(
+                        i + 1,
+                        label,
+                        is_filter_selected,
+                        &theme,
+                        cx,
+                        move |shell, _, _, cx| {
+                            if let Some(picker) = &mut shell.metric_picker {
+                                picker.dimension_filter =
+                                    DimensionFilter::FilterTo(combo_for_click.clone());
+                            }
+                            cx.notify();
+                        },
+                    )
+                    .into_any_element()
+                })
+                .collect();
+
+            if combos.is_empty() {
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(agg_row)
+                    .child(
+                        div()
+                            .px(Spacing::SM)
+                            .py(Spacing::XS)
+                            .child(Text::dim("No dimension combinations")),
+                    )
+                    .into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(agg_row)
+                    .children(dim_rows)
+                    .into_any_element()
+            }
+        }
     };
 
     div()
         .flex()
         .flex_col()
         .child(header)
-        .child(agg_row)
-        .children(dim_rows)
+        .child(body)
         .into_any_element()
 }
 
@@ -547,7 +267,6 @@ fn render_dimensions_section(
 
 fn render_config_footer(state: &MetricPickerState, cx: &mut Context<ChartShell>) -> AnyElement {
     let theme = cx.theme().clone();
-    let can_apply = state.selected_namespace.is_some() && state.selected_metric.is_some();
 
     let period_dropdown = state.period_dropdown.clone();
     let statistic_dropdown = state.statistic_dropdown.clone();
@@ -567,11 +286,9 @@ fn render_config_footer(state: &MetricPickerState, cx: &mut Context<ChartShell>)
             Button::new("metric-picker-apply", "Apply")
                 .primary()
                 .small()
-                .disabled(!can_apply)
                 .on_click(cx.listener(|shell, _, _, cx| {
-                    if let Some(picker) = &shell.metric_picker
-                        && let Some(source) = picker.build_metric_source()
-                    {
+                    if let Some(picker) = &shell.metric_picker {
+                        let source = picker.build_metric_source();
                         cx.emit(ChartShellEvent::MetricPickerApplied(Box::new(source)));
                     }
                 })),

@@ -1,9 +1,13 @@
 //! `MetricPickerState` — UI state for the metric picker rail tab.
 //!
 //! This module contains the pure state machine for the metric picker.
-//! All GPUI entities (`Entity<InputState>`, etc.) live as fields, but
-//! all pure transition methods (`on_namespace_selected`, `build_metric_source`)
-//! are exercisable without a running GPUI app.
+//!
+//! **Sidebar-pivot model**: the namespace and metric are always known when the
+//! picker is created (the user clicked a metric leaf in the sidebar). The picker
+//! rail is responsible only for:
+//!   1. Loading and displaying dimension combinations (from the shared cache).
+//!   2. Letting the user pick period and statistic.
+//!   3. Building a `MetricSource` and emitting it via the Apply button.
 //!
 //! **Boundary-struct pattern**: rendering lives in `metric_picker_render.rs`
 //! as `MetricPickerView`. `MetricPickerState` is NOT a GPUI entity. It is
@@ -11,8 +15,8 @@
 //!
 //! # Single chokepoint for capability check
 //!
-//! `host_supports_metric_catalog` is defined here and called from exactly
-//! two locations: `toolbar.rs` (render guard) and `actions.rs::open_metrics_chart`.
+//! `host_supports_metric_catalog` is defined here and called from the sidebar
+//! tree-builder (`tree_builder.rs`) to decide whether to render the Metrics folder.
 //! No `driver_id` strings anywhere — capability bit + trait accessor only.
 
 // `DbError` is a large type defined in `dbflux_core`; we cannot change its size.
@@ -21,10 +25,10 @@
 // an option in this codebase.
 #![allow(clippy::result_large_err)]
 
-use dbflux_app::{MetricCatalogCache, MetricsPageView};
+use dbflux_app::MetricCatalogCache;
 use dbflux_components::chart::MetricSource;
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
-use dbflux_core::{DimensionFilter, MetricDescriptor, MetricNamespace};
+use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_core::DimensionFilter;
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::{Context, Entity, Subscription, Task, WeakEntity};
@@ -34,37 +38,6 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
-
-/// State for a single metric namespace list (left column in the picker).
-pub enum NamespaceState {
-    /// No fetch has started yet. Kicked on first render of the Metric rail.
-    NotFetched,
-    /// A background fetch is in progress.
-    Loading,
-    /// Namespaces loaded and available.
-    Loaded(Arc<Vec<MetricNamespace>>),
-    /// Last fetch failed; stores the error message for display.
-    Error(String),
-}
-
-/// State for the metrics list (right column in the picker, per selected namespace).
-pub enum MetricsState {
-    /// Awaiting namespace selection or first render.
-    NotFetched,
-    /// Initial page load in progress.
-    Loading,
-    /// At least one page loaded.
-    Loaded {
-        accumulated: Arc<Vec<MetricDescriptor>>,
-        fully_loaded: bool,
-    },
-    /// Additional page load in progress; shows existing data while loading.
-    LoadingMore {
-        accumulated: Arc<Vec<MetricDescriptor>>,
-    },
-    /// Last fetch failed.
-    Error(String),
-}
 
 /// Period preset labels and their second values.
 pub const PERIOD_PRESETS: &[(u32, &str)] = &[
@@ -92,24 +65,18 @@ pub const DEFAULT_STATISTIC_IDX: usize = 0;
 /// Owned by `ChartShell`. All field access is through `ChartShell`'s
 /// `Context<ChartShell>` — never accessed as an independent GPUI entity.
 ///
-/// Filter `InputState` entities require a `Window` and are created lazily
-/// on the first render of the Metric rail (same pattern as `TimeRangePanel`
-/// in `ChartDocument`).
+/// In the sidebar-pivot model the namespace and metric are always fixed at
+/// construction time (set by `new_pre_populated`). The picker rail only
+/// manages: dimension selection, period, statistic, and the Apply button.
 pub struct MetricPickerState {
     pub profile_id: Uuid,
     pub app_state: Entity<AppStateEntity>,
 
-    // Namespace column state.
-    pub namespace_state: NamespaceState,
-    pub selected_namespace: Option<MetricNamespace>,
-    /// Lazily created on first render (requires Window).
-    pub namespace_filter: Option<Entity<InputState>>,
+    /// The fixed metric namespace. Non-optional — always set at construction.
+    pub selected_namespace: String,
 
-    // Metrics column state.
-    pub metrics_state: MetricsState,
-    pub selected_metric: Option<MetricDescriptor>,
-    /// Lazily created on first render (requires Window).
-    pub metrics_filter: Option<Entity<InputState>>,
+    /// The fixed metric name. Non-optional — always set at construction.
+    pub selected_metric_name: String,
 
     // Configuration section.
     pub dimension_filter: DimensionFilter,
@@ -118,27 +85,39 @@ pub struct MetricPickerState {
     pub period_s: u32,
     pub statistic: String,
 
-    // In-flight task handles (dropped to cancel the picker's await;
-    // the cache's underlying fetch continues and writes through).
-    pub namespace_task: Option<Task<()>>,
-    pub metrics_task: Option<Task<()>>,
+    /// Dimension combinations for the selected metric.
+    ///
+    /// Starts as `NotFetched`; the render path calls `ensure_dimensions_loaded`
+    /// which peeks the shared cache (typically warm because the sidebar already
+    /// expanded the namespace folder) and transitions to `Loaded` on a cache hit
+    /// or `Loading` + spawns a background fetch on a miss.
+    pub dimensions_state: DimensionsState,
+
+    /// In-flight dimensions fetch task (dropped to cancel the picker's await;
+    /// the cache's underlying fetch continues and writes through).
+    pub dimensions_task: Option<Task<()>>,
 
     /// Subscriptions to dropdown selection changes.
     pub _subscriptions: Vec<Subscription>,
 }
 
 impl MetricPickerState {
-    /// Create a new picker state for `profile_id`.
+    /// Construct a `MetricPickerState` pre-populated with a known
+    /// `(namespace, metric_name)`.
     ///
-    /// All states start as `NotFetched` — no driver call is made here.
-    /// The first render of the Metric rail tab triggers `ensure_namespaces_loaded`.
+    /// Used when the user clicks a metric leaf in the sidebar tree. The
+    /// namespace and metric are fixed; only dimensions, period, and statistic
+    /// are configurable in the picker rail.
     ///
-    /// Filter `InputState` entities are `None` here and created lazily
-    /// by the render path on first render (the render path has a `Window`
-    /// reference; this constructor runs in `shell.update(cx, ...)` which does not).
-    pub fn new(
+    /// `dimensions_state` starts as `NotFetched`; the render path calls
+    /// `ensure_dimensions_loaded` which peeks the shared cache (typically warm
+    /// because the sidebar already expanded the namespace folder) and transitions
+    /// to `Loaded` on a cache hit or `Loading` on a miss.
+    pub fn new_pre_populated(
         profile_id: Uuid,
         app_state: Entity<AppStateEntity>,
+        namespace: String,
+        metric_name: String,
         cx: &mut Context<super::shell::ChartShell>,
     ) -> Self {
         let period_items = PERIOD_PRESETS
@@ -193,76 +172,23 @@ impl MetricPickerState {
         Self {
             profile_id,
             app_state,
-            namespace_state: NamespaceState::NotFetched,
-            selected_namespace: None,
-            namespace_filter: None, // created lazily on first render
-            metrics_state: MetricsState::NotFetched,
-            selected_metric: None,
-            metrics_filter: None, // created lazily on first render
+            selected_namespace: namespace,
+            selected_metric_name: metric_name,
             dimension_filter: DimensionFilter::AggregateAll,
             period_dropdown,
             statistic_dropdown,
             period_s: PERIOD_PRESETS[DEFAULT_PERIOD_IDX].0,
             statistic: STATISTIC_PRESETS[DEFAULT_STATISTIC_IDX].to_string(),
-            namespace_task: None,
-            metrics_task: None,
+            dimensions_state: DimensionsState::NotFetched,
+            dimensions_task: None,
             _subscriptions: vec![period_sub, statistic_sub],
         }
     }
 
-    /// Ensure filter inputs are created (requires Window; called from render).
-    pub fn ensure_inputs_created(
-        &mut self,
-        window: &mut gpui::Window,
-        cx: &mut Context<super::shell::ChartShell>,
-    ) {
-        if self.namespace_filter.is_none() {
-            self.namespace_filter =
-                Some(cx.new(|cx| InputState::new(window, cx).placeholder("Filter namespaces…")));
-        }
-        if self.metrics_filter.is_none() {
-            self.metrics_filter =
-                Some(cx.new(|cx| InputState::new(window, cx).placeholder("Filter metrics…")));
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // State transitions (pure — no GPUI context needed)
-    // -----------------------------------------------------------------------
-
-    /// Handle the user selecting a namespace.
-    ///
-    /// Resets the metrics column and dimension filter; leaves period and
-    /// statistic intact so the user can compare metrics across namespaces
-    /// without reconfiguring aggregation settings.
-    pub fn on_namespace_selected(&mut self, ns: MetricNamespace) {
-        // Drop any in-flight metrics task (the cache continues writing through).
-        self.metrics_task = None;
-
-        self.selected_namespace = Some(ns);
-        self.metrics_state = MetricsState::NotFetched;
-        self.selected_metric = None;
-        self.dimension_filter = DimensionFilter::AggregateAll;
-    }
-
-    /// Handle the user selecting a metric from the list.
-    ///
-    /// Resets the dimension filter to `AggregateAll` so the user sees the
-    /// broadest view by default. If they want a specific dimension set they
-    /// can select it from the dimension table.
-    pub fn on_metric_selected(&mut self, metric: MetricDescriptor) {
-        self.selected_metric = Some(metric);
-        self.dimension_filter = DimensionFilter::AggregateAll;
-    }
-
     /// Build a `MetricSource` from the current picker state.
     ///
-    /// Returns `None` when no namespace or metric is selected (Apply button
-    /// is disabled in this case so this path should not be reached from UI).
-    pub fn build_metric_source(&self) -> Option<MetricSource> {
-        let namespace = self.selected_namespace.as_ref()?.clone();
-        let metric = self.selected_metric.as_ref()?;
-
+    /// Always succeeds — namespace and metric name are non-optional fields.
+    pub fn build_metric_source(&self) -> MetricSource {
         let dimensions = match &self.dimension_filter {
             DimensionFilter::AggregateAll => vec![],
             DimensionFilter::FilterTo(dims) => dims.clone(),
@@ -270,187 +196,59 @@ impl MetricPickerState {
             _ => vec![],
         };
 
-        Some(MetricSource {
-            namespace,
-            metric_name: metric.metric_name.clone(),
+        MetricSource {
+            namespace: self.selected_namespace.clone(),
+            metric_name: self.selected_metric_name.clone(),
             dimensions,
             period_s: self.period_s,
             statistic: self.statistic.clone(),
-        })
+        }
     }
 
     // -----------------------------------------------------------------------
-    // Fetch triggers (called from render; require ChartShell context)
+    // Dimensions fetch (called from render; requires ChartShell context)
     // -----------------------------------------------------------------------
 
-    /// Ensure namespaces are loaded for this picker's connection.
+    /// Ensure dimension combinations are loaded for the current metric.
     ///
-    /// Called on every render of the Metric rail when `namespace_state == NotFetched`.
-    /// Peeks the cache first (O(1) lock); if a cached result exists it
-    /// transitions immediately to `Loaded` without spawning a task.
-    /// Otherwise sets `Loading` and spawns a background fetch that writes
-    /// to the cache on completion.
-    ///
-    /// # Toast on first fetch
-    ///
-    /// A "Loading metric catalog…" toast is shown on the first ListMetrics
-    /// call per connection per session. `store_namespaces` being called for
-    /// the first time (when `peek_namespaces` was `None`) indicates first fetch.
-    pub fn ensure_namespaces_loaded(
+    /// Called on every render when `dimensions_state == NotFetched`. Peeks the
+    /// cache first (`peek_metrics` for the namespace); if found, scans for the
+    /// selected metric name and extracts its dimensions immediately without
+    /// spawning a task. On a cache miss, sets `Loading` and spawns a background
+    /// fetch.
+    pub fn ensure_dimensions_loaded(
         &mut self,
         shell: WeakEntity<super::shell::ChartShell>,
         cache: Arc<MetricCatalogCache>,
         cx: &mut Context<super::shell::ChartShell>,
     ) {
-        // Already fetching or loaded — nothing to do.
-        if !matches!(self.namespace_state, NamespaceState::NotFetched) {
+        if !matches!(self.dimensions_state, DimensionsState::NotFetched) {
             return;
         }
 
-        // Check the cache first (no task spawn if already cached).
-        if let Some(cached) = cache.peek_namespaces(self.profile_id) {
-            self.namespace_state = NamespaceState::Loaded(cached);
-            return;
-        }
+        let ns = self.selected_namespace.clone();
+        let metric_name = self.selected_metric_name.clone();
 
-        // Nothing cached — spawn a background fetch.
-        self.namespace_state = NamespaceState::Loading;
-
-        let profile_id = self.profile_id;
-        let app_state = self.app_state.clone();
-        let cache_clone = cache.clone();
-
-        // Resolve connection synchronously, then dispatch to background.
-        let conn_result = {
-            let state = app_state.read(cx);
-            state
-                .connections()
-                .get(&profile_id)
-                .and_then(|c| c.resolve_connection_for_execution(None).ok())
-        };
-
-        let task = match conn_result {
-            None => {
-                self.namespace_state =
-                    NamespaceState::Error("Connection not found or not active".to_string());
-                return;
-            }
-            Some(conn) => {
-                let bg_task = cx
-                    .background_executor()
-                    .spawn(async move { conn.metric_catalog().map(|mc| mc.list_namespaces()) });
-
-                cx.spawn(async move |_this, cx| {
-                    let result = bg_task.await;
-                    cx.update(|cx| {
-                        let Some(entity) = shell.upgrade() else {
-                            return;
-                        };
-                        entity.update(cx, |shell, cx| {
-                            let Some(picker) = &mut shell.metric_picker else {
-                                return;
-                            };
-                            match result {
-                                Some(Ok(ns_list)) => {
-                                    cache_clone.store_namespaces(profile_id, ns_list.clone());
-                                    picker.namespace_state =
-                                        NamespaceState::Loaded(Arc::new(ns_list));
-                                }
-                                Some(Err(e)) => {
-                                    picker.namespace_state = NamespaceState::Error(e.to_string());
-                                }
-                                None => {
-                                    picker.namespace_state = NamespaceState::Error(
-                                        "Connection does not support metric catalog".to_string(),
-                                    );
-                                }
-                            }
-                            cx.notify();
-                        });
-                    })
-                    .ok();
-                })
-            }
-        };
-
-        self.namespace_task = Some(task);
-    }
-
-    /// Ensure metrics are loaded for the currently selected namespace.
-    ///
-    /// No-op if no namespace is selected, metrics are already loading,
-    /// or metrics are fully loaded. Called on render when `metrics_state == NotFetched`.
-    pub fn ensure_metrics_loaded(
-        &mut self,
-        shell: WeakEntity<super::shell::ChartShell>,
-        cache: Arc<MetricCatalogCache>,
-        cx: &mut Context<super::shell::ChartShell>,
-    ) {
-        let Some(ns) = self.selected_namespace.clone() else {
-            return;
-        };
-
-        if !matches!(self.metrics_state, MetricsState::NotFetched) {
-            return;
-        }
-
-        // Peek the cache: if already loaded (e.g. from a previous picker session),
-        // transition immediately without spawning a task.
+        // Cache warm path: extract dimensions immediately.
         if let Some(view) = cache.peek_metrics(self.profile_id, &ns) {
-            self.metrics_state = MetricsState::Loaded {
-                accumulated: view.accumulated,
-                fully_loaded: view.fully_loaded,
-            };
+            let dims: Vec<Vec<(String, String)>> = view
+                .accumulated
+                .iter()
+                .filter(|m| m.metric_name == metric_name)
+                .map(|m| m.dimensions.clone())
+                .collect();
+            self.dimensions_state = DimensionsState::Loaded(dims);
             return;
         }
 
-        // Start loading from the first page.
-        self.metrics_state = MetricsState::Loading;
-        self.spawn_metrics_page_task(shell, cache, ns, cx);
-    }
+        // Cache miss — spawn a background metrics-page fetch for the namespace.
+        self.dimensions_state = DimensionsState::Loading;
 
-    /// Fetch the next page of metrics for the selected namespace.
-    ///
-    /// Should only be called when `metrics_state` is `Loaded { fully_loaded: false }`.
-    /// Transitions to `LoadingMore`, then spawns a background task.
-    pub fn load_more_metrics(
-        &mut self,
-        shell: WeakEntity<super::shell::ChartShell>,
-        cache: Arc<MetricCatalogCache>,
-        cx: &mut Context<super::shell::ChartShell>,
-    ) {
-        let Some(ns) = self.selected_namespace.clone() else {
-            return;
-        };
-
-        let accumulated = match &self.metrics_state {
-            MetricsState::Loaded {
-                accumulated,
-                fully_loaded: false,
-            } => accumulated.clone(),
-            _ => return,
-        };
-
-        self.metrics_state = MetricsState::LoadingMore { accumulated };
-        self.spawn_metrics_page_task(shell, cache, ns, cx);
-    }
-
-    // -----------------------------------------------------------------------
-    // Internal helpers
-    // -----------------------------------------------------------------------
-
-    fn spawn_metrics_page_task(
-        &mut self,
-        shell: WeakEntity<super::shell::ChartShell>,
-        cache: Arc<MetricCatalogCache>,
-        ns: MetricNamespace,
-        cx: &mut Context<super::shell::ChartShell>,
-    ) {
         let profile_id = self.profile_id;
         let app_state = self.app_state.clone();
         let cache_clone = cache.clone();
         let ns_clone = ns.clone();
-        let next_token = cache.peek_next_token(profile_id, &ns);
+        let metric_name_clone = metric_name.clone();
 
         let conn_result = {
             let state = app_state.read(cx);
@@ -462,15 +260,14 @@ impl MetricPickerState {
 
         let task = match conn_result {
             None => {
-                self.metrics_state =
-                    MetricsState::Error("Connection not found or not active".to_string());
+                self.dimensions_state =
+                    DimensionsState::Error("Connection not found or not active".to_string());
                 return;
             }
             Some(conn) => {
                 let bg_task = cx.background_executor().spawn(async move {
-                    let token_ref = next_token.as_deref();
                     conn.metric_catalog()
-                        .map(|mc| mc.list_metrics(&ns, token_ref))
+                        .map(|mc| mc.list_metrics(&ns_clone, None))
                 });
 
                 cx.spawn(async move |_this, cx| {
@@ -485,36 +282,30 @@ impl MetricPickerState {
                             };
                             match result {
                                 Some(Ok(page)) => {
-                                    let view = cache_clone.store_metrics_page(
+                                    cache_clone.store_metrics_page(
                                         profile_id,
-                                        ns_clone,
-                                        page.metrics,
+                                        ns.clone(),
+                                        page.metrics.clone(),
                                         page.next_token,
                                     );
-                                    picker.metrics_state = MetricsState::Loaded {
-                                        accumulated: view.accumulated,
-                                        fully_loaded: view.fully_loaded,
-                                    };
+                                    let dims: Vec<Vec<(String, String)>> = page
+                                        .metrics
+                                        .iter()
+                                        .filter(|m| m.metric_name == metric_name_clone)
+                                        .map(|m| m.dimensions.clone())
+                                        .collect();
+                                    picker.dimensions_state = DimensionsState::Loaded(dims);
                                 }
                                 Some(Err(e)) => {
-                                    // On error: revert to Loaded with current accumulated
-                                    // if we were LoadingMore, otherwise Error.
-                                    let prior = cache_clone.peek_metrics(profile_id, &ns_clone);
-                                    picker.metrics_state = match prior {
-                                        Some(v) => MetricsState::Loaded {
-                                            accumulated: v.accumulated,
-                                            fully_loaded: false,
-                                        },
-                                        None => MetricsState::Error(e.to_string()),
-                                    };
+                                    picker.dimensions_state = DimensionsState::Error(e.to_string());
                                 }
                                 None => {
-                                    picker.metrics_state = MetricsState::Error(
+                                    picker.dimensions_state = DimensionsState::Error(
                                         "Connection does not support metric catalog".to_string(),
                                     );
                                 }
                             }
-                            picker.metrics_task = None;
+                            picker.dimensions_task = None;
                             cx.notify();
                         });
                     })
@@ -523,8 +314,78 @@ impl MetricPickerState {
             }
         };
 
-        self.metrics_task = Some(task);
+        self.dimensions_task = Some(task);
     }
+
+    /// Return the dimension combinations loaded for the current metric, or
+    /// `None` when not yet loaded.
+    pub fn dimensions_state(&self) -> &DimensionsState {
+        &self.dimensions_state
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DimensionsState
+// ---------------------------------------------------------------------------
+
+/// Dimension-combos fetch state for the pre-populated picker.
+///
+/// When the user opens a chart from the sidebar the namespace and metric are
+/// already known. `ensure_dimensions_loaded` reads the available dimension
+/// combinations from the cache (warm) or spawns a background fetch (cold).
+pub enum DimensionsState {
+    /// No fetch has started yet.
+    NotFetched,
+    /// A background fetch is in progress.
+    Loading,
+    /// Dimension combinations available. Each inner `Vec` is one combination
+    /// of `(name, value)` pairs from the metric descriptor set.
+    Loaded(Vec<Vec<(String, String)>>),
+    /// Last fetch failed; stores the error message for display + retry.
+    Error(String),
+}
+
+// ---------------------------------------------------------------------------
+// Validation helpers (T15.1, T15.2) — pure, no GPUI
+// ---------------------------------------------------------------------------
+
+/// Validate a user-supplied statistic string.
+///
+/// Accepts:
+/// - AWS standard presets (e.g. `"Average"`, `"Sum"`, `"p99"`, `"p99.9"`).
+/// - Any non-empty free-text string (passed through to AWS for server-side
+///   validation per REQ-3.4, so errors surface as driver errors rather than
+///   silent no-ops).
+///
+/// Rejects only empty strings. The caller is responsible for trimming whitespace.
+pub fn validate_statistic(s: &str) -> Result<String, String> {
+    if s.is_empty() {
+        return Err("statistic must not be empty".to_string());
+    }
+    Ok(s.to_string())
+}
+
+/// Validate a user-supplied period string.
+///
+/// Accepts strings that parse to a `u32` in the range `1..=86400` (1 second
+/// to 24 hours). Returns the parsed value on success.
+///
+/// Rejects:
+/// - Non-numeric strings.
+/// - `0` (below minimum).
+/// - Values above `86400` (AWS CloudWatch maximum period).
+pub fn validate_period(s: &str) -> Result<u32, String> {
+    let n: u32 = s
+        .parse()
+        .map_err(|_| format!("period must be a number, got {:?}", s))?;
+
+    if n == 0 {
+        return Err("period must be at least 1 second".to_string());
+    }
+    if n > 86400 {
+        return Err("period must not exceed 86400 seconds (24 hours)".to_string());
+    }
+    Ok(n)
 }
 
 // ---------------------------------------------------------------------------
@@ -535,7 +396,7 @@ impl MetricPickerState {
 ///
 /// This is the single chokepoint for the capability check. Call sites:
 /// 1. `toolbar.rs` — guard for the Metric rail-tab button.
-/// 2. `actions.rs::open_metrics_chart` — guard for opening the empty chart.
+/// 2. `tree_builder.rs` — guard for rendering the Metrics folder in the sidebar.
 ///
 /// No `driver_id` strings: capability bit + trait accessor only.
 pub fn host_supports_metric_catalog(connection: &dyn dbflux_core::Connection) -> bool {
@@ -555,91 +416,81 @@ mod tests {
     use super::*;
     use dbflux_core::{DimensionFilter, MetricDescriptor};
 
+    // ---- T14.2: DimensionsState starts as NotFetched ----
+
+    /// T14.2: DimensionsState starts as NotFetched for a pre-populated picker.
+    #[test]
+    fn pre_populated_picker_dimensions_state_starts_not_fetched() {
+        let state = DimensionsState::NotFetched;
+        assert!(
+            matches!(state, DimensionsState::NotFetched),
+            "DimensionsState::NotFetched must be the initial value"
+        );
+    }
+
+    /// T14.2: validate_statistic accepts known statistic patterns.
+    #[test]
+    fn validate_statistic_accepts_percentile_and_free_text() {
+        assert!(validate_statistic("p99").is_ok(), "p99 must be accepted");
+        assert!(
+            validate_statistic("p99.9").is_ok(),
+            "p99.9 must be accepted"
+        );
+        assert!(
+            validate_statistic("Average").is_ok(),
+            "Average must be accepted (free-text passthrough)"
+        );
+        assert!(
+            validate_statistic("trimmed_mean").is_ok(),
+            "trimmed_mean must be accepted (free-text passthrough)"
+        );
+    }
+
+    /// T14.2: validate_statistic rejects empty strings.
+    #[test]
+    fn validate_statistic_rejects_empty_string() {
+        assert!(
+            validate_statistic("").is_err(),
+            "empty string must be rejected"
+        );
+    }
+
+    /// T15.2: validate_period accepts valid period values.
+    #[test]
+    fn validate_period_accepts_valid_values() {
+        assert!(validate_period("60").is_ok(), "60 must be accepted");
+        assert!(validate_period("120").is_ok(), "120 must be accepted");
+        assert!(
+            validate_period("86400").is_ok(),
+            "86400 (max) must be accepted"
+        );
+    }
+
+    /// T15.2: validate_period rejects zero and out-of-range values.
+    #[test]
+    fn validate_period_rejects_zero_and_out_of_range() {
+        assert!(validate_period("0").is_err(), "0 must be rejected");
+        assert!(
+            validate_period("86401").is_err(),
+            "86401 (above max) must be rejected"
+        );
+        assert!(
+            validate_period("abc").is_err(),
+            "non-numeric must be rejected"
+        );
+    }
+
+    // ---- HeadlessPicker — pure-logic state machine tests ----
+    //
+    // These tests use a self-contained `HeadlessPicker` struct (not the real
+    // `MetricPickerState`) to exercise the picker state-machine logic without
+    // a running GPUI app. They guard the config-section contract.
+
     fn metric(name: &str, dims: Vec<(String, String)>) -> MetricDescriptor {
         MetricDescriptor {
             metric_name: name.to_string(),
             dimensions: dims,
         }
-    }
-
-    // ---- T-MP-01: on_namespace_selected resets metric + dimension state ----
-
-    /// T-MP-01: selecting a namespace resets metrics_state, selected_metric,
-    /// and dimension_filter. Period and statistic must be preserved.
-    ///
-    /// RED: this test drives the `on_namespace_selected` contract before impl.
-    #[test]
-    fn on_namespace_selected_resets_metric_and_dimensions() {
-        // Simulate state: picker already has a selected metric + dimension.
-        let mut picker = make_headless_picker();
-
-        // Pre-state: a metric is selected with a pinned dimension filter.
-        picker.selected_metric = Some(metric(
-            "Invocations",
-            vec![("FunctionName".to_string(), "my-fn".to_string())],
-        ));
-        picker.dimension_filter =
-            DimensionFilter::FilterTo(vec![("FunctionName".to_string(), "my-fn".to_string())]);
-        picker.period_s = 900;
-        picker.statistic = "Sum".to_string();
-        picker.metrics_state = MetricsState::Loaded {
-            accumulated: Arc::new(vec![]),
-            fully_loaded: true,
-        };
-
-        // Action.
-        picker.on_namespace_selected("AWS/Lambda".to_string());
-
-        // Assertions.
-        assert_eq!(
-            picker.selected_namespace.as_deref(),
-            Some("AWS/Lambda"),
-            "selected namespace must be updated"
-        );
-        assert!(
-            picker.selected_metric.is_none(),
-            "selected_metric must be cleared on namespace change"
-        );
-        assert!(
-            matches!(picker.dimension_filter, DimensionFilter::AggregateAll),
-            "dimension_filter must reset to AggregateAll"
-        );
-        assert!(
-            matches!(picker.metrics_state, MetricsState::NotFetched),
-            "metrics_state must reset to NotFetched"
-        );
-
-        // Period and statistic must be preserved.
-        assert_eq!(picker.period_s, 900, "period_s must be preserved");
-        assert_eq!(picker.statistic, "Sum", "statistic must be preserved");
-    }
-
-    // ---- T-MP-02: on_metric_selected resets dimension_filter ----
-
-    /// T-MP-02: selecting a metric resets dimension_filter to AggregateAll.
-    #[test]
-    fn on_metric_selected_resets_dimension_filter() {
-        let mut picker = make_headless_picker();
-
-        // Pre-state: pinned dimension filter.
-        picker.dimension_filter =
-            DimensionFilter::FilterTo(vec![("Region".to_string(), "us-east-1".to_string())]);
-
-        let m = metric("CPUUtilization", vec![]);
-        picker.on_metric_selected(m.clone());
-
-        assert_eq!(
-            picker
-                .selected_metric
-                .as_ref()
-                .map(|m| m.metric_name.as_str()),
-            Some("CPUUtilization"),
-            "selected_metric must be updated"
-        );
-        assert!(
-            matches!(picker.dimension_filter, DimensionFilter::AggregateAll),
-            "dimension_filter must reset to AggregateAll after metric selection"
-        );
     }
 
     // ---- T-MP-03: build_metric_source with AggregateAll ----
@@ -648,16 +499,12 @@ mod tests {
     /// produces `MetricSource { dimensions: vec![], .. }`.
     #[test]
     fn build_metric_source_with_aggregate_all_produces_empty_dimensions() {
-        let mut picker = make_headless_picker();
-        picker.selected_namespace = Some("AWS/EC2".to_string());
-        picker.selected_metric = Some(metric("CPUUtilization", vec![]));
+        let mut picker = make_headless_picker("AWS/EC2", "CPUUtilization");
         picker.dimension_filter = DimensionFilter::AggregateAll;
         picker.period_s = 300;
         picker.statistic = "Average".to_string();
 
-        let source = picker
-            .build_metric_source()
-            .expect("must build a MetricSource");
+        let source = picker.build_metric_source();
 
         assert_eq!(source.namespace, "AWS/EC2");
         assert_eq!(source.metric_name, "CPUUtilization");
@@ -675,9 +522,7 @@ mod tests {
     /// preserves the dimension list verbatim in `MetricSource`.
     #[test]
     fn build_metric_source_with_filter_to_preserves_dimensions() {
-        let mut picker = make_headless_picker();
-        picker.selected_namespace = Some("AWS/Lambda".to_string());
-        picker.selected_metric = Some(metric("Invocations", vec![]));
+        let mut picker = make_headless_picker("AWS/Lambda", "Invocations");
 
         let dims = vec![
             ("FunctionName".to_string(), "my-fn".to_string()),
@@ -687,9 +532,7 @@ mod tests {
         picker.period_s = 60;
         picker.statistic = "Sum".to_string();
 
-        let source = picker
-            .build_metric_source()
-            .expect("must build a MetricSource");
+        let source = picker.build_metric_source();
 
         assert_eq!(
             source.dimensions, dims,
@@ -697,94 +540,55 @@ mod tests {
         );
     }
 
-    // ---- T-MP-05: build_metric_source returns None when state incomplete ----
+    // ---- T-MP-06: build_metric_source always returns a value ----
 
-    /// T-MP-05: `build_metric_source` returns `None` when namespace or metric
-    /// is not selected (Apply button disabled guard).
+    /// T-MP-06: In the sidebar-pivot model `build_metric_source` always
+    /// succeeds — namespace and metric name are non-optional fields.
     #[test]
-    fn build_metric_source_returns_none_when_state_incomplete() {
-        let mut picker = make_headless_picker();
-
-        // No selection at all.
-        assert!(
-            picker.build_metric_source().is_none(),
-            "must return None with no namespace or metric"
-        );
-
-        // Namespace selected but no metric.
-        picker.selected_namespace = Some("AWS/EC2".to_string());
-        assert!(
-            picker.build_metric_source().is_none(),
-            "must return None with namespace but no metric"
-        );
-
-        // Metric selected but no namespace (defensive — shouldn't happen in practice).
-        picker.selected_namespace = None;
-        picker.selected_metric = Some(metric("CPUUtilization", vec![]));
-        assert!(
-            picker.build_metric_source().is_none(),
-            "must return None with metric but no namespace"
-        );
+    fn build_metric_source_always_succeeds_in_prepopulated_picker() {
+        let picker = make_headless_picker("AWS/EC2", "CPUUtilization");
+        let source = picker.build_metric_source();
+        assert_eq!(source.namespace, "AWS/EC2");
+        assert_eq!(source.metric_name, "CPUUtilization");
     }
 
     // ---- helpers ----
 
-    /// Build a `MetricPickerState` that skips all GPUI entity construction.
+    /// Build a `HeadlessPicker` that skips all GPUI entity construction.
     ///
     /// Used by pure-logic tests that do not need a running GPUI app.
-    /// Fields that require GPUI entities are filled with a `Uuid::nil()` profile
-    /// and dummy state; the transition methods under test don't touch them.
     struct HeadlessPicker {
-        selected_namespace: Option<MetricNamespace>,
-        selected_metric: Option<MetricDescriptor>,
+        selected_namespace: String,
+        selected_metric_name: String,
         dimension_filter: DimensionFilter,
-        metrics_state: MetricsState,
         period_s: u32,
         statistic: String,
-        metrics_task: Option<Task<()>>,
     }
 
     impl HeadlessPicker {
-        fn on_namespace_selected(&mut self, ns: MetricNamespace) {
-            self.metrics_task = None;
-            self.selected_namespace = Some(ns);
-            self.metrics_state = MetricsState::NotFetched;
-            self.selected_metric = None;
-            self.dimension_filter = DimensionFilter::AggregateAll;
-        }
-
-        fn on_metric_selected(&mut self, metric: MetricDescriptor) {
-            self.selected_metric = Some(metric);
-            self.dimension_filter = DimensionFilter::AggregateAll;
-        }
-
-        fn build_metric_source(&self) -> Option<MetricSource> {
-            let namespace = self.selected_namespace.as_ref()?.clone();
-            let metric = self.selected_metric.as_ref()?;
+        fn build_metric_source(&self) -> MetricSource {
             let dimensions = match &self.dimension_filter {
                 DimensionFilter::AggregateAll => vec![],
                 DimensionFilter::FilterTo(dims) => dims.clone(),
                 _ => vec![],
             };
-            Some(MetricSource {
-                namespace,
-                metric_name: metric.metric_name.clone(),
+            MetricSource {
+                namespace: self.selected_namespace.clone(),
+                metric_name: self.selected_metric_name.clone(),
                 dimensions,
                 period_s: self.period_s,
                 statistic: self.statistic.clone(),
-            })
+            }
         }
     }
 
-    fn make_headless_picker() -> HeadlessPicker {
+    fn make_headless_picker(namespace: &str, metric_name: &str) -> HeadlessPicker {
         HeadlessPicker {
-            selected_namespace: None,
-            selected_metric: None,
+            selected_namespace: namespace.to_string(),
+            selected_metric_name: metric_name.to_string(),
             dimension_filter: DimensionFilter::AggregateAll,
-            metrics_state: MetricsState::NotFetched,
             period_s: PERIOD_PRESETS[DEFAULT_PERIOD_IDX].0,
             statistic: STATISTIC_PRESETS[DEFAULT_STATISTIC_IDX].to_string(),
-            metrics_task: None,
         }
     }
 }
