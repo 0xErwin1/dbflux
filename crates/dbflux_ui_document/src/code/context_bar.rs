@@ -155,7 +155,7 @@ impl CodeDocument {
             .and_then(|connected| connected.connection.source_context_spec())
     }
 
-    fn current_source_query_mode_value(&self, cx: &App) -> Option<String> {
+    pub(super) fn current_source_query_mode_value(&self, cx: &App) -> Option<String> {
         let spec = self.current_source_context_spec(cx)?;
 
         self.source_query_mode_dropdown
@@ -230,7 +230,7 @@ impl CodeDocument {
         items
     }
 
-    fn current_source_targets(&self, cx: &App) -> Vec<String> {
+    pub(super) fn current_source_targets(&self, cx: &App) -> Vec<String> {
         self.source_targets
             .read(cx)
             .selected_values()
@@ -448,6 +448,12 @@ impl CodeDocument {
                 end_ms,
                 query_mode,
             });
+
+            // Stale text in `source_start_input` / `source_end_input` would
+            // otherwise clobber this window inside `run_query_text` via
+            // `current_source_context`. Stash the panel bounds so the next
+            // `run_query` rebuilds `exec_ctx.source` from them instead.
+            self.pending_window_override = Some((start_ms, end_ms));
 
             if !self.result_tabs.is_empty() {
                 self.pending_chart_reexecute = true;
