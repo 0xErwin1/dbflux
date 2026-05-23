@@ -22,6 +22,7 @@ use gpui::{
 
 use crate::chart::spec::{AggKind, BindingSpec};
 use crate::semantic::ChartColors;
+use crate::tokens::{ChartGeometry, Spacing};
 use dbflux_core::{ColumnKind, ColumnMeta};
 
 /// Identifies which AxisBar pill is currently open (showing its picker).
@@ -279,9 +280,9 @@ where
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(4.0))
-        .px(px(8.0))
-        .py(px(2.0))
+        .gap(Spacing::XS)
+        .px(Spacing::SM)
+        .py(ChartGeometry::ACCENT_STRIPE)
         .child(pill_group("axis-x-group", x_pill, x_picker))
         .child(pill_group("axis-y-group", y_pill, y_picker))
         .child(pill_group("axis-group-group", group_pill, group_picker))
@@ -326,10 +327,10 @@ fn pill_element(
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(3.0))
-        .px(px(6.0))
-        .py(px(2.0))
-        .rounded(px(4.0))
+        .gap(ChartGeometry::TICK_GAP)
+        .px(Spacing::XXS)
+        .py(ChartGeometry::ACCENT_STRIPE)
+        .rounded(Spacing::XS)
         .border_1()
         .border_color(border_color)
         .bg(bg_color)
@@ -340,14 +341,14 @@ fn pill_element(
         })
         .child(
             div()
-                .text_size(px(10.0))
+                .text_size(ChartGeometry::FONT_TINY)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.label_fg)
                 .child(SharedString::from(role)),
         )
         .child(
             div()
-                .text_size(px(11.0))
+                .text_size(ChartGeometry::FONT_LABEL)
                 .text_color(colors.value_fg)
                 .child(value),
         )
@@ -368,7 +369,7 @@ fn pill_group(
             deferred(
                 anchored()
                     .anchor(Corner::TopLeft)
-                    .offset(point(px(0.0), px(24.0)))
+                    .offset(point(px(0.0), Spacing::XL))
                     .snap_to_window()
                     .child(picker_el),
             )
@@ -403,16 +404,21 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
+                .gap(Spacing::XXS)
+                .px(Spacing::SM)
+                .py(ChartGeometry::TICK_GAP)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     handler(col_idx, window, cx);
                 })
-                .child(div().text_size(px(11.0)).text_color(value_fg).child(label))
+                .child(
+                    div()
+                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_color(value_fg)
+                        .child(label),
+                )
                 .into_any_element()
         })
         .collect();
@@ -444,9 +450,9 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
+                .gap(Spacing::XXS)
+                .px(Spacing::SM)
+                .py(ChartGeometry::TICK_GAP)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -455,9 +461,9 @@ where
                 .child(
                     // Checkbox indicator
                     div()
-                        .w(px(10.0))
-                        .h(px(10.0))
-                        .rounded(px(2.0))
+                        .w(ChartGeometry::SWATCH)
+                        .h(ChartGeometry::SWATCH)
+                        .rounded(ChartGeometry::ACCENT_STRIPE)
                         .border_1()
                         .border_color(pill_border)
                         .bg(if checked {
@@ -466,7 +472,12 @@ where
                             gpui::transparent_black()
                         }),
                 )
-                .child(div().text_size(px(11.0)).text_color(value_fg).child(label))
+                .child(
+                    div()
+                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_color(value_fg)
+                        .child(label),
+                )
                 .into_any_element()
         })
         .collect();
@@ -506,16 +517,21 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
+                .gap(Spacing::XXS)
+                .px(Spacing::SM)
+                .py(ChartGeometry::TICK_GAP)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     handler(col_idx_opt, window, cx);
                 })
-                .child(div().text_size(px(11.0)).text_color(value_fg).child(label))
+                .child(
+                    div()
+                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_color(value_fg)
+                        .child(label),
+                )
                 .into_any_element()
         })
         .collect();
@@ -547,16 +563,21 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
+                .gap(Spacing::XXS)
+                .px(Spacing::SM)
+                .py(ChartGeometry::TICK_GAP)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     handler(kind, window, cx);
                 })
-                .child(div().text_size(px(11.0)).text_color(value_fg).child(label))
+                .child(
+                    div()
+                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_color(value_fg)
+                        .child(label),
+                )
                 .into_any_element()
         })
         .collect();
@@ -574,13 +595,13 @@ fn picker_container(
         .id(id.into())
         .flex()
         .flex_col()
-        .min_w(px(140.0))
+        .min_w(ChartGeometry::DROPDOWN_PANEL)
         .bg(colors.panel_bg)
         .border_1()
         .border_color(colors.pill_border)
-        .rounded(px(4.0))
+        .rounded(Spacing::XS)
         .shadow_lg()
-        .py(px(2.0))
+        .py(ChartGeometry::ACCENT_STRIPE)
         .occlude()
         .children(rows)
 }
