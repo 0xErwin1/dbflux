@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-dev.8] - 2026-05-23
+
 ### Added
 
 * **Audit event charts** — the Audit document now has a Table/Chart view
@@ -20,9 +22,55 @@ All notable changes to DBFlux will be documented in this file.
   generic metric-series capability; the chart refreshes over the active
   time window. The metric is currently fixed (AWS/Lambda Invocations,
   average over 5-minute periods); an in-app metric picker is a follow-up.
+* **Generic `ChartDataSource` seam (W0)** — a driver-agnostic chart data
+  trait that the audit and CloudWatch chart features both consume. The UI
+  never branches on driver identity; charts are wired through metadata and
+  capabilities.
+
+### Changed
+
+* **Charts respond to the active theme** — chart canvas chrome (gridlines,
+  tick labels, crosshair, hover dot, readout overlays) and chart overlays
+  (legend, axis bar, point inspector, picker) now route through a new
+  `semantic::ChartColors` palette resolved per active theme. The Light
+  theme no longer renders the dark series palette over a light canvas;
+  Mirage and Dark use theme-driven series colors via the engine's
+  `theme.chart_1..chart_5`. Dark series colors remain byte-identical to
+  prior releases. Three deliberate Dark chrome divergences (gridlines via
+  `theme.border`, tick labels via `theme.muted_foreground`, hover-dot
+  background via `theme.background`) carry through and were validated by
+  visual QA.
+* **Document toolbar styling unified** — every document type's toolbar now
+  uses the same shared primitives (icons, separators, spacing) so the look
+  is consistent across SQL editors, chart documents, audit views, and the
+  data grid.
+* **UI split into six layered crates** — the monolithic `dbflux_ui` crate
+  was split into `dbflux_components` (domain-free leaf), `dbflux_ui_base`
+  (events/keymap/AppState seam), `dbflux_ui_document` (tabs, panes, all
+  document types), `dbflux_ui_windows` (settings + connection manager),
+  `dbflux_ui_sidebar`, and a thin `dbflux_ui` integrator. Per-driver
+  feature flags no longer live on UI crates (they belong to `dbflux_app`,
+  which registers drivers). Incremental rebuilds are noticeably faster.
+* **Design tokens consolidated across every UI crate** — every UI crate
+  now consumes the centralized `dbflux_components::tokens` scale
+  (`Spacing`, `Borders`, `Widths`, `ChartGeometry`) and routes banner
+  colors through a single `semantic::BannerColors`. Each crate is locked
+  by a source-scanning guardrail test that prevents regressions. Chart
+  factory files (`axis_bar`, `point_inspector`, `legend`) sit under the
+  guardrail; only `chart/engine.rs` stays exempt for canvas geometry math.
+  Behavior-preserving.
+* **`dbflux` binary dependency cleanup** — the binary's `Cargo.toml` no
+  longer declares the driver/runtime crates as direct optional deps; they
+  are activated through `dbflux_app/<feature>`. Feature relays unchanged
+  from a user perspective; `--features sqlite,…,lua,aws,mcp` continues to
+  work identically.
 
 ### Fixed
 
+* **Audit row detail expanded full-width with custom range inputs
+  visible** — the Audit document's row detail panel now spans the full
+  width of the document and the custom date-range inputs are no longer
+  clipped behind toolbar chrome.
 * **Audit SQLite "database is locked" errors under contention** — the
   audit store now sets a 5s `busy_timeout` when opening its connection.
   Since the audit database shares a WAL file with `StorageRuntime` (and
