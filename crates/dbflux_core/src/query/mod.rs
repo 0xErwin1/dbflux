@@ -3,6 +3,7 @@ pub(crate) mod language_service;
 pub(crate) mod safety;
 pub(crate) mod semantic;
 pub(crate) mod table_browser;
+pub(crate) mod time_macros;
 pub(crate) mod types;
 
 pub use generator::{
@@ -27,6 +28,7 @@ pub use table_browser::{
     ExplainRequest, OrderByColumn, Pagination, SortDirection, TableBrowseRequest,
     TableCountRequest, TableRef,
 };
+pub use time_macros::{contains_time_macros, substitute_time_macros};
 pub use types::{
     ColumnKind, ColumnMeta, QueryHandle, QueryRequest, QueryResult, QueryResultShape,
     ResolvedWindow, Row,

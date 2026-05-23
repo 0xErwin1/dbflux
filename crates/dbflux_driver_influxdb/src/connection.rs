@@ -11,7 +11,7 @@ use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, Connection, DatabaseInfo, DbError, DbKind,
     DefaultSqlDialect, DriverMetadata, InfluxVersion, MeasurementInfo, QueryLanguage, QueryRequest,
     QueryResult, ResolvedWindow, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot,
-    SourceContextSpec, SourceQueryMode, TimeSeriesSchema,
+    SourceContextSpec, SourceQueryMode, TimeSeriesSchema, contains_time_macros,
 };
 
 use crate::error_formatter::InfluxErrorFormatter;
@@ -369,29 +369,38 @@ impl Connection for InfluxConnection {
         let resolved_window: Option<ResolvedWindow>;
         let final_query: String;
 
-        match language {
-            QueryLanguage::Flux => {
-                let had_range = flux_has_range_call(&req.sql);
-                final_query = inject_flux_window(&req.sql, &window);
-                injected_window = !had_range
-                    && (window.start_rfc3339.is_some() || window.end_rfc3339.is_some())
-                    && flux_has_range_call(&final_query);
-                resolved_window = if injected_window {
-                    window_to_resolved(&window, language.clone())
-                } else {
-                    None
-                };
-            }
-            _ => {
-                let had_predicate = influxql_has_time_predicate(&req.sql);
-                final_query = inject_influxql_window(&req.sql, &window);
-                injected_window = !had_predicate
-                    && (window.start_rfc3339.is_some() || window.end_rfc3339.is_some());
-                resolved_window = if injected_window {
-                    window_to_resolved(&window, language.clone())
-                } else {
-                    None
-                };
+        // When the query already contains explicit time-range macros (substituted upstream by
+        // `substitute_time_macros`), the user has declared their own time bounds. Skip the
+        // inject-when-absent logic entirely so the macro-derived predicates win (REQ-5).
+        if contains_time_macros(&req.sql) {
+            final_query = req.sql.clone();
+            injected_window = false;
+            resolved_window = None;
+        } else {
+            match language {
+                QueryLanguage::Flux => {
+                    let had_range = flux_has_range_call(&req.sql);
+                    final_query = inject_flux_window(&req.sql, &window);
+                    injected_window = !had_range
+                        && (window.start_rfc3339.is_some() || window.end_rfc3339.is_some())
+                        && flux_has_range_call(&final_query);
+                    resolved_window = if injected_window {
+                        window_to_resolved(&window, language.clone())
+                    } else {
+                        None
+                    };
+                }
+                _ => {
+                    let had_predicate = influxql_has_time_predicate(&req.sql);
+                    final_query = inject_influxql_window(&req.sql, &window);
+                    injected_window = !had_predicate
+                        && (window.start_rfc3339.is_some() || window.end_rfc3339.is_some());
+                    resolved_window = if injected_window {
+                        window_to_resolved(&window, language.clone())
+                    } else {
+                        None
+                    };
+                }
             }
         }
 
@@ -1227,6 +1236,76 @@ mod tests {
             InfluxVersion::V2,
         )
         .expect("stub HTTP client build")
+    }
+
+    // Guard logic tests (REQ-5) — verify the macro guard decision path.
+    //
+    // The guard branches on `contains_time_macros(&req.sql)`. These tests confirm that
+    // the function correctly identifies which queries should skip injection and which
+    // should proceed through the normal inject-when-absent path. They do not call
+    // `execute()` (which requires an HTTP connection) but validate the predicate that
+    // drives the guard decision.
+
+    /// Queries with explicit macros trigger the guard (injection skipped).
+    #[test]
+    fn guard_macros_present_triggers_skip_injection() {
+        // After substitution by the UI layer, the macro token is replaced. However,
+        // if macros somehow reach the driver unsubstituted (e.g., no window), the guard
+        // ensures injection is not attempted on a syntactically invalid query.
+        assert!(
+            dbflux_core::contains_time_macros(
+                "SELECT mean(usage_user) FROM cpu WHERE $timeFilter GROUP BY time(1m)"
+            ),
+            "$timeFilter macro must be detected"
+        );
+        assert!(
+            dbflux_core::contains_time_macros("SELECT * FROM cpu WHERE time >= $__from"),
+            "$__from macro must be detected"
+        );
+        assert!(
+            dbflux_core::contains_time_macros("SELECT * FROM cpu WHERE time <= $__to"),
+            "$__to macro must be detected"
+        );
+        assert!(
+            dbflux_core::contains_time_macros(
+                "from(bucket: \"x\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop)"
+            ),
+            "Flux v.timeRangeStart/Stop macros must be detected"
+        );
+    }
+
+    /// Macro-free queries do not trigger the guard (injection proceeds normally).
+    #[test]
+    fn guard_macro_free_query_does_not_trigger_skip() {
+        assert!(
+            !dbflux_core::contains_time_macros("SELECT * FROM cpu"),
+            "plain InfluxQL must not be flagged as macro-bearing"
+        );
+        assert!(
+            !dbflux_core::contains_time_macros("SELECT * FROM cpu WHERE time > now() - 1h"),
+            "query with native time predicate must not be flagged"
+        );
+    }
+
+    /// After macro substitution the resulting query contains no raw macro tokens,
+    /// so the guard lets injection proceed normally (existing predicate check still stops it).
+    #[test]
+    fn guard_does_not_fire_on_substituted_query() {
+        let substituted = "SELECT mean(usage_user) FROM cpu WHERE time >= '2024-03-09T16:00:00Z' AND time <= '2024-03-09T17:00:00Z' GROUP BY time(1m)";
+
+        // The substituted form contains `time >=`, so the existing inject logic also
+        // skips injection (influxql_has_time_predicate returns true). Confirm neither
+        // guard path is triggered unexpectedly.
+        assert!(
+            !dbflux_core::contains_time_macros(substituted),
+            "substituted query must not be flagged as macro-bearing"
+        );
+
+        // Confirm injection logic would also skip it via the existing predicate check.
+        assert!(
+            crate::injection::influxql_has_time_predicate(substituted),
+            "substituted query must have a time predicate detected"
+        );
     }
 
     // C.8.4 — escape_influxql_ident wraps plain names and escapes embedded quotes
