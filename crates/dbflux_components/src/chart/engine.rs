@@ -10,8 +10,8 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, Context, Hsla, PathBuilder, Pixels, Render, SharedString, TextRun,
-    Window, canvas, div, fill, font, point,
+    AnyElement, App, Bounds, Context, Hsla, PathBuilder, Pixels, Render, ShapedLine, SharedString,
+    TextRun, Window, canvas, div, fill, font, point,
 };
 use gpui_component::ActiveTheme;
 
@@ -76,6 +76,9 @@ pub(crate) struct RenderModel {
     /// Raw color-slot indices per series (theme-resolved at render time).
     pub palette_slots: Vec<u8>,
     /// X-axis tick labels rendered below the plot area.
+    // Used in tests and retained for future rendering flexibility; the paint
+    // closure regenerates ticks dynamically at render time via `x_ticks_dynamic`.
+    #[allow(dead_code)]
     pub x_ticks: Vec<TickLabel>,
     /// Y-axis tick labels rendered to the left of the plot area.
     pub y_ticks: Vec<TickLabel>,
@@ -1020,6 +1023,25 @@ const MARGIN_RIGHT: f32 = 16.0;
 const MARGIN_TOP: f32 = 8.0;
 const MARGIN_BOTTOM: f32 = 32.0;
 
+/// Compute effective horizontal padding from the rendered widths of X-axis tick labels.
+///
+/// Each returned pad is `max(base_margin, max_label_width / 2.0)`, so the widest
+/// label's center can align exactly on the plot edge without its half-width
+/// overhanging the canvas boundary. REQ-001..REQ-004 from the spec:
+///
+/// - Empty `label_widths` returns `(margin_left, margin_right)` unchanged.
+/// - Padding never shrinks below the base margin (floor preserved).
+/// - Both left and right expand symmetrically based on the single widest label.
+fn effective_x_label_padding(
+    label_widths: &[f32],
+    margin_left: f32,
+    margin_right: f32,
+) -> (f32, f32) {
+    let max_width = label_widths.iter().copied().fold(0.0_f32, f32::max);
+    let half = max_width / 2.0;
+    (margin_left.max(half), margin_right.max(half))
+}
+
 impl Render for ChartView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::chart::spec::ChartKind;
@@ -1097,12 +1119,6 @@ impl Render for ChartView {
 
         // Tick label strings for in-canvas painting (Y data order; painting handles positioning).
         let y_tick_labels: Vec<(f64, SharedString)> = effective_y_ticks
-            .iter()
-            .map(|t| (t.value, SharedString::from(t.label.clone())))
-            .collect();
-
-        let _x_tick_labels: Vec<(f64, SharedString)> = model
-            .x_ticks
             .iter()
             .map(|t| (t.value, SharedString::from(t.label.clone())))
             .collect();
@@ -1187,6 +1203,12 @@ impl Render for ChartView {
                             move |bounds, _window, _cx| {
                                 // Store the full canvas bounds; plot bounds are derived
                                 // inside the paint closure using the same margin constants.
+                                //
+                                // v1 limitation: plot_bounds uses the base MARGIN_LEFT /
+                                // MARGIN_RIGHT constants. When effective X-label padding is
+                                // larger, hover detection in the outer gutter maps to
+                                // off-data coordinates — no incorrect data is shown.
+                                // Tracked for follow-up: align plot_bounds with effective padding.
                                 *plot_bounds_for_canvas.borrow_mut() = Some(gpui::Bounds {
                                     origin: point(
                                         bounds.origin.x + gpui::px(MARGIN_LEFT),
@@ -1209,11 +1231,73 @@ impl Render for ChartView {
                                 // Resolve theme tokens once at the start of each paint pass.
                                 let theme = cx.theme();
 
-                                // Plot area occupies the right portion of the canvas;
-                                // the left MARGIN_LEFT is reserved for Y-axis tick labels.
-                                let plot_x0 = ox + MARGIN_LEFT;
+                                // --- X-tick density and pre-shape pass ---
+                                //
+                                // Provisional plot_w (base margins only) drives the tick-target
+                                // bucket. Tick count only changes on ~120 px boundaries, so a
+                                // few extra pixels of effective padding will not flip buckets in
+                                // the common case. This breaks the chicken-and-egg loop:
+                                // tick count ↔ plot_w ↔ widest label.
+                                let plot_w_provisional = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
+                                let x_tick_target =
+                                    ((plot_w_provisional / 120.0).round() as usize).clamp(4, 16);
+                                let x_ticks_dynamic = if x_is_time {
+                                    ticks_time(x_min, x_max, x_tick_target)
+                                } else {
+                                    ticks_numeric(x_min, x_max, x_tick_target)
+                                };
+
+                                // Shared tick font / color for both the pre-shape pass and
+                                // the label render loop below.
+                                let tick_color = theme.muted_foreground;
+                                let tick_font = font("Zed Mono");
+                                let tick_size = gpui::px(10.0);
+                                let line_height = gpui::px(12.0);
+
+                                // Pre-shape X-tick labels to measure their widths, then derive
+                                // effective horizontal padding. Pie charts have no X-axis ticks
+                                // — skip the pass and use base margins directly.
+                                let (shaped_x_labels, left_pad, right_pad) =
+                                    if matches!(kind_canvas, ChartKind::Pie) {
+                                        (vec![], MARGIN_LEFT, MARGIN_RIGHT)
+                                    } else {
+                                        let mut shaped: Vec<(f64, ShapedLine)> =
+                                            Vec::with_capacity(x_ticks_dynamic.len());
+                                        let mut widths: Vec<f32> =
+                                            Vec::with_capacity(x_ticks_dynamic.len());
+
+                                        for tick in &x_ticks_dynamic {
+                                            let label = SharedString::from(tick.label.clone());
+                                            let run = TextRun {
+                                                len: label.len(),
+                                                font: tick_font.clone(),
+                                                color: tick_color,
+                                                background_color: None,
+                                                underline: None,
+                                                strikethrough: None,
+                                            };
+                                            let shaped_line = window.text_system().shape_line(
+                                                label,
+                                                tick_size,
+                                                &[run],
+                                                None,
+                                            );
+                                            widths.push(f32::from(shaped_line.width));
+                                            shaped.push((tick.value, shaped_line));
+                                        }
+
+                                        let (lp, rp) = effective_x_label_padding(
+                                            &widths,
+                                            MARGIN_LEFT,
+                                            MARGIN_RIGHT,
+                                        );
+                                        (shaped, lp, rp)
+                                    };
+
+                                // Final plot rect using effective horizontal padding.
+                                let plot_x0 = ox + left_pad;
                                 let plot_y0 = oy + MARGIN_TOP;
-                                let plot_w = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
+                                let plot_w = (w - left_pad - right_pad).max(1.0);
                                 let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
 
                                 // Bars inset both edges by half a column so the
@@ -1237,17 +1321,6 @@ impl Render for ChartView {
                                         y_log_range,
                                         y_is_log,
                                     )
-                                };
-
-                                // Dynamic X tick density: roughly one tick per 120px,
-                                // clamped to a sane range so very narrow or very wide
-                                // charts stay legible.
-                                let x_tick_target =
-                                    ((plot_w / 120.0).round() as usize).clamp(4, 16);
-                                let x_ticks_dynamic = if x_is_time {
-                                    ticks_time(x_min, x_max, x_tick_target)
-                                } else {
-                                    ticks_numeric(x_min, x_max, x_tick_target)
                                 };
 
                                 // --- Horizontal gridlines at each Y tick ---
@@ -1566,13 +1639,9 @@ impl Render for ChartView {
                                 }
 
                                 // --- In-canvas Y-axis tick labels ---
-                                // Right-aligned in the MARGIN_LEFT column.
-                                // Pie has no axes — skip all tick labels.
-                                let tick_color = theme.muted_foreground;
-                                let tick_font = font("Zed Mono");
-                                let tick_size = gpui::px(10.0);
-                                let line_height = gpui::px(12.0);
-
+                                // Right-aligned against the effective left margin so the
+                                // Y-tick column stays flush with the plot edge even when
+                                // the left guard fires. Pie has no axes — skip all tick labels.
                                 for (value, label) in y_tick_labels_canvas
                                     .iter()
                                     .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
@@ -1600,8 +1669,8 @@ impl Render for ChartView {
                                         None,
                                     );
                                     let label_w = f32::from(shaped.width);
-                                    // Right-align within MARGIN_LEFT minus 4px padding.
-                                    let label_x = ox + (MARGIN_LEFT - 4.0) - label_w;
+                                    // Right-align within left_pad minus 4px padding.
+                                    let label_x = ox + (left_pad - 4.0) - label_w;
                                     let label_y = sy - f32::from(line_height) / 2.0;
                                     let _ = shaped.paint(
                                         point(gpui::px(label_x), gpui::px(label_y)),
@@ -1613,29 +1682,12 @@ impl Render for ChartView {
 
                                 // --- In-canvas X-axis tick labels ---
                                 // Centered below each tick, in the MARGIN_BOTTOM band.
+                                // Uses the pre-shaped lines from the width-measurement pass
+                                // above — no second shape_line call needed.
                                 let x_baseline_y = plot_y0 + plot_h + 10.0;
 
-                                for tick in x_ticks_dynamic
-                                    .iter()
-                                    .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
-                                {
-                                    let value = tick.value;
-                                    let label = SharedString::from(tick.label.clone());
-                                    let sx = data_to_screen_x(value);
-                                    let run = TextRun {
-                                        len: label.len(),
-                                        font: tick_font.clone(),
-                                        color: tick_color,
-                                        background_color: None,
-                                        underline: None,
-                                        strikethrough: None,
-                                    };
-                                    let shaped = window.text_system().shape_line(
-                                        label.clone(),
-                                        tick_size,
-                                        &[run],
-                                        None,
-                                    );
+                                for (value, shaped) in &shaped_x_labels {
+                                    let sx = data_to_screen_x(*value);
                                     let label_w = f32::from(shaped.width);
                                     let label_x = sx - label_w / 2.0;
                                     let _ = shaped.paint(
@@ -3207,5 +3259,64 @@ mod tests {
 
         let view = ChartView::build(&result, spec).expect("build with Pie kind must not fail");
         assert_eq!(view.kind(), crate::chart::spec::ChartKind::Pie);
+    }
+
+    // ---------------------------------------------------------------------------
+    // T-PAD: effective_x_label_padding — unit tests (TDD cycle 1 RED → 2 GREEN)
+    // ---------------------------------------------------------------------------
+
+    mod padding_tests {
+        use super::*;
+
+        /// Empty label_widths: both pads equal their floor constants. Covers REQ-003, REQ-004.
+        #[test]
+        fn padding_empty_input() {
+            let (left, right) = effective_x_label_padding(&[], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, MARGIN_RIGHT);
+        }
+
+        /// Narrow label (half-width < both margins): floors apply. Covers REQ-003 floor.
+        #[test]
+        fn padding_narrow_labels() {
+            let (left, right) = effective_x_label_padding(&[20.0], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, MARGIN_RIGHT);
+        }
+
+        /// Wide label that inflates right but not left (80/2=40 > MARGIN_RIGHT=16, < MARGIN_LEFT=50).
+        /// Covers REQ-001.
+        #[test]
+        fn padding_wide_right() {
+            let (left, right) = effective_x_label_padding(&[80.0], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, 40.0);
+        }
+
+        /// Very wide label (120/2=60) inflates both pads. Covers REQ-002.
+        #[test]
+        fn padding_wide_triggers_left() {
+            let (left, right) = effective_x_label_padding(&[120.0], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, 60.0);
+            assert_eq!(right, 60.0);
+        }
+
+        /// Mixed widths: max is 80, so right inflates to 40; left stays at floor. Asymmetric case.
+        #[test]
+        fn padding_asymmetric_mix() {
+            let (left, right) = effective_x_label_padding(&[20.0, 80.0], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, 40.0);
+        }
+
+        /// Label width exactly 2 * MARGIN_RIGHT (= 32.0): half = 16.0 == MARGIN_RIGHT, no expansion.
+        /// Covers the boundary edge / floor equality.
+        #[test]
+        fn padding_exactly_at_floor() {
+            let width = MARGIN_RIGHT * 2.0;
+            let (left, right) = effective_x_label_padding(&[width], MARGIN_LEFT, MARGIN_RIGHT);
+            assert_eq!(left, MARGIN_LEFT);
+            assert_eq!(right, MARGIN_RIGHT);
+        }
     }
 }
