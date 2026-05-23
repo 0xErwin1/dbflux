@@ -1207,24 +1207,15 @@ impl CodeDocument {
         // is, the picker + hour/minute dropdowns + Apply button are rendered
         // on a dedicated second row so they don't overflow the bar width.
         // Hidden in Chart mode (chart toolbar covers the range selection).
+        // Tuple shrunk to (panel_entity, can_apply) — the helper owns the
+        // individual sub-entity references via render_custom_picker_row.
         let custom_range_info = (!is_chart_mode)
             .then_some(())
             .and(self.source_time_range_panel.as_ref())
             .and_then(|p| {
                 let panel = p.read(cx);
                 let is_custom = panel.selected_time_range == Some(TimeRange::Custom);
-
-                is_custom.then(|| {
-                    (
-                        p.clone(),
-                        panel.custom_date_range_picker.clone(),
-                        panel.custom_start_hour_dropdown.clone(),
-                        panel.custom_start_minute_dropdown.clone(),
-                        panel.custom_end_hour_dropdown.clone(),
-                        panel.custom_end_minute_dropdown.clone(),
-                        panel.can_apply_custom_range(cx),
-                    )
-                })
+                is_custom.then(|| (p.clone(), panel.can_apply_custom_range(cx)))
             });
 
         // Build the primary (always-visible) controls row.
@@ -1434,57 +1425,31 @@ impl CodeDocument {
             // Custom date-range second row — only visible when Custom is active.
             // This avoids overflowing the single-line bar with the date picker,
             // four time dropdowns, and Apply button all pushed onto one row.
-            .when_some(
-                custom_range_info,
-                |el,
-                 (
-                    panel,
-                    date_picker,
-                    start_hour,
-                    start_minute,
-                    end_hour,
-                    end_minute,
-                    can_apply,
-                )| {
-                    el.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .pt(Spacing::XS)
-                            .child(
-                                div().w(px(320.0)).child(control_shell(
-                                    DatePicker::new(&date_picker)
-                                        .small()
-                                        .placeholder("Select date range")
-                                        .number_of_months(2),
-                                    cx,
-                                )),
-                            )
-                            .child(Text::caption("from"))
-                            .child(div().w(px(72.0)).child(control_shell(start_hour, cx)))
-                            .child(div().w(px(72.0)).child(control_shell(start_minute, cx)))
-                            .child(Text::caption("to"))
-                            .child(div().w(px(72.0)).child(control_shell(end_hour, cx)))
-                            .child(div().w(px(72.0)).child(control_shell(end_minute, cx)))
-                            .child(
-                                Button::new("ctx-time-range-apply", "Apply")
-                                    .small()
-                                    .disabled(!can_apply)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        panel.update(cx, |p, cx| {
-                                            // Ignore the returned bounds — the panel emits
-                                            // TimeRangeChanged which is the authoritative signal.
-                                            let _ = p.apply_custom_range(cx);
-                                        });
-                                        this.sync_source_exec_context(cx);
-                                        cx.emit(DocumentEvent::MetaChanged);
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                },
-            )
+            .when_some(custom_range_info, |el, (panel, can_apply)| {
+                el.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .pt(Spacing::XS)
+                        .child(panel.read(cx).render_custom_picker_row(px(320.0), cx))
+                        .child(
+                            Button::new("ctx-time-range-apply", "Apply")
+                                .small()
+                                .disabled(!can_apply)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    panel.update(cx, |p, cx| {
+                                        // Ignore the returned bounds — the panel emits
+                                        // TimeRangeChanged which is the authoritative signal.
+                                        let _ = p.apply_custom_range(cx);
+                                    });
+                                    this.sync_source_exec_context(cx);
+                                    cx.emit(DocumentEvent::MetaChanged);
+                                    cx.notify();
+                                })),
+                        ),
+                )
+            })
             .into_any_element()
     }
 }
