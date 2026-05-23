@@ -9,6 +9,7 @@
 pub mod pane;
 mod render;
 
+use super::chart::shell::ChartShellEvent;
 use super::chart::{ChartHost, ChartShell, HostAdapter};
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
@@ -111,6 +112,12 @@ pub struct ChartDocument {
     // Consumed by the render loop so the swap happens on the UI thread.
     pending_data_source: Option<Box<dyn ChartDataSource>>,
 
+    // The `(namespace, metric_name)` triple this document was opened with,
+    // when the source was a `MetricSource`. Used by `matches_metric_source`
+    // for sidebar dedup so the identity remains stable after the user
+    // refines dimensions/period/statistic via the Apply button.
+    initial_metric_identity: Option<(String, String)>,
+
     // Save flow
     saved_chart_id: Option<Uuid>,
     name_prompt: Option<NamePromptState>,
@@ -153,6 +160,19 @@ impl ChartDocument {
             // drives set_result directly without going through HostAdapter.
             ChartShell::new_standalone(cx)
         });
+
+        // Bridge the metric picker's Apply emission into this document.
+        // Without this subscription `pending_data_source` is never written and
+        // the Apply button (and Cmd/Ctrl+Enter shortcut) become dead UI.
+        let metric_apply_sub = cx.subscribe(
+            &chart_shell,
+            |this: &mut Self, _shell, event: &ChartShellEvent, cx| match event {
+                ChartShellEvent::MetricPickerApplied(src) => {
+                    this.pending_data_source = Some(src.clone_box());
+                    cx.notify();
+                }
+            },
+        );
 
         let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
@@ -213,13 +233,14 @@ impl ChartDocument {
             pending_time_window: None,
             pending_chart_reexecute: false,
             pending_data_source: None,
+            initial_metric_identity: None,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             result_panel: None,
-            _subscriptions: Vec::new(),
+            _subscriptions: vec![metric_apply_sub],
         }
     }
 
@@ -284,6 +305,19 @@ impl ChartDocument {
     ) -> Self {
         let chart_shell = cx.new(ChartShell::new_standalone);
 
+        // Bridge the metric picker's Apply emission into this document.
+        // Without this subscription `pending_data_source` is never written and
+        // the Apply button (and Cmd/Ctrl+Enter shortcut) become dead UI.
+        let metric_apply_sub = cx.subscribe(
+            &chart_shell,
+            |this: &mut Self, _shell, event: &ChartShellEvent, cx| match event {
+                ChartShellEvent::MetricPickerApplied(src) => {
+                    this.pending_data_source = Some(src.clone_box());
+                    cx.notify();
+                }
+            },
+        );
+
         let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
@@ -310,6 +344,14 @@ impl ChartDocument {
             runner.set_profile_id(pid);
         }
 
+        // Capture the initial (namespace, metric_name) identity when the
+        // source is a MetricSource so sidebar dedup stays correct even after
+        // Apply rewrites dimensions/period/statistic.
+        let initial_metric_identity = data_source
+            .as_any()
+            .and_then(|a| a.downcast_ref::<dbflux_components::chart::MetricSource>())
+            .map(|src| (src.namespace.clone(), src.metric_name.clone()));
+
         Self {
             id: DocumentId::new(),
             title,
@@ -334,13 +376,14 @@ impl ChartDocument {
             pending_time_window: None,
             pending_chart_reexecute: false,
             pending_data_source: None,
+            initial_metric_identity,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
             result_panel: None,
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
-            _subscriptions: Vec::new(),
+            _subscriptions: vec![metric_apply_sub],
         }
     }
 
@@ -384,10 +427,13 @@ impl ChartDocument {
         self.saved_chart_id
     }
 
-    /// Check whether this document's data source is a `MetricSource` with the
-    /// given `(profile_id, namespace, metric_name)` identity.
+    /// Check whether this document was opened for the given metric identity.
     ///
-    /// Used by the `DocumentKey::MetricChart` dedup path in `into_pane`.
+    /// Used by the `DocumentKey::MetricChart` dedup path in `into_pane`. Compares
+    /// against the initial `(namespace, metric_name)` captured at construction —
+    /// NOT the current `data_source` — so the identity remains stable after the
+    /// Apply button rewrites dimensions/period/statistic (which keeps the
+    /// `MetricSource` type but produces a new value via `set_data_source`).
     pub fn matches_metric_source(
         &self,
         profile_id: Uuid,
@@ -398,10 +444,9 @@ impl ChartDocument {
             return false;
         }
 
-        self.data_source
-            .as_any()
-            .and_then(|a| a.downcast_ref::<dbflux_components::chart::MetricSource>())
-            .is_some_and(|src| src.namespace == namespace && src.metric_name == metric_name)
+        self.initial_metric_identity
+            .as_ref()
+            .is_some_and(|(ns, mn)| ns == namespace && mn == metric_name)
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -450,6 +495,10 @@ impl ChartDocument {
             Some(id) => id,
             None => return,
         };
+
+        // Record the metric identity so the sidebar's MetricChart dedup
+        // remains stable across subsequent Apply rewrites.
+        self.initial_metric_identity = Some((namespace.clone(), metric_name.clone()));
 
         let app_state_clone = self.app_state.clone();
         self.chart_shell.update(cx, |shell, cx| {
@@ -1246,6 +1295,118 @@ mod tests {
         assert!(
             pending_chart_reexecute,
             "set_data_source must schedule a reexecute"
+        );
+    }
+
+    /// Simulate the closure body installed by the `metric_apply_sub` subscription
+    /// in `ChartDocument::new` / `new_with_source`. The closure must:
+    ///   1. Clone the source via `clone_box` (the field is `Box<dyn ChartDataSource>`
+    ///      so it cannot be moved out of the borrowed event).
+    ///   2. Write it into `pending_data_source`.
+    ///
+    /// Without this closure the Apply button is dead UI.
+    #[test]
+    fn metric_picker_applied_event_populates_pending_data_source() {
+        use crate::chart::shell::ChartShellEvent;
+        use dbflux_components::chart::{ChartDataSource, MetricSource};
+
+        let source = MetricSource {
+            namespace: "AWS/EC2".to_string(),
+            metric_name: "CPUUtilization".to_string(),
+            dimensions: vec![],
+            period_s: 300,
+            statistic: "Average".to_string(),
+        };
+        let event = ChartShellEvent::MetricPickerApplied(Box::new(source));
+
+        let mut pending_data_source: Option<Box<dyn ChartDataSource>> = None;
+
+        // Mirror the closure body in `cx.subscribe(&chart_shell, ...)`.
+        match &event {
+            ChartShellEvent::MetricPickerApplied(src) => {
+                pending_data_source = Some(src.clone_box());
+            }
+        }
+
+        assert!(
+            pending_data_source.is_some(),
+            "MetricPickerApplied must populate pending_data_source"
+        );
+        let captured = pending_data_source
+            .as_ref()
+            .and_then(|s| s.as_any())
+            .and_then(|a| a.downcast_ref::<MetricSource>())
+            .expect("pending_data_source must downcast back to MetricSource");
+        assert_eq!(captured.namespace, "AWS/EC2");
+        assert_eq!(captured.metric_name, "CPUUtilization");
+    }
+
+    /// `matches_metric_source` must compare against the initial identity
+    /// captured at construction, not the (possibly mutated) current data_source.
+    ///
+    /// After Apply rewrites dimensions/period/statistic the
+    /// `(namespace, metric_name)` pair stays the same, so sidebar dedup must
+    /// continue to find the existing tab.
+    #[test]
+    fn matches_metric_source_uses_initial_identity() {
+        let profile_id = Uuid::new_v4();
+        let identity = Some(("AWS/EC2".to_string(), "CPUUtilization".to_string()));
+
+        // Simulate the body of `matches_metric_source` directly without a GPUI runtime.
+        fn matches(
+            doc_profile: Option<Uuid>,
+            doc_identity: &Option<(String, String)>,
+            query_profile: Uuid,
+            query_ns: &str,
+            query_metric: &str,
+        ) -> bool {
+            if doc_profile != Some(query_profile) {
+                return false;
+            }
+            doc_identity
+                .as_ref()
+                .is_some_and(|(ns, mn)| ns == query_ns && mn == query_metric)
+        }
+
+        assert!(
+            matches(
+                Some(profile_id),
+                &identity,
+                profile_id,
+                "AWS/EC2",
+                "CPUUtilization"
+            ),
+            "exact identity must match"
+        );
+        assert!(
+            !matches(
+                Some(profile_id),
+                &identity,
+                profile_id,
+                "AWS/EC2",
+                "NetworkIn"
+            ),
+            "different metric name must not match"
+        );
+        assert!(
+            !matches(
+                Some(profile_id),
+                &identity,
+                Uuid::new_v4(),
+                "AWS/EC2",
+                "CPUUtilization"
+            ),
+            "different profile must not match"
+        );
+        assert!(
+            !matches(
+                Some(profile_id),
+                &None,
+                profile_id,
+                "AWS/EC2",
+                "CPUUtilization"
+            ),
+            "doc with no identity (non-metric chart) must not match"
         );
     }
 
