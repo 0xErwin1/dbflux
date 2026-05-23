@@ -1276,18 +1276,17 @@ mod tests {
     /// replicating the flag-set that `set_data_source` performs.
     #[test]
     fn set_data_source_replaces_data_source_and_schedules_reexecute() {
-        use dbflux_components::chart::{ChartSourceDescription, EmptyChartSource};
+        use dbflux_components::chart::ChartSourceDescription;
 
-        // Simulate the state changes that set_data_source performs.
-        let new_source: Box<dyn dbflux_components::chart::ChartDataSource> =
-            Box::new(EmptyChartSource);
-        let description = new_source.describe();
-
-        // A source with no display title leaves the title unchanged.
+        // A source whose description carries no display title must NOT
+        // overwrite the document title. We exercise this by constructing the
+        // empty description directly — set_data_source's title-update branch
+        // reads only `description.display_title()`.
+        let description = ChartSourceDescription::empty();
         let title_update: Option<String> = description.display_title();
         assert!(
             title_update.is_none(),
-            "EmptyChartSource has no display title; title must not be overwritten"
+            "ChartSourceDescription::empty() must have no display title; title must not be overwritten"
         );
 
         // Simulate the reexecute-flag set: set_data_source always enables it.

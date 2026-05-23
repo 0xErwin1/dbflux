@@ -145,8 +145,8 @@ pub struct ChartSourceDescription {
 }
 
 impl ChartSourceDescription {
-    /// Returns a description with no information — used by sentinel sources
-    /// such as `EmptyChartSource` that carry no displayable metadata.
+    /// Returns a description with no information — used when a source has
+    /// no displayable metadata.
     pub fn empty() -> Self {
         Self { title: None }
     }
@@ -207,8 +207,8 @@ pub trait ChartDataSource: Send + 'static {
     /// without requiring the user to type or confirm a query.
     ///
     /// `MetricSource` returns `true`: clicking a metric leaf auto-runs the chart.
-    /// `QuerySource` and `EmptyChartSource` return `false` (default) because
-    /// the chart stays idle until the user provides a query or presses Run.
+    /// `QuerySource` returns `false` (default) because the chart stays idle
+    /// until the user provides a query or presses Run.
     ///
     /// Used by render code to select the appropriate empty-state copy:
     /// - `is_self_executing() == true` + idle/empty → "No data points for the selected window"
@@ -430,36 +430,6 @@ impl ChartDataSource for AuditSource {
         }
 
         Ok(ChartDataPlan::LocalAudit(spec))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// EmptyChartSource
-// ---------------------------------------------------------------------------
-
-/// Sentinel source used when `ChartDocument` has no real data source yet.
-///
-/// `build_plan` always returns `Err(ChartSourceError::EmptyQuery)`, which is
-/// already silently handled by `ChartDocument::request_reexecute` at the
-/// `EmptyQuery` short-circuit path — no query is executed and no error is
-/// surfaced to the user.
-///
-/// Using a sentinel rather than `Option<Box<dyn ChartDataSource>>` keeps the
-/// ~6 call sites that reference `data_source` free from `Option`-unwrapping
-/// boilerplate.
-pub struct EmptyChartSource;
-
-impl ChartDataSource for EmptyChartSource {
-    fn clone_box(&self) -> Box<dyn ChartDataSource> {
-        Box::new(EmptyChartSource)
-    }
-
-    fn describe(&self) -> ChartSourceDescription {
-        ChartSourceDescription::empty()
-    }
-
-    fn build_plan(&self, _window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
-        Err(ChartSourceError::EmptyQuery)
     }
 }
 
@@ -956,51 +926,6 @@ mod tests {
         };
     }
 
-    // --- Phase 2: EmptyChartSource + clone_box (TDD RED) ---
-
-    /// EmptyChartSource::build_plan must return EmptyQuery regardless of window.
-    #[test]
-    fn empty_chart_source_build_plan_returns_empty_query() {
-        let src = EmptyChartSource;
-        let result = src.build_plan(None);
-
-        assert!(
-            matches!(result, Err(ChartSourceError::EmptyQuery)),
-            "EmptyChartSource must return EmptyQuery, got: {:?}",
-            result
-        );
-    }
-
-    /// EmptyChartSource::build_plan returns EmptyQuery even when a window is supplied.
-    #[test]
-    fn empty_chart_source_build_plan_with_window_returns_empty_query() {
-        let src = EmptyChartSource;
-        let window = TimeWindow {
-            start_ms: 1_000,
-            end_ms: 2_000,
-        };
-        let result = src.build_plan(Some(window));
-
-        assert!(
-            matches!(result, Err(ChartSourceError::EmptyQuery)),
-            "EmptyChartSource with window must still return EmptyQuery, got: {:?}",
-            result
-        );
-    }
-
-    /// EmptyChartSource::clone_box must produce a usable Box<dyn ChartDataSource>.
-    #[test]
-    fn empty_chart_source_clone_box_produces_usable_source() {
-        let original = EmptyChartSource;
-        let cloned = original.clone_box();
-
-        // The clone must also return EmptyQuery.
-        assert!(
-            matches!(cloned.build_plan(None), Err(ChartSourceError::EmptyQuery)),
-            "cloned EmptyChartSource must also return EmptyQuery"
-        );
-    }
-
     // ---- T17.1: is_self_executing ----
 
     /// T17.1: `MetricSource::is_self_executing` must return `true`.
@@ -1016,16 +941,6 @@ mod tests {
         assert!(
             src.is_self_executing(),
             "MetricSource must report is_self_executing() == true"
-        );
-    }
-
-    /// T17.1: `EmptyChartSource::is_self_executing` must return `false` (default).
-    #[test]
-    fn empty_chart_source_is_not_self_executing() {
-        let src = EmptyChartSource;
-        assert!(
-            !src.is_self_executing(),
-            "EmptyChartSource must report is_self_executing() == false"
         );
     }
 
