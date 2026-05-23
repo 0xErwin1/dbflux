@@ -10,10 +10,12 @@
 //! still reference them in `FilterBarItem` lists for keyboard navigation.
 
 use crate::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use crate::primitives::Text;
 use gpui::prelude::*;
 use gpui::{App, Entity, EventEmitter, Subscription, Window};
+use gpui_component::Sizable;
 use gpui_component::calendar::Date;
-use gpui_component::date_picker::{DatePickerEvent, DatePickerState};
+use gpui_component::date_picker::{DatePicker, DatePickerEvent, DatePickerState};
 
 use super::state::{TimeRange, TimestampDisplayMode, validate_custom_range_parts};
 
@@ -351,13 +353,128 @@ impl TimeRangePanel {
 
         Ok((start_ms, end_ms))
     }
+
+    /// Returns the individual sub-elements of the custom picker row as a struct.
+    ///
+    /// Each element is pre-sized (date picker at `date_picker_width`, time
+    /// dropdowns at `px(72)`) but NOT wrapped with outer chrome (ring borders,
+    /// background, padding) — callers compose them into a row with whatever
+    /// decoration they need.
+    ///
+    /// Use this when per-slot decoration is required (e.g. audit's keyboard-focus
+    /// ring guards that wrap each individual control). Use `render_custom_picker_row`
+    /// when the standard gap-1 flex row layout suffices.
+    ///
+    /// Both APIs render the same underlying sub-entities: `render_custom_picker_row`
+    /// calls this method internally and assembles the result into the standard row.
+    pub fn custom_picker_slots(
+        &self,
+        date_picker_width: gpui::Pixels,
+        _cx: &gpui::App,
+    ) -> CustomPickerSlots {
+        use gpui::{div, px};
+
+        CustomPickerSlots {
+            date_picker: div()
+                .w(date_picker_width)
+                .child(
+                    DatePicker::new(&self.custom_date_range_picker)
+                        .small()
+                        .placeholder("Select date range")
+                        .number_of_months(2),
+                )
+                .into_any_element(),
+            from_label: Text::caption("from").into_any_element(),
+            start_hour: div()
+                .w(px(72.0))
+                .child(self.custom_start_hour_dropdown.clone())
+                .into_any_element(),
+            start_minute: div()
+                .w(px(72.0))
+                .child(self.custom_start_minute_dropdown.clone())
+                .into_any_element(),
+            to_label: Text::caption("to").into_any_element(),
+            end_hour: div()
+                .w(px(72.0))
+                .child(self.custom_end_hour_dropdown.clone())
+                .into_any_element(),
+            end_minute: div()
+                .w(px(72.0))
+                .child(self.custom_end_minute_dropdown.clone())
+                .into_any_element(),
+        }
+    }
+
+    /// Render the shared custom date+time picker row used by chart and code hosts
+    /// when the user has selected the Custom preset.
+    ///
+    /// Returns a flex row containing: the date-range picker at `date_picker_width`,
+    /// a "from" label, start-hour dropdown, start-minute dropdown, a "to" label,
+    /// end-hour dropdown, and end-minute dropdown.
+    ///
+    /// Does NOT include an Apply button — each host owns its own Apply because the
+    /// component type, disabled visuals, and side-effect chain differ between hosts.
+    ///
+    /// Does NOT include outer chrome (border, background, padding) — callers are
+    /// responsible for wrapping with their own container styling.
+    ///
+    /// `date_picker_width` is parameterized because chart uses `px(260)` and code
+    /// uses `px(320)`. Standardizing is a visible change and out of scope for this
+    /// refactor. The `_cx` parameter is reserved for future theme-aware tweaks.
+    ///
+    /// Internally delegates to `custom_picker_slots` so both APIs render the same
+    /// sub-elements with guaranteed structural parity.
+    pub fn render_custom_picker_row(
+        &self,
+        date_picker_width: gpui::Pixels,
+        cx: &gpui::App,
+    ) -> impl gpui::IntoElement {
+        use gpui::div;
+
+        let slots = self.custom_picker_slots(date_picker_width, cx);
+
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(slots.date_picker)
+            .child(slots.from_label)
+            .child(slots.start_hour)
+            .child(slots.start_minute)
+            .child(slots.to_label)
+            .child(slots.end_hour)
+            .child(slots.end_minute)
+    }
+}
+
+/// Individual picker elements returned by [`TimeRangePanel::custom_picker_slots`].
+///
+/// Hosts that need per-slot decoration (e.g. audit's keyboard-focus ring guards)
+/// receive each element separately and compose them into a row. All elements
+/// are pre-sized but carry no outer chrome.
+pub struct CustomPickerSlots {
+    /// Date-range picker at the caller-specified width.
+    pub date_picker: gpui::AnyElement,
+    /// The "from" label between the date picker and start-time dropdowns.
+    pub from_label: gpui::AnyElement,
+    /// Start-hour dropdown at `px(72)`.
+    pub start_hour: gpui::AnyElement,
+    /// Start-minute dropdown at `px(72)`.
+    pub start_minute: gpui::AnyElement,
+    /// The "to" label between start and end dropdowns.
+    pub to_label: gpui::AnyElement,
+    /// End-hour dropdown at `px(72)`.
+    pub end_hour: gpui::AnyElement,
+    /// End-minute dropdown at `px(72)`.
+    pub end_minute: gpui::AnyElement,
 }
 
 impl EventEmitter<TimeRangeChanged> for TimeRangePanel {}
 
 #[cfg(test)]
 mod tests {
-    use super::{TimeRange, TimeRangePanel};
+    use super::{TimeRange, TimeRangeChanged, TimeRangePanel};
+    use gpui::prelude::*;
 
     #[test]
     fn preset_index_maps_to_correct_range_variant() {
@@ -474,5 +591,176 @@ mod tests {
                 "index {index} must not be Custom"
             );
         }
+    }
+
+    // ── render_custom_picker_row TDD tests ────────────────────────────────────
+    //
+    // These tests verify the render helper contract:
+    //   - Returns an element that converts to `AnyElement` without panicking.
+    //   - Does not emit `TimeRangeChanged` or mutate panel state.
+    //   - Sub-entity handles are stable across repeated calls.
+    //
+    // The helper requires a constructed `TimeRangePanel`, which in turn requires
+    // a `&mut Window`. We use `#[gpui::test]` with `cx.add_window_view` and a
+    // minimal `Render` harness, since `TimeRangePanel` does not implement `Render`.
+
+    /// Minimal window harness so tests can open a window in dbflux_components
+    /// without importing dbflux_ui's `Root` type.
+    struct PanelHarness {
+        #[allow(dead_code)]
+        panel: gpui::Entity<TimeRangePanel>,
+    }
+
+    impl gpui::Render for PanelHarness {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    /// Smoke test: `render_custom_picker_row` returns an element that can be
+    /// converted to `AnyElement` without panicking.
+    ///
+    /// Satisfies REQ-1, SCEN-7.
+    #[gpui::test]
+    fn render_custom_picker_row_returns_element(cx: &mut gpui::TestAppContext) {
+        use gpui::px;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let panel_ref: Rc<RefCell<Option<gpui::Entity<TimeRangePanel>>>> =
+            Rc::new(RefCell::new(None));
+
+        let (_, window) = cx.add_window_view({
+            let panel_ref = panel_ref.clone();
+            move |window, cx| {
+                let panel = cx.new(|cx| TimeRangePanel::new("Select range", None, window, cx));
+                panel_ref.replace(Some(panel.clone()));
+                PanelHarness { panel }
+            }
+        });
+
+        let panel = panel_ref.borrow().clone().expect("panel must be created");
+
+        window.update(|_, app| {
+            let element = panel.read(app).render_custom_picker_row(px(260.0), app);
+            // Converting to AnyElement must not panic — pins that the method exists
+            // and its return type implements IntoElement.
+            let _ = element.into_any_element();
+        });
+    }
+
+    /// `render_custom_picker_row` must not emit `TimeRangeChanged` and must not
+    /// mutate `selected_time_range`.
+    ///
+    /// Satisfies REQ-5 (event contract), SCEN-7.
+    #[gpui::test]
+    fn render_custom_picker_row_is_render_only(cx: &mut gpui::TestAppContext) {
+        use gpui::px;
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        let panel_ref: Rc<RefCell<Option<gpui::Entity<TimeRangePanel>>>> =
+            Rc::new(RefCell::new(None));
+        let event_count = Rc::new(Cell::new(0u32));
+
+        let (_, window) = cx.add_window_view({
+            let panel_ref = panel_ref.clone();
+            let event_count = event_count.clone();
+            move |window, cx| {
+                let panel = cx.new(|cx| TimeRangePanel::new("Select range", None, window, cx));
+                panel_ref.replace(Some(panel.clone()));
+
+                // Subscribe to TimeRangeChanged before the helper is called.
+                let _sub = cx.subscribe(&panel, {
+                    let event_count = event_count.clone();
+                    move |_this, _, _event: &TimeRangeChanged, _cx| {
+                        event_count.set(event_count.get() + 1);
+                    }
+                });
+
+                PanelHarness { panel }
+            }
+        });
+
+        let panel = panel_ref.borrow().clone().expect("panel must be created");
+
+        window.update(|_, app| {
+            let selected_before = panel.read(app).selected_time_range;
+            let element = panel.read(app).render_custom_picker_row(px(260.0), app);
+            let _ = element.into_any_element();
+            let selected_after = panel.read(app).selected_time_range;
+
+            assert_eq!(
+                selected_before, selected_after,
+                "render_custom_picker_row must not mutate selected_time_range"
+            );
+        });
+
+        // No events should have been emitted during the helper call.
+        assert_eq!(
+            event_count.get(),
+            0,
+            "render_custom_picker_row must not emit TimeRangeChanged"
+        );
+    }
+
+    /// Sub-entity handles are stable across two consecutive calls to the helper.
+    ///
+    /// Satisfies REQ-4.
+    #[gpui::test]
+    fn render_custom_picker_row_does_not_mutate_sub_entities(cx: &mut gpui::TestAppContext) {
+        use gpui::px;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let panel_ref: Rc<RefCell<Option<gpui::Entity<TimeRangePanel>>>> =
+            Rc::new(RefCell::new(None));
+
+        let (_, window) = cx.add_window_view({
+            let panel_ref = panel_ref.clone();
+            move |window, cx| {
+                let panel = cx.new(|cx| TimeRangePanel::new("Select range", None, window, cx));
+                panel_ref.replace(Some(panel.clone()));
+                PanelHarness { panel }
+            }
+        });
+
+        let panel = panel_ref.borrow().clone().expect("panel must be created");
+
+        window.update(|_, app| {
+            // Capture entity IDs before calling the helper.
+            let (picker_id, sh_id, sm_id, eh_id, em_id) = {
+                let p = panel.read(app);
+                (
+                    p.custom_date_range_picker.entity_id(),
+                    p.custom_start_hour_dropdown.entity_id(),
+                    p.custom_start_minute_dropdown.entity_id(),
+                    p.custom_end_hour_dropdown.entity_id(),
+                    p.custom_end_minute_dropdown.entity_id(),
+                )
+            };
+
+            // Call the helper twice with different widths.
+            let _ = panel
+                .read(app)
+                .render_custom_picker_row(px(260.0), app)
+                .into_any_element();
+            let _ = panel
+                .read(app)
+                .render_custom_picker_row(px(320.0), app)
+                .into_any_element();
+
+            // Sub-entity handles must be unchanged (cloned, not replaced).
+            let p = panel.read(app);
+            assert_eq!(p.custom_date_range_picker.entity_id(), picker_id);
+            assert_eq!(p.custom_start_hour_dropdown.entity_id(), sh_id);
+            assert_eq!(p.custom_start_minute_dropdown.entity_id(), sm_id);
+            assert_eq!(p.custom_end_hour_dropdown.entity_id(), eh_id);
+            assert_eq!(p.custom_end_minute_dropdown.entity_id(), em_id);
+        });
     }
 }

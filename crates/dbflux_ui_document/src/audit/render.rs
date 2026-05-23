@@ -313,63 +313,53 @@ impl AuditDocument {
                 this.apply_custom_time_range(cx);
             }));
 
+        // Obtain individual picker elements from the shared panel so the audit
+        // render and other hosts stay structurally aligned.  Ring-guard wrappers
+        // are applied per-slot here to preserve the keyboard-focus indicators
+        // that audit requires for its FilterBar navigation.
+        let slots = self
+            .time_range_panel
+            .read(cx)
+            .custom_picker_slots(px(260.0), cx);
+
+        let ring_start = self.slot_has_ring(ToolbarSlot::CustomStart);
+        let ring_end = self.slot_has_ring(ToolbarSlot::CustomEnd);
+
         let custom_time_controls = div()
             .flex()
             .items_center()
             .gap_1()
             .child(
                 div()
-                    .w(px(260.0))
                     .rounded(Radii::SM)
-                    .when(self.slot_has_ring(ToolbarSlot::CustomStart), |d| {
-                        d.border_1().border_color(theme.ring)
-                    })
-                    .child(
-                        gpui_component::date_picker::DatePicker::new(
-                            &self.custom_date_range_picker,
-                        )
-                        .small()
-                        .placeholder("Select date range")
-                        .number_of_months(2),
-                    ),
+                    .when(ring_start, |d| d.border_1().border_color(theme.ring))
+                    .child(slots.date_picker),
             )
-            .child(Text::caption("from"))
+            .child(slots.from_label)
             .child(
                 div()
-                    .w(px(72.0))
                     .rounded(Radii::SM)
-                    .when(self.slot_has_ring(ToolbarSlot::CustomStart), |d| {
-                        d.border_1().border_color(theme.ring)
-                    })
-                    .child(self.custom_start_hour_dropdown.clone()),
+                    .when(ring_start, |d| d.border_1().border_color(theme.ring))
+                    .child(slots.start_hour),
             )
             .child(
                 div()
-                    .w(px(72.0))
                     .rounded(Radii::SM)
-                    .when(self.slot_has_ring(ToolbarSlot::CustomStart), |d| {
-                        d.border_1().border_color(theme.ring)
-                    })
-                    .child(self.custom_start_minute_dropdown.clone()),
+                    .when(ring_start, |d| d.border_1().border_color(theme.ring))
+                    .child(slots.start_minute),
             )
-            .child(Text::caption("to"))
+            .child(slots.to_label)
             .child(
                 div()
-                    .w(px(72.0))
                     .rounded(Radii::SM)
-                    .when(self.slot_has_ring(ToolbarSlot::CustomEnd), |d| {
-                        d.border_1().border_color(theme.ring)
-                    })
-                    .child(self.custom_end_hour_dropdown.clone()),
+                    .when(ring_end, |d| d.border_1().border_color(theme.ring))
+                    .child(slots.end_hour),
             )
             .child(
                 div()
-                    .w(px(72.0))
                     .rounded(Radii::SM)
-                    .when(self.slot_has_ring(ToolbarSlot::CustomEnd), |d| {
-                        d.border_1().border_color(theme.ring)
-                    })
-                    .child(self.custom_end_minute_dropdown.clone()),
+                    .when(ring_end, |d| d.border_1().border_color(theme.ring))
+                    .child(slots.end_minute),
             )
             .child(custom_apply_button);
 
