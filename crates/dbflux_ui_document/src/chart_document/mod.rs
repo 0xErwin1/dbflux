@@ -482,6 +482,19 @@ impl ChartDocument {
             }
         };
 
+        // Apply time-range macro substitution before dispatch. ChartDocument
+        // does not flow through `query_request_for_execution` in code/mod.rs,
+        // so we substitute here using the connection's declared QueryLanguage
+        // and the same window that drove the data-source plan. Without this,
+        // queries containing `$timeFilter` / `$__from` / `$__to` (InfluxQL) or
+        // `v.timeRangeStart` / `v.timeRangeStop` (Flux) would reach the driver
+        // unsubstituted and fail to parse.
+        let mut request = request;
+        let macro_window = self.pending_time_window;
+        let query_language = conn.metadata().query_language.clone();
+        request.sql =
+            dbflux_core::substitute_time_macros(&request.sql, macro_window, query_language);
+
         let (task_id, cancel_token) =
             self.runner
                 .start_primary(dbflux_core::TaskKind::Query, "Chart query", cx);

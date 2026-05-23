@@ -547,7 +547,12 @@ impl CodeDocument {
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
 
-        let request = query_request_for_execution(query.clone(), active_database, &self.exec_ctx);
+        let request = query_request_for_execution(
+            query.clone(),
+            active_database,
+            &self.exec_ctx,
+            self.query_language.clone(),
+        );
 
         // Capture audit_service, task_target, and started_at before spawning so we can emit
         // audit events even if the document is closed before the deferred task runs.
@@ -1801,7 +1806,7 @@ impl CodeDocument {
 mod tests {
     use super::query_request_for_execution;
     use crate::code::build_source_window_context;
-    use dbflux_core::{ExecutionContext, ExecutionSourceContext};
+    use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryLanguage};
     use uuid::Uuid;
 
     #[test]
@@ -1822,8 +1827,13 @@ mod tests {
             ),
         };
 
-        let request =
-            query_request_for_execution("fields @message".into(), Some("logs".into()), &exec_ctx);
+        // "fields @message" contains no macros; CloudWatchLogsInsightsQl passes through unchanged.
+        let request = query_request_for_execution(
+            "fields @message".into(),
+            Some("logs".into()),
+            &exec_ctx,
+            QueryLanguage::CloudWatchLogsInsightsQl,
+        );
 
         assert_eq!(request.database.as_deref(), Some("logs"));
 
@@ -1887,6 +1897,148 @@ mod tests {
             )
             .unwrap_err(),
             "Start time must be earlier than end time"
+        );
+    }
+
+    /// REQ-4: macro substitution fires when source is CollectionWindow + InfluxQL.
+    #[test]
+    fn influxql_macro_substituted_when_collection_window() {
+        let exec_ctx = ExecutionContext {
+            connection_id: None,
+            database: None,
+            schema: None,
+            container: None,
+            source: Some(
+                build_source_window_context(
+                    None,
+                    &["cpu".to_string()],
+                    Some(1_710_000_000_000),
+                    Some(1_710_003_600_000),
+                )
+                .expect("valid source"),
+            ),
+        };
+
+        let request = query_request_for_execution(
+            "SELECT mean(usage_user) FROM cpu WHERE $timeFilter GROUP BY time(1m)".into(),
+            None,
+            &exec_ctx,
+            QueryLanguage::InfluxQuery,
+        );
+
+        assert!(
+            request.sql.contains("time >="),
+            "time >= expected in: {}",
+            request.sql
+        );
+        assert!(
+            request.sql.contains("time <="),
+            "time <= expected in: {}",
+            request.sql
+        );
+        assert!(
+            !request.sql.contains("$timeFilter"),
+            "macro must be replaced, got: {}",
+            request.sql
+        );
+    }
+
+    /// REQ-4: Flux macro substitution fires when source is CollectionWindow + Flux.
+    #[test]
+    fn flux_macro_substituted_when_collection_window() {
+        let exec_ctx = ExecutionContext {
+            connection_id: None,
+            database: None,
+            schema: None,
+            container: None,
+            source: Some(
+                build_source_window_context(
+                    None,
+                    &["telegraf".to_string()],
+                    Some(1_710_000_000_000),
+                    Some(1_710_003_600_000),
+                )
+                .expect("valid source"),
+            ),
+        };
+
+        let request = query_request_for_execution(
+            "from(bucket: \"telegraf\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop)"
+                .into(),
+            None,
+            &exec_ctx,
+            QueryLanguage::Flux,
+        );
+
+        assert!(
+            !request.sql.contains("v.timeRangeStart"),
+            "v.timeRangeStart macro must be replaced, got: {}",
+            request.sql
+        );
+        assert!(
+            !request.sql.contains("v.timeRangeStop"),
+            "v.timeRangeStop macro must be replaced, got: {}",
+            request.sql
+        );
+        assert!(
+            request.sql.contains("'2024-03-09T16:00:00Z'"),
+            "start RFC3339 expected in: {}",
+            request.sql
+        );
+        assert!(
+            request.sql.contains("'2024-03-09T17:00:00Z'"),
+            "stop RFC3339 expected in: {}",
+            request.sql
+        );
+    }
+
+    /// REQ-6: macros are NOT substituted when no window is bound (source is None).
+    #[test]
+    fn macro_passthrough_when_no_window() {
+        let exec_ctx = ExecutionContext {
+            connection_id: None,
+            database: None,
+            schema: None,
+            container: None,
+            source: None,
+        };
+
+        let query = "SELECT * FROM cpu WHERE time >= $__from";
+        let request =
+            query_request_for_execution(query.into(), None, &exec_ctx, QueryLanguage::InfluxQuery);
+
+        assert_eq!(
+            request.sql, query,
+            "query must pass through unchanged when no window"
+        );
+    }
+
+    /// REQ-4: non-InfluxDB language passes through even with a CollectionWindow present.
+    #[test]
+    fn macro_passthrough_for_non_influx_language() {
+        let exec_ctx = ExecutionContext {
+            connection_id: None,
+            database: None,
+            schema: None,
+            container: None,
+            source: Some(
+                build_source_window_context(
+                    Some("sql".to_string()),
+                    &[],
+                    Some(1_710_000_000_000),
+                    Some(1_710_003_600_000),
+                )
+                .expect("valid source"),
+            ),
+        };
+
+        let query = "SELECT $__from FROM table";
+        let request =
+            query_request_for_execution(query.into(), None, &exec_ctx, QueryLanguage::Sql);
+
+        assert_eq!(
+            request.sql, query,
+            "SQL language must pass through unchanged"
         );
     }
 }
