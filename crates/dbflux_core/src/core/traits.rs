@@ -996,6 +996,15 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Return a reference to this connection's metric catalog, if supported.
+    ///
+    /// Drivers that implement `MetricCatalog` override this and return `Some(&self.catalog)`.
+    /// Drivers that do not support catalog browsing inherit this default and return `None`.
+    /// These drivers MUST NOT advertise `DriverCapabilities::METRIC_CATALOG`.
+    fn metric_catalog(&self) -> Option<&dyn crate::connection::metric_catalog::MetricCatalog> {
+        None
+    }
+
     /// Explain a query execution plan for a table or custom query.
     ///
     /// If `request.query` is `None`, explains a `SELECT * FROM table LIMIT 100`.

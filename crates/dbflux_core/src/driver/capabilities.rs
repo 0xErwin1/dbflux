@@ -509,6 +509,11 @@ bitflags! {
         /// metric data as a `QueryResult`. The UI uses this flag to gate the metrics
         /// chart entry point — no driver_id or category checks are needed.
         const METRIC_SERIES = 1 << 49;
+
+        /// Driver exposes a browsable metric catalog (namespaces + metrics +
+        /// dimensions) via the `MetricCatalog` trait accessor on `Connection`.
+        /// Independent from `METRIC_SERIES` — a driver MAY set one without the other.
+        const METRIC_CATALOG = 1 << 50;
     }
 }
 
@@ -2627,6 +2632,38 @@ mod tests {
         assert_eq!(all.len(), 7);
         for _variant in all {
             assert!(matches!(_variant, _));
+        }
+    }
+
+    // T-5: METRIC_CATALOG bit must equal exactly 1 << 50 and must be a power
+    // of two independent from METRIC_SERIES. Guards against accidental bit reuse.
+    #[test]
+    fn metric_catalog_capability_bit_value_and_unique() {
+        let bits = DriverCapabilities::METRIC_CATALOG.bits();
+
+        assert_eq!(bits, 1u64 << 50, "METRIC_CATALOG must equal 1 << 50");
+        assert_eq!(bits.count_ones(), 1, "METRIC_CATALOG must be a power of two");
+        assert_ne!(
+            bits,
+            DriverCapabilities::METRIC_SERIES.bits(),
+            "METRIC_CATALOG must not collide with METRIC_SERIES"
+        );
+
+        // Spot-check against a representative set of existing flags.
+        let collision_check = [
+            DriverCapabilities::MULTIPLE_DATABASES,
+            DriverCapabilities::METRIC_SERIES,
+            DriverCapabilities::TRANSACTIONAL_DDL,
+            DriverCapabilities::ROUTINES,
+            DriverCapabilities::MULTI_STATEMENT,
+        ];
+        for other in collision_check {
+            assert_ne!(
+                bits,
+                other.bits(),
+                "METRIC_CATALOG bit ({bits}) collides with another flag ({})",
+                other.bits()
+            );
         }
     }
 

@@ -2,6 +2,9 @@ pub(crate) mod context;
 pub(crate) mod hook;
 pub(crate) mod item_manager;
 pub mod manager;
+pub mod metric_catalog;
+
+pub use metric_catalog::{DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace};
 pub(crate) mod profile;
 pub mod profile_manager;
 pub(crate) mod proxy;
