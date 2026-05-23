@@ -1336,6 +1336,57 @@ impl DataGridPanel {
 
         let toolbar_row = render_chart_toolbar(ctx, handlers, cx);
 
+        // Custom date/time picker row — rendered between the chart toolbar and
+        // the AxisBar when the user has selected "Custom…" in the time-range
+        // preset dropdown. Allows adjusting the custom time window without
+        // leaving the CodeDocument's result chart view.
+        //
+        // The Apply button calls `panel.apply_custom_range`; the parent
+        // CodeDocument's `TimeRangeChanged` subscription handles re-execution.
+        let custom_picker_row: Option<AnyElement> = self
+            .chart_source_time_range_panel
+            .as_ref()
+            .and_then(|panel_entity| {
+                use dbflux_components::common::time_range::state::TimeRange;
+                use dbflux_components::controls::Button;
+
+                let panel = panel_entity.read(cx);
+                if panel.selected_time_range != Some(TimeRange::Custom) {
+                    return None;
+                }
+
+                let can_apply = panel.can_apply_custom_range(cx);
+                let picker_row = panel.render_custom_picker_row(px(320.0), cx);
+                let panel_clone = panel_entity.clone();
+
+                let row = div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .pt(Spacing::XS)
+                    .px(Spacing::SM)
+                    .py(Spacing::XS)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .bg(theme.tab_bar)
+                    .child(picker_row)
+                    .child(
+                        Button::new("data-grid-chart-time-range-apply", "Apply")
+                            .small()
+                            .disabled(!can_apply)
+                            .on_click(move |_, _, cx| {
+                                panel_clone.update(cx, |p, cx| {
+                                    // The returned bounds are intentionally discarded:
+                                    // the parent CodeDocument's TimeRangeChanged
+                                    // subscription drives re-execution.
+                                    let _ = p.apply_custom_range(cx);
+                                });
+                            }),
+                    );
+
+                Some(row.into_any_element())
+            });
+
         // AxisBar row: shown below the main toolbar when a chart view is live.
         // Reads bindings and open-pill state from the shell.
         let (bindings, open_pill, columns) = self
@@ -1425,6 +1476,7 @@ impl DataGridPanel {
             .border_b_1()
             .border_color(theme.border)
             .child(toolbar_row)
+            .when_some(custom_picker_row, |el, row| el.child(row))
             .child(
                 div()
                     .flex()
