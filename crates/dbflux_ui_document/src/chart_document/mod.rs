@@ -476,10 +476,31 @@ impl ChartDocument {
         doc.pending_run_on_first_render = false;
 
         // Open the Metric rail tab immediately so the picker is visible on load.
-        doc.chart_shell.update(cx, |shell, _cx| {
-            shell.chart_rail_tab = super::chart::ChartRailTab::Metric;
-            shell.chart_rail_open = true;
+        // Also initialize the MetricPickerState so the first render can start
+        // namespace fetching without an extra round-trip through shell.update.
+        let app_state_clone = doc.app_state.clone();
+        doc.chart_shell.update(cx, |shell, cx| {
+            shell.set_initial_rail(super::chart::ChartRailTab::Metric, true);
+            shell.metric_picker = Some(super::chart::metric_picker::MetricPickerState::new(
+                profile_id,
+                app_state_clone,
+                cx,
+            ));
         });
+
+        // Subscribe to MetricPickerApplied so the document can swap its source.
+        // The subscription stores the new source in pending_data_source and requests
+        // a render; the render loop calls set_data_source with a Window reference.
+        let sub = cx.subscribe(
+            &doc.chart_shell,
+            |this: &mut Self, _shell, event: &super::chart::shell::ChartShellEvent, _cx| {
+                use super::chart::shell::ChartShellEvent;
+                let ChartShellEvent::MetricPickerApplied(src) = event;
+                this.pending_data_source = Some(src.clone_box());
+                this.pending_chart_reexecute = true;
+            },
+        );
+        doc._subscriptions.push(sub);
 
         doc
     }
