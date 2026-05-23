@@ -3820,6 +3820,17 @@ impl Sidebar {
                     cx.emit(AppStateChanged);
                     cx.notify();
                 });
+                // Cancel in-flight metric catalog fetches for this profile so
+                // that stale data from a previous account cannot land in the
+                // cache after invalidation (e.g. if the user reconnects the
+                // same profile_id to a different AWS account). Dropping the
+                // Task handle abandons the await.
+                sidebar.update(cx, |sidebar, _cx| {
+                    sidebar.pending_metric_namespace_fetches.remove(&profile_id);
+                    sidebar
+                        .pending_metric_fetches
+                        .retain(|(pid, _ns), _task| *pid != profile_id);
+                });
             }) {
                 log::warn!(
                     "Failed to apply disconnect transition to app state: {:?}",
