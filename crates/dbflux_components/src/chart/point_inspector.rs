@@ -8,6 +8,7 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, div, px};
 
+use crate::semantic::ChartColors;
 use crate::tokens::FontSizes;
 
 // ---------------------------------------------------------------------------
@@ -53,6 +54,7 @@ pub struct SourceRowRef {
 /// * `hovered_y` — formatted Y value.
 /// * `delta_prev` — optional formatted delta vs the previous decimated sample.
 /// * `delta_avg` — optional formatted delta vs the window average.
+/// * `colors` — semantic chart colors for the active theme.
 #[allow(clippy::too_many_arguments)]
 pub fn point_inspector_element(
     source: SourceRowRef,
@@ -62,6 +64,7 @@ pub fn point_inspector_element(
     hovered_y: &str,
     delta_prev: Option<&str>,
     delta_avg: Option<&str>,
+    colors: &ChartColors,
 ) -> AnyElement {
     let show_in_tree_source = source;
 
@@ -71,8 +74,8 @@ pub fn point_inspector_element(
         .flex()
         .flex_col()
         .border_l_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.08))
-        .bg(gpui::hsla(0.0, 0.0, 0.08, 1.0))
+        .border_color(colors.panel_border)
+        .bg(colors.panel_bg)
         .overflow_hidden()
         // Header: series name
         .child(
@@ -80,14 +83,14 @@ pub fn point_inspector_element(
                 .px(px(12.0))
                 .py(px(8.0))
                 .border_b_1()
-                .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.06))
+                .border_color(colors.pill_bg)
                 .flex()
                 .items_center()
                 .gap(px(6.0))
                 .child(
                     div()
                         .text_size(FontSizes::XS)
-                        .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
+                        .text_color(colors.label_fg)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child("SERIES"),
                 )
@@ -95,7 +98,7 @@ pub fn point_inspector_element(
                     div()
                         .flex_1()
                         .text_size(FontSizes::SM)
-                        .text_color(gpui::hsla(0.0, 0.0, 0.90, 1.0))
+                        .text_color(colors.value_fg)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(series_name.to_string()),
                 ),
@@ -107,10 +110,11 @@ pub fn point_inspector_element(
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(kv_row("Time", hovered_x))
-                .child(kv_row("Value", hovered_y))
-                .when_some(delta_prev, |d, v| d.child(kv_row("Δ prev", v)))
-                .when_some(delta_avg, |d, v| d.child(kv_row("Δ avg", v))),
+                .child(kv_row("Time", hovered_x, colors))
+                .child(kv_row("Value", hovered_y, colors))
+                .when_some(delta_prev, |d, v| d.child(kv_row("Δ prev", v, colors)))
+                .when_some(delta_avg, |d, v| d.child(kv_row("Δ avg", v, colors))),
+            colors,
         ))
         // Source doc section: pretty-print the row fields
         .child(inspector_section(
@@ -130,7 +134,7 @@ pub fn point_inspector_element(
                                 .flex_shrink_0()
                                 .w(px(80.0))
                                 .text_size(FontSizes::XS)
-                                .text_color(gpui::hsla(0.0, 0.0, 0.50, 1.0))
+                                .text_color(colors.muted_fg)
                                 .overflow_hidden()
                                 .child(key.clone()),
                         )
@@ -138,11 +142,12 @@ pub fn point_inspector_element(
                             div()
                                 .flex_1()
                                 .text_size(FontSizes::XS)
-                                .text_color(gpui::hsla(0.0, 0.0, 0.85, 1.0))
+                                .text_color(colors.value_fg)
                                 .overflow_hidden()
                                 .child(val.clone()),
                         )
                 })),
+            colors,
         ))
         // Quick actions row
         .child(
@@ -150,14 +155,14 @@ pub fn point_inspector_element(
                 .px(px(12.0))
                 .py(px(10.0))
                 .border_t_1()
-                .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.06))
+                .border_color(colors.pill_bg)
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
                 .child(
                     div()
                         .text_size(FontSizes::XS)
-                        .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+                        .text_color(colors.muted_fg)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child("QUICK ACTIONS"),
                 )
@@ -176,11 +181,16 @@ pub fn point_inspector_element(
                             "Show in tree",
                             false,
                             show_in_tree_source.row_idx,
+                            colors,
                         ))
                         // "Annotate" — stub, coming soon.
-                        .child(action_button_disabled("Annotate", "Coming soon"))
+                        .child(action_button_disabled("Annotate", "Coming soon", colors))
                         // "Copy as query" — stub.
-                        .child(action_button_disabled("Copy as query", "Coming soon")),
+                        .child(action_button_disabled(
+                            "Copy as query",
+                            "Coming soon",
+                            colors,
+                        )),
                 ),
         )
         .into_any_element()
@@ -190,26 +200,30 @@ pub fn point_inspector_element(
 // Layout helpers (private)
 // ---------------------------------------------------------------------------
 
-fn inspector_section(label: &'static str, content: impl IntoElement) -> impl IntoElement {
+fn inspector_section(
+    label: &'static str,
+    content: impl IntoElement,
+    colors: &ChartColors,
+) -> impl IntoElement {
     div()
         .px(px(12.0))
         .py(px(8.0))
         .border_b_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.06))
+        .border_color(colors.pill_bg)
         .flex()
         .flex_col()
         .gap(px(6.0))
         .child(
             div()
                 .text_size(FontSizes::XS)
-                .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+                .text_color(colors.muted_fg)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(label),
         )
         .child(content)
 }
 
-fn kv_row(key: &'static str, value: &str) -> impl IntoElement {
+fn kv_row(key: &'static str, value: &str, colors: &ChartColors) -> impl IntoElement {
     div()
         .flex()
         .items_center()
@@ -219,14 +233,14 @@ fn kv_row(key: &'static str, value: &str) -> impl IntoElement {
                 .w(px(60.0))
                 .flex_shrink_0()
                 .text_size(FontSizes::XS)
-                .text_color(gpui::hsla(0.0, 0.0, 0.50, 1.0))
+                .text_color(colors.muted_fg)
                 .child(key),
         )
         .child(
             div()
                 .flex_1()
                 .text_size(FontSizes::XS)
-                .text_color(gpui::hsla(0.0, 0.0, 0.90, 1.0))
+                .text_color(colors.value_fg)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(value.to_string()),
         )
@@ -236,7 +250,12 @@ fn kv_row(key: &'static str, value: &str) -> impl IntoElement {
 /// `SourceRowRef.row_idx` encoded in the element ID so the host can read it
 /// from the DOM event. The actual scroll is wired by the host — the inspector
 /// does not own the target entity.
-fn action_button(label: &'static str, _disabled: bool, row_idx: usize) -> impl IntoElement {
+fn action_button(
+    label: &'static str,
+    _disabled: bool,
+    row_idx: usize,
+    colors: &ChartColors,
+) -> impl IntoElement {
     div()
         .id(gpui::ElementId::Name(
             format!(
@@ -250,27 +269,31 @@ fn action_button(label: &'static str, _disabled: bool, row_idx: usize) -> impl I
         .py(px(3.0))
         .rounded(px(4.0))
         .border_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.12))
-        .bg(gpui::hsla(0.0, 0.0, 0.13, 1.0))
+        .border_color(colors.pill_border)
+        .bg(colors.pill_bg)
         .cursor_pointer()
         .text_size(FontSizes::XS)
-        .text_color(gpui::hsla(0.0, 0.0, 0.85, 1.0))
-        .hover(|d| d.bg(gpui::hsla(0.0, 0.0, 0.18, 1.0)))
+        .text_color(colors.value_fg)
+        .hover(|d| d.bg(colors.hover_bg))
         .child(label)
 }
 
 /// Disabled action button with a tooltip hint.
-fn action_button_disabled(label: &'static str, _tooltip: &'static str) -> impl IntoElement {
+fn action_button_disabled(
+    label: &'static str,
+    _tooltip: &'static str,
+    colors: &ChartColors,
+) -> impl IntoElement {
     div()
         .px(px(8.0))
         .py(px(3.0))
         .rounded(px(4.0))
         .border_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.06))
-        .bg(gpui::hsla(0.0, 0.0, 0.09, 1.0))
+        .border_color(colors.pill_bg)
+        .bg(colors.panel_bg)
         .cursor_default()
         .text_size(FontSizes::XS)
-        .text_color(gpui::hsla(0.0, 0.0, 0.35, 1.0))
+        .text_color(colors.muted_fg)
         .child(label)
 }
 

@@ -18,17 +18,32 @@ mod style_guardrails {
 
     const SRC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
 
-    /// Fragments that, when found in a file's path, exempt it from all checks.
-    /// These are canonical token/semantic/theme definition files where bare
-    /// literals and color constructors are legitimately defined.
+    /// Fragments that, when found in a file's path, exempt it from ALL checks
+    /// (both spacing and color). These are canonical token/semantic/theme
+    /// definition files where bare literals and color constructors are
+    /// legitimately defined.
     const FILE_EXEMPT_FRAGMENTS: &[&str] = &[
         "tokens.rs",
         "semantic.rs",
         "density.rs",
-        "/chart/",
         "theme.rs",
         "style_guardrails.rs",
     ];
+
+    /// Fragments that exempt a file from the color check only.
+    /// Chart factory files (`axis_bar`, `point_inspector`, `legend`) use raw
+    /// spacing tokens (px values) that pre-date the token system and are
+    /// exempt from the spacing check via `FILE_EXEMPT_CHART_SPACING_FRAGMENTS`.
+    /// They route all colour roles through `ChartColors` so they pass the
+    /// colour check — but engine.rs retains canvas paint literals and stays
+    /// fully exempt.
+    const FILE_EXEMPT_COLOR_FRAGMENTS: &[&str] = &["/chart/engine.rs"];
+
+    /// Fragments that exempt a file from the spacing check only.
+    /// Chart files use raw px() spacing values that were exempt under the old
+    /// `/chart/` blanket exemption. They now route colors through `ChartColors`
+    /// but their spacing literals remain and are exempt from the spacing check.
+    const FILE_EXEMPT_SPACING_FRAGMENTS: &[&str] = &["/chart/"];
 
     /// Spacing/size literal patterns that are forbidden in component code.
     ///
@@ -65,10 +80,11 @@ mod style_guardrails {
         }
     }
 
-    fn is_file_exempt(path: &Path) -> bool {
+    fn is_file_exempt(path: &Path, extra_exempt: &[&str]) -> bool {
         let path_str = path.to_string_lossy();
         FILE_EXEMPT_FRAGMENTS
             .iter()
+            .chain(extra_exempt.iter())
             .any(|fragment| path_str.contains(fragment))
     }
 
@@ -76,7 +92,7 @@ mod style_guardrails {
         line.contains("// guardrail-allow") || line.contains("px(0.)") || line.contains("px(0.0)")
     }
 
-    fn check_violations(forbidden_patterns: &[&str]) -> Vec<String> {
+    fn check_violations(forbidden_patterns: &[&str], extra_exempt: &[&str]) -> Vec<String> {
         let src_root = PathBuf::from(SRC_DIR);
         let mut files = Vec::new();
         collect_rust_files(&src_root, &mut files);
@@ -84,7 +100,7 @@ mod style_guardrails {
         let mut violations = Vec::new();
 
         for file in &files {
-            if is_file_exempt(file) {
+            if is_file_exempt(file, extra_exempt) {
                 continue;
             }
 
@@ -117,7 +133,8 @@ mod style_guardrails {
 
     #[test]
     fn no_bare_spacing_literals_in_component_code() {
-        let violations = check_violations(FORBIDDEN_SPACING_PATTERNS);
+        let violations =
+            check_violations(FORBIDDEN_SPACING_PATTERNS, FILE_EXEMPT_SPACING_FRAGMENTS);
 
         assert!(
             violations.is_empty(),
@@ -128,7 +145,7 @@ mod style_guardrails {
 
     #[test]
     fn no_raw_color_constructors_in_component_code() {
-        let violations = check_violations(FORBIDDEN_COLOR_PATTERNS);
+        let violations = check_violations(FORBIDDEN_COLOR_PATTERNS, FILE_EXEMPT_COLOR_FRAGMENTS);
 
         assert!(
             violations.is_empty(),
