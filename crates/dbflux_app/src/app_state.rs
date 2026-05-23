@@ -106,6 +106,11 @@ pub struct AppState {
     scripts_directory: Option<ScriptsDirectory>,
     storage_runtime: StorageRuntime,
     audit_service: dbflux_audit::AuditService,
+    /// Session-scoped cache for metric catalog data (namespaces + metrics pages).
+    ///
+    /// Shared via `Arc` so multiple chart documents can read and write it
+    /// without holding a reference to `AppState` itself.
+    pub metric_catalog_cache: Arc<crate::metric_catalog_cache::MetricCatalogCache>,
     /// Tracks whether the audit service was initialized from a degraded (in-memory)
     /// store because the real SQLite database could not be opened. When true,
     /// bootstrap_audit_settings will not enable the service even if persisted
@@ -258,6 +263,7 @@ impl AppState {
             session_passphrase_vault: Arc::new(RwLock::new(
                 dbflux_ssh::SessionPassphraseVault::new(),
             )),
+            metric_catalog_cache: crate::metric_catalog_cache::MetricCatalogCache::new(),
             #[cfg(feature = "mcp")]
             mcp_runtime,
         };
@@ -876,6 +882,15 @@ impl AppState {
 
     pub fn disconnect(&mut self, profile_id: Uuid) {
         self.facade.connections.disconnect(profile_id);
+        // Evict stale metric catalog data for this connection.
+        self.metric_catalog_cache.invalidate(profile_id);
+    }
+
+    /// Access the session-scoped metric catalog cache.
+    pub fn metric_catalog_cache(
+        &self,
+    ) -> &Arc<crate::metric_catalog_cache::MetricCatalogCache> {
+        &self.metric_catalog_cache
     }
 
     #[allow(dead_code)]
