@@ -806,18 +806,29 @@ impl Sidebar {
             )];
         };
 
-        page.accumulated
+        // CloudWatch returns one descriptor per (metric_name, dimension_combo)
+        // pair, so a 1000-instance AWS/EC2 account would otherwise produce 1000
+        // identical "CPUUtilization" leaves. Deduplicate by metric_name; the
+        // dimension picker inside the chart document handles dimension choice.
+        // BTreeSet keeps the order alphabetical, which is also nicer UX.
+        let unique_names: std::collections::BTreeSet<&str> = page
+            .accumulated
             .iter()
-            .map(|desc| {
+            .map(|desc| desc.metric_name.as_str())
+            .collect();
+
+        unique_names
+            .into_iter()
+            .map(|metric_name| {
                 TreeItem::new(
                     SchemaNodeId::MetricLeaf {
                         profile_id,
                         database: database_name.to_string(),
                         namespace: namespace.clone(),
-                        metric_name: desc.metric_name.clone(),
+                        metric_name: metric_name.to_string(),
                     }
                     .to_string(),
-                    desc.metric_name.clone(),
+                    metric_name.to_string(),
                 )
             })
             .collect()
@@ -1810,6 +1821,65 @@ mod tests {
                 SchemaNodeId::MetricNamespaceFolder { namespace, .. } if namespace == "AWS/S3"
             )),
             "AWS/S3 namespace must appear"
+        );
+    }
+
+    #[test]
+    fn metric_leaves_dedupe_by_metric_name() {
+        use dbflux_app::MetricCatalogCache;
+        use dbflux_core::{MetricDescriptor, MetricNamespace};
+
+        let profile_id = Uuid::new_v4();
+        let cache = MetricCatalogCache::new();
+        let ns: MetricNamespace = "AWS/EC2".to_string();
+
+        // Three CPUUtilization entries (one per instance) plus two NetworkIn entries
+        // (one per instance). CloudWatch emits one descriptor per
+        // (metric_name, dimension_combo); the sidebar must collapse them.
+        let descriptors = vec![
+            MetricDescriptor {
+                metric_name: "CPUUtilization".to_string(),
+                dimensions: vec![("InstanceId".to_string(), "i-1".to_string())],
+            },
+            MetricDescriptor {
+                metric_name: "CPUUtilization".to_string(),
+                dimensions: vec![("InstanceId".to_string(), "i-2".to_string())],
+            },
+            MetricDescriptor {
+                metric_name: "CPUUtilization".to_string(),
+                dimensions: vec![("InstanceId".to_string(), "i-3".to_string())],
+            },
+            MetricDescriptor {
+                metric_name: "NetworkIn".to_string(),
+                dimensions: vec![("InstanceId".to_string(), "i-1".to_string())],
+            },
+            MetricDescriptor {
+                metric_name: "NetworkIn".to_string(),
+                dimensions: vec![("InstanceId".to_string(), "i-2".to_string())],
+            },
+        ];
+        cache.store_metrics_page(profile_id, ns.clone(), descriptors, None);
+
+        let children =
+            Sidebar::build_metric_leaf_children(profile_id, "default", &ns, Some(&*cache));
+
+        assert_eq!(
+            children.len(),
+            2,
+            "5 descriptors with 2 distinct metric_names must produce 2 leaves; got {}",
+            children.len()
+        );
+
+        let labels: Vec<&str> = children.iter().map(|c| c.label.as_ref()).collect();
+        assert!(
+            labels.contains(&"CPUUtilization"),
+            "CPUUtilization leaf must exist: {:?}",
+            labels
+        );
+        assert!(
+            labels.contains(&"NetworkIn"),
+            "NetworkIn leaf must exist: {:?}",
+            labels
         );
     }
 
