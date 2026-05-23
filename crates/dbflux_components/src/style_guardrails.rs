@@ -5,12 +5,18 @@
 ///
 /// Exemptions are opt-in at two levels:
 /// - **File-level**: files whose path contains one of the exempt path fragments
-///   (token/semantic/theme definition files) are skipped entirely.
+///   (token/semantic/theme definition files, and `chart/engine.rs` for canvas
+///   paint geometry) are skipped entirely from both spacing and color checks.
 /// - **Line-level**: any line containing `// guardrail-allow` is skipped, as is
 ///   any line that contains `px(0.)` or `px(0.0)` (zero is never a forbidden value).
 ///
 /// The `style_guardrails.rs` file itself is always excluded from scanning so
 /// that the forbidden pattern strings in this file do not self-trigger.
+///
+/// Chart factory files (`axis_bar`, `point_inspector`, `legend`) are now fully
+/// under the guardrail: they use `ChartGeometry` tokens for spacing and route
+/// all colour roles through `ChartColors`. Only `chart/engine.rs` stays exempt
+/// (canvas paint geometry — line widths, tick lengths — are not UI spacing tokens).
 #[cfg(test)]
 mod style_guardrails {
     use std::fs;
@@ -21,29 +27,15 @@ mod style_guardrails {
     /// Fragments that, when found in a file's path, exempt it from ALL checks
     /// (both spacing and color). These are canonical token/semantic/theme
     /// definition files where bare literals and color constructors are
-    /// legitimately defined.
+    /// legitimately defined, plus `chart/engine.rs` for canvas paint geometry.
     const FILE_EXEMPT_FRAGMENTS: &[&str] = &[
         "tokens.rs",
         "semantic.rs",
         "density.rs",
         "theme.rs",
         "style_guardrails.rs",
+        "/chart/engine.rs",
     ];
-
-    /// Fragments that exempt a file from the color check only.
-    /// Chart factory files (`axis_bar`, `point_inspector`, `legend`) use raw
-    /// spacing tokens (px values) that pre-date the token system and are
-    /// exempt from the spacing check via `FILE_EXEMPT_CHART_SPACING_FRAGMENTS`.
-    /// They route all colour roles through `ChartColors` so they pass the
-    /// colour check — but engine.rs retains canvas paint literals and stays
-    /// fully exempt.
-    const FILE_EXEMPT_COLOR_FRAGMENTS: &[&str] = &["/chart/engine.rs"];
-
-    /// Fragments that exempt a file from the spacing check only.
-    /// Chart files use raw px() spacing values that were exempt under the old
-    /// `/chart/` blanket exemption. They now route colors through `ChartColors`
-    /// but their spacing literals remain and are exempt from the spacing check.
-    const FILE_EXEMPT_SPACING_FRAGMENTS: &[&str] = &["/chart/"];
 
     /// Spacing/size literal patterns that are forbidden in component code.
     ///
@@ -133,8 +125,7 @@ mod style_guardrails {
 
     #[test]
     fn no_bare_spacing_literals_in_component_code() {
-        let violations =
-            check_violations(FORBIDDEN_SPACING_PATTERNS, FILE_EXEMPT_SPACING_FRAGMENTS);
+        let violations = check_violations(FORBIDDEN_SPACING_PATTERNS, &[]);
 
         assert!(
             violations.is_empty(),
@@ -145,7 +136,7 @@ mod style_guardrails {
 
     #[test]
     fn no_raw_color_constructors_in_component_code() {
-        let violations = check_violations(FORBIDDEN_COLOR_PATTERNS, FILE_EXEMPT_COLOR_FRAGMENTS);
+        let violations = check_violations(FORBIDDEN_COLOR_PATTERNS, &[]);
 
         assert!(
             violations.is_empty(),

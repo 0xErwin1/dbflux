@@ -11,6 +11,7 @@ use gpui::{AnyElement, Hsla, IntoElement, SharedString, div};
 use crate::chart::spec::SeriesSpec;
 use crate::chart::stats::SeriesStats;
 use crate::semantic::ChartColors;
+use crate::tokens::{ChartGeometry, Spacing};
 
 /// Build the legend element for a chart.
 ///
@@ -60,16 +61,16 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(gpui::px(4.0))
-                .px(gpui::px(4.0))
-                .py(gpui::px(1.0))
-                .text_size(gpui::px(11.0))
+                .gap(Spacing::XS)
+                .px(Spacing::XS)
+                .py(ChartGeometry::HAIRLINE)
+                .text_size(ChartGeometry::FONT_LABEL)
                 .when(is_focused, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
                 .when(is_hidden, |d| d.opacity(0.4))
                 .child(
                     div()
-                        .w(gpui::px(6.0))
-                        .h(gpui::px(6.0))
+                        .w(Spacing::XXS)
+                        .h(Spacing::XXS)
                         .rounded_full()
                         .bg(color),
                 )
@@ -98,10 +99,10 @@ where
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap_x(gpui::px(12.0))
-        .gap_y(gpui::px(2.0))
-        .px(gpui::px(12.0))
-        .py(gpui::px(4.0))
+        .gap_x(Spacing::MD)
+        .gap_y(ChartGeometry::ACCENT_STRIPE)
+        .px(Spacing::MD)
+        .py(Spacing::XS)
         .border_t_1()
         .border_color(colors.pill_border)
         .children(chips)
@@ -111,7 +112,7 @@ where
                 .flex()
                 .justify_end()
                 .text_color(colors.muted_fg)
-                .text_size(gpui::px(10.0))
+                .text_size(ChartGeometry::FONT_TINY)
                 .child(counter),
         )
 }

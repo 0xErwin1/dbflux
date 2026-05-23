@@ -351,6 +351,48 @@ impl Anim {
     pub const FADE_MS: u64 = 120;
 }
 
+/// Chart-specific geometry tokens — fonts, gaps, swatch/dot sizes, row heights,
+/// and reserved column widths used by chart element factories (`axis_bar`,
+/// `point_inspector`, `legend`).
+///
+/// Chart chrome uses smaller fonts than the standard UI scale and a handful of
+/// chart-only widths that do not belong in the generic `Widths` namespace.
+/// Canvas paint geometry (line widths, tick lengths) lives directly in
+/// `chart/engine.rs` and is exempt from the spacing guardrail.
+pub struct ChartGeometry;
+
+impl ChartGeometry {
+    /// Tiny chart font — counter text, tick labels. (10 px, smaller than `FontSizes::XS`)
+    pub const FONT_TINY: Pixels = px(10.0);
+
+    /// Chart label font — legend chips, dropdown rows. (11 px)
+    pub const FONT_LABEL: Pixels = px(11.0);
+
+    /// Hairline accent stripe inside chart chrome. (1 px)
+    pub const HAIRLINE: Pixels = px(1.0);
+
+    /// Accent stripe (medium emphasis) — divider lines, checked-state borders. (2 px)
+    pub const ACCENT_STRIPE: Pixels = px(2.0);
+
+    /// Tick/gap accent — small gaps between chart sub-elements and tick spacing. (3 px)
+    pub const TICK_GAP: Pixels = px(3.0);
+
+    /// Color swatch / status dot dimension. (10 px square)
+    pub const SWATCH: Pixels = px(10.0);
+
+    /// Row height in chart dropdowns and inspector lists. (11 px)
+    pub const ROW: Pixels = px(11.0);
+
+    /// Reserved width for short axis tick labels. (60 px)
+    pub const SHORT_LABEL_COL: Pixels = px(60.0);
+
+    /// Reserved width for the point-inspector value column. (80 px)
+    pub const VALUE_COL: Pixels = px(80.0);
+
+    /// Axis-bar dropdown panel width. (140 px)
+    pub const DROPDOWN_PANEL: Pixels = px(140.0);
+}
+
 pub struct Widths;
 
 impl Widths {
@@ -379,8 +421,8 @@ impl Widths {
 #[cfg(test)]
 mod tests {
     use super::{
-        Borders, ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Radii, Shadows,
-        Spacing,
+        Borders, ChartGeometry, ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes,
+        Radii, Shadows, Spacing,
     };
     use gpui::px;
 
@@ -466,5 +508,19 @@ mod tests {
     #[test]
     fn borders_medium_equals_px_2() {
         assert_eq!(Borders::MEDIUM, px(2.0));
+    }
+
+    #[test]
+    fn chart_geometry_tokens_match_documented_values() {
+        assert_eq!(ChartGeometry::FONT_TINY, px(10.0));
+        assert_eq!(ChartGeometry::FONT_LABEL, px(11.0));
+        assert_eq!(ChartGeometry::HAIRLINE, px(1.0));
+        assert_eq!(ChartGeometry::ACCENT_STRIPE, px(2.0));
+        assert_eq!(ChartGeometry::TICK_GAP, px(3.0));
+        assert_eq!(ChartGeometry::SWATCH, px(10.0));
+        assert_eq!(ChartGeometry::ROW, px(11.0));
+        assert_eq!(ChartGeometry::SHORT_LABEL_COL, px(60.0));
+        assert_eq!(ChartGeometry::VALUE_COL, px(80.0));
+        assert_eq!(ChartGeometry::DROPDOWN_PANEL, px(140.0));
     }
 }

@@ -9,7 +9,7 @@ use gpui::prelude::*;
 use gpui::{AnyElement, div, px};
 
 use crate::semantic::ChartColors;
-use crate::tokens::FontSizes;
+use crate::tokens::{ChartGeometry, FontSizes, Spacing, Widths};
 
 // ---------------------------------------------------------------------------
 // Data-point → source-row bridge types
@@ -69,7 +69,7 @@ pub fn point_inspector_element(
     let show_in_tree_source = source;
 
     div()
-        .w(px(320.0))
+        .w(Widths::INSPECTOR)
         .h_full()
         .flex()
         .flex_col()
@@ -80,13 +80,13 @@ pub fn point_inspector_element(
         // Header: series name
         .child(
             div()
-                .px(px(12.0))
-                .py(px(8.0))
+                .px(Spacing::MD)
+                .py(Spacing::SM)
                 .border_b_1()
                 .border_color(colors.pill_bg)
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(Spacing::XXS)
                 .child(
                     div()
                         .text_size(FontSizes::XS)
@@ -109,7 +109,7 @@ pub fn point_inspector_element(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
+                .gap(Spacing::XS)
                 .child(kv_row("Time", hovered_x, colors))
                 .child(kv_row("Value", hovered_y, colors))
                 .when_some(delta_prev, |d, v| d.child(kv_row("Δ prev", v, colors)))
@@ -122,17 +122,17 @@ pub fn point_inspector_element(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(2.0))
+                .gap(ChartGeometry::ACCENT_STRIPE)
                 .children(row_values.iter().map(|(key, val)| {
                     div()
                         .flex()
                         .items_start()
-                        .gap(px(6.0))
-                        .py(px(1.0))
+                        .gap(Spacing::XXS)
+                        .py(ChartGeometry::HAIRLINE)
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .w(px(80.0))
+                                .w(ChartGeometry::VALUE_COL)
                                 .text_size(FontSizes::XS)
                                 .text_color(colors.muted_fg)
                                 .overflow_hidden()
@@ -152,13 +152,13 @@ pub fn point_inspector_element(
         // Quick actions row
         .child(
             div()
-                .px(px(12.0))
+                .px(Spacing::MD)
                 .py(px(10.0))
                 .border_t_1()
                 .border_color(colors.pill_bg)
                 .flex()
                 .flex_col()
-                .gap(px(6.0))
+                .gap(Spacing::XXS)
                 .child(
                     div()
                         .text_size(FontSizes::XS)
@@ -169,7 +169,7 @@ pub fn point_inspector_element(
                 .child(
                     div()
                         .flex()
-                        .gap(px(6.0))
+                        .gap(Spacing::XXS)
                         // "Show in tree" — active, wired by host via scroll_to_row.
                         // The host is responsible for connecting this button's
                         // on_click to its own scroll_to_row implementation.
@@ -206,13 +206,13 @@ fn inspector_section(
     colors: &ChartColors,
 ) -> impl IntoElement {
     div()
-        .px(px(12.0))
-        .py(px(8.0))
+        .px(Spacing::MD)
+        .py(Spacing::SM)
         .border_b_1()
         .border_color(colors.pill_bg)
         .flex()
         .flex_col()
-        .gap(px(6.0))
+        .gap(Spacing::XXS)
         .child(
             div()
                 .text_size(FontSizes::XS)
@@ -227,10 +227,10 @@ fn kv_row(key: &'static str, value: &str, colors: &ChartColors) -> impl IntoElem
     div()
         .flex()
         .items_center()
-        .gap(px(6.0))
+        .gap(Spacing::XXS)
         .child(
             div()
-                .w(px(60.0))
+                .w(ChartGeometry::SHORT_LABEL_COL)
                 .flex_shrink_0()
                 .text_size(FontSizes::XS)
                 .text_color(colors.muted_fg)
@@ -265,9 +265,9 @@ fn action_button(
             )
             .into(),
         ))
-        .px(px(8.0))
-        .py(px(3.0))
-        .rounded(px(4.0))
+        .px(Spacing::SM)
+        .py(ChartGeometry::TICK_GAP)
+        .rounded(Spacing::XS)
         .border_1()
         .border_color(colors.pill_border)
         .bg(colors.pill_bg)
@@ -285,9 +285,9 @@ fn action_button_disabled(
     colors: &ChartColors,
 ) -> impl IntoElement {
     div()
-        .px(px(8.0))
-        .py(px(3.0))
-        .rounded(px(4.0))
+        .px(Spacing::SM)
+        .py(ChartGeometry::TICK_GAP)
+        .rounded(Spacing::XS)
         .border_1()
         .border_color(colors.pill_bg)
         .bg(colors.panel_bg)
