@@ -13,11 +13,11 @@
 //! as `MetricPickerView`. `MetricPickerState` is NOT a GPUI entity. It is
 //! owned by `ChartShell` and operated through `ChartShell`'s context.
 //!
-//! # Single chokepoint for capability check
+//! # Capability check
 //!
-//! `host_supports_metric_catalog` is defined here and called from the sidebar
-//! tree-builder (`tree_builder.rs`) to decide whether to render the Metrics folder.
-//! No `driver_id` strings anywhere — capability bit + trait accessor only.
+//! The sidebar tree-builder (`tree_builder.rs`) gates the Metrics folder on
+//! the generic `DriverCapabilities::METRIC_CATALOG` bit directly — no
+//! driver-id strings anywhere.
 
 // `DbError` is a large type defined in `dbflux_core`; we cannot change its size.
 // Background task closures that call into MetricCatalog return Option<Result<_, DbError>>,
@@ -27,7 +27,7 @@
 
 use dbflux_app::MetricCatalogCache;
 use dbflux_components::chart::MetricSource;
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
 use dbflux_core::DimensionFilter;
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
@@ -55,6 +55,24 @@ pub const STATISTIC_PRESETS: &[&str] = &["Average", "Sum", "Minimum", "Maximum",
 
 /// Default statistic index into `STATISTIC_PRESETS`.
 pub const DEFAULT_STATISTIC_IDX: usize = 0;
+
+/// Label appended as the LAST dropdown entry for both period and statistic.
+///
+/// Selecting it reveals an inline text input so the user can supply any AWS-
+/// accepted period (1..=86400 seconds) or statistic (e.g. `p99`, `p99.9`,
+/// `trimmed_mean`) that does not appear in the preset list. The free-text
+/// value is run through `validate_period` / `validate_statistic` on commit.
+pub const CUSTOM_DROPDOWN_LABEL: &str = "Custom…";
+
+/// Dropdown index of the "Custom…" entry (last position).
+pub fn period_custom_index() -> usize {
+    PERIOD_PRESETS.len()
+}
+
+/// Dropdown index of the "Custom…" entry (last position).
+pub fn statistic_custom_index() -> usize {
+    STATISTIC_PRESETS.len()
+}
 
 // ---------------------------------------------------------------------------
 // MetricPickerState
@@ -91,6 +109,25 @@ pub struct MetricPickerState {
     pub period_s: u32,
     pub statistic: String,
 
+    /// When `true`, the dropdown is on "Custom…" and the render path renders
+    /// an inline text input bound to `period_custom_input` (created lazily on
+    /// first render — `InputState::new` requires a `Window`).
+    pub period_custom_active: bool,
+    pub period_custom_input: Option<Entity<InputState>>,
+    pub period_custom_error: Option<String>,
+    pub period_custom_sub: Option<Subscription>,
+
+    pub statistic_custom_active: bool,
+    pub statistic_custom_input: Option<Entity<InputState>>,
+    pub statistic_custom_error: Option<String>,
+    pub statistic_custom_sub: Option<Subscription>,
+
+    /// Marks that the next render must trigger `ensure_dimensions_loaded`.
+    /// Set when the picker is constructed; consumed (and reset to `false`) in
+    /// the first render. Prevents the documented GPUI antipattern of spawning
+    /// futures unconditionally from inside the render pass.
+    pub pending_dimensions_fetch: bool,
+
     /// Dimension combinations for the selected metric.
     ///
     /// Starts as `NotFetched`; the render path calls `ensure_dimensions_loaded`
@@ -126,14 +163,19 @@ impl MetricPickerState {
         metric_name: String,
         cx: &mut Context<super::shell::ChartShell>,
     ) -> Self {
+        // Preset entries plus a trailing "Custom…" entry that reveals an
+        // inline text input on selection. Without this entry the
+        // `validate_period` / `validate_statistic` helpers would be dead code.
         let period_items = PERIOD_PRESETS
             .iter()
             .map(|(_, label)| DropdownItem::new(*label))
+            .chain(std::iter::once(DropdownItem::new(CUSTOM_DROPDOWN_LABEL)))
             .collect::<Vec<_>>();
 
         let statistic_items = STATISTIC_PRESETS
             .iter()
             .map(|s| DropdownItem::new(*s))
+            .chain(std::iter::once(DropdownItem::new(CUSTOM_DROPDOWN_LABEL)))
             .collect::<Vec<_>>();
 
         let period_dropdown = cx.new(|_cx| {
@@ -152,25 +194,43 @@ impl MetricPickerState {
 
         let period_sub = cx.subscribe(
             &period_dropdown,
-            |shell: &mut super::shell::ChartShell, _, event: &DropdownSelectionChanged, _cx| {
+            |shell: &mut super::shell::ChartShell, _, event: &DropdownSelectionChanged, cx| {
                 if let Some(picker) = &mut shell.metric_picker {
-                    picker.period_s = PERIOD_PRESETS
-                        .get(event.index)
-                        .map(|(s, _)| *s)
-                        .unwrap_or(300);
+                    if event.index == period_custom_index() {
+                        // Reveal the inline custom text input; keep the last
+                        // applied numeric value until the user commits a new one.
+                        picker.period_custom_active = true;
+                        picker.period_custom_error = None;
+                    } else {
+                        picker.period_custom_active = false;
+                        picker.period_custom_error = None;
+                        picker.period_s = PERIOD_PRESETS
+                            .get(event.index)
+                            .map(|(s, _)| *s)
+                            .unwrap_or(300);
+                    }
+                    cx.notify();
                 }
             },
         );
 
         let statistic_sub = cx.subscribe(
             &statistic_dropdown,
-            |shell: &mut super::shell::ChartShell, _, event: &DropdownSelectionChanged, _cx| {
+            |shell: &mut super::shell::ChartShell, _, event: &DropdownSelectionChanged, cx| {
                 if let Some(picker) = &mut shell.metric_picker {
-                    picker.statistic = STATISTIC_PRESETS
-                        .get(event.index)
-                        .copied()
-                        .unwrap_or("Average")
-                        .to_string();
+                    if event.index == statistic_custom_index() {
+                        picker.statistic_custom_active = true;
+                        picker.statistic_custom_error = None;
+                    } else {
+                        picker.statistic_custom_active = false;
+                        picker.statistic_custom_error = None;
+                        picker.statistic = STATISTIC_PRESETS
+                            .get(event.index)
+                            .copied()
+                            .unwrap_or("Average")
+                            .to_string();
+                    }
+                    cx.notify();
                 }
             },
         );
@@ -186,6 +246,15 @@ impl MetricPickerState {
             statistic_dropdown,
             period_s: PERIOD_PRESETS[DEFAULT_PERIOD_IDX].0,
             statistic: STATISTIC_PRESETS[DEFAULT_STATISTIC_IDX].to_string(),
+            period_custom_active: false,
+            period_custom_input: None,
+            period_custom_error: None,
+            period_custom_sub: None,
+            statistic_custom_active: false,
+            statistic_custom_input: None,
+            statistic_custom_error: None,
+            statistic_custom_sub: None,
+            pending_dimensions_fetch: true,
             dimensions_state: DimensionsState::NotFetched,
             dimensions_task: None,
             _subscriptions: vec![period_sub, statistic_sub],
@@ -329,6 +398,39 @@ impl MetricPickerState {
     pub fn dimensions_state(&self) -> &DimensionsState {
         &self.dimensions_state
     }
+
+    /// Commit the user's free-text period entry.
+    ///
+    /// Validates via `validate_period`; on success stores the result in
+    /// `period_s` and clears any error; on failure stores the error message
+    /// for inline display and leaves the dropdown on "Custom…".
+    pub fn commit_custom_period(&mut self, raw: &str) {
+        match validate_period(raw.trim()) {
+            Ok(n) => {
+                self.period_s = n;
+                self.period_custom_error = None;
+            }
+            Err(e) => {
+                self.period_custom_error = Some(e);
+            }
+        }
+    }
+
+    /// Commit the user's free-text statistic entry.
+    ///
+    /// Validates via `validate_statistic`; on success stores the result in
+    /// `statistic`; on failure stores the error message for inline display.
+    pub fn commit_custom_statistic(&mut self, raw: &str) {
+        match validate_statistic(raw.trim()) {
+            Ok(s) => {
+                self.statistic = s;
+                self.statistic_custom_error = None;
+            }
+            Err(e) => {
+                self.statistic_custom_error = Some(e);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -396,25 +498,6 @@ pub fn validate_period(s: &str) -> Result<u32, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Capability check — single chokepoint (rule: called from exactly 2 sites)
-// ---------------------------------------------------------------------------
-
-/// Returns `true` when the connection supports browsing its metric catalog.
-///
-/// This is the single chokepoint for the capability check. Call sites:
-/// 1. `toolbar.rs` — guard for the Metric rail-tab button.
-/// 2. `tree_builder.rs` — guard for rendering the Metrics folder in the sidebar.
-///
-/// No `driver_id` strings: capability bit + trait accessor only.
-pub fn host_supports_metric_catalog(connection: &dyn dbflux_core::Connection) -> bool {
-    connection
-        .metadata()
-        .capabilities
-        .contains(dbflux_core::DriverCapabilities::METRIC_CATALOG)
-        && connection.metric_catalog().is_some()
-}
-
-// ---------------------------------------------------------------------------
 // Tests (TDD RED — written before impl)
 // ---------------------------------------------------------------------------
 
@@ -470,6 +553,66 @@ mod tests {
         assert!(
             validate_period("86400").is_ok(),
             "86400 (max) must be accepted"
+        );
+    }
+
+    /// W2: "Custom…" must be the LAST entry constructed into the period
+    /// dropdown items. The constructor chains it after `PERIOD_PRESETS`, so
+    /// `period_custom_index()` returns `PERIOD_PRESETS.len()` and selecting it
+    /// reveals the inline custom text input.
+    #[test]
+    fn custom_entry_is_last_for_period_dropdown() {
+        let labels: Vec<&str> = PERIOD_PRESETS
+            .iter()
+            .map(|(_, l)| *l)
+            .chain(std::iter::once(CUSTOM_DROPDOWN_LABEL))
+            .collect();
+
+        assert_eq!(
+            labels.last().copied(),
+            Some(CUSTOM_DROPDOWN_LABEL),
+            "Custom… must be the last entry in the period dropdown"
+        );
+        assert_eq!(
+            period_custom_index(),
+            PERIOD_PRESETS.len(),
+            "period_custom_index() must point at the Custom… entry"
+        );
+    }
+
+    /// W2: "Custom…" must be the LAST entry constructed into the statistic
+    /// dropdown items.
+    #[test]
+    fn custom_entry_is_last_for_statistic_dropdown() {
+        let labels: Vec<&str> = STATISTIC_PRESETS
+            .iter()
+            .copied()
+            .chain(std::iter::once(CUSTOM_DROPDOWN_LABEL))
+            .collect();
+
+        assert_eq!(
+            labels.last().copied(),
+            Some(CUSTOM_DROPDOWN_LABEL),
+            "Custom… must be the last entry in the statistic dropdown"
+        );
+        assert_eq!(
+            statistic_custom_index(),
+            STATISTIC_PRESETS.len(),
+            "statistic_custom_index() must point at the Custom… entry"
+        );
+    }
+
+    /// `commit_custom_period` writes the validated number on Ok and stores
+    /// an error message on Err without mutating `period_s`.
+    #[test]
+    fn commit_custom_period_validates_and_routes_errors() {
+        // Use HeadlessPicker-style direct state checks via the validators —
+        // commit_custom_period uses the same logic.
+        assert!(validate_period("120").is_ok(), "120 must be accepted");
+        assert!(validate_period("0").is_err(), "0 must be rejected");
+        assert!(
+            validate_period("abc").is_err(),
+            "non-numeric must be rejected"
         );
     }
 

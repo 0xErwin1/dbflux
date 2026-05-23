@@ -18,12 +18,12 @@
 use super::metric_picker::{DimensionsState, MetricPickerState};
 use super::shell::{ChartShell, ChartShellEvent};
 use dbflux_app::MetricCatalogCache;
-use dbflux_components::controls::Button;
+use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{Heights, Spacing};
 use dbflux_core::DimensionFilter;
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, KeyDownEvent, SharedString, Window, div, px};
+use gpui::{AnyElement, Context, Entity, KeyDownEvent, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
 use std::sync::Arc;
 
@@ -53,19 +53,33 @@ impl<'a> MetricPickerView<'a> {
     ///   └─────────────────────────────────────────┘
     pub fn render(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<ChartShell>,
     ) -> impl IntoElement {
-        // Kick dimensions fetch if not started.
-        let shell_weak = cx.weak_entity();
-        let cache = self.cache.clone();
-        self.state.ensure_dimensions_loaded(shell_weak, cache, cx);
+        // Kick dimensions fetch on the first render where the picker is
+        // visible. Gated on `pending_dimensions_fetch` so we don't spawn
+        // futures unconditionally from inside the render pass (documented
+        // GPUI antipattern in CLAUDE.md). `ensure_dimensions_loaded` itself
+        // remains idempotent — the flag just prevents redundant calls.
+        if self.state.pending_dimensions_fetch {
+            self.state.pending_dimensions_fetch = false;
+            let shell_weak = cx.weak_entity();
+            let cache = self.cache.clone();
+            self.state.ensure_dimensions_loaded(shell_weak, cache, cx);
+        }
+
+        // Lazily build the Custom… text inputs the first time their dropdown
+        // entry is selected (InputState::new requires a Window, which is only
+        // available in render). We also wire a PressEnter subscription that
+        // validates the value via the state's commit_custom_* helpers.
+        ensure_custom_inputs(self.state, window, cx);
 
         let theme = cx.theme().clone();
 
         let header = render_metric_header(self.state, cx);
         let dimensions_section = render_dimensions_section(self.state, cx);
         let config_footer = render_config_footer(self.state, cx);
+        let custom_row = render_custom_inputs_row(self.state, cx);
 
         let focus_handle = self.state.focus_handle.clone();
 
@@ -99,7 +113,105 @@ impl<'a> MetricPickerView<'a> {
             .child(div().h(px(1.0)).bg(theme.border))
             // Config footer.
             .child(config_footer)
+            // Inline custom-value row, only rendered when at least one of the
+            // dropdowns is on "Custom…".
+            .when_some(custom_row, |this, row| this.child(row))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Custom… text input lazy construction + render
+// ---------------------------------------------------------------------------
+
+/// Build the two Custom… `InputState` entities on first render and wire their
+/// PressEnter subscriptions so committing the value runs the matching
+/// validator on the picker state.
+fn ensure_custom_inputs(
+    state: &mut MetricPickerState,
+    window: &mut Window,
+    cx: &mut Context<ChartShell>,
+) {
+    if state.period_custom_input.is_none() {
+        let input: Entity<InputState> =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Period (seconds)"));
+        let sub = cx.subscribe(
+            &input,
+            |shell: &mut ChartShell, input_entity: Entity<InputState>, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::PressEnter { .. })
+                    && let Some(picker) = &mut shell.metric_picker
+                {
+                    let raw = input_entity.read(cx).value().to_string();
+                    picker.commit_custom_period(&raw);
+                    cx.notify();
+                }
+            },
+        );
+        state.period_custom_input = Some(input);
+        state.period_custom_sub = Some(sub);
+    }
+
+    if state.statistic_custom_input.is_none() {
+        let input: Entity<InputState> =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Statistic (e.g. p99)"));
+        let sub = cx.subscribe(
+            &input,
+            |shell: &mut ChartShell, input_entity: Entity<InputState>, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::PressEnter { .. })
+                    && let Some(picker) = &mut shell.metric_picker
+                {
+                    let raw = input_entity.read(cx).value().to_string();
+                    picker.commit_custom_statistic(&raw);
+                    cx.notify();
+                }
+            },
+        );
+        state.statistic_custom_input = Some(input);
+        state.statistic_custom_sub = Some(sub);
+    }
+}
+
+/// Render an inline row beneath the config footer that shows whichever
+/// Custom… text inputs are currently active. Returns `None` when neither
+/// dropdown is on Custom….
+fn render_custom_inputs_row(
+    state: &MetricPickerState,
+    cx: &mut Context<ChartShell>,
+) -> Option<AnyElement> {
+    if !state.period_custom_active && !state.statistic_custom_active {
+        return None;
+    }
+
+    let theme = cx.theme().clone();
+
+    let mut row = div()
+        .flex()
+        .flex_col()
+        .gap(Spacing::XS)
+        .px(Spacing::SM)
+        .py(Spacing::XS)
+        .bg(theme.popover)
+        .border_t_1()
+        .border_color(theme.border);
+
+    if state.period_custom_active
+        && let Some(input) = state.period_custom_input.as_ref()
+    {
+        row = row.child(Input::new(input).placeholder("Period (seconds)"));
+        if let Some(err) = state.period_custom_error.as_ref() {
+            row = row.child(Text::muted(format!("Period: {err}")));
+        }
+    }
+
+    if state.statistic_custom_active
+        && let Some(input) = state.statistic_custom_input.as_ref()
+    {
+        row = row.child(Input::new(input).placeholder("Statistic (e.g. p99)"));
+        if let Some(err) = state.statistic_custom_error.as_ref() {
+            row = row.child(Text::muted(format!("Statistic: {err}")));
+        }
+    }
+
+    Some(row.into_any_element())
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +298,9 @@ fn render_dimensions_section(
                             if let Some(picker) = &mut shell.metric_picker {
                                 picker.dimensions_state = DimensionsState::NotFetched;
                                 picker.dimensions_task = None;
+                                // Re-arm the fetch trigger so the next render
+                                // re-issues ensure_dimensions_loaded.
+                                picker.pending_dimensions_fetch = true;
                             }
                             cx.notify();
                         })),
