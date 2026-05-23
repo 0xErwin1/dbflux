@@ -10,6 +10,7 @@ use gpui::{AnyElement, Hsla, IntoElement, SharedString, div};
 
 use crate::chart::spec::SeriesSpec;
 use crate::chart::stats::SeriesStats;
+use crate::semantic::ChartColors;
 
 /// Build the legend element for a chart.
 ///
@@ -19,6 +20,7 @@ use crate::chart::stats::SeriesStats;
 /// - `stats`: per-series statistics (parallel to `series`); may be `None` for empty series.
 /// - `hidden`: set of hidden series indices; chips for hidden indices are rendered at 40% opacity.
 /// - `focused_series_idx`: currently focused series (chip highlighted with a border).
+/// - `colors`: semantic chart colors for the active theme.
 /// - `on_toggle_hidden`: called with the series index when the chip is clicked.
 pub fn legend_element<F>(
     series: &[SeriesSpec],
@@ -26,6 +28,7 @@ pub fn legend_element<F>(
     stats: &[Option<SeriesStats>],
     hidden: &HashSet<usize>,
     focused_series_idx: usize,
+    colors: &ChartColors,
     on_toggle_hidden: Option<F>,
 ) -> impl IntoElement
 where
@@ -42,7 +45,7 @@ where
             let color = palette
                 .get(s.color_slot as usize % palette.len().max(1))
                 .copied()
-                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0));
+                .unwrap_or(gpui::hsla(0.6, 0.6, 0.5, 1.0)); // guardrail-allow: OOB palette slot neutral fallback, no semantic token for this case
 
             let label: SharedString = s.label.clone().into();
             let is_focused = i == focused_series_idx;
@@ -73,11 +76,7 @@ where
                 .child(div().child(label));
 
             if let Some(stat) = stat_str {
-                chip = chip.child(
-                    div()
-                        .text_color(gpui::hsla(0.0, 0.0, 0.55, 1.0))
-                        .child(stat),
-                );
+                chip = chip.child(div().text_color(colors.label_fg).child(stat));
             }
 
             if let Some(ref handler) = on_toggle_hidden {
@@ -104,14 +103,14 @@ where
         .px(gpui::px(12.0))
         .py(gpui::px(4.0))
         .border_t_1()
-        .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.06))
+        .border_color(colors.pill_border)
         .children(chips)
         .child(
             div()
                 .flex_1()
                 .flex()
                 .justify_end()
-                .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+                .text_color(colors.muted_fg)
                 .text_size(gpui::px(10.0))
                 .child(counter),
         )
