@@ -16,10 +16,12 @@ use dbflux_core::{
     DbConfig, DbDriver, DbError, DbKind, DeploymentClass, DocumentSchema, DriverCapabilities,
     DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery,
     EventRecord, EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext,
-    FormValues, Icon, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
+    FormValues, Icon, MetricCatalog, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
     SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
     ValidationResult, Value,
 };
+
+use crate::metric_catalog::{CloudWatchMetricCatalog, RealCloudWatchClient};
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "cloudwatch".into(),
@@ -28,7 +30,9 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     category: DatabaseCategory::LogStream,
     deployment_class: Some(DeploymentClass::CloudManaged),
     query_language: QueryLanguage::Sql,
-    capabilities: DriverCapabilities::AUTHENTICATION.union(DriverCapabilities::METRIC_SERIES),
+    capabilities: DriverCapabilities::AUTHENTICATION
+        .union(DriverCapabilities::METRIC_SERIES)
+        .union(DriverCapabilities::METRIC_CATALOG),
     default_port: None,
     uri_scheme: "cloudwatch".into(),
     icon: Icon::Logs,
@@ -76,6 +80,8 @@ struct CloudWatchConnection {
     client: Client,
     metrics_client: aws_sdk_cloudwatch::Client,
     config: CloudWatchProfileConfig,
+    /// Metric catalog implementation backed by the same AWS metrics client.
+    metric_catalog_impl: CloudWatchMetricCatalog,
 }
 
 struct CloudWatchLanguageService;
@@ -168,10 +174,14 @@ impl DbDriver for CloudWatchDriver {
 
         probe_connection(&client, &config)?;
 
+        let metric_catalog_impl =
+            CloudWatchMetricCatalog::new(Box::new(RealCloudWatchClient(metrics_client.clone())));
+
         Ok(Box::new(CloudWatchConnection {
             client,
             metrics_client,
             config,
+            metric_catalog_impl,
         }))
     }
 
@@ -186,6 +196,10 @@ impl DbDriver for CloudWatchDriver {
 impl Connection for CloudWatchConnection {
     fn metadata(&self) -> &DriverMetadata {
         &CLOUDWATCH_METADATA
+    }
+
+    fn metric_catalog(&self) -> Option<&dyn MetricCatalog> {
+        Some(&self.metric_catalog_impl)
     }
 
     fn ping(&self) -> Result<(), DbError> {

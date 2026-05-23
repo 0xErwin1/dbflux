@@ -18,6 +18,7 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 - Event-stream browsing (`browse_event_stream` / `EventStreamTarget`) backed by `FilterLogEvents`, with a default 24-hour browse window and support for filter pattern, stream-name prefix, explicit stream names, and a most-recent toggle.
 - Insights column names are classified into semantic `ColumnKind`s (e.g. `@timestamp`, `@ingestionTime` recognized as timestamps) for chart auto-detection.
 - CloudWatch Metrics via `GetMetricData`: executes a single `MetricDataQuery` per request, maps the response to a two-column (timestamp, value) `QueryResult` ordered ascending by timestamp. Timestamps from AWS (second-precision) are converted to milliseconds. Multi-metric pivot to wide format is supported when multiple `MetricDataResult` entries are returned.
+- Browse CloudWatch metric catalog (namespaces and per-namespace metrics with dimension combinations) via `ListMetrics` pagination. Namespace listing is synthesized by sweeping `ListMetrics` with no filter and collecting distinct namespace strings. Results are cached in-session by `MetricCatalogCache`.
 
 ## Limitations
 
@@ -26,5 +27,6 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 - Editor syntax highlighting remains generic (`query_language` is reported as `Sql` at the metadata level); mode selection drives execution semantics and completion keywords rather than per-mode highlighting.
 - Read-only: no mutation, DDL, transaction, or pagination capabilities are declared (`query`, `mutation`, `ddl`, `transactions`, `limits` are all `None`); `schema_features` is empty.
 - No SSL form (TLS handled by the AWS SDK transport).
-- Metrics execution supports a single `MetricDataQuery` per request in this release (W2); a `ListMetrics`-backed picker for namespace/metric/dimension selection is deferred to a follow-up.
+- Metrics execution supports a single `MetricDataQuery` per request per call.
+- The namespace list synthesis (sweeping `ListMetrics` with no filter) can be slow for large AWS accounts with many metrics; it is cached for the session once complete.
 - Live integration tests for metrics (`live_execute_cloudwatch_metric`) require real AWS credentials and are `#[ignore]`d by default. LocalStack Community does not support the CloudWatch Metrics API.

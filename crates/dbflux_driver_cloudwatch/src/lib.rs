@@ -10,5 +10,6 @@
 )]
 
 pub mod driver;
+pub mod metric_catalog;
 
 pub use driver::{CLOUDWATCH_METADATA, CloudWatchDriver};
