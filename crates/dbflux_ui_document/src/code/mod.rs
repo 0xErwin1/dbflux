@@ -37,7 +37,6 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::date_picker::DatePicker;
 use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
 };

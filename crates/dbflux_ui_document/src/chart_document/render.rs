@@ -33,7 +33,6 @@ use dbflux_ui_base::toast::{PendingToast, flush_pending_toast, now_hms};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_component::date_picker::DatePicker;
 use gpui_component::{ActiveTheme, Disableable, Sizable};
 use std::sync::Arc;
 
@@ -392,11 +391,10 @@ impl ChartDocument {
         let custom_picker_row: Option<AnyElement> =
             if self.selected_time_range == Some(TimeRange::Custom) {
                 if let Some(panel_entity) = &self.time_range_panel {
-                    // Read can_apply before borrowing the panel's internals so
-                    // we don't hold two simultaneous borrows through cx.
+                    // Read can_apply (and weak_self for the Apply click closure)
+                    // before the helper call so there are no concurrent borrows.
                     let can_apply = panel_entity.read(cx).can_apply_custom_range(cx);
                     let weak_self = cx.weak_entity();
-                    let panel = panel_entity.read(cx);
 
                     let apply_btn = div()
                         .id("chart-custom-time-apply")
@@ -422,6 +420,9 @@ impl ChartDocument {
                         .when(!can_apply, |d| d.opacity(0.45))
                         .child(Text::caption("Apply"));
 
+                    // Outer band: full-width chrome (border, bg, padding) plus
+                    // flex_wrap so the picker row + Apply can wrap on narrow
+                    // viewports. The picker row itself is one opaque unit.
                     let row = div()
                         .flex()
                         .flex_row()
@@ -434,34 +435,9 @@ impl ChartDocument {
                         .border_color(theme.border)
                         .bg(theme.tab_bar)
                         .child(
-                            div().w(px(260.0)).child(
-                                DatePicker::new(&panel.custom_date_range_picker)
-                                    .small()
-                                    .placeholder("Select date range")
-                                    .number_of_months(2),
-                            ),
-                        )
-                        .child(Text::caption("from"))
-                        .child(
-                            div()
-                                .w(px(72.0))
-                                .child(panel.custom_start_hour_dropdown.clone()),
-                        )
-                        .child(
-                            div()
-                                .w(px(72.0))
-                                .child(panel.custom_start_minute_dropdown.clone()),
-                        )
-                        .child(Text::caption("to"))
-                        .child(
-                            div()
-                                .w(px(72.0))
-                                .child(panel.custom_end_hour_dropdown.clone()),
-                        )
-                        .child(
-                            div()
-                                .w(px(72.0))
-                                .child(panel.custom_end_minute_dropdown.clone()),
+                            panel_entity
+                                .read(cx)
+                                .render_custom_picker_row(px(260.0), cx),
                         )
                         .child(apply_btn);
 
