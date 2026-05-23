@@ -832,10 +832,14 @@ impl Render for CodeDocument {
                     });
                 }
 
-                // Seed the initial window for the default preset. The panel
-                // cannot emit during its constructor because the subscription
-                // above is not registered until after `cx.new` returns.
-                panel.update(cx, |panel, cx| panel.emit_initial(cx));
+                // Seed the initial window for the default preset only when no
+                // user-selected window already exists. On panel *recreation*
+                // (e.g. after a transient teardown / connection reload) the
+                // existing exec_ctx.source carries the user's current selection
+                // and must not be overwritten by Last-24h.
+                if self.exec_ctx.source.is_none() {
+                    panel.update(cx, |panel, cx| panel.emit_initial(cx));
+                }
             }
         }
 

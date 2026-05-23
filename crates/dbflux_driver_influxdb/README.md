@@ -11,7 +11,51 @@ InfluxDB driver for DBFlux.
 - **Optional default bucket** — the connection profile's bucket (v2) or database (v1) field is optional. A v2 API token gives access to all buckets in the organisation; a v1 user gives access to all databases on the server. Leaving the field blank lets the user select a bucket per-query from the source-context dropdown in the editor. Setting it pre-selects that bucket without restricting access to others.
 - **Per-query bucket routing** — the bucket used for each InfluxQL query comes from the source-context dropdown selection, not the connection profile. For Flux queries the bucket is embedded in the query text itself (`from(bucket: "...")`).
 - **Bucket-free ping** — the connection liveness check does not require a bucket: v1 uses `SHOW DATABASES` against the internal database; v2 fetches `/api/v2/buckets?limit=1`.
-- **Automatic time-window injection** — when a time range is set via the source context panel and the query does not already contain a time predicate (`time >=` etc. for InfluxQL, `|> range(` for Flux), the driver injects the bounds automatically.
+- **Time range macros** — InfluxQL and Flux queries support Grafana-compatible macro tokens that are substituted with the bound time-range window before the query is sent to the driver:
+
+  | Token | Language | Expansion |
+  |---|---|---|
+  | `$timeFilter` | InfluxQL | `time >= 'RFC3339_start' AND time <= 'RFC3339_end'` |
+  | `$__from` | InfluxQL | `'RFC3339_start'` |
+  | `$__to` | InfluxQL | `'RFC3339_end'` |
+  | `v.timeRangeStart` | Flux | `'RFC3339_start'` |
+  | `v.timeRangeStop` | Flux | `'RFC3339_end'` |
+
+  These tokens match Grafana's variable conventions (`$timeFilter` for InfluxQL, `v.timeRangeStart`/`v.timeRangeStop` for Flux). Users familiar with Grafana should find the syntax intuitive.
+
+  RFC3339 format: `YYYY-MM-DDTHH:MM:SSZ` (UTC, second precision, Z suffix).
+
+  **InfluxQL example** — using `$timeFilter`:
+
+  ```influxql
+  -- Typed:
+  SELECT mean(usage_user) FROM cpu WHERE $timeFilter GROUP BY time(1m)
+
+  -- Executed (window = 2026-05-20T00:00:00Z to 2026-05-22T23:59:00Z):
+  SELECT mean(usage_user) FROM cpu WHERE time >= '2026-05-20T00:00:00Z' AND time <= '2026-05-22T23:59:00Z' GROUP BY time(1m)
+  ```
+
+  **Flux example** — using `v.timeRangeStart` / `v.timeRangeStop`:
+
+  ```flux
+  -- Typed:
+  from(bucket: "telegraf")
+    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+    |> filter(fn: (r) => r._measurement == "cpu")
+
+  -- Executed (same window):
+  from(bucket: "telegraf")
+    |> range(start: '2026-05-20T00:00:00Z', stop: '2026-05-22T23:59:00Z')
+    |> filter(fn: (r) => r._measurement == "cpu")
+  ```
+
+  **Macros require a bound window** — if the query contains macro tokens but no time-range window is set (i.e., the source-context panel has no selection), the macros pass through to the driver unsubstituted. InfluxDB will return a parse error since `$timeFilter` etc. are not valid InfluxQL/Flux syntax.
+
+  **Macros suppress inject-when-absent** — when a query contains any of the recognized macro tokens, the automatic time-window injection (see below) is suppressed. The macro substitution is treated as the user's authoritative time bound.
+
+  **v1 known limitation (naïve substring substitution)** — macro tokens inside quoted string literals or comments are also substituted. There is no escape syntax in v1. For Flux, a variable whose name merely starts with `v.timeRangeStart` or `v.timeRangeStop` (e.g. `v.timeRangeStartCustom`) will also be substituted. Proper tokenisation is planned for a future version.
+
+- **Automatic time-window injection** — when a time range is set via the source context panel and the query does not already contain a time predicate (`time >=` etc. for InfluxQL, `|> range(` for Flux), the driver injects the bounds automatically. This behavior is suppressed when the query contains explicit time-range macro tokens.
 - **Structured error messages** — server-side errors are parsed from the JSON `{"error": "..."}` field instead of being displayed as raw HTTP status codes.
 - **CSV and JSON export** — query results can be exported through the standard DBFlux export pipeline.
 - **Audit emission** — all queries are tracked through the standard DBFlux audit sink. The `bucket_or_database` metadata field records the actual bucket used for each query, not the profile default.

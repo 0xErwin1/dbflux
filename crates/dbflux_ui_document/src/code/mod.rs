@@ -186,8 +186,18 @@ fn query_request_for_execution(
     query: String,
     active_database: Option<String>,
     exec_ctx: &ExecutionContext,
+    query_language: QueryLanguage,
 ) -> QueryRequest {
-    QueryRequest::new(query)
+    let window = match &exec_ctx.source {
+        Some(ExecutionSourceContext::CollectionWindow {
+            start_ms, end_ms, ..
+        }) => Some((*start_ms, *end_ms)),
+        _ => None,
+    };
+
+    let sql = dbflux_core::substitute_time_macros(&query, window, query_language);
+
+    QueryRequest::new(sql)
         .with_database(active_database)
         .with_execution_context(Some(exec_ctx.clone()))
 }
