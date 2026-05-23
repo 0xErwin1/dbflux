@@ -7,7 +7,7 @@
 
 pub mod host;
 pub mod metric_picker;
-mod metric_picker_render;
+pub(crate) mod metric_picker_render;
 pub mod shell;
 pub mod toolbar;
 

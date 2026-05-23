@@ -40,9 +40,12 @@ use std::sync::Arc;
 ///
 /// Holds borrowed references into the `ChartShell`'s state. `render` is
 /// called from the rail render dispatch inside `shell.rs`/`data_grid_panel`.
+///
+/// Note: `ChartShell` state is accessed indirectly through `cx.listener`
+/// closures inside the render helpers rather than via a direct mutable reference.
+/// This avoids a split-borrow conflict when extracting `state` from the shell.
 pub struct MetricPickerView<'a> {
     pub state: &'a mut MetricPickerState,
-    pub shell: &'a mut ChartShell,
     pub app_state: &'a Entity<AppStateEntity>,
     pub cache: &'a Arc<MetricCatalogCache>,
 }

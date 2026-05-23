@@ -19,6 +19,7 @@
 
 use super::ChartDocument;
 use crate::chart::ChartRailTab;
+use crate::chart::metric_picker_render::MetricPickerView;
 use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
 use dbflux_components::chart::{ChartDetection, axis_bar_element};
 use dbflux_components::common::time_range::state::TimeRange;
@@ -206,9 +207,13 @@ impl ChartDocument {
     /// Called from the `ViewHandle::render` closure produced by
     /// `into_view_handle`. Pixel-equivalent to the former standalone render body
     /// minus the header row (which is now projected as chrome-row segments).
+    ///
+    /// When the Metric rail is open (i.e. `ChartRailTab::Metric` is active),
+    /// an absolute-positioned 320px panel is overlaid on the right edge showing
+    /// the `MetricPickerView` — same layout as the Stats rail in `DataGridPanel`.
     pub(super) fn render_chart_content(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme().clone();
@@ -456,14 +461,68 @@ impl ChartDocument {
                 None
             };
 
+        // -- Metric picker rail (absolute overlay, right edge) --
+        // Rendered when the Metric tab is active and the shell has picker state.
+        // Uses the same absolute-right-panel layout as the Stats rail in DataGridPanel.
+        let metric_rail: Option<AnyElement> = {
+            let (rail_open, rail_tab) = {
+                let shell = self.chart_shell.read(cx);
+                (shell.chart_rail_open, shell.chart_rail_tab)
+            };
+
+            if rail_open && rail_tab == ChartRailTab::Metric {
+                let has_picker = self.chart_shell.read(cx).metric_picker.is_some();
+                if has_picker {
+                    let cache = self.app_state.read(cx).metric_catalog_cache().clone();
+                    let app_state_entity = self.app_state.clone();
+                    let rail_element = self.chart_shell.update(cx, |shell, cx| {
+                        let picker = shell.metric_picker.as_mut().unwrap();
+                        MetricPickerView {
+                            state: picker,
+                            app_state: &app_state_entity,
+                            cache: &cache,
+                        }
+                        .render(window, cx)
+                        .into_any_element()
+                    });
+                    let rail_panel = div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .w(px(320.0))
+                        .flex()
+                        .flex_col()
+                        .border_l_1()
+                        .border_color(theme.border)
+                        .bg(theme.popover)
+                        .occlude()
+                        .child(
+                            div()
+                                .flex_grow()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(rail_element),
+                        );
+                    Some(rail_panel.into_any_element())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         div()
             .flex()
             .flex_col()
             .size_full()
+            .relative() // needed so the absolute rail positions relative to this container
             .child(chart_toolbar_row)
             .when_some(custom_picker_row, |el, row| el.child(row))
             .child(axis_row)
             .child(div().flex_1().min_h_0().child(chart_area))
+            .when_some(metric_rail, |el, rail| el.child(rail))
             .into_any_element()
     }
 }

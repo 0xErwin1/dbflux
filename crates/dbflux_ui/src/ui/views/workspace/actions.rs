@@ -1,13 +1,14 @@
 use super::*;
 use crate::platform;
-use dbflux_components::chart::MetricSource;
 use dbflux_core::{DriverCapabilities, DriverMetadata};
 
 /// Returns `true` when the given driver metadata advertises the `METRIC_SERIES`
 /// capability, meaning the driver can execute `MetricQuery` requests.
 ///
-/// This is the sole gating condition for showing the "Open Metrics Chart" entry
-/// point. No driver_id, database category, or driver name comparisons are used.
+/// Used by tests to validate the METRIC_SERIES gating predicate.
+/// The live entry point (`open_metrics_chart`) uses `host_supports_metric_catalog`
+/// which additionally checks `METRIC_CATALOG` and the trait accessor.
+#[allow(dead_code)]
 pub(crate) fn supports_metric_charts(metadata: &DriverMetadata) -> bool {
     metadata
         .capabilities
@@ -294,17 +295,15 @@ impl Workspace {
             .push(cx);
     }
 
-    /// Opens a `ChartDocument` pre-seeded with a default `MetricSource` for the
-    /// active connection — but only when the driver advertises `METRIC_SERIES`.
+    /// Opens a `ChartDocument` with an empty source and the metric picker rail
+    /// open, allowing the user to browse and select a metric interactively.
     ///
-    /// The visibility condition is `metadata.capabilities.contains(METRIC_SERIES)`.
-    /// No driver_id, driver name, or DatabaseCategory comparisons are used here.
-    ///
-    /// The `MetricSource` is constructed with sensible defaults (period 300 s,
-    /// statistic "Average"). A follow-up workstream will add a ListMetrics-backed
-    /// picker so the user can select namespace / metric interactively.
+    /// Guard: the connected driver must advertise `METRIC_CATALOG` capability
+    /// (checked via `host_supports_metric_catalog`). No driver_id, driver name,
+    /// or `DatabaseCategory` comparisons are used here.
     pub(super) fn open_metrics_chart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::ui::document::ChartDocument;
+        use dbflux_ui_document::chart::host_supports_metric_catalog;
 
         let active = self.app_state.read(cx).active_connection();
 
@@ -315,11 +314,10 @@ impl Workspace {
             return;
         };
 
-        // Sole visibility condition: the driver must advertise METRIC_SERIES.
-        // No driver_id, driver name, or DatabaseCategory check anywhere here.
-        let metadata = active.connection.metadata();
-        if !supports_metric_charts(metadata) {
-            Toast::warning("Connected driver does not support metric charts")
+        // Gate on METRIC_CATALOG capability: the driver must support browsing
+        // namespaces and metrics. No driver_id check; capability bit only.
+        if !host_supports_metric_catalog(active.connection.as_ref()) {
+            Toast::warning("Connected driver does not support the metric catalog")
                 .meta_right(now_hms())
                 .push(cx);
             return;
@@ -327,28 +325,12 @@ impl Workspace {
 
         let profile_id = active.profile.id;
 
-        // Construct MetricSource with defaults. Period and statistic are set to
-        // commonly useful values; namespace and metric_name are placeholders that
-        // the user replaces in the chart's title area or via a future picker.
-        // Follow-up: wire a ListMetrics-backed picker to let the user select
-        // namespace / metric / dimensions without typing them manually.
-        let source = MetricSource {
-            namespace: "AWS/Lambda".to_string(),
-            metric_name: "Invocations".to_string(),
-            dimensions: vec![],
-            period_s: 300,
-            statistic: "Average".to_string(),
-        };
-
+        // Open an empty chart with the metric picker rail pre-opened.
+        // The user selects namespace / metric / dimensions in the picker and
+        // presses Apply; that triggers ChartShellEvent::MetricPickerApplied
+        // which swaps the source and auto-runs the query.
         let doc = cx.new(|cx| {
-            ChartDocument::new_with_source(
-                Some(profile_id),
-                "Metrics chart".to_string(),
-                Box::new(source),
-                self.app_state.clone(),
-                window,
-                cx,
-            )
+            ChartDocument::new_empty_metric_chart(profile_id, self.app_state.clone(), window, cx)
         });
         let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);
 
