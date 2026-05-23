@@ -2,7 +2,8 @@ use super::*;
 
 impl Sidebar {
     pub(super) fn build_tree_items_with_overrides(&self, cx: &Context<Self>) -> Vec<TreeItem> {
-        let items = Self::build_tree_items(self.app_state.read(cx));
+        let items =
+            Self::build_tree_items_with_errors(self.app_state.read(cx), &self.metric_fetch_errors);
         let items = self.apply_expansion_overrides(items);
 
         if self.connections_search_query.trim().is_empty() {
@@ -102,8 +103,15 @@ impl Sidebar {
     }
 
     pub(super) fn build_tree_items(state: &AppState) -> Vec<TreeItem> {
+        Self::build_tree_items_with_errors(state, &HashMap::new())
+    }
+
+    pub(super) fn build_tree_items_with_errors(
+        state: &AppState,
+        metric_fetch_errors: &HashMap<String, String>,
+    ) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
-        Self::build_tree_nodes_recursive(&root_nodes, state)
+        Self::build_tree_nodes_recursive_with_errors(&root_nodes, state, metric_fetch_errors)
     }
 
     /// Build tree items for the Scripts tab from ScriptsDirectory entries.
@@ -146,9 +154,10 @@ impl Sidebar {
         }
     }
 
-    fn build_tree_nodes_recursive(
+    fn build_tree_nodes_recursive_with_errors(
         nodes: &[&ConnectionTreeNode],
         state: &AppState,
+        metric_fetch_errors: &HashMap<String, String>,
     ) -> Vec<TreeItem> {
         let mut items = Vec::new();
 
@@ -158,7 +167,11 @@ impl Sidebar {
                     let children_nodes = state.connection_tree().children_of(node.id);
                     let children_refs: Vec<&ConnectionTreeNode> =
                         children_nodes.into_iter().collect();
-                    let children = Self::build_tree_nodes_recursive(&children_refs, state);
+                    let children = Self::build_tree_nodes_recursive_with_errors(
+                        &children_refs,
+                        state,
+                        metric_fetch_errors,
+                    );
 
                     let folder_item = TreeItem::new(
                         SchemaNodeId::ConnectionFolder { node_id: node.id }.to_string(),
@@ -174,7 +187,11 @@ impl Sidebar {
                     if let Some(profile_id) = node.profile_id
                         && let Some(profile) = state.profiles().iter().find(|p| p.id == profile_id)
                     {
-                        let profile_item = Self::build_profile_item(profile, state);
+                        let profile_item = Self::build_profile_item_with_errors(
+                            profile,
+                            state,
+                            metric_fetch_errors,
+                        );
                         items.push(profile_item);
                     }
                 }
@@ -184,7 +201,11 @@ impl Sidebar {
         items
     }
 
-    fn build_profile_item(profile: &dbflux_core::ConnectionProfile, state: &AppState) -> TreeItem {
+    fn build_profile_item_with_errors(
+        profile: &dbflux_core::ConnectionProfile,
+        state: &AppState,
+        metric_fetch_errors: &HashMap<String, String>,
+    ) -> TreeItem {
         let profile_id = profile.id;
         let is_connected = state.connections().contains_key(&profile_id);
         let is_active = state.active_connection_id() == Some(profile_id);
@@ -210,11 +231,9 @@ impl Sidebar {
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
             let is_document_db = schema.is_document();
             let is_time_series_db = schema.is_time_series();
-            let supports_routines = connected
-                .connection
-                .metadata()
-                .capabilities
-                .contains(DriverCapabilities::ROUTINES);
+            let conn_capabilities = connected.connection.metadata().capabilities;
+            let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
+            let metric_cache = state.metric_catalog_cache().clone();
 
             if schema.is_key_value() {
                 let mut database_names: Vec<String> = schema
@@ -281,6 +300,9 @@ impl Sidebar {
                                     db_schema,
                                     &connected.table_details,
                                     &connected.collection_children,
+                                    conn_capabilities,
+                                    Some(&metric_cache),
+                                    metric_fetch_errors,
                                 )
                             } else if is_time_series_db {
                                 // Time-series lazy schemas are stored in database_schemas
@@ -368,6 +390,9 @@ impl Sidebar {
                                 &db_schema,
                                 &connected.table_details,
                                 &connected.collection_children,
+                                conn_capabilities,
+                                Some(&metric_cache),
+                                metric_fetch_errors,
                             )
                         } else if is_time_series_db {
                             // InfluxDB uses SingleDatabase loading: the connection-level
@@ -560,12 +585,16 @@ impl Sidebar {
         children
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_document_db_content(
         profile_id: Uuid,
         database_name: &str,
         db_schema: &dbflux_core::DbSchemaInfo,
         table_details: &HashMap<(String, String), TableInfo>,
         collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
+        capabilities: DriverCapabilities,
+        metric_catalog_cache: Option<&dbflux_app::MetricCatalogCache>,
+        metric_fetch_errors: &HashMap<String, String>,
     ) -> Vec<TreeItem> {
         let mut content = Vec::new();
 
@@ -595,6 +624,31 @@ impl Sidebar {
                 )
                 .expanded(true)
                 .children(collection_children),
+            );
+        }
+
+        if capabilities.contains(DriverCapabilities::METRIC_CATALOG) {
+            let parent_id = SchemaNodeId::MetricsFolder {
+                profile_id,
+                database: database_name.to_string(),
+            }
+            .to_string();
+
+            let children = if let Some(err_msg) = metric_fetch_errors.get(&parent_id) {
+                let retry_id = format!("metrics-retry|{}|{}", profile_id, database_name);
+                vec![Self::error_retry_placeholder(&retry_id, err_msg)]
+            } else {
+                Self::build_metric_namespace_children(
+                    profile_id,
+                    database_name,
+                    metric_catalog_cache,
+                )
+            };
+
+            content.push(
+                TreeItem::new(parent_id, "Metrics".to_string())
+                    .expanded(false)
+                    .children(children),
             );
         }
 
@@ -670,6 +724,125 @@ impl Sidebar {
         }
 
         content
+    }
+
+    /// Build the namespace children for a `MetricsFolder` node.
+    ///
+    /// Peeks the `MetricCatalogCache`; if populated, emits one
+    /// `MetricNamespaceFolder` child per cached namespace. On a cache miss
+    /// (data not yet fetched) emits a single "Loading..." placeholder so the
+    /// user sees feedback. The expansion handler triggers the background fetch.
+    /// If `metric_fetch_errors` contains an entry for the parent MetricsFolder
+    /// node id, an error placeholder is rendered instead.
+    pub(crate) fn build_metric_namespace_children(
+        profile_id: Uuid,
+        database_name: &str,
+        metric_catalog_cache: Option<&dbflux_app::MetricCatalogCache>,
+    ) -> Vec<TreeItem> {
+        let Some(cache) = metric_catalog_cache else {
+            return vec![Self::loading_placeholder(
+                profile_id,
+                database_name,
+                "metrics-loading",
+            )];
+        };
+
+        let Some(namespaces) = cache.peek_namespaces(profile_id) else {
+            return vec![Self::loading_placeholder(
+                profile_id,
+                database_name,
+                "metrics-loading",
+            )];
+        };
+
+        namespaces
+            .iter()
+            .map(|ns| {
+                let leaf_children = Self::build_metric_leaf_children(
+                    profile_id,
+                    database_name,
+                    ns,
+                    metric_catalog_cache,
+                );
+                TreeItem::new(
+                    SchemaNodeId::MetricNamespaceFolder {
+                        profile_id,
+                        database: database_name.to_string(),
+                        namespace: ns.clone(),
+                    }
+                    .to_string(),
+                    ns.clone(),
+                )
+                .expanded(false)
+                .children(leaf_children)
+            })
+            .collect()
+    }
+
+    /// Build the metric leaf children for a `MetricNamespaceFolder` node.
+    ///
+    /// Peeks the cache for this `(profile_id, namespace)` pair. On a miss,
+    /// returns a single loading placeholder. On a hit, returns one `MetricLeaf`
+    /// per cached descriptor.
+    pub(crate) fn build_metric_leaf_children(
+        profile_id: Uuid,
+        database_name: &str,
+        namespace: &dbflux_core::MetricNamespace,
+        metric_catalog_cache: Option<&dbflux_app::MetricCatalogCache>,
+    ) -> Vec<TreeItem> {
+        let Some(cache) = metric_catalog_cache else {
+            return vec![Self::loading_placeholder(
+                profile_id,
+                database_name,
+                &format!("metrics-ns-loading|{}", namespace),
+            )];
+        };
+
+        let Some(page) = cache.peek_metrics(profile_id, namespace) else {
+            return vec![Self::loading_placeholder(
+                profile_id,
+                database_name,
+                &format!("metrics-ns-loading|{}", namespace),
+            )];
+        };
+
+        page.accumulated
+            .iter()
+            .map(|desc| {
+                TreeItem::new(
+                    SchemaNodeId::MetricLeaf {
+                        profile_id,
+                        database: database_name.to_string(),
+                        namespace: namespace.clone(),
+                        metric_name: desc.metric_name.clone(),
+                    }
+                    .to_string(),
+                    desc.metric_name.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Build a non-typed placeholder `TreeItem` used for Loading / error sentinel nodes.
+    ///
+    /// The sentinel ID is purposely not a valid `SchemaNodeId` so the expansion
+    /// dispatcher ignores it rather than misrouting it.
+    pub(crate) fn loading_placeholder(
+        profile_id: Uuid,
+        database_name: &str,
+        suffix: &str,
+    ) -> TreeItem {
+        let id = format!("{}|{}|{}", suffix, profile_id, database_name);
+        TreeItem::new(id, "Loading...".to_string())
+    }
+
+    /// Build an error retry placeholder child for metric sidebar nodes.
+    ///
+    /// The sentinel ID encodes the retry key so `execute_item` can route it
+    /// back to the appropriate fetch helper.
+    pub(crate) fn error_retry_placeholder(retry_sentinel_id: &str, error_msg: &str) -> TreeItem {
+        let label = format!("Error: {} — click to retry", error_msg);
+        TreeItem::new(retry_sentinel_id.to_string(), label)
     }
 
     /// Build sidebar children for a time-series database node (e.g. an InfluxDB bucket).
@@ -1604,6 +1777,148 @@ mod tests {
     };
     use std::collections::HashMap;
     use uuid::Uuid;
+
+    #[test]
+    fn metric_namespaces_render_from_cache() {
+        use dbflux_app::MetricCatalogCache;
+        use dbflux_core::{MetricNamespace, SchemaNodeId};
+
+        let profile_id = Uuid::new_v4();
+        let cache = MetricCatalogCache::new();
+        let ns1: MetricNamespace = "AWS/EC2".to_string();
+        let ns2: MetricNamespace = "AWS/S3".to_string();
+        cache.store_namespaces(profile_id, vec![ns1.clone(), ns2.clone()]);
+
+        let children =
+            Sidebar::build_metric_namespace_children(profile_id, "default", Some(&*cache));
+
+        assert_eq!(children.len(), 2, "One child per namespace");
+        let ids: Vec<SchemaNodeId> = children
+            .iter()
+            .map(|item| item.id.as_ref().parse().expect("valid SchemaNodeId"))
+            .collect();
+        assert!(
+            ids.iter().any(|id| matches!(
+                id,
+                SchemaNodeId::MetricNamespaceFolder { namespace, .. } if namespace == "AWS/EC2"
+            )),
+            "AWS/EC2 namespace must appear"
+        );
+        assert!(
+            ids.iter().any(|id| matches!(
+                id,
+                SchemaNodeId::MetricNamespaceFolder { namespace, .. } if namespace == "AWS/S3"
+            )),
+            "AWS/S3 namespace must appear"
+        );
+    }
+
+    #[test]
+    fn loading_placeholder_when_namespace_cache_miss() {
+        use dbflux_app::MetricCatalogCache;
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let cache = MetricCatalogCache::new();
+        // No data stored — cache miss
+
+        let children =
+            Sidebar::build_metric_namespace_children(profile_id, "default", Some(&*cache));
+
+        assert_eq!(
+            children.len(),
+            1,
+            "Single loading placeholder on cache miss"
+        );
+        // Loading placeholder must not be a valid MetricNamespaceFolder
+        let parsed = children[0].id.as_ref().parse::<SchemaNodeId>();
+        assert!(
+            parsed.is_err()
+                || !matches!(parsed.unwrap(), SchemaNodeId::MetricNamespaceFolder { .. }),
+            "Loading placeholder must not parse as MetricNamespaceFolder"
+        );
+        assert!(
+            children[0].label.as_ref().contains("Loading"),
+            "Placeholder label must contain 'Loading'"
+        );
+    }
+
+    #[test]
+    fn metrics_folder_appears_when_capability_present() {
+        use dbflux_core::{DbSchemaInfo, DriverCapabilities, SchemaNodeId};
+
+        let profile_id = Uuid::new_v4();
+        let db_schema = DbSchemaInfo {
+            name: "default".to_string(),
+            tables: vec![],
+            views: vec![],
+            custom_types: None,
+        };
+        let capabilities = DriverCapabilities::METRIC_CATALOG;
+
+        let content = Sidebar::build_document_db_content(
+            profile_id,
+            "default",
+            &db_schema,
+            &Default::default(),
+            &Default::default(),
+            capabilities,
+            None,
+            &Default::default(),
+        );
+
+        let metrics_folder = content.iter().find(|item| {
+            item.id
+                .as_ref()
+                .parse::<SchemaNodeId>()
+                .ok()
+                .is_some_and(|id| matches!(id, SchemaNodeId::MetricsFolder { .. }))
+        });
+        assert!(
+            metrics_folder.is_some(),
+            "Metrics folder must appear when METRIC_CATALOG capability is set"
+        );
+        let folder = metrics_folder.unwrap();
+        assert_eq!(folder.label.as_ref(), "Metrics");
+        assert!(!folder.is_expanded());
+    }
+
+    #[test]
+    fn metrics_folder_absent_without_capability() {
+        use dbflux_core::{DbSchemaInfo, DriverCapabilities, SchemaNodeId};
+
+        let profile_id = Uuid::new_v4();
+        let db_schema = DbSchemaInfo {
+            name: "default".to_string(),
+            tables: vec![],
+            views: vec![],
+            custom_types: None,
+        };
+        let capabilities = DriverCapabilities::empty();
+
+        let content = Sidebar::build_document_db_content(
+            profile_id,
+            "default",
+            &db_schema,
+            &Default::default(),
+            &Default::default(),
+            capabilities,
+            None,
+            &Default::default(),
+        );
+
+        let has_metrics_folder = content.iter().any(|item| {
+            item.id
+                .as_ref()
+                .parse::<SchemaNodeId>()
+                .ok()
+                .is_some_and(|id| matches!(id, SchemaNodeId::MetricsFolder { .. }))
+        });
+        assert!(
+            !has_metrics_folder,
+            "Metrics folder must not appear when METRIC_CATALOG capability is absent"
+        );
+    }
 
     #[test]
     fn collection_item_builds_default_field_and_index_sections() {

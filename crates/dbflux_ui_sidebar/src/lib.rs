@@ -118,6 +118,16 @@ pub enum SidebarEvent {
         schema_name: Option<String>,
         dependents: Vec<dbflux_core::RelationRef>,
     },
+    /// Open a new metric chart pre-populated with the selected metric's defaults.
+    ///
+    /// Emitted when the user clicks a `MetricLeaf` node in the sidebar tree.
+    /// The workspace handler opens a `ChartDocument` with `MetricSource` defaults
+    /// (dimensions: [], period_s: 300, statistic: "Average") and auto-executes.
+    OpenMetricChart {
+        profile_id: Uuid,
+        namespace: String,
+        metric_name: String,
+    },
     /// Request to prompt the user for an SSH tunnel passphrase.
     ///
     /// Emitted when a connection attempt fails with a passphrase-required error
@@ -696,6 +706,17 @@ pub struct Sidebar {
     /// Profile ID waiting for an SSH passphrase to be supplied via the tunnel-auth modal.
     /// Set when a connect attempt fails with a passphrase-required error.
     pub pending_tunnel_auth_profile_id: Option<Uuid>,
+    /// In-flight metric catalog fetch tasks, keyed by profile_id.
+    ///
+    /// Dropping the task on collapse abandons the await; the underlying cache fetch
+    /// keeps running and writes through on completion (consistent with v1 design).
+    pending_metric_namespace_fetches: HashMap<Uuid, Task<()>>,
+    /// In-flight metric fetch tasks, keyed by (profile_id, namespace).
+    pending_metric_fetches: HashMap<(Uuid, String), Task<()>>,
+    /// Per-node metric fetch error messages for retry UI.
+    ///
+    /// Key is the parent node id string (MetricsFolder or MetricNamespaceFolder).
+    metric_fetch_errors: HashMap<String, String>,
 }
 
 use dbflux_ui_base::toast::PendingToast;
@@ -896,6 +917,9 @@ impl Sidebar {
             scripts_gutter_metadata,
             hovered_item_id: None,
             pending_tunnel_auth_profile_id: None,
+            pending_metric_namespace_fetches: HashMap::new(),
+            pending_metric_fetches: HashMap::new(),
+            metric_fetch_errors: HashMap::new(),
         }
     }
 
@@ -1002,6 +1026,26 @@ impl Sidebar {
     }
 
     fn execute_item(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        // Retry sentinels for failed metric fetches have a non-parseable ID of the
+        // form "metrics-retry|<profile_id>|<database_name>".  Handle them before
+        // attempting to parse as a SchemaNodeId.
+        if let Some(rest) = item_id.strip_prefix("metrics-retry|") {
+            let parts: Vec<&str> = rest.splitn(2, '|').collect();
+            if let (Some(profile_id_str), Some(database)) = (parts.first(), parts.get(1))
+                && let Ok(profile_id) = profile_id_str.parse::<Uuid>()
+            {
+                // Clear the stale error so the fetch guard won't block.
+                let error_key = SchemaNodeId::MetricsFolder {
+                    profile_id,
+                    database: (*database).to_string(),
+                }
+                .to_string();
+                self.metric_fetch_errors.remove(&error_key);
+                self.spawn_fetch_metric_namespaces(profile_id, database, cx);
+            }
+            return;
+        }
+
         let Some(node_id) = parse_node_id(item_id) else {
             return;
         };
@@ -1069,6 +1113,18 @@ impl Sidebar {
                     title: specific_name.clone(),
                     schema,
                     specific_name,
+                });
+            }
+            SchemaNodeId::MetricLeaf {
+                profile_id,
+                namespace,
+                metric_name,
+                ..
+            } => {
+                cx.emit(SidebarEvent::OpenMetricChart {
+                    profile_id,
+                    namespace,
+                    metric_name,
                 });
             }
             SchemaNodeId::Database { .. } => {
@@ -1628,6 +1684,76 @@ mod tests {
 
         assert!(toast.is_error);
         assert_eq!(toast.message, "No driver registered for 'sqlite'");
+    }
+
+    #[test]
+    fn metric_leaf_node_id_roundtrips() {
+        // Validates that MetricLeaf node IDs parse correctly so execute_item can
+        // route them to the OpenMetricChart event branch.
+        let profile_id = test_uuid();
+        let id = SchemaNodeId::MetricLeaf {
+            profile_id,
+            database: "default".into(),
+            namespace: "AWS/EC2".into(),
+            metric_name: "CPUUtilization".into(),
+        };
+        let s = id.to_string();
+        let parsed: SchemaNodeId = s.parse().expect("MetricLeaf must round-trip");
+        assert_eq!(parsed, id);
+
+        // Check that the kind is MetricLeaf
+        assert_eq!(parsed.kind(), SchemaNodeKind::MetricLeaf);
+    }
+
+    #[test]
+    fn open_metric_chart_event_carries_expected_fields() {
+        use super::SidebarEvent;
+        // Validates that the SidebarEvent::OpenMetricChart variant exists and carries
+        // the correct field types.  This is effectively a compile-time correctness check.
+        let profile_id = test_uuid();
+        let event = SidebarEvent::OpenMetricChart {
+            profile_id,
+            namespace: "AWS/EC2".to_string(),
+            metric_name: "CPUUtilization".to_string(),
+        };
+        match event {
+            SidebarEvent::OpenMetricChart {
+                profile_id: pid,
+                namespace,
+                metric_name,
+            } => {
+                assert_eq!(pid, profile_id);
+                assert_eq!(namespace, "AWS/EC2");
+                assert_eq!(metric_name, "CPUUtilization");
+            }
+            _ => panic!("Expected OpenMetricChart variant"),
+        }
+    }
+
+    #[test]
+    fn retry_sentinel_id_parses_correctly() {
+        // Validates that the metrics-retry sentinel format is understood:
+        // execute_item checks for the "metrics-retry|" prefix before attempting
+        // SchemaNodeId parsing, so the sentinel must survive a round-trip through
+        // the prefix-strip and UUID parse.
+        let profile_id = test_uuid();
+        let database = "default";
+        let sentinel = format!("metrics-retry|{}|{}", profile_id, database);
+
+        assert!(sentinel.starts_with("metrics-retry|"));
+        let rest = sentinel.strip_prefix("metrics-retry|").unwrap();
+        let parts: Vec<&str> = rest.splitn(2, '|').collect();
+        assert_eq!(parts.len(), 2);
+        let parsed_id: Uuid = parts[0].parse().expect("UUID in sentinel must parse");
+        assert_eq!(parsed_id, profile_id);
+        assert_eq!(parts[1], database);
+
+        // The sentinel must NOT parse as a valid SchemaNodeId.
+        let not_a_node: Result<SchemaNodeId, _> = sentinel.parse();
+        assert!(
+            not_a_node.is_err(),
+            "Retry sentinel must not parse as SchemaNodeId"
+        );
     }
 
     #[test]
