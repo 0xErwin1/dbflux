@@ -27,6 +27,7 @@ use dbflux_components::controls::DropdownSelectionChanged;
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::Text;
 use dbflux_components::result_panel::ResultPanel;
+use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast, now_hms};
 use gpui::prelude::*;
@@ -326,10 +327,13 @@ impl ChartDocument {
         let chart_shell_for_group = self.chart_shell.clone();
         let chart_shell_for_agg = self.chart_shell.clone();
 
+        let chart_colors = ChartColors::for_current(cx);
+
         let axis_bar = axis_bar_element(
             &bindings,
             &columns,
             open_pill,
+            &chart_colors,
             move |pill, _window, cx| {
                 chart_shell_for_pill.update(cx, |s, cx| s.toggle_axis_pill(pill, cx));
             },
