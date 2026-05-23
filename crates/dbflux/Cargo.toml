@@ -40,99 +40,34 @@ indexmap.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-[dependencies.dbflux_driver_sqlite]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_postgres]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_mysql]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_mongodb]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_redis]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_dynamodb]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_cloudwatch]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_influxdb]
-workspace = true
-optional = true
-
-[dependencies.dbflux_driver_mssql]
-workspace = true
-optional = true
-
-[dependencies.dbflux_aws]
-workspace = true
-optional = true
-
-[dependencies.dbflux_ssm]
-workspace = true
-optional = true
-
-[dependencies.dbflux_lua]
-workspace = true
-optional = true
-
-[dependencies.dbflux_export]
-workspace = true
-optional = true
+# The binary registers drivers and runtime features through `dbflux_app`, not
+# directly. Optional dep declarations on driver crates would be dead weight
+# (no `use ...` in this crate), so they live on `dbflux_app` instead. The few
+# optional deps below exist only for feature passthroughs that this manifest
+# itself exposes (e.g. `vendored-openssl` on `dbflux_ssh`).
 
 [dependencies.dbflux_ssh]
-workspace = true
-optional = true
-
-[dependencies.dbflux_proxy]
-workspace = true
-optional = true
-
-[dependencies.dbflux_mcp]
-workspace = true
-optional = true
-
-[dependencies.dbflux_mcp_server]
-workspace = true
-optional = true
-
-[dependencies.dbflux_policy]
-workspace = true
-optional = true
-
-[dependencies.dbflux_approval]
 workspace = true
 optional = true
 
 [features]
 default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "lua", "aws", "mcp"]
 # dbflux_ui is driver-agnostic, so driver features only drive dbflux_app (which
-# registers the drivers and relays to the MCP server). The mcp_server driver
-# relay that used to pass through dbflux_ui now lives in dbflux_app.
+# registers the drivers and relays to the MCP server). The binary does not need
+# to declare driver/runtime crates as direct optional deps — `dbflux_app/<feat>`
+# pulls them in through dbflux_app's own optional deps.
 sqlite = ["dbflux_app/sqlite"]
 postgres = ["dbflux_app/postgres"]
 mysql = ["dbflux_app/mysql"]
 mongodb = ["dbflux_app/mongodb"]
 redis = ["dbflux_app/redis"]
 dynamodb = ["dbflux_app/dynamodb"]
-cloudwatch = ["dbflux_driver_cloudwatch", "dbflux_app/cloudwatch"]
-influxdb = ["dbflux_driver_influxdb", "dbflux_app/influxdb"]
-mssql = ["dbflux_driver_mssql", "dbflux_app/mssql"]
-lua = ["dbflux_lua", "dbflux_app/lua", "dbflux_ui/lua"]
-aws = ["dbflux_aws", "dbflux_ssm", "dbflux_app/aws", "dbflux_ui/aws"]
-mcp = ["dbflux_mcp", "dbflux_mcp_server", "dbflux_policy", "dbflux_approval", "dbflux_app/mcp", "dbflux_ui/mcp"]
+cloudwatch = ["dbflux_app/cloudwatch"]
+influxdb = ["dbflux_app/influxdb"]
+mssql = ["dbflux_app/mssql"]
+lua = ["dbflux_app/lua", "dbflux_ui/lua"]
+aws = ["dbflux_app/aws", "dbflux_ui/aws"]
+mcp = ["dbflux_app/mcp", "dbflux_ui/mcp"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]
