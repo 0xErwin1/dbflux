@@ -33,7 +33,26 @@ pub trait CloudWatchListMetricsClient: Send + Sync {
 // Real client adapter (wraps aws_sdk_cloudwatch::Client)
 // ---------------------------------------------------------------------------
 
-pub(crate) struct RealCloudWatchClient(pub aws_sdk_cloudwatch::Client);
+pub(crate) struct RealCloudWatchClient {
+    client: aws_sdk_cloudwatch::Client,
+    /// Long-lived Tokio runtime shared across all `list_metrics` calls.
+    ///
+    /// Constructing a new runtime per call (previous behavior) wasted file
+    /// descriptors and made full-namespace sweeps very expensive — each page
+    /// would spin up and tear down its own reactor.
+    runtime: tokio::runtime::Runtime,
+}
+
+impl RealCloudWatchClient {
+    /// Build a client adapter with a long-lived runtime.
+    ///
+    /// Returns an error if the runtime cannot be constructed.
+    pub(crate) fn new(client: aws_sdk_cloudwatch::Client) -> Result<Self, DbError> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|e| DbError::connection_failed(format!("Tokio runtime setup failed: {e}")))?;
+        Ok(Self { client, runtime })
+    }
+}
 
 impl CloudWatchListMetricsClient for RealCloudWatchClient {
     fn list_metrics(
@@ -41,10 +60,7 @@ impl CloudWatchListMetricsClient for RealCloudWatchClient {
         ns: Option<&str>,
         token: Option<&str>,
     ) -> Result<(Vec<SdkMetric>, Option<String>), DbError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| DbError::connection_failed(format!("Tokio runtime setup failed: {e}")))?;
-
-        let mut req = self.0.list_metrics();
+        let mut req = self.client.list_metrics();
         if let Some(n) = ns {
             req = req.namespace(n);
         }
@@ -52,7 +68,8 @@ impl CloudWatchListMetricsClient for RealCloudWatchClient {
             req = req.next_token(t);
         }
 
-        let output = rt
+        let output = self
+            .runtime
             .block_on(req.send())
             .map_err(|e| DbError::connection_failed(format!("{e}")))?;
 
@@ -62,6 +79,21 @@ impl CloudWatchListMetricsClient for RealCloudWatchClient {
         Ok((metrics, next_token))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Sweep limits
+// ---------------------------------------------------------------------------
+
+/// Hard cap on `ListMetrics` pages consumed during a single
+/// `list_namespaces` sweep.
+///
+/// CloudWatch returns up to 500 metrics per page; this cap bounds the worst-case
+/// sweep at roughly 25,000 metrics. On very large accounts (typically AWS
+/// service-owned namespaces with per-instance metric explosion) the sweep
+/// returns early instead of running indefinitely. The cap is documented in the
+/// crate README and CHANGELOG; a full timeout + cancellation infrastructure is
+/// tracked as a follow-up.
+const MAX_NAMESPACE_SWEEP_PAGES: usize = 50;
 
 // ---------------------------------------------------------------------------
 // CloudWatchMetricCatalog
@@ -81,28 +113,6 @@ impl CloudWatchMetricCatalog {
     pub fn new(client: Box<dyn CloudWatchListMetricsClient>) -> Self {
         Self { client }
     }
-
-    /// Expose recorded calls for test assertions when the client is a mock.
-    ///
-    /// This method is only called from unit tests via the mock's own
-    /// `recorded_calls()` method; this is a convenience wrapper on
-    /// `CloudWatchMetricCatalog` that tests can use if needed.
-    #[cfg(test)]
-    pub fn inner_client_calls(&self) -> Vec<(Option<String>, Option<String>)> {
-        // Downcast via Any is intentionally avoided — tests access the mock
-        // directly. This method exists as a delegation point for the test that
-        // uses `MockListMetricsClient::recorded_calls()` through the
-        // `CloudWatchMetricCatalog` wrapper.
-        //
-        // Since `CloudWatchListMetricsClient` is not `Any`, we surface the
-        // call record by casting via a known test helper. For actual unit
-        // tests in this crate the mock exposes its own `recorded_calls()`.
-        //
-        // We re-implement a simple workaround: tests in `tests/` can access
-        // the mock directly; tests that go through `CloudWatchMetricCatalog`
-        // use a wrapper. Kept as a placeholder for future test wiring.
-        vec![] // placeholder; real tests access the mock directly
-    }
 }
 
 impl MetricCatalog for CloudWatchMetricCatalog {
@@ -115,9 +125,11 @@ impl MetricCatalog for CloudWatchMetricCatalog {
     fn list_namespaces(&self) -> Result<Vec<MetricNamespace>, DbError> {
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut token: Option<String> = None;
+        let mut pages = 0_usize;
 
         loop {
             let (metrics, next) = self.client.list_metrics(None, token.as_deref())?;
+            pages += 1;
 
             for m in &metrics {
                 if let Some(ns) = m.namespace() {
@@ -127,6 +139,17 @@ impl MetricCatalog for CloudWatchMetricCatalog {
 
             token = next;
             if token.is_none() {
+                break;
+            }
+
+            // Bound the worst case for accounts with massive metric volume.
+            // The user sees the namespaces collected so far; the cap is
+            // documented in the crate README.
+            if pages >= MAX_NAMESPACE_SWEEP_PAGES {
+                log::warn!(
+                    "[cloudwatch] list_namespaces hit page cap of {} (results truncated)",
+                    MAX_NAMESPACE_SWEEP_PAGES
+                );
                 break;
             }
         }

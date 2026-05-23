@@ -29,5 +29,5 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 - Read-only: no mutation, DDL, transaction, or pagination capabilities are declared (`query`, `mutation`, `ddl`, `transactions`, `limits` are all `None`); `schema_features` is empty.
 - No SSL form (TLS handled by the AWS SDK transport).
 - Metrics execution supports a single `MetricDataQuery` per request per call.
-- The namespace list synthesis (sweeping `ListMetrics` with no filter) can be slow for large AWS accounts with many metrics; it is cached for the session once complete.
+- The namespace list synthesis (sweeping `ListMetrics` with no filter) can be slow for large AWS accounts with many metrics; it is cached for the session once complete. The sweep is capped at 50 pages (~25,000 metrics) to bound the worst case on very large accounts. When the cap is hit, the namespace list is truncated silently and a warning is logged; a future change will replace the cap with full timeout + cancellation infrastructure.
 - Live integration tests for metrics (`live_execute_cloudwatch_metric`) require real AWS credentials and are `#[ignore]`d by default. LocalStack Community does not support the CloudWatch Metrics API.

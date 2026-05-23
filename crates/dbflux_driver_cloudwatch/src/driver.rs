@@ -174,8 +174,9 @@ impl DbDriver for CloudWatchDriver {
 
         probe_connection(&client, &config)?;
 
-        let metric_catalog_impl =
-            CloudWatchMetricCatalog::new(Box::new(RealCloudWatchClient(metrics_client.clone())));
+        let metric_catalog_impl = CloudWatchMetricCatalog::new(Box::new(
+            RealCloudWatchClient::new(metrics_client.clone())?,
+        ));
 
         Ok(Box::new(CloudWatchConnection {
             client,

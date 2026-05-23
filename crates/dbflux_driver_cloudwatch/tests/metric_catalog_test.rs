@@ -1,5 +1,17 @@
 // TDD RED phase: tests written before the MetricCatalog implementation.
 // All tests use the `CloudWatchListMetricsClient` mock seam.
+//
+// Clippy allow-list: tests rely on direct unwraps and indexed access for
+// brevity; these are accepted in integration test files but trigger
+// `-D warnings` under `cargo clippy --tests`.
+#![allow(
+    clippy::unwrap_used,
+    clippy::unwrap_in_result,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::type_complexity,
+    dead_code
+)]
 
 use dbflux_core::{DbError, MetricCatalog, MetricNamespace};
 use dbflux_driver_cloudwatch::metric_catalog::{
