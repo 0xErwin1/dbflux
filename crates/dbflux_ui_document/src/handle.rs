@@ -26,4 +26,9 @@ pub enum DocumentEvent {
         query: String,
         connection_id: Option<uuid::Uuid>,
     },
+    /// The chart document's active data source was replaced via `set_data_source`.
+    ///
+    /// Subscribers (e.g. the tab bar title chip) use this to refresh the
+    /// displayed title without polling on every render.
+    DataSourceChanged,
 }

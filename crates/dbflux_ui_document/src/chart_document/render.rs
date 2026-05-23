@@ -92,6 +92,13 @@ impl Render for ChartDocument {
             panel.update(cx, |panel, cx| panel.emit_initial(cx));
         }
 
+        // -- Consume pending data-source swap from MetricPickerApplied event.
+        // Must run before the reexecute drain so the new source is in place
+        // when the immediate re-execution request is issued.
+        if let Some(source) = self.pending_data_source.take() {
+            self.set_data_source(source, window, cx);
+        }
+
         // -- Drain pending chart re-execute triggered by time-range changes.
         if std::mem::take(&mut self.pending_chart_reexecute) {
             self.request_reexecute(window, cx);

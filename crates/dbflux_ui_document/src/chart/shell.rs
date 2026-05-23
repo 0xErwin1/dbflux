@@ -5,12 +5,16 @@
 //! `ChartHost` can mount a `ChartShell` to get full chart UX (toolbar,
 //! legend, rail, hidden-series management) without duplicating state.
 
-/// Active tab in the chart Configure/Stats rail.
+/// Active tab in the chart Configure/Stats/Metric rail.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChartRailTab {
     #[default]
     Configure,
     Stats,
+    /// Metric picker rail — visible only when the connection supports
+    /// `DriverCapabilities::METRIC_CATALOG`. Shows namespace / metric / dimension
+    /// selection columns and a config section with period + statistic controls.
+    Metric,
 }
 
 use super::host::{ChartHost, HostAdapter};
