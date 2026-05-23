@@ -127,6 +127,37 @@ pub enum ChartDataPlan {
 }
 
 // ---------------------------------------------------------------------------
+// ChartSourceDescription
+// ---------------------------------------------------------------------------
+
+/// Human-readable metadata about a chart data source.
+///
+/// Used by `ChartDocument::set_data_source` to update the tab title when a
+/// new source is installed. All fields are optional so that implementations
+/// can provide only the information they know about.
+#[derive(Debug, Clone, Default)]
+pub struct ChartSourceDescription {
+    /// Optional display title for the chart tab.
+    ///
+    /// When `Some`, `ChartDocument` updates its `title` field to this value.
+    /// When `None`, the existing title is kept.
+    pub title: Option<String>,
+}
+
+impl ChartSourceDescription {
+    /// Returns a description with no information — used by sentinel sources
+    /// such as `EmptyChartSource` that carry no displayable metadata.
+    pub fn empty() -> Self {
+        Self { title: None }
+    }
+
+    /// Returns the display title, if any.
+    pub fn display_title(&self) -> Option<String> {
+        self.title.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ChartDataSource trait
 // ---------------------------------------------------------------------------
 
@@ -142,6 +173,23 @@ pub trait ChartDataSource: Send + 'static {
     /// Pure and synchronous — no IO, no GPUI context. All execution (driver
     /// round-trips, store aggregation) stays in the host crate.
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError>;
+
+    /// Returns human-readable metadata about this source.
+    ///
+    /// Used by `ChartDocument::set_data_source` to update the tab title.
+    /// Default implementation returns an empty description so existing
+    /// implementations do not need to opt in.
+    fn describe(&self) -> ChartSourceDescription {
+        ChartSourceDescription::empty()
+    }
+
+    /// Clone this source into a new heap-allocated box.
+    ///
+    /// Needed because `Clone` is not object-safe. The picker emits a
+    /// `ChartShellEvent::MetricPickerApplied(Box<dyn ChartDataSource>)` and
+    /// `ChartDocument` stashes the source in a `pending_data_source` field;
+    /// `clone_box` lets that field be cloned without knowing the concrete type.
+    fn clone_box(&self) -> Box<dyn ChartDataSource>;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +212,10 @@ impl QuerySource {
 }
 
 impl ChartDataSource for QuerySource {
+    fn clone_box(&self) -> Box<dyn ChartDataSource> {
+        Box::new(QuerySource { query: self.query.clone() })
+    }
+
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
         let q = self.query.trim();
 
@@ -213,6 +265,10 @@ pub(crate) struct CollectionSource {
 }
 
 impl ChartDataSource for CollectionSource {
+    fn clone_box(&self) -> Box<dyn ChartDataSource> {
+        Box::new(CollectionSource { collection_ref: self.collection_ref.clone() })
+    }
+
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
         // A window is mandatory: CollectionWindow requires concrete start/end bounds.
         let w = window.ok_or(ChartSourceError::WindowRequired)?;
@@ -254,6 +310,7 @@ impl ChartDataSource for CollectionSource {
 ///
 /// `MetricSource` is constructed directly by the UI entry point (not via
 /// `SavedChartSource`) — same pattern as `AuditSource`.
+#[derive(Clone)]
 pub struct MetricSource {
     pub namespace: String,
     pub metric_name: String,
@@ -266,6 +323,16 @@ pub struct MetricSource {
 }
 
 impl ChartDataSource for MetricSource {
+    fn clone_box(&self) -> Box<dyn ChartDataSource> {
+        Box::new(self.clone())
+    }
+
+    fn describe(&self) -> ChartSourceDescription {
+        ChartSourceDescription {
+            title: Some(format!("{} / {}", self.namespace, self.metric_name)),
+        }
+    }
+
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
         // GetMetricData requires explicit StartTime/EndTime — window is mandatory.
         let w = window.ok_or(ChartSourceError::WindowRequired)?;
@@ -309,6 +376,10 @@ pub struct AuditSource {
 }
 
 impl ChartDataSource for AuditSource {
+    fn clone_box(&self) -> Box<dyn ChartDataSource> {
+        Box::new(AuditSource { spec: self.spec.clone() })
+    }
+
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
         let mut spec = self.spec.clone();
 
@@ -319,6 +390,36 @@ impl ChartDataSource for AuditSource {
         }
 
         Ok(ChartDataPlan::LocalAudit(spec))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EmptyChartSource
+// ---------------------------------------------------------------------------
+
+/// Sentinel source used when `ChartDocument` has no real data source yet.
+///
+/// `build_plan` always returns `Err(ChartSourceError::EmptyQuery)`, which is
+/// already silently handled by `ChartDocument::request_reexecute` at the
+/// `EmptyQuery` short-circuit path — no query is executed and no error is
+/// surfaced to the user.
+///
+/// Using a sentinel rather than `Option<Box<dyn ChartDataSource>>` keeps the
+/// ~6 call sites that reference `data_source` free from `Option`-unwrapping
+/// boilerplate.
+pub struct EmptyChartSource;
+
+impl ChartDataSource for EmptyChartSource {
+    fn clone_box(&self) -> Box<dyn ChartDataSource> {
+        Box::new(EmptyChartSource)
+    }
+
+    fn describe(&self) -> ChartSourceDescription {
+        ChartSourceDescription::empty()
+    }
+
+    fn build_plan(&self, _window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
+        Err(ChartSourceError::EmptyQuery)
     }
 }
 
@@ -813,5 +914,84 @@ mod tests {
             outcomes: vec![],
             free_text: None,
         };
+    }
+
+    // --- Phase 2: EmptyChartSource + clone_box (TDD RED) ---
+
+    /// EmptyChartSource::build_plan must return EmptyQuery regardless of window.
+    #[test]
+    fn empty_chart_source_build_plan_returns_empty_query() {
+        let src = EmptyChartSource;
+        let result = src.build_plan(None);
+
+        assert!(
+            matches!(result, Err(ChartSourceError::EmptyQuery)),
+            "EmptyChartSource must return EmptyQuery, got: {:?}",
+            result
+        );
+    }
+
+    /// EmptyChartSource::build_plan returns EmptyQuery even when a window is supplied.
+    #[test]
+    fn empty_chart_source_build_plan_with_window_returns_empty_query() {
+        let src = EmptyChartSource;
+        let window = TimeWindow { start_ms: 1_000, end_ms: 2_000 };
+        let result = src.build_plan(Some(window));
+
+        assert!(
+            matches!(result, Err(ChartSourceError::EmptyQuery)),
+            "EmptyChartSource with window must still return EmptyQuery, got: {:?}",
+            result
+        );
+    }
+
+    /// EmptyChartSource::clone_box must produce a usable Box<dyn ChartDataSource>.
+    #[test]
+    fn empty_chart_source_clone_box_produces_usable_source() {
+        let original = EmptyChartSource;
+        let cloned = original.clone_box();
+
+        // The clone must also return EmptyQuery.
+        assert!(
+            matches!(cloned.build_plan(None), Err(ChartSourceError::EmptyQuery)),
+            "cloned EmptyChartSource must also return EmptyQuery"
+        );
+    }
+
+    /// MetricSource::clone_box must produce a box with equal fields.
+    #[test]
+    fn metric_source_clone_box_produces_equal_source() {
+        let src = MetricSource {
+            namespace: "AWS/EC2".to_string(),
+            metric_name: "CPUUtilization".to_string(),
+            dimensions: vec![("InstanceId".to_string(), "i-abc".to_string())],
+            period_s: 300,
+            statistic: "Average".to_string(),
+        };
+
+        let cloned = src.clone_box();
+
+        // The cloned source must produce an identical plan for the same window.
+        let window = TimeWindow { start_ms: 1_000, end_ms: 2_000 };
+        let original_plan = src
+            .build_plan(Some(window))
+            .expect("MetricSource must succeed");
+        let cloned_plan = cloned
+            .build_plan(Some(window))
+            .expect("cloned MetricSource must succeed");
+
+        // Both plans are ChartDataPlan::Driver — compare their query requests.
+        let ChartDataPlan::Driver(orig_req) = original_plan else {
+            panic!("expected Driver plan");
+        };
+        let ChartDataPlan::Driver(clone_req) = cloned_plan else {
+            panic!("expected Driver plan");
+        };
+
+        assert_eq!(
+            orig_req.execution_context,
+            clone_req.execution_context,
+            "cloned MetricSource must produce identical execution context"
+        );
     }
 }
