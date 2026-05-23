@@ -306,7 +306,12 @@ impl CodeDocument {
             .as_ref()
             .is_some_and(|spec| !spec.start_label.is_empty() && !spec.end_label.is_empty());
 
-        if !wants_panel {
+        // Only tear down when the spec is resolved AND explicitly does not want
+        // a panel. A transient `source_spec = None` (e.g. mid-schema-reload on
+        // an AppStateChanged) would otherwise destroy the panel and force a
+        // re-seed of the default preset on the next render — clobbering any
+        // custom window the user just applied via the chart toolbar.
+        if !wants_panel && source_spec.is_some() {
             self.source_time_range_panel = None;
             self._source_time_range_sub = None;
         }
