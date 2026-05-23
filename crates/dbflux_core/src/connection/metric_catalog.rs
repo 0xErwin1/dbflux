@@ -104,15 +104,9 @@ mod tests {
     /// DimensionFilter::FilterTo must compare by its contained Vec contents.
     #[test]
     fn dimension_filter_filter_to_equality_by_contents() {
-        let a = DimensionFilter::FilterTo(vec![
-            ("InstanceId".to_string(), "i-abc".to_string()),
-        ]);
-        let b = DimensionFilter::FilterTo(vec![
-            ("InstanceId".to_string(), "i-abc".to_string()),
-        ]);
-        let c = DimensionFilter::FilterTo(vec![
-            ("InstanceId".to_string(), "i-xyz".to_string()),
-        ]);
+        let a = DimensionFilter::FilterTo(vec![("InstanceId".to_string(), "i-abc".to_string())]);
+        let b = DimensionFilter::FilterTo(vec![("InstanceId".to_string(), "i-abc".to_string())]);
+        let c = DimensionFilter::FilterTo(vec![("InstanceId".to_string(), "i-xyz".to_string())]);
 
         assert_eq!(a, b);
         assert_ne!(a, c);

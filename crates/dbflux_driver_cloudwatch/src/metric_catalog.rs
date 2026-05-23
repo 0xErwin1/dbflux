@@ -41,9 +41,8 @@ impl CloudWatchListMetricsClient for RealCloudWatchClient {
         ns: Option<&str>,
         token: Option<&str>,
     ) -> Result<(Vec<SdkMetric>, Option<String>), DbError> {
-        let rt = tokio::runtime::Runtime::new().map_err(|e| {
-            DbError::connection_failed(format!("Tokio runtime setup failed: {e}"))
-        })?;
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| DbError::connection_failed(format!("Tokio runtime setup failed: {e}")))?;
 
         let mut req = self.0.list_metrics();
         if let Some(n) = ns {
@@ -118,9 +117,7 @@ impl MetricCatalog for CloudWatchMetricCatalog {
         let mut token: Option<String> = None;
 
         loop {
-            let (metrics, next) = self
-                .client
-                .list_metrics(None, token.as_deref())?;
+            let (metrics, next) = self.client.list_metrics(None, token.as_deref())?;
 
             for m in &metrics {
                 if let Some(ns) = m.namespace() {
@@ -150,10 +147,7 @@ impl MetricCatalog for CloudWatchMetricCatalog {
             .client
             .list_metrics(Some(namespace.as_str()), next_token)?;
 
-        let descriptors = metrics
-            .into_iter()
-            .map(sdk_metric_to_descriptor)
-            .collect();
+        let descriptors = metrics.into_iter().map(sdk_metric_to_descriptor).collect();
 
         Ok(MetricCatalogPage {
             metrics: descriptors,

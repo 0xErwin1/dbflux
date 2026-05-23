@@ -125,10 +125,7 @@ impl MetricCatalogCache {
     /// Store a completed namespace fetch result.
     pub fn store_namespaces(&self, profile_id: Uuid, namespaces: Vec<MetricNamespace>) {
         let mut inner = self.inner.lock().expect("MetricCatalogCache lock poisoned");
-        inner
-            .entry(profile_id)
-            .or_default()
-            .namespaces = Some(Arc::new(namespaces));
+        inner.entry(profile_id).or_default().namespaces = Some(Arc::new(namespaces));
     }
 
     /// Append a fetched metrics page to the accumulator for `(profile_id, namespace)`.
@@ -170,11 +167,7 @@ impl MetricCatalogCache {
     /// Return the stored continuation token for the next page, if any.
     ///
     /// Returns `None` if no entry exists or the namespace is fully loaded.
-    pub fn peek_next_token(
-        &self,
-        profile_id: Uuid,
-        namespace: &MetricNamespace,
-    ) -> Option<String> {
+    pub fn peek_next_token(&self, profile_id: Uuid, namespace: &MetricNamespace) -> Option<String> {
         self.inner
             .lock()
             .expect("MetricCatalogCache lock poisoned")
@@ -307,10 +300,7 @@ mod tests {
 
         cache.invalidate(id1);
 
-        assert!(
-            cache.peek_namespaces(id1).is_none(),
-            "id1 must be cleared"
-        );
+        assert!(cache.peek_namespaces(id1).is_none(), "id1 must be cleared");
         assert!(
             cache.peek_namespaces(id2).is_some(),
             "id2 must be unaffected"
@@ -359,7 +349,10 @@ mod tests {
         assert!(cache.peek_namespaces(id).is_none(), "must return None");
 
         // Second call still returns None, not an error or panic.
-        assert!(cache.peek_namespaces(id).is_none(), "retry must still return None");
+        assert!(
+            cache.peek_namespaces(id).is_none(),
+            "retry must still return None"
+        );
 
         // Now a successful store arrives.
         cache.store_namespaces(id, vec![ns("AWS/EC2")]);
@@ -388,15 +381,13 @@ mod tests {
         assert!(!view.fully_loaded);
 
         // Second page: 1 metric, no continuation token.
-        let view2 = cache.store_metrics_page(
-            id,
-            ns_name.clone(),
-            vec![metric("NetworkOut")],
-            None,
-        );
+        let view2 = cache.store_metrics_page(id, ns_name.clone(), vec![metric("NetworkOut")], None);
 
         assert_eq!(view2.accumulated.len(), 3, "must accumulate across pages");
-        assert!(view2.fully_loaded, "fully_loaded must be true after final page");
+        assert!(
+            view2.fully_loaded,
+            "fully_loaded must be true after final page"
+        );
 
         let peek = cache.peek_metrics(id, &ns_name).unwrap();
         assert_eq!(peek.accumulated.len(), 3);

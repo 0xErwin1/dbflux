@@ -887,9 +887,7 @@ impl AppState {
     }
 
     /// Access the session-scoped metric catalog cache.
-    pub fn metric_catalog_cache(
-        &self,
-    ) -> &Arc<crate::metric_catalog_cache::MetricCatalogCache> {
+    pub fn metric_catalog_cache(&self) -> &Arc<crate::metric_catalog_cache::MetricCatalogCache> {
         &self.metric_catalog_cache
     }
 

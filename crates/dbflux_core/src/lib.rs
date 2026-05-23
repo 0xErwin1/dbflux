@@ -63,7 +63,9 @@ pub use connection::{
     ssl_mode_requires_root_cert,
 };
 
-pub use connection::{DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace};
+pub use connection::{
+    DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace,
+};
 
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,

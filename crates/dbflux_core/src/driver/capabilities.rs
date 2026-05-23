@@ -2642,7 +2642,11 @@ mod tests {
         let bits = DriverCapabilities::METRIC_CATALOG.bits();
 
         assert_eq!(bits, 1u64 << 50, "METRIC_CATALOG must equal 1 << 50");
-        assert_eq!(bits.count_ones(), 1, "METRIC_CATALOG must be a power of two");
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "METRIC_CATALOG must be a power of two"
+        );
         assert_ne!(
             bits,
             DriverCapabilities::METRIC_SERIES.bits(),

@@ -213,7 +213,9 @@ impl QuerySource {
 
 impl ChartDataSource for QuerySource {
     fn clone_box(&self) -> Box<dyn ChartDataSource> {
-        Box::new(QuerySource { query: self.query.clone() })
+        Box::new(QuerySource {
+            query: self.query.clone(),
+        })
     }
 
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
@@ -266,7 +268,9 @@ pub(crate) struct CollectionSource {
 
 impl ChartDataSource for CollectionSource {
     fn clone_box(&self) -> Box<dyn ChartDataSource> {
-        Box::new(CollectionSource { collection_ref: self.collection_ref.clone() })
+        Box::new(CollectionSource {
+            collection_ref: self.collection_ref.clone(),
+        })
     }
 
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
@@ -377,7 +381,9 @@ pub struct AuditSource {
 
 impl ChartDataSource for AuditSource {
     fn clone_box(&self) -> Box<dyn ChartDataSource> {
-        Box::new(AuditSource { spec: self.spec.clone() })
+        Box::new(AuditSource {
+            spec: self.spec.clone(),
+        })
     }
 
     fn build_plan(&self, window: Option<TimeWindow>) -> Result<ChartDataPlan, ChartSourceError> {
@@ -935,7 +941,10 @@ mod tests {
     #[test]
     fn empty_chart_source_build_plan_with_window_returns_empty_query() {
         let src = EmptyChartSource;
-        let window = TimeWindow { start_ms: 1_000, end_ms: 2_000 };
+        let window = TimeWindow {
+            start_ms: 1_000,
+            end_ms: 2_000,
+        };
         let result = src.build_plan(Some(window));
 
         assert!(
@@ -972,7 +981,10 @@ mod tests {
         let cloned = src.clone_box();
 
         // The cloned source must produce an identical plan for the same window.
-        let window = TimeWindow { start_ms: 1_000, end_ms: 2_000 };
+        let window = TimeWindow {
+            start_ms: 1_000,
+            end_ms: 2_000,
+        };
         let original_plan = src
             .build_plan(Some(window))
             .expect("MetricSource must succeed");
@@ -989,8 +1001,7 @@ mod tests {
         };
 
         assert_eq!(
-            orig_req.execution_context,
-            clone_req.execution_context,
+            orig_req.execution_context, clone_req.execution_context,
             "cloned MetricSource must produce identical execution context"
         );
     }

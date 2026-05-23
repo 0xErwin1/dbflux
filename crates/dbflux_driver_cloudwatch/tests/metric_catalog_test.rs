@@ -46,7 +46,10 @@ impl CloudWatchListMetricsClient for MockListMetricsClient {
             .push((ns.map(ToOwned::to_owned), token.map(ToOwned::to_owned)));
 
         let mut pages = self.pages.lock().unwrap();
-        assert!(!pages.is_empty(), "mock exhausted — test called list_metrics too many times");
+        assert!(
+            !pages.is_empty(),
+            "mock exhausted — test called list_metrics too many times"
+        );
         Ok(pages.remove(0))
     }
 }
@@ -96,7 +99,11 @@ fn list_namespaces_returns_sorted_distinct_namespaces() {
     // Must be sorted and deduplicated.
     assert_eq!(
         namespaces,
-        vec!["AWS/EC2".to_string(), "AWS/Lambda".to_string(), "AWS/S3".to_string(),],
+        vec![
+            "AWS/EC2".to_string(),
+            "AWS/Lambda".to_string(),
+            "AWS/S3".to_string(),
+        ],
         "namespaces must be sorted and distinct"
     );
 }
