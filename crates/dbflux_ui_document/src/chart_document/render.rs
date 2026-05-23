@@ -484,19 +484,24 @@ impl ChartDocument {
             };
 
             if rail_open && rail_tab == ChartRailTab::Metric {
-                let has_picker = self.chart_shell.read(cx).metric_picker.is_some();
-                if has_picker {
-                    let cache = self.app_state.read(cx).metric_catalog_cache().clone();
-                    let rail_element = self.chart_shell.update(cx, |shell, cx| {
-                        let picker = shell.metric_picker.as_mut().unwrap();
+                // Single read+update path: render the picker inside one
+                // `update` closure so a concurrent clear of `metric_picker`
+                // (subscription, pending action) cannot turn the previously
+                // observed `Some` into a `None` between the read and the update.
+                let cache = self.app_state.read(cx).metric_catalog_cache().clone();
+                let rail_element: Option<AnyElement> = self.chart_shell.update(cx, |shell, cx| {
+                    shell.metric_picker.as_mut().map(|picker| {
                         MetricPickerView {
                             state: picker,
                             cache: &cache,
                         }
                         .render(window, cx)
                         .into_any_element()
-                    });
-                    let rail_panel = div()
+                    })
+                });
+
+                rail_element.map(|element| {
+                    div()
                         .absolute()
                         .top_0()
                         .right_0()
@@ -508,17 +513,9 @@ impl ChartDocument {
                         .border_color(theme.border)
                         .bg(theme.popover)
                         .occlude()
-                        .child(
-                            div()
-                                .flex_grow()
-                                .min_h_0()
-                                .overflow_hidden()
-                                .child(rail_element),
-                        );
-                    Some(rail_panel.into_any_element())
-                } else {
-                    None
-                }
+                        .child(div().flex_grow().min_h_0().overflow_hidden().child(element))
+                        .into_any_element()
+                })
             } else {
                 None
             }

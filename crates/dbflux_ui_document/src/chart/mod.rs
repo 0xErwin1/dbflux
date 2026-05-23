@@ -12,6 +12,6 @@ pub mod shell;
 pub mod toolbar;
 
 pub use host::{ChartHost, HostAdapter};
-pub use metric_picker::{MetricPickerState, host_supports_metric_catalog};
+pub use metric_picker::MetricPickerState;
 pub use shell::{ChartRailTab, ChartShell, ChartShellEvent};
 pub use toolbar::{ActionHandler, ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
