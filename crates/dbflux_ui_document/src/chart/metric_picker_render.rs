@@ -98,7 +98,15 @@ impl<'a> MetricPickerView<'a> {
                     && !ks.modifiers.shift
                     && !ks.modifiers.alt
                     && (ks.modifiers.platform || ks.modifiers.control);
-                if is_apply && let Some(picker) = &shell.metric_picker {
+                if is_apply && let Some(picker) = &mut shell.metric_picker {
+                    // Flush any pending Custom… inputs so the user does not
+                    // need to press Enter inside the input before Apply.
+                    // If validation fails the inline error is shown and Apply
+                    // is suppressed.
+                    if !picker.flush_pending_custom_inputs(cx) {
+                        cx.notify();
+                        return;
+                    }
                     let source = picker.build_metric_source();
                     cx.emit(ChartShellEvent::MetricPickerApplied(Box::new(source)));
                 }
@@ -419,7 +427,13 @@ fn render_config_footer(state: &MetricPickerState, cx: &mut Context<ChartShell>)
                 .primary()
                 .small()
                 .on_click(cx.listener(|shell, _, _, cx| {
-                    if let Some(picker) = &shell.metric_picker {
+                    if let Some(picker) = &mut shell.metric_picker {
+                        // Flush any pending Custom… inputs so the click path
+                        // commits typed values without requiring Enter.
+                        if !picker.flush_pending_custom_inputs(cx) {
+                            cx.notify();
+                            return;
+                        }
                         let source = picker.build_metric_source();
                         cx.emit(ChartShellEvent::MetricPickerApplied(Box::new(source)));
                     }

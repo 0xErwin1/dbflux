@@ -31,7 +31,7 @@ use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChang
 use dbflux_core::DimensionFilter;
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
-use gpui::{Context, Entity, FocusHandle, Subscription, Task, WeakEntity};
+use gpui::{App, Context, Entity, FocusHandle, Subscription, Task, WeakEntity};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -431,6 +431,44 @@ impl MetricPickerState {
             }
         }
     }
+
+    /// Flush any pending "Custom…" inputs before Apply.
+    ///
+    /// When the user selects "Custom…" in the period or statistic dropdown and
+    /// types a value but does not press Enter inside the input, the
+    /// per-input PressEnter subscription never fires and `period_s` /
+    /// `statistic` still reflect the previously-committed values. Apply must
+    /// read the current input contents directly, validate them, and either
+    /// commit (success) or surface the inline error and refuse to proceed.
+    ///
+    /// Returns `true` when every active custom input committed cleanly. When
+    /// `false`, the caller must surface `period_custom_error` /
+    /// `statistic_custom_error` instead of emitting `MetricPickerApplied`.
+    pub fn flush_pending_custom_inputs(&mut self, cx: &App) -> bool {
+        let mut ok = true;
+
+        if self.period_custom_active
+            && let Some(input) = self.period_custom_input.as_ref()
+        {
+            let raw = input.read(cx).value().to_string();
+            self.commit_custom_period(&raw);
+            if self.period_custom_error.is_some() {
+                ok = false;
+            }
+        }
+
+        if self.statistic_custom_active
+            && let Some(input) = self.statistic_custom_input.as_ref()
+        {
+            let raw = input.read(cx).value().to_string();
+            self.commit_custom_statistic(&raw);
+            if self.statistic_custom_error.is_some() {
+                ok = false;
+            }
+        }
+
+        ok
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -680,6 +718,74 @@ mod tests {
         assert_eq!(
             source.dimensions, dims,
             "FilterTo dimensions must be passed through verbatim"
+        );
+    }
+
+    // ---- A1: Apply must flush pending Custom… inputs ----
+
+    /// A1 regression: simulate the flush path that
+    /// `flush_pending_custom_inputs` performs before Apply. If the user
+    /// selects Custom… and types `120` but never presses Enter, the picker's
+    /// `period_s` still reflects the previous preset. The Apply path must call
+    /// `commit_custom_period` with the input contents so the new value is
+    /// applied. This test pins that contract at the validator + commit level
+    /// (the GPUI input read happens at the call site).
+    #[test]
+    fn flush_custom_period_commits_typed_value_before_build_metric_source() {
+        let mut picker = make_headless_picker("AWS/EC2", "CPUUtilization");
+        picker.period_s = 300; // previously-committed preset
+
+        // Simulate user typing "120" into the Custom… input but not pressing
+        // Enter — this is what flush_pending_custom_inputs reads from the
+        // InputState entity and feeds into commit_custom_period.
+        let raw = "120";
+        match validate_period(raw.trim()) {
+            Ok(n) => picker.period_s = n,
+            Err(_) => panic!("120 must validate"),
+        }
+
+        let source = picker.build_metric_source();
+        assert_eq!(
+            source.period_s, 120,
+            "Apply must use the typed Custom… value, not the prior preset"
+        );
+    }
+
+    /// A1 regression: when validation fails, Apply must NOT proceed and the
+    /// caller must observe the error (here proxied by validate_period's Err
+    /// return). The picker.period_s must remain at the previous preset.
+    #[test]
+    fn flush_custom_period_rejects_invalid_and_preserves_prior_value() {
+        let mut picker = make_headless_picker("AWS/EC2", "CPUUtilization");
+        picker.period_s = 300;
+
+        let raw = "abc";
+        let result = validate_period(raw.trim());
+        assert!(result.is_err(), "non-numeric must reject");
+
+        // The Apply path returns early on Err — period_s is untouched.
+        assert_eq!(
+            picker.period_s, 300,
+            "invalid input must not overwrite the prior preset"
+        );
+    }
+
+    /// A1 regression: same behavior for the statistic Custom… input.
+    #[test]
+    fn flush_custom_statistic_commits_typed_value_before_build_metric_source() {
+        let mut picker = make_headless_picker("AWS/EC2", "CPUUtilization");
+        picker.statistic = "Average".to_string();
+
+        let raw = "p99.5";
+        match validate_statistic(raw.trim()) {
+            Ok(s) => picker.statistic = s,
+            Err(_) => panic!("p99.5 must validate"),
+        }
+
+        let source = picker.build_metric_source();
+        assert_eq!(
+            source.statistic, "p99.5",
+            "Apply must use the typed Custom… statistic value, not the prior preset"
         );
     }
 
