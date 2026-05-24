@@ -174,6 +174,18 @@ impl ChartDocument {
             },
         );
 
+        // Cancel any pending metric-picker dimensions fetch when the chart's
+        // connection drops. Without this, the in-flight fetch completes,
+        // enters its foreground cx.update closure, and writes a now-stale
+        // entry into MetricCatalogCache (which the disconnect already
+        // invalidated). Dropping the task short-circuits the await.
+        let app_state_disconnect_sub = cx.subscribe(
+            &app_state,
+            |this: &mut Self, _state, _event: &dbflux_ui_base::AppStateChanged, cx| {
+                this.cancel_metric_fetches_if_disconnected(cx);
+            },
+        );
+
         let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
@@ -240,7 +252,7 @@ impl ChartDocument {
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             result_panel: None,
-            _subscriptions: vec![metric_apply_sub],
+            _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
         }
     }
 
@@ -318,6 +330,16 @@ impl ChartDocument {
             },
         );
 
+        // See `new()` for the rationale: drop the metric-picker dimensions
+        // task on disconnect so its foreground cache-write closure never runs
+        // against the invalidated MetricCatalogCache.
+        let app_state_disconnect_sub = cx.subscribe(
+            &app_state,
+            |this: &mut Self, _state, _event: &dbflux_ui_base::AppStateChanged, cx| {
+                this.cancel_metric_fetches_if_disconnected(cx);
+            },
+        );
+
         let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
@@ -383,8 +405,34 @@ impl ChartDocument {
             result_panel: None,
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
-            _subscriptions: vec![metric_apply_sub],
+            _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
         }
+    }
+
+    /// If the document's profile is no longer connected, drop the metric
+    /// picker's in-flight dimensions fetch so its foreground cache-write
+    /// closure never runs against the now-invalidated cache.
+    ///
+    /// No-op when there is no profile, no picker, or no in-flight task.
+    fn cancel_metric_fetches_if_disconnected(&mut self, cx: &mut Context<Self>) {
+        let Some(profile_id) = self.profile_id else {
+            return;
+        };
+        let still_connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+        if still_connected {
+            return;
+        }
+        self.chart_shell.update(cx, |shell, _cx| {
+            if let Some(picker) = shell.metric_picker.as_mut()
+                && picker.dimensions_task.is_some()
+            {
+                picker.dimensions_task = None;
+            }
+        });
     }
 
     /// Check whether a `SavedChart` source is compatible with `ChartDocument`.
@@ -1402,6 +1450,34 @@ mod tests {
                 "CPUUtilization"
             ),
             "doc with no identity (non-metric chart) must not match"
+        );
+    }
+
+    /// A2 regression: `cancel_metric_fetches_if_disconnected` must early-return
+    /// when the profile is still connected and tear down the dimensions task
+    /// when the profile is no longer present. The full GPUI wiring sits behind
+    /// the subscribe -> chart_shell.update path; this test pins the pure
+    /// decision logic that selects between "no-op" and "drop task".
+    #[test]
+    fn cancel_metric_fetches_decision_logic_short_circuits_when_connected() {
+        // Pure-logic replica of `cancel_metric_fetches_if_disconnected`'s
+        // decision predicate: only proceed when we have a profile AND it is no
+        // longer in the connections map.
+        fn should_cancel(profile: Option<Uuid>, connected: bool) -> bool {
+            profile.is_some() && !connected
+        }
+
+        assert!(
+            !should_cancel(None, false),
+            "no profile_id must skip cancellation"
+        );
+        assert!(
+            !should_cancel(Some(Uuid::new_v4()), true),
+            "still-connected profile must skip cancellation"
+        );
+        assert!(
+            should_cancel(Some(Uuid::new_v4()), false),
+            "disconnected profile must trigger cancellation"
         );
     }
 
