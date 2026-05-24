@@ -35,22 +35,16 @@ pub trait CloudWatchListMetricsClient: Send + Sync {
 
 pub(crate) struct RealCloudWatchClient {
     client: aws_sdk_cloudwatch::Client,
-    /// Long-lived Tokio runtime shared across all `list_metrics` calls.
-    ///
-    /// Constructing a new runtime per call (previous behavior) wasted file
-    /// descriptors and made full-namespace sweeps very expensive — each page
-    /// would spin up and tear down its own reactor.
-    runtime: tokio::runtime::Runtime,
 }
 
 impl RealCloudWatchClient {
-    /// Build a client adapter with a long-lived runtime.
+    /// Build a client adapter that dispatches through the driver's
+    /// process-wide tokio runtime (`crate::driver::runtime()`).
     ///
-    /// Returns an error if the runtime cannot be constructed.
-    pub(crate) fn new(client: aws_sdk_cloudwatch::Client) -> Result<Self, DbError> {
-        let runtime = tokio::runtime::Runtime::new()
-            .map_err(|e| DbError::connection_failed(format!("Tokio runtime setup failed: {e}")))?;
-        Ok(Self { client, runtime })
+    /// Infallible: the shared runtime is initialized lazily on first use and
+    /// any failure there is a process-wide panic, not a per-connection error.
+    pub(crate) fn new(client: aws_sdk_cloudwatch::Client) -> Self {
+        Self { client }
     }
 }
 
@@ -68,8 +62,7 @@ impl CloudWatchListMetricsClient for RealCloudWatchClient {
             req = req.next_token(t);
         }
 
-        let output = self
-            .runtime
+        let output = crate::driver::runtime()
             .block_on(req.send())
             .map_err(|e| DbError::connection_failed(format!("{e}")))?;
 
