@@ -1643,6 +1643,15 @@ impl Connection for MysqlConnection {
         }
     }
 
+    fn language_service(&self) -> &dyn dbflux_core::LanguageService {
+        // MySQL and MariaDB have DCL constructs that the shared tree-sitter-sequel
+        // parser doesn't recognise (CREATE USER 'u'@'h' IDENTIFIED BY '...',
+        // GRANT ALL PRIVILEGES ON db.* TO 'u'@'h', FLUSH PRIVILEGES, etc.).
+        // Returning the MySQL-aware service suppresses the noisy parse diagnostics
+        // while keeping dangerous-query detection intact.
+        &crate::language_service::MySqlLanguageService
+    }
+
     fn ping(&self) -> Result<(), DbError> {
         let mut conn = self
             .catalog_conn
