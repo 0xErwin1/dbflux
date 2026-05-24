@@ -284,3 +284,49 @@ fn invalidate_namespace_allows_targeted_refresh() {
     );
     assert!(refreshed.fully_loaded);
 }
+
+// ---------------------------------------------------------------------------
+// Integration scenario 5 (RC1): cache writes that never happen don't poison
+// ---------------------------------------------------------------------------
+
+/// RC1 regression: if a fetch's foreground completion is dropped (e.g. the
+/// sidebar evicts the pending task on disconnect) and `store_*` is therefore
+/// never called, the cache must remain in its post-invalidate state.
+///
+/// The fix moved cache writes out of the background closure and into the
+/// foreground `cx.spawn`. This test pins the contract that store-not-called
+/// means cache-not-poisoned — the exact behavior `spawn_fetch_*` now relies on.
+#[test]
+fn cache_not_poisoned_when_fetch_completion_is_dropped_after_invalidate() {
+    let cache = MetricCatalogCache::new();
+    let profile_id = profile();
+    let ec2 = ns("AWS/EC2");
+
+    // First session populates the cache.
+    cache.store_namespaces(profile_id, vec![ec2.clone()]);
+    cache.store_metrics_page(
+        profile_id,
+        ec2.clone(),
+        vec![metric("CPUUtilization")],
+        None,
+    );
+
+    assert!(cache.peek_namespaces(profile_id).is_some());
+    assert!(cache.peek_metrics(profile_id, &ec2).is_some());
+
+    // Disconnect: invalidate the profile, and DO NOT call any store_* after.
+    // This models the new behavior where dropping the foreground task
+    // abandons the closure that would have called store_*.
+    cache.invalidate(profile_id);
+
+    // The cache must stay empty — the background task's "result" is discarded
+    // because the foreground awaiter was dropped.
+    assert!(
+        cache.peek_namespaces(profile_id).is_none(),
+        "namespaces must remain cleared when store is never called after invalidate"
+    );
+    assert!(
+        cache.peek_metrics(profile_id, &ec2).is_none(),
+        "metrics must remain cleared when store is never called after invalidate"
+    );
+}

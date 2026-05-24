@@ -422,20 +422,17 @@ impl Sidebar {
 
         let sidebar = cx.entity().clone();
         let db_str = database.to_string();
-        let background_task = cx.background_executor().spawn({
-            let cache = cache.clone();
-            async move {
-                let catalog = match connection.metric_catalog() {
-                    Some(c) => c,
-                    None => return Err("driver does not support metric catalog".to_string()),
-                };
-                catalog
-                    .list_namespaces()
-                    .map_err(|e| e.to_string())
-                    .map(|ns| {
-                        cache.store_namespaces(profile_id, ns);
-                    })
-            }
+        // Background task only fetches; the cache write happens on the
+        // foreground task below, after the await. If the foreground task is
+        // dropped (e.g. disconnect_profile evicts it), the cache write is
+        // never executed and stale data from a previous account cannot land
+        // in the cache.
+        let background_task = cx.background_executor().spawn(async move {
+            let catalog = match connection.metric_catalog() {
+                Some(c) => c,
+                None => return Err("driver does not support metric catalog".to_string()),
+            };
+            catalog.list_namespaces().map_err(|e| e.to_string())
         });
 
         let task = cx.spawn(async move |_this, cx| {
@@ -444,7 +441,8 @@ impl Sidebar {
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.pending_metric_namespace_fetches.remove(&profile_id);
                     match result {
-                        Ok(()) => {
+                        Ok(namespaces) => {
+                            cache.store_namespaces(profile_id, namespaces);
                             sidebar.metric_fetch_errors.remove(&parent_id);
                         }
                         Err(msg) => {
@@ -511,8 +509,10 @@ impl Sidebar {
         .to_string();
 
         let sidebar = cx.entity().clone();
+        // Background task only fetches; the cache write happens on the
+        // foreground task below, after the await. Dropping the foreground task
+        // (e.g. on disconnect) prevents stale data from landing in the cache.
         let background_task = cx.background_executor().spawn({
-            let cache = cache.clone();
             let ns_clone = ns.clone();
             async move {
                 let catalog = match connection.metric_catalog() {
@@ -520,11 +520,9 @@ impl Sidebar {
                     None => return Err("driver does not support metric catalog".to_string()),
                 };
                 // Fetch first page only; pagination is not required for sidebar display.
-                let page = catalog
+                catalog
                     .list_metrics(&ns_clone, None)
-                    .map_err(|e| e.to_string())?;
-                cache.store_metrics_page(profile_id, ns_clone, page.metrics, page.next_token);
-                Ok(())
+                    .map_err(|e| e.to_string())
             }
         });
 
@@ -535,7 +533,13 @@ impl Sidebar {
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.pending_metric_fetches.remove(&ns_key);
                     match result {
-                        Ok(()) => {
+                        Ok(page) => {
+                            cache.store_metrics_page(
+                                profile_id,
+                                ns.clone(),
+                                page.metrics,
+                                page.next_token,
+                            );
                             sidebar.metric_fetch_errors.remove(&parent_id);
                         }
                         Err(msg) => {
