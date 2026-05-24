@@ -18,6 +18,7 @@
 /// all colour roles through `ChartColors`. Only `chart/engine.rs` stays exempt
 /// (canvas paint geometry — line widths, tick lengths — are not UI spacing tokens).
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod style_guardrails {
     use std::fs;
     use std::path::{Path, PathBuf};

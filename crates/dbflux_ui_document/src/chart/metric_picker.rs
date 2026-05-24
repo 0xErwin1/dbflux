@@ -504,7 +504,7 @@ pub fn validate_period(s: &str) -> Result<u32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::{DimensionFilter, MetricDescriptor};
+    use dbflux_core::DimensionFilter;
 
     // ---- T14.2: DimensionsState starts as NotFetched ----
 
@@ -635,13 +635,6 @@ mod tests {
     // These tests use a self-contained `HeadlessPicker` struct (not the real
     // `MetricPickerState`) to exercise the picker state-machine logic without
     // a running GPUI app. They guard the config-section contract.
-
-    fn metric(name: &str, dims: Vec<(String, String)>) -> MetricDescriptor {
-        MetricDescriptor {
-            metric_name: name.to_string(),
-            dimensions: dims,
-        }
-    }
 
     // ---- T-MP-03: build_metric_source with AggregateAll ----
 

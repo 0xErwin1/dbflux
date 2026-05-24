@@ -1221,7 +1221,7 @@ mod tests {
     /// The contract constant is validated here without a GPUI runtime.
     #[test]
     fn available_modes_chart_only() {
-        let modes = vec![ResultViewMode::Chart];
+        let modes = [ResultViewMode::Chart];
         assert_eq!(modes.len(), 1);
         assert_eq!(modes[0], ResultViewMode::Chart);
     }
@@ -1318,14 +1318,10 @@ mod tests {
         };
         let event = ChartShellEvent::MetricPickerApplied(Box::new(source));
 
-        let mut pending_data_source: Option<Box<dyn ChartDataSource>> = None;
-
         // Mirror the closure body in `cx.subscribe(&chart_shell, ...)`.
-        match &event {
-            ChartShellEvent::MetricPickerApplied(src) => {
-                pending_data_source = Some(src.clone_box());
-            }
-        }
+        let pending_data_source: Option<Box<dyn ChartDataSource>> = match &event {
+            ChartShellEvent::MetricPickerApplied(src) => Some(src.clone_box()),
+        };
 
         assert!(
             pending_data_source.is_some(),
