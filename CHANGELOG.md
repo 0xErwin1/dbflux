@@ -4,6 +4,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Modal sizing & button overflow** — three confirm dialogs (Run entire
+  script, Dangerous query, sidebar Delete/Drop) now use the shared
+  `ModalShell` primitive with consistent widths and a dedicated footer
+  button row. Buttons no longer overflow into the body, and the
+  Drop Database / Delete confirms no longer render at half the size of
+  the other confirm modals.
+
 ## [0.6.0-dev.8] - 2026-05-23
 
 ### Added

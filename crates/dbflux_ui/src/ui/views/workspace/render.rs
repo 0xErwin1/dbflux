@@ -2,9 +2,10 @@ use super::*;
 use crate::keymap::ContextId;
 use crate::platform;
 use crate::ui::components::modal_frame::ModalFrame;
-use crate::ui::tokens::FontSizes;
 use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
-use dbflux_components::primitives::{Chord, Icon, Text, overlay_bg};
+use dbflux_components::controls::Button;
+use dbflux_components::modals::shell::{ModalShell, ModalVariant};
+use dbflux_components::primitives::{Chord, Icon, Text};
 use dbflux_components::typography::Body;
 use gpui_component::IconName;
 
@@ -877,9 +878,20 @@ impl Render for Workspace {
             .when_some(
                 self.sidebar.read(cx).delete_modal_state(),
                 |el, modal_state| {
-                    let theme = cx.theme();
+                    // Capture sidebar clones for each callback before building the footer.
                     let sidebar_confirm = self.sidebar.clone();
                     let sidebar_cancel = self.sidebar.clone();
+                    let sidebar_close = self.sidebar.clone();
+
+                    let title = if modal_state.multi_count.is_some() {
+                        "Delete"
+                    } else if modal_state.is_ddl {
+                        "Drop"
+                    } else if modal_state.is_folder {
+                        "Delete folder"
+                    } else {
+                        "Delete connection"
+                    };
 
                     let message = if let Some(count) = modal_state.multi_count {
                         format!("Delete {count} selected items?")
@@ -893,118 +905,44 @@ impl Render for Workspace {
                     };
 
                     let confirm_label = if modal_state.is_ddl { "Drop" } else { "Delete" };
-                    let btn_hover = theme.muted;
+                    let variant = if modal_state.is_ddl {
+                        ModalVariant::Danger
+                    } else {
+                        ModalVariant::Default
+                    };
+
+                    let body = Text::body(message).into_any_element();
+
+                    let footer = div()
+                        .flex()
+                        .gap(Spacing::SM)
+                        .child(
+                            Button::new("delete-cancel", "Cancel").on_click(move |_, _, cx| {
+                                sidebar_cancel.update(cx, |this, cx| {
+                                    this.cancel_modal_delete(cx);
+                                });
+                            }),
+                        )
+                        .child(
+                            Button::new("delete-confirm", confirm_label)
+                                .when(modal_state.is_ddl, |b| b.danger())
+                                .on_click(move |_, _, cx| {
+                                    sidebar_confirm.update(cx, |this, cx| {
+                                        this.confirm_modal_delete(cx);
+                                    });
+                                }),
+                        )
+                        .into_any_element();
 
                     el.child(
-                        div()
-                            .id("delete-modal-overlay")
-                            .absolute()
-                            .inset_0()
-                            .bg(overlay_bg(theme))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation();
-                            })
-                            .child(
-                                div()
-                                    .bg(theme.sidebar)
-                                    .border_1()
-                                    .border_color(if modal_state.is_ddl {
-                                        theme.danger
-                                    } else {
-                                        theme.border
-                                    })
-                                    .rounded(Radii::MD)
-                                    .p(Spacing::MD)
-                                    .min_w(px(250.0))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(Spacing::MD)
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                svg()
-                                                    .path(if modal_state.is_ddl {
-                                                        AppIcon::Delete.path()
-                                                    } else {
-                                                        AppIcon::TriangleAlert.path()
-                                                    })
-                                                    .size_5()
-                                                    .text_color(if modal_state.is_ddl {
-                                                        theme.danger
-                                                    } else {
-                                                        theme.warning
-                                                    }),
-                                            )
-                                            .child(Text::body(message)),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .justify_end()
-                                            .gap(Spacing::SM)
-                                            .child(
-                                                div()
-                                                    .id("delete-cancel")
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .px(Spacing::SM)
-                                                    .py(Spacing::XS)
-                                                    .rounded(Radii::SM)
-                                                    .cursor_pointer()
-                                                    .text_size(FontSizes::SM)
-                                                    .bg(theme.secondary)
-                                                    .hover(move |d| d.bg(btn_hover))
-                                                    .on_click(move |_, _, cx| {
-                                                        sidebar_cancel.update(cx, |this, cx| {
-                                                            this.cancel_modal_delete(cx);
-                                                        });
-                                                    })
-                                                    .child(
-                                                        Icon::new(AppIcon::X)
-                                                            .size(px(16.0))
-                                                            .muted(),
-                                                    )
-                                                    .child(
-                                                        Text::caption("Cancel").muted_foreground(),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("delete-confirm")
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .px(Spacing::SM)
-                                                    .py(Spacing::XS)
-                                                    .rounded(Radii::SM)
-                                                    .cursor_pointer()
-                                                    .text_size(FontSizes::SM)
-                                                    .bg(theme.danger)
-                                                    .hover(|d| d.opacity(0.9))
-                                                    .on_click(move |_, _, cx| {
-                                                        sidebar_confirm.update(cx, |this, cx| {
-                                                            this.confirm_modal_delete(cx);
-                                                        });
-                                                    })
-                                                    .child(
-                                                        Icon::new(AppIcon::Delete)
-                                                            .size(px(16.0))
-                                                            .color(theme.background),
-                                                    )
-                                                    .child(
-                                                        Text::caption(confirm_label)
-                                                            .color(theme.background),
-                                                    ),
-                                            ),
-                                    ),
-                            ),
+                        ModalShell::new(title, body, footer)
+                            .width(px(360.0))
+                            .variant(variant)
+                            .on_close(move |_, cx| {
+                                sidebar_close.update(cx, |this, cx| {
+                                    this.cancel_modal_delete(cx);
+                                });
+                            }),
                     )
                 },
             )
