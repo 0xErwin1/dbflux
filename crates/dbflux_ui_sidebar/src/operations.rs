@@ -3824,12 +3824,10 @@ impl Sidebar {
                 // that stale data from a previous account cannot land in the
                 // cache after invalidation (e.g. if the user reconnects the
                 // same profile_id to a different AWS account). Dropping the
-                // Task handle abandons the await.
+                // Task handle abandons the foreground awaiter, which is where
+                // the cache write now lives (see spawn_fetch_* refactor).
                 sidebar.update(cx, |sidebar, _cx| {
-                    sidebar.pending_metric_namespace_fetches.remove(&profile_id);
-                    sidebar
-                        .pending_metric_fetches
-                        .retain(|(pid, _ns), _task| *pid != profile_id);
+                    sidebar.drop_pending_metric_fetches(profile_id);
                 });
             }) {
                 log::warn!(
@@ -3953,6 +3951,10 @@ impl Sidebar {
     }
 
     pub(super) fn refresh_connection(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        // Cancel pending metric catalog fetches before disconnect invalidates
+        // the cache. The foreground awaiter holding the cache-write closure is
+        // dropped, so stale data cannot land after the reconnect.
+        self.drop_pending_metric_fetches(profile_id);
         self.app_state.update(cx, |state, cx| {
             state.cancel_detached_hook_tasks(profile_id);
             state.disconnect(profile_id);
@@ -3964,6 +3966,11 @@ impl Sidebar {
     }
 
     pub(super) fn delete_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        // Defensive eviction: even though delete_profile does not call
+        // disconnect directly, removing the profile orphans any in-flight
+        // metric fetches. Drop their foreground tasks so the cache-write
+        // closures never run.
+        self.drop_pending_metric_fetches(profile_id);
         self.app_state.update(cx, |state, cx| {
             if let Some(idx) = state.profiles().iter().position(|p| p.id == profile_id)
                 && let Some(removed) = state.remove_profile(idx)
@@ -3972,6 +3979,23 @@ impl Sidebar {
             }
             cx.emit(dbflux_ui_base::AppStateChanged);
         });
+    }
+
+    /// Drop foreground tasks for every in-flight metric catalog fetch
+    /// targeting `profile_id`.
+    ///
+    /// Dropping the `Task` handle abandons the `cx.spawn` awaiter where the
+    /// cache-write closure now lives (see `spawn_fetch_metric_namespaces` /
+    /// `spawn_fetch_metrics`). This guarantees that any data fetched in the
+    /// background before the teardown can no longer be written to the
+    /// session-scoped `MetricCatalogCache`.
+    ///
+    /// Called from every code path that invalidates the cache or removes a
+    /// profile: `disconnect_profile`, `refresh_connection`, `delete_profile`.
+    fn drop_pending_metric_fetches(&mut self, profile_id: Uuid) {
+        self.pending_metric_namespace_fetches.remove(&profile_id);
+        self.pending_metric_fetches
+            .retain(|(pid, _ns), _task| *pid != profile_id);
     }
 
     pub(super) fn edit_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
