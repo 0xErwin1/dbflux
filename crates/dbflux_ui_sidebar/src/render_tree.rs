@@ -161,6 +161,8 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::CollectionFieldsFolder
                 | SchemaNodeKind::CollectionIndexesFolder
                 | SchemaNodeKind::DependentsFolder
+                | SchemaNodeKind::MetricsFolder
+                | SchemaNodeKind::MetricNamespaceFolder
         ));
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
@@ -1007,6 +1009,9 @@ fn resolve_node_icon(
         }
         SchemaNodeKind::DependentsFolder => (Some(AppIcon::Link2), "", params.color_gray),
         SchemaNodeKind::DependentItem => (Some(AppIcon::ExternalLink), "", theme.muted_foreground),
+        SchemaNodeKind::MetricsFolder => (Some(AppIcon::ChartSpline), "", params.color_orange),
+        SchemaNodeKind::MetricNamespaceFolder => (Some(AppIcon::Folder), "", params.color_orange),
+        SchemaNodeKind::MetricLeaf => (Some(AppIcon::ChartSpline), "", params.color_teal),
         _ => (None, "", theme.muted_foreground),
     }
 }

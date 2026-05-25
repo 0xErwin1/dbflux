@@ -54,6 +54,15 @@ pub enum DocumentKey {
         schema: String,
         specific_name: String,
     },
+
+    /// A metric chart document opened from the sidebar tree by clicking a metric
+    /// leaf. Deduplicated by `(profile_id, namespace, metric_name)` so that
+    /// clicking the same metric a second time focuses the existing tab.
+    MetricChart {
+        profile_id: Uuid,
+        namespace: String,
+        metric_name: String,
+    },
 }
 
 #[cfg(test)]
@@ -108,6 +117,12 @@ mod tests {
             },
         };
 
+        let metric_chart = DocumentKey::MetricChart {
+            profile_id: id,
+            namespace: "AWS/EC2".to_string(),
+            metric_name: "CPUUtilization".to_string(),
+        };
+
         // Verify Clone is derived.
         let _ = table.clone();
         let _ = collection.clone();
@@ -116,10 +131,12 @@ mod tests {
         let _ = chart.clone();
         let _ = audit.clone();
         let _ = event_stream.clone();
+        let _ = metric_chart.clone();
 
         // Verify Debug is derived (format! would panic if not).
         let _ = format!("{:?}", table);
         let _ = format!("{:?}", audit);
+        let _ = format!("{:?}", metric_chart);
     }
 
     /// Table dedup key with database = None is distinct from one with Some("x").

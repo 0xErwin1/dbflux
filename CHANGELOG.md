@@ -4,6 +4,46 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Metric picker rail tab for chart documents** — CloudWatch metric charts now
+  open with an interactive picker rail (320 px overlay) that lets users browse
+  namespaces, metrics, and dimension combinations fetched live via
+  `ListMetrics` pagination. Selecting a metric and pressing Apply swaps the
+  chart's data source and auto-runs the query. Results are cached for the
+  session by `MetricCatalogCache`. No driver names or categories are hardcoded
+  in the UI layer; the Metric tab is gated solely on the generic
+  `METRIC_CATALOG` capability bit (#96).
+
+### Changed
+
+* **CloudWatch metric catalog hardening** — The `RealCloudWatchClient` adapter
+  now reuses a single long-lived Tokio runtime across `list_metrics` calls
+  (previously a new runtime was constructed per call, wasting file descriptors
+  during full-namespace sweeps). The namespace sweep is also bounded at 50
+  pages (~25,000 metrics) to cap the worst case on very large AWS accounts; the
+  cap is documented in the driver README. A future change will replace the cap
+  with full timeout + cancellation infrastructure (#96).
+* **Sidebar metric leaves dedupe by metric name** — On accounts with
+  per-instance metric explosion (e.g. AWS/EC2 with 1000 instances) the
+  CloudWatch driver returns one `MetricDescriptor` per `(metric_name,
+  dimension_combo)` pair. The sidebar now collapses these into one leaf per
+  distinct `metric_name`; dimension refinement still happens inside the chart
+  document's picker rail (#96).
+* **Metric chart entry point moved to the sidebar** — Clicking a metric leaf
+  in the connection sidebar (Metrics > Namespace > Metric) opens a chart
+  pre-populated with defaults (Average statistic / 5 min period / aggregate
+  across all dimensions) and immediately executes it. The picker rail opens
+  alongside for refinement of dimensions, period, and statistic. Duplicate
+  clicks on the same metric leaf focus the existing tab (#96).
+
+### Removed
+
+* `open_metrics_chart` workspace action and command-palette entry — the sidebar
+  tree is now the single entry point for metric charts.
+* `ChartDocument::new_empty_metric_chart` constructor — replaced by
+  `new_with_source` with a pre-built `MetricSource` and `setup_metric_picker`.
+
 ### Fixed
 
 * **Modal sizing & button overflow** — three confirm dialogs (Run entire

@@ -6,9 +6,12 @@
 //! `ChartView`, hidden-series state, the rail, and toolbar rendering.
 
 pub mod host;
+pub mod metric_picker;
+pub(crate) mod metric_picker_render;
 pub mod shell;
 pub mod toolbar;
 
 pub use host::{ChartHost, HostAdapter};
-pub use shell::{ChartRailTab, ChartShell};
+pub use metric_picker::MetricPickerState;
+pub use shell::{ChartRailTab, ChartShell, ChartShellEvent};
 pub use toolbar::{ActionHandler, ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};

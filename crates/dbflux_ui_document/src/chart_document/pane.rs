@@ -95,12 +95,20 @@ impl ChartDocument {
             // matches_dedup_key
             {
                 let e = entity.clone();
-                Box::new(move |key, cx| match key {
-                    DocumentKey::Chart { saved_chart_id } => {
-                        let d = e.read(cx);
-                        d.connection_id().is_some() && d.saved_chart_id() == Some(*saved_chart_id)
+                Box::new(move |key, cx| {
+                    let d = e.read(cx);
+                    match key {
+                        DocumentKey::Chart { saved_chart_id } => {
+                            d.connection_id().is_some()
+                                && d.saved_chart_id() == Some(*saved_chart_id)
+                        }
+                        DocumentKey::MetricChart {
+                            profile_id,
+                            namespace,
+                            metric_name,
+                        } => d.matches_metric_source(*profile_id, namespace, metric_name),
+                        _ => false,
                     }
-                    _ => false,
                 })
             },
             // subscribe — ChartDocument emits DocumentEvent directly

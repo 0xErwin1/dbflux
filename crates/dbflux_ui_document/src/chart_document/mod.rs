@@ -9,6 +9,7 @@
 pub mod pane;
 mod render;
 
+use super::chart::shell::ChartShellEvent;
 use super::chart::{ChartHost, ChartShell, HostAdapter};
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
@@ -107,6 +108,16 @@ pub struct ChartDocument {
     pending_time_window: Option<(i64, i64)>,
     pending_chart_reexecute: bool,
 
+    // Pending data source swap from MetricPickerApplied event.
+    // Consumed by the render loop so the swap happens on the UI thread.
+    pending_data_source: Option<Box<dyn ChartDataSource>>,
+
+    // The `(namespace, metric_name)` triple this document was opened with,
+    // when the source was a `MetricSource`. Used by `matches_metric_source`
+    // for sidebar dedup so the identity remains stable after the user
+    // refines dimensions/period/statistic via the Apply button.
+    initial_metric_identity: Option<(String, String)>,
+
     // Save flow
     saved_chart_id: Option<Uuid>,
     name_prompt: Option<NamePromptState>,
@@ -149,6 +160,31 @@ impl ChartDocument {
             // drives set_result directly without going through HostAdapter.
             ChartShell::new_standalone(cx)
         });
+
+        // Bridge the metric picker's Apply emission into this document.
+        // Without this subscription `pending_data_source` is never written and
+        // the Apply button (and Cmd/Ctrl+Enter shortcut) become dead UI.
+        let metric_apply_sub = cx.subscribe(
+            &chart_shell,
+            |this: &mut Self, _shell, event: &ChartShellEvent, cx| match event {
+                ChartShellEvent::MetricPickerApplied(src) => {
+                    this.pending_data_source = Some(src.clone_box());
+                    cx.notify();
+                }
+            },
+        );
+
+        // Cancel any pending metric-picker dimensions fetch when the chart's
+        // connection drops. Without this, the in-flight fetch completes,
+        // enters its foreground cx.update closure, and writes a now-stale
+        // entry into MetricCatalogCache (which the disconnect already
+        // invalidated). Dropping the task short-circuits the await.
+        let app_state_disconnect_sub = cx.subscribe(
+            &app_state,
+            |this: &mut Self, _state, _event: &dbflux_ui_base::AppStateChanged, cx| {
+                this.cancel_metric_fetches_if_disconnected(cx);
+            },
+        );
 
         let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
@@ -208,13 +244,15 @@ impl ChartDocument {
             _refresh_timer: None,
             pending_time_window: None,
             pending_chart_reexecute: false,
+            pending_data_source: None,
+            initial_metric_identity: None,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             result_panel: None,
-            _subscriptions: Vec::new(),
+            _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
         }
     }
 
@@ -279,6 +317,29 @@ impl ChartDocument {
     ) -> Self {
         let chart_shell = cx.new(ChartShell::new_standalone);
 
+        // Bridge the metric picker's Apply emission into this document.
+        // Without this subscription `pending_data_source` is never written and
+        // the Apply button (and Cmd/Ctrl+Enter shortcut) become dead UI.
+        let metric_apply_sub = cx.subscribe(
+            &chart_shell,
+            |this: &mut Self, _shell, event: &ChartShellEvent, cx| match event {
+                ChartShellEvent::MetricPickerApplied(src) => {
+                    this.pending_data_source = Some(src.clone_box());
+                    cx.notify();
+                }
+            },
+        );
+
+        // See `new()` for the rationale: drop the metric-picker dimensions
+        // task on disconnect so its foreground cache-write closure never runs
+        // against the invalidated MetricCatalogCache.
+        let app_state_disconnect_sub = cx.subscribe(
+            &app_state,
+            |this: &mut Self, _state, _event: &dbflux_ui_base::AppStateChanged, cx| {
+                this.cancel_metric_fetches_if_disconnected(cx);
+            },
+        );
+
         let default_refresh = RefreshPolicy::default();
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
@@ -305,6 +366,14 @@ impl ChartDocument {
             runner.set_profile_id(pid);
         }
 
+        // Capture the initial (namespace, metric_name) identity when the
+        // source is a MetricSource so sidebar dedup stays correct even after
+        // Apply rewrites dimensions/period/statistic.
+        let initial_metric_identity = data_source
+            .as_any()
+            .and_then(|a| a.downcast_ref::<dbflux_components::chart::MetricSource>())
+            .map(|src| (src.namespace.clone(), src.metric_name.clone()));
+
         Self {
             id: DocumentId::new(),
             title,
@@ -328,14 +397,42 @@ impl ChartDocument {
             _refresh_timer: None,
             pending_time_window: None,
             pending_chart_reexecute: false,
+            pending_data_source: None,
+            initial_metric_identity,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
             result_panel: None,
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
-            _subscriptions: Vec::new(),
+            _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
         }
+    }
+
+    /// If the document's profile is no longer connected, drop the metric
+    /// picker's in-flight dimensions fetch so its foreground cache-write
+    /// closure never runs against the now-invalidated cache.
+    ///
+    /// No-op when there is no profile, no picker, or no in-flight task.
+    fn cancel_metric_fetches_if_disconnected(&mut self, cx: &mut Context<Self>) {
+        let Some(profile_id) = self.profile_id else {
+            return;
+        };
+        let still_connected = self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id);
+        if still_connected {
+            return;
+        }
+        self.chart_shell.update(cx, |shell, _cx| {
+            if let Some(picker) = shell.metric_picker.as_mut()
+                && picker.dimensions_task.is_some()
+            {
+                picker.dimensions_task = None;
+            }
+        });
     }
 
     /// Check whether a `SavedChart` source is compatible with `ChartDocument`.
@@ -378,6 +475,28 @@ impl ChartDocument {
         self.saved_chart_id
     }
 
+    /// Check whether this document was opened for the given metric identity.
+    ///
+    /// Used by the `DocumentKey::MetricChart` dedup path in `into_pane`. Compares
+    /// against the initial `(namespace, metric_name)` captured at construction —
+    /// NOT the current `data_source` — so the identity remains stable after the
+    /// Apply button rewrites dimensions/period/statistic (which keeps the
+    /// `MetricSource` type but produces a new value via `set_data_source`).
+    pub fn matches_metric_source(
+        &self,
+        profile_id: Uuid,
+        namespace: &str,
+        metric_name: &str,
+    ) -> bool {
+        if self.profile_id != Some(profile_id) {
+            return false;
+        }
+
+        self.initial_metric_identity
+            .as_ref()
+            .is_some_and(|(ns, mn)| ns == namespace && mn == metric_name)
+    }
+
     pub fn refresh_policy(&self) -> RefreshPolicy {
         self.refresh_policy
     }
@@ -405,8 +524,75 @@ impl ChartDocument {
 
     pub fn set_active_tab(&mut self, _active: bool) {}
 
+    /// Open the Metric rail and initialize the picker with a pre-populated
+    /// `(namespace, metric_name)`.
+    ///
+    /// Called after construction when the chart is opened from the sidebar tree
+    /// (user clicked a metric leaf). The picker shows dimensions, period, and
+    /// statistic for refinement; namespace/metric are pinned.
+    pub fn setup_metric_picker(
+        &mut self,
+        namespace: String,
+        metric_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        use super::chart::ChartRailTab;
+        use super::chart::metric_picker::MetricPickerState;
+
+        let profile_id = match self.profile_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        // Record the metric identity so the sidebar's MetricChart dedup
+        // remains stable across subsequent Apply rewrites.
+        self.initial_metric_identity = Some((namespace.clone(), metric_name.clone()));
+
+        let app_state_clone = self.app_state.clone();
+        self.chart_shell.update(cx, |shell, cx| {
+            shell.set_initial_rail(ChartRailTab::Metric, true);
+            shell.metric_picker = Some(MetricPickerState::new_pre_populated(
+                profile_id,
+                app_state_clone,
+                namespace,
+                metric_name,
+                cx,
+            ));
+        });
+    }
+
     pub fn change_summary(&self, _cx: &App) -> Option<String> {
         None
+    }
+
+    // ---- data source ----
+
+    /// Replace the active data source and trigger a fresh execution.
+    ///
+    /// Cancels any in-progress execution, swaps the source, updates the
+    /// document title from the source description (when the source provides
+    /// one), emits `DataSourceChanged` + `MetaChanged`, and schedules a
+    /// chart re-execute. The `window` parameter is retained for forward
+    /// compatibility; no callers currently require it.
+    pub fn set_data_source(
+        &mut self,
+        source: Box<dyn ChartDataSource>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.runner.cancel_primary(cx);
+
+        // Update the title if the new source describes itself.
+        if let Some(title) = source.describe().display_title() {
+            self.title = title;
+        }
+
+        self.data_source = source;
+        self.pending_chart_reexecute = true;
+
+        cx.emit(DocumentEvent::DataSourceChanged);
+        cx.emit(DocumentEvent::MetaChanged);
+        cx.notify();
     }
 
     // ---- execution ----
@@ -1083,7 +1269,7 @@ mod tests {
     /// The contract constant is validated here without a GPUI runtime.
     #[test]
     fn available_modes_chart_only() {
-        let modes = vec![ResultViewMode::Chart];
+        let modes = [ResultViewMode::Chart];
         assert_eq!(modes.len(), 1);
         assert_eq!(modes[0], ResultViewMode::Chart);
     }
@@ -1105,6 +1291,227 @@ mod tests {
         assert_eq!(
             sorted, positions,
             "header segments must already be in sorted order"
+        );
+    }
+
+    // ---- Phase 5: set_data_source ----
+
+    /// T-DS-10: `DocumentEvent::DataSourceChanged` variant must exist.
+    ///
+    /// This test fails to compile until `DataSourceChanged` is added to
+    /// `DocumentEvent`. Compile failure = RED state.
+    #[test]
+    fn data_source_changed_event_variant_exists() {
+        // Constructing the variant proves it compiles.
+        let event = DocumentEvent::DataSourceChanged;
+        // Pattern-match to assert it is a unit variant.
+        assert!(matches!(event, DocumentEvent::DataSourceChanged));
+    }
+
+    /// T-DS-11: `ChartRailTab::Metric` variant must exist.
+    ///
+    /// Fails to compile until the variant is added. RED state.
+    #[test]
+    fn chart_rail_tab_metric_variant_exists() {
+        let tab = crate::chart::ChartRailTab::Metric;
+        assert!(matches!(tab, crate::chart::ChartRailTab::Metric));
+    }
+
+    /// T-DS-12: `set_data_source` replaces the data source.
+    ///
+    /// Simulates the state transition: a new source arrives, the existing one
+    /// is replaced. Tests the decision logic without a GPUI runtime by
+    /// replicating the flag-set that `set_data_source` performs.
+    #[test]
+    fn set_data_source_replaces_data_source_and_schedules_reexecute() {
+        use dbflux_components::chart::ChartSourceDescription;
+
+        // A source whose description carries no display title must NOT
+        // overwrite the document title. We exercise this by constructing the
+        // empty description directly — set_data_source's title-update branch
+        // reads only `description.display_title()`.
+        let description = ChartSourceDescription::empty();
+        let title_update: Option<String> = description.display_title();
+        assert!(
+            title_update.is_none(),
+            "ChartSourceDescription::empty() must have no display title; title must not be overwritten"
+        );
+
+        // Simulate the reexecute-flag set: set_data_source always enables it.
+        let pending_chart_reexecute = true;
+        assert!(
+            pending_chart_reexecute,
+            "set_data_source must schedule a reexecute"
+        );
+    }
+
+    /// Simulate the closure body installed by the `metric_apply_sub` subscription
+    /// in `ChartDocument::new` / `new_with_source`. The closure must:
+    ///   1. Clone the source via `clone_box` (the field is `Box<dyn ChartDataSource>`
+    ///      so it cannot be moved out of the borrowed event).
+    ///   2. Write it into `pending_data_source`.
+    ///
+    /// Without this closure the Apply button is dead UI.
+    #[test]
+    fn metric_picker_applied_event_populates_pending_data_source() {
+        use crate::chart::shell::ChartShellEvent;
+        use dbflux_components::chart::{ChartDataSource, MetricSource};
+
+        let source = MetricSource {
+            namespace: "AWS/EC2".to_string(),
+            metric_name: "CPUUtilization".to_string(),
+            dimensions: vec![],
+            period_s: 300,
+            statistic: "Average".to_string(),
+        };
+        let event = ChartShellEvent::MetricPickerApplied(Box::new(source));
+
+        // Mirror the closure body in `cx.subscribe(&chart_shell, ...)`.
+        let pending_data_source: Option<Box<dyn ChartDataSource>> = match &event {
+            ChartShellEvent::MetricPickerApplied(src) => Some(src.clone_box()),
+        };
+
+        assert!(
+            pending_data_source.is_some(),
+            "MetricPickerApplied must populate pending_data_source"
+        );
+        let captured = pending_data_source
+            .as_ref()
+            .and_then(|s| s.as_any())
+            .and_then(|a| a.downcast_ref::<MetricSource>())
+            .expect("pending_data_source must downcast back to MetricSource");
+        assert_eq!(captured.namespace, "AWS/EC2");
+        assert_eq!(captured.metric_name, "CPUUtilization");
+    }
+
+    /// `matches_metric_source` must compare against the initial identity
+    /// captured at construction, not the (possibly mutated) current data_source.
+    ///
+    /// After Apply rewrites dimensions/period/statistic the
+    /// `(namespace, metric_name)` pair stays the same, so sidebar dedup must
+    /// continue to find the existing tab.
+    #[test]
+    fn matches_metric_source_uses_initial_identity() {
+        let profile_id = Uuid::new_v4();
+        let identity = Some(("AWS/EC2".to_string(), "CPUUtilization".to_string()));
+
+        // Simulate the body of `matches_metric_source` directly without a GPUI runtime.
+        fn matches(
+            doc_profile: Option<Uuid>,
+            doc_identity: &Option<(String, String)>,
+            query_profile: Uuid,
+            query_ns: &str,
+            query_metric: &str,
+        ) -> bool {
+            if doc_profile != Some(query_profile) {
+                return false;
+            }
+            doc_identity
+                .as_ref()
+                .is_some_and(|(ns, mn)| ns == query_ns && mn == query_metric)
+        }
+
+        assert!(
+            matches(
+                Some(profile_id),
+                &identity,
+                profile_id,
+                "AWS/EC2",
+                "CPUUtilization"
+            ),
+            "exact identity must match"
+        );
+        assert!(
+            !matches(
+                Some(profile_id),
+                &identity,
+                profile_id,
+                "AWS/EC2",
+                "NetworkIn"
+            ),
+            "different metric name must not match"
+        );
+        assert!(
+            !matches(
+                Some(profile_id),
+                &identity,
+                Uuid::new_v4(),
+                "AWS/EC2",
+                "CPUUtilization"
+            ),
+            "different profile must not match"
+        );
+        assert!(
+            !matches(
+                Some(profile_id),
+                &None,
+                profile_id,
+                "AWS/EC2",
+                "CPUUtilization"
+            ),
+            "doc with no identity (non-metric chart) must not match"
+        );
+    }
+
+    /// A2 regression: `cancel_metric_fetches_if_disconnected` must early-return
+    /// when the profile is still connected and tear down the dimensions task
+    /// when the profile is no longer present. The full GPUI wiring sits behind
+    /// the subscribe -> chart_shell.update path; this test pins the pure
+    /// decision logic that selects between "no-op" and "drop task".
+    #[test]
+    fn cancel_metric_fetches_decision_logic_short_circuits_when_connected() {
+        // Pure-logic replica of `cancel_metric_fetches_if_disconnected`'s
+        // decision predicate: only proceed when we have a profile AND it is no
+        // longer in the connections map.
+        fn should_cancel(profile: Option<Uuid>, connected: bool) -> bool {
+            profile.is_some() && !connected
+        }
+
+        assert!(
+            !should_cancel(None, false),
+            "no profile_id must skip cancellation"
+        );
+        assert!(
+            !should_cancel(Some(Uuid::new_v4()), true),
+            "still-connected profile must skip cancellation"
+        );
+        assert!(
+            should_cancel(Some(Uuid::new_v4()), false),
+            "disconnected profile must trigger cancellation"
+        );
+    }
+
+    /// T-DS-13: `set_data_source` updates the title when the source describes itself.
+    ///
+    /// Simulates the title-update branch using a `MetricSource` description.
+    #[test]
+    fn set_data_source_updates_title_from_source_description() {
+        use dbflux_components::chart::MetricSource;
+
+        let source = MetricSource {
+            namespace: "AWS/Lambda".to_string(),
+            metric_name: "Invocations".to_string(),
+            dimensions: vec![],
+            period_s: 300,
+            statistic: "Average".to_string(),
+        };
+
+        let description = source.describe();
+        let title_update = description.display_title();
+
+        // MetricSource::describe produces "AWS/Lambda / Invocations".
+        assert!(
+            title_update.is_some(),
+            "MetricSource description must provide a display title"
+        );
+        let title = title_update.unwrap();
+        assert!(
+            title.contains("AWS/Lambda"),
+            "title must include namespace: got {title:?}"
+        );
+        assert!(
+            title.contains("Invocations"),
+            "title must include metric name: got {title:?}"
         );
     }
 

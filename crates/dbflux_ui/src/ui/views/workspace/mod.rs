@@ -738,6 +738,19 @@ impl Workspace {
                         cx,
                     );
                 }
+                SidebarEvent::OpenMetricChart {
+                    profile_id,
+                    namespace,
+                    metric_name,
+                } => {
+                    this.open_metric_chart_from_sidebar(
+                        *profile_id,
+                        namespace.clone(),
+                        metric_name.clone(),
+                        window,
+                        cx,
+                    );
+                }
                 SidebarEvent::RequestTunnelAuth {
                     tunnel_id,
                     tunnel_name,
@@ -1242,7 +1255,6 @@ impl Workspace {
                 .with_shortcut(SC.open_audit_viewer),
             // Charts
             PaletteCommand::new("open_saved_chart", "Open Chart...", "Charts"),
-            PaletteCommand::new("open_metrics_chart", "Open Metrics Chart", "Charts"),
         ]
     }
 

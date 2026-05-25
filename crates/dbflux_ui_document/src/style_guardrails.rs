@@ -13,6 +13,7 @@
 /// The `style_guardrails.rs` file itself is always excluded from scanning so
 /// that the forbidden pattern strings in this file do not self-trigger.
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod style_guardrails {
     use std::fs;
     use std::path::{Path, PathBuf};
