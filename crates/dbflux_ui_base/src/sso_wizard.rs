@@ -5,10 +5,13 @@ use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{Radii, Spacing};
+#[cfg(feature = "aws")]
+use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::Spacing;
 use dbflux_core::AuthProfile;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+#[cfg(feature = "aws")]
 use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
@@ -327,6 +330,7 @@ impl SsoWizard {
                     .child(Input::new(&self.input_region))
                     .into_any_element(),
                 WizardStep::Account => {
+                    #[allow(unused_mut)]
                     let mut account_step = div()
                         .flex()
                         .flex_col()
@@ -411,6 +415,7 @@ impl SsoWizard {
                     account_step.into_any_element()
                 }
                 WizardStep::Role => {
+                    #[allow(unused_mut)]
                     let mut role_step = div()
                         .flex()
                         .flex_col()

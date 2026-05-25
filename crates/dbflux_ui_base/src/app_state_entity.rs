@@ -3,12 +3,16 @@
 //! This module provides `AppStateEntity`, which wraps the pure `AppState` from `dbflux_app`
 //! and adds GPUI-specific state (like the settings window handle) and event types.
 
+use std::sync::Arc;
+
 use dbflux_app::AppState;
-use dbflux_components::SavedChartManager;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::{EventEmitter, WindowHandle};
 use gpui_component::Root;
 use uuid::Uuid;
+
+use crate::dashboard_manager::DashboardManager;
+use crate::saved_chart_manager::SavedChartManager;
 
 // ============================================================================
 // GPUI-coupled event types
@@ -40,6 +44,8 @@ pub struct McpRuntimeEventRaised {
 /// `AppStateEntity` holds:
 /// - The inner `AppState` (pure domain state)
 /// - The settings window handle (to reuse a single settings window)
+/// - `SavedChartManager` — SQLite-backed chart cache
+/// - `DashboardManager` — SQLite-backed dashboard cache
 ///
 /// This struct implements `Deref<Target=AppState>` so all `AppState` methods
 /// are directly accessible via the wrapper.
@@ -51,26 +57,56 @@ pub struct AppStateEntity {
     /// Used to focus/reuse an existing settings window rather than opening multiple.
     pub settings_window: Option<WindowHandle<Root>>,
 
-    /// Saved-chart manager — load once at startup, mutated via `upsert`/`remove`.
+    /// Saved-chart manager — loaded from SQLite on startup; mutated via `upsert`/`remove`.
     pub saved_charts: SavedChartManager,
+
+    /// Dashboard manager — loaded from SQLite on startup; mutated via `upsert_dashboard`
+    /// and `replace_panels`.
+    pub dashboards: DashboardManager,
 }
 
 impl AppStateEntity {
     /// Creates a new `AppStateEntity` wrapping a fresh `AppState`.
+    ///
+    /// Repositories are read from the `AppState`'s internally constructed storage
+    /// runtime. This path is used in production where the default DB location is
+    /// used (`~/.local/share/dbflux/dbflux.db`).
     pub fn new() -> Self {
+        let inner = AppState::new();
+
+        let saved_charts = SavedChartManager::new(Arc::clone(&inner.saved_charts_repo));
+        let dashboards = DashboardManager::new(
+            Arc::clone(&inner.dashboards_repo),
+            Arc::clone(&inner.dashboard_panels_repo),
+        );
+
         Self {
-            inner: AppState::new(),
+            inner,
             settings_window: None,
-            saved_charts: SavedChartManager::load(),
+            saved_charts,
+            dashboards,
         }
     }
 
     /// Creates a new `AppStateEntity` with a caller-provided storage runtime.
+    ///
+    /// The provided `StorageRuntime` is passed to `AppState`, which runs
+    /// migrations and opens the viz connection. Managers are then constructed
+    /// from the resulting repository `Arc`s.
     pub fn new_with_storage_runtime(storage_runtime: StorageRuntime) -> Self {
+        let inner = AppState::new_with_storage_runtime(storage_runtime);
+
+        let saved_charts = SavedChartManager::new(Arc::clone(&inner.saved_charts_repo));
+        let dashboards = DashboardManager::new(
+            Arc::clone(&inner.dashboards_repo),
+            Arc::clone(&inner.dashboard_panels_repo),
+        );
+
         Self {
-            inner: AppState::new_with_storage_runtime(storage_runtime),
+            inner,
             settings_window: None,
-            saved_charts: SavedChartManager::load(),
+            saved_charts,
+            dashboards,
         }
     }
 }

@@ -2927,6 +2927,7 @@ name = "dbflux_ui_base"
 version = "0.6.0-dev.8"
 dependencies = [
  "anyhow",
+ "chrono",
  "dbflux_app",
  "dbflux_aws",
  "dbflux_components",
@@ -2936,6 +2937,8 @@ dependencies = [
  "gpui",
  "gpui-component",
  "log",
+ "rusqlite",
+ "tempfile",
  "uuid",
 ]
 

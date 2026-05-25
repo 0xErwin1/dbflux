@@ -6,9 +6,11 @@
 
 pub mod app_state_entity;
 pub mod async_ext;
+pub mod dashboard_manager;
 pub mod keymap;
 pub mod modal_frame;
 pub mod platform;
+pub mod saved_chart_manager;
 pub mod sql_preview_modal;
 pub mod sso_wizard;
 pub mod toast;
@@ -19,4 +21,6 @@ mod style_guardrails;
 pub use app_state_entity::McpRuntimeEventRaised;
 pub use app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};
 pub use async_ext::AsyncUpdateResultExt;
+pub use dashboard_manager::DashboardManager;
 pub use keymap::{default_keymap, key_chord_from_gpui};
+pub use saved_chart_manager::SavedChartManager;
