@@ -4,6 +4,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+* **Sidebar collapses single-database wrapper** — Connections whose driver
+  exposes exactly one database (CloudWatch's `logs`, DynamoDB's default
+  region, single-file SQLite, etc.) no longer render the redundant database
+  level. Child nodes (Collections, Metrics, Tables) attach directly under the
+  connection node. Multi-database drivers (Postgres, MySQL, MongoDB) are
+  unaffected — the wrapper still discriminates between databases (#131).
+
 ### Added
 
 * **Metric picker rail tab for chart documents** — CloudWatch metric charts now
