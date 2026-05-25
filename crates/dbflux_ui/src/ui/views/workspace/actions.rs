@@ -1752,7 +1752,8 @@ impl Workspace {
                 let collection = collection_ref.clone();
                 self.open_collection_document(chart.profile_id, collection, window, cx);
             }
-            dbflux_components::saved_chart::SavedChartSource::Query { .. } => {
+            dbflux_components::saved_chart::SavedChartSource::Query { .. }
+            | dbflux_components::saved_chart::SavedChartSource::Metric { .. } => {
                 // Validate before allocating an entity — from_saved checks the source variant.
                 let validation = crate::ui::document::ChartDocument::validate_saved_source(&chart);
                 if let Err(e) = validation {
@@ -1765,9 +1766,9 @@ impl Workspace {
 
                 let app_state = self.app_state.clone();
                 let doc = cx.new(|cx| {
-                    // from_saved is guaranteed Ok for Query source (validated above).
+                    // from_saved is guaranteed Ok for Query and Metric sources (validated above).
                     crate::ui::document::ChartDocument::from_saved(&chart, app_state, window, cx)
-                        .expect("Query source validated before entity creation")
+                        .expect("Query/Metric source validated before entity creation")
                 });
 
                 let pane = crate::ui::document::ChartDocument::into_pane(doc, cx);
@@ -1839,46 +1840,62 @@ impl Workspace {
             use crate::ui::document::DashboardPanelSlot;
             use dbflux_components::common::time_range::view::TimeRangePanel;
 
-            // Build panel slots: Loaded when a Query-source chart exists,
-            // Orphan otherwise.
-            let panel_slots: Vec<DashboardPanelSlot> = panels
-                .iter()
-                .map(|panel| {
-                    let chart = app_state
-                        .read(cx)
-                        .saved_charts
-                        .all_charts()
-                        .iter()
-                        .find(|c| c.id == panel.saved_chart_id)
-                        .cloned();
+            // Build panel slots: Loaded when a Query/Metric-source chart exists,
+            // Orphan otherwise. Grid position is carried on every slot so
+            // the render can sort and size panels correctly.
+            let panel_slots: Vec<DashboardPanelSlot> =
+                panels
+                    .iter()
+                    .map(|panel| {
+                        use crate::ui::document::dashboard::PanelGridPos;
 
-                    match chart {
-                        Some(saved_chart)
-                            if matches!(
+                        let grid_pos = PanelGridPos {
+                            grid_row: panel.grid_row,
+                            grid_column: panel.grid_column,
+                            grid_width: panel.grid_width,
+                            grid_height: panel.grid_height,
+                        };
+
+                        let chart = app_state
+                            .read(cx)
+                            .saved_charts
+                            .all_charts()
+                            .iter()
+                            .find(|c| c.id == panel.saved_chart_id)
+                            .cloned();
+
+                        match chart {
+                            Some(saved_chart)
+                                if matches!(
                                 saved_chart.source,
                                 dbflux_components::saved_chart::SavedChartSource::Query { .. }
+                                    | dbflux_components::saved_chart::SavedChartSource::Metric {
+                                        ..
+                                    }
                             ) =>
-                        {
-                            let app_state_inner = app_state.clone();
-                            let panel_entity = cx.new(|cx| {
-                                crate::ui::document::ChartDocument::from_saved(
-                                    &saved_chart,
-                                    app_state_inner,
-                                    window,
-                                    cx,
-                                )
-                                .expect("Query source validated before entity creation")
-                            });
-                            DashboardPanelSlot::Loaded {
-                                panel: panel_entity,
+                            {
+                                let app_state_inner = app_state.clone();
+                                let panel_entity = cx.new(|cx| {
+                                    crate::ui::document::ChartDocument::from_saved(
+                                        &saved_chart,
+                                        app_state_inner,
+                                        window,
+                                        cx,
+                                    )
+                                    .expect("Query/Metric source validated before entity creation")
+                                });
+                                DashboardPanelSlot::Loaded {
+                                    panel: panel_entity,
+                                    grid_pos,
+                                }
                             }
+                            _ => DashboardPanelSlot::Orphan {
+                                saved_chart_id: panel.saved_chart_id,
+                                grid_pos,
+                            },
                         }
-                        _ => DashboardPanelSlot::Orphan {
-                            saved_chart_id: panel.saved_chart_id,
-                        },
-                    }
-                })
-                .collect();
+                    })
+                    .collect();
 
             // Build the shared time-range panel. Use the "24h" preset by
             // default (preset index 3 matches Last24Hours in TimeRangePanel).
@@ -1889,6 +1906,7 @@ impl Workspace {
                 dashboard.name.clone(),
                 panel_slots,
                 shared_time_range,
+                dashboard.grid_columns,
                 cx,
             )
         });
@@ -1903,8 +1921,8 @@ impl Workspace {
     /// Runs the dashboard import flow after the user confirms JSON input.
     ///
     /// Calls `conn.dashboard_importer()?.import(&json)` to get `PanelImportSpec`
-    /// records, creates a `SavedChart` per panel (using the metric params encoded
-    /// as a JSON query string), upserts a new `Dashboard` and its panel set, then
+    /// records, creates a `SavedChart` per panel using `SavedChartSource::Metric`
+    /// with native typed fields, upserts a new `Dashboard` and its panel set, then
     /// opens the dashboard in a new tab. This method does not inspect `driver_id`.
     pub(super) fn run_dashboard_import(
         &mut self,
@@ -1973,23 +1991,13 @@ impl Workspace {
         };
 
         // Convert each PanelImportSpec to a SavedChart + DashboardPanel.
-        // The metric parameters are encoded as a JSON query string so they
-        // survive the SavedChart round-trip. Full metric execution requires
-        // a future `SavedChartSource::Metric` variant.
+        // Metric parameters are stored in SavedChartSource::Metric with native
+        // typed fields. On open, from_saved reconstructs a MetricSource directly
+        // so panels can execute immediately without going through the query path.
         let mut charts: Vec<SavedChart> = Vec::with_capacity(specs.len());
         let mut panels: Vec<DashboardPanel> = Vec::with_capacity(specs.len());
 
         for (idx, spec) in specs.iter().enumerate() {
-            let metric_query_json = serde_json::json!({
-                "namespace":   spec.namespace,
-                "metric_name": spec.metric_name,
-                "dimensions":  spec.dimensions,
-                "period_s":    spec.period_seconds,
-                "statistic":   spec.statistic,
-                "region":      spec.region,
-            })
-            .to_string();
-
             let placeholder_spec = ChartSpec {
                 kind: ChartKind::Line,
                 x_axis: AxisSpec {
@@ -2006,10 +2014,15 @@ impl Workspace {
                 y_scale: YScale::Linear,
             };
 
-            let chart = SavedChart::new_query(
+            let chart = SavedChart::new_metric(
                 spec.title.clone(),
                 profile_id,
-                metric_query_json,
+                spec.namespace.clone(),
+                spec.metric_name.clone(),
+                spec.dimensions.clone(),
+                spec.period_seconds,
+                spec.statistic.clone(),
+                spec.region.clone(),
                 placeholder_spec,
                 BindingSpec::default(),
             );

@@ -268,18 +268,53 @@ impl ChartDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Self, String> {
-        // Collection sources are not routed through ChartDocument in W0.
-        // They still open via DataDocument. This guard must remain intact
-        // until a future workstream explicitly changes routing.
-        if let SavedChartSource::Collection { .. } = &saved.source {
-            return Err(
-                "Collection source not supported in ChartDocument; open via DataDocument"
-                    .to_string(),
-            );
+        use dbflux_components::chart::MetricSource;
+
+        match &saved.source {
+            // Collection sources are not routed through ChartDocument in W0.
+            // They still open via DataDocument.
+            SavedChartSource::Collection { .. } => {
+                return Err(
+                    "Collection source not supported in ChartDocument; open via DataDocument"
+                        .to_string(),
+                );
+            }
+
+            // Metric sources bypass the query path and construct a MetricSource
+            // directly, matching the same path used by `open_metric_chart_from_sidebar`.
+            SavedChartSource::Metric {
+                namespace,
+                metric_name,
+                dimensions,
+                period_seconds,
+                statistic,
+                ..
+            } => {
+                let source = MetricSource {
+                    namespace: namespace.clone(),
+                    metric_name: metric_name.clone(),
+                    dimensions: dimensions.clone(),
+                    period_s: *period_seconds,
+                    statistic: statistic.clone(),
+                };
+
+                let mut doc = Self::new_with_source(
+                    Some(saved.profile_id),
+                    saved.name.clone(),
+                    Box::new(source),
+                    app_state,
+                    window,
+                    cx,
+                );
+                doc.saved_chart_id = Some(saved.id);
+                return Ok(doc);
+            }
+
+            // Query source: standard path through query execution.
+            SavedChartSource::Query { .. } => {}
         }
 
-        // Extract the query string. The Collection guard above ensures this is
-        // always a Query variant at this point; the fallback is a safe no-op.
+        // Extract the query string (only reached for Query variant).
         let query = if let SavedChartSource::Query { query } = &saved.source {
             query.clone()
         } else {
@@ -441,7 +476,7 @@ impl ChartDocument {
     /// Call this before allocating an entity to avoid panicking inside `cx.new`.
     pub fn validate_saved_source(saved: &SavedChart) -> Result<(), String> {
         match &saved.source {
-            SavedChartSource::Query { .. } => Ok(()),
+            SavedChartSource::Query { .. } | SavedChartSource::Metric { .. } => Ok(()),
             SavedChartSource::Collection { .. } => Err(
                 "Collection source not supported in ChartDocument; open via DataDocument"
                     .to_string(),
@@ -772,6 +807,27 @@ impl ChartDocument {
             self.pending_chart_reexecute = true;
             cx.notify();
         }
+    }
+
+    /// Update the pending time window WITHOUT scheduling a re-execution.
+    ///
+    /// Called by `DashboardDocument::request_reexec_for_slot` for panels that
+    /// are queued behind the semaphore. The window is stashed so that when the
+    /// semaphore releases and `mark_pending_reexecute` is called, the correct
+    /// window is used.
+    pub fn stage_time_window(&mut self, start_ms: i64, end_ms: i64) {
+        self.pending_time_window = Some((start_ms, end_ms));
+        // Intentionally does NOT set pending_chart_reexecute or call cx.notify().
+    }
+
+    /// Set `pending_chart_reexecute = true` and schedule a render notification.
+    ///
+    /// Called by `DashboardDocument` when the semaphore releases a slot.
+    /// The panel's render loop will pick up the flag and call
+    /// `request_reexecute(window, cx)`.
+    pub fn mark_pending_reexecute(&mut self, cx: &mut Context<Self>) {
+        self.pending_chart_reexecute = true;
+        cx.notify();
     }
 
     /// Apply the custom date/time picker values and trigger a chart re-execution.

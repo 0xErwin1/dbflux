@@ -26,6 +26,7 @@ use dbflux_storage::{
     error::StorageError,
     repositories::viz_saved_chart_binding_y::BindingYDto,
     repositories::viz_saved_chart_series::SeriesDto,
+    repositories::viz_saved_chart_source_metric_dimensions::MetricDimensionDto,
     repositories::viz_saved_charts::{SavedChartDto, SavedChartsRepository},
 };
 use uuid::Uuid;
@@ -127,6 +128,36 @@ fn dto_to_chart(dto: SavedChartDto) -> Result<SavedChart, StorageError> {
                 time_window,
             }
         }
+        "metric" => {
+            let namespace = dto
+                .source_metric_namespace
+                .ok_or_else(|| StorageError::Data("metric source missing namespace".to_string()))?;
+            let metric_name = dto.source_metric_name.ok_or_else(|| {
+                StorageError::Data("metric source missing metric_name".to_string())
+            })?;
+            let period_seconds = dto.source_metric_period_seconds.ok_or_else(|| {
+                StorageError::Data("metric source missing period_seconds".to_string())
+            })? as u32;
+            let statistic = dto
+                .source_metric_statistic
+                .ok_or_else(|| StorageError::Data("metric source missing statistic".to_string()))?;
+            let region = dto.source_metric_region;
+
+            let dimensions: Vec<(String, String)> = dto
+                .metric_dimensions
+                .into_iter()
+                .map(|d| (d.dim_key, d.dim_value))
+                .collect();
+
+            SavedChartSource::Metric {
+                namespace,
+                metric_name,
+                dimensions,
+                period_seconds,
+                statistic,
+                region,
+            }
+        }
         other => {
             return Err(StorageError::Data(format!(
                 "unknown source_kind: '{other}'"
@@ -163,6 +194,9 @@ fn chart_to_dto(
     series: Vec<SeriesDto>,
     binding_y: Vec<BindingYDto>,
 ) -> SavedChartDto {
+    // Decompose source variant into flat columns + child rows.
+    let mut metric_dimensions: Vec<MetricDimensionDto> = Vec::new();
+
     let (
         source_kind,
         source_query,
@@ -171,10 +205,20 @@ fn chart_to_dto(
         source_time_window_start_ms,
         source_time_window_end_ms,
         source_time_window_language,
+        source_metric_namespace,
+        source_metric_name,
+        source_metric_period_seconds,
+        source_metric_statistic,
+        source_metric_region,
     ) = match &chart.source {
         SavedChartSource::Query { query } => (
             "query".to_string(),
             Some(query.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -201,6 +245,46 @@ fn chart_to_dto(
                 start,
                 end,
                 lang,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        SavedChartSource::Metric {
+            namespace,
+            metric_name,
+            dimensions,
+            period_seconds,
+            statistic,
+            region,
+        } => {
+            // Build dimension child rows.
+            metric_dimensions = dimensions
+                .iter()
+                .enumerate()
+                .map(|(i, (k, v))| MetricDimensionDto {
+                    chart_id: chart.id.to_string(),
+                    dim_index: i as i64,
+                    dim_key: k.clone(),
+                    dim_value: v.clone(),
+                })
+                .collect();
+
+            (
+                "metric".to_string(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(namespace.clone()),
+                Some(metric_name.clone()),
+                Some(*period_seconds as i64),
+                Some(statistic.clone()),
+                region.clone(),
             )
         }
     };
@@ -235,6 +319,11 @@ fn chart_to_dto(
         source_time_window_start_ms,
         source_time_window_end_ms,
         source_time_window_language,
+        source_metric_namespace,
+        source_metric_name,
+        source_metric_period_seconds,
+        source_metric_statistic,
+        source_metric_region,
 
         time_range_preset: chart.time_range_preset.map(time_range_preset_to_str),
         refresh_policy_kind: refresh_policy_kind_to_str(chart.refresh_policy),
@@ -245,6 +334,7 @@ fn chart_to_dto(
 
         series,
         binding_y,
+        metric_dimensions,
     }
 }
 
@@ -708,5 +798,97 @@ mod tests {
             manager.all_charts().is_empty(),
             "fresh DB must yield empty cache"
         );
+    }
+
+    fn sample_metric_chart(name: &str, profile_id: Uuid) -> SavedChart {
+        let now = Utc::now();
+        SavedChart {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            profile_id,
+            source: SavedChartSource::Metric {
+                namespace: "AWS/EC2".to_string(),
+                metric_name: "CPUUtilization".to_string(),
+                dimensions: vec![
+                    ("InstanceId".to_string(), "i-12345".to_string()),
+                    ("Region".to_string(), "us-east-1".to_string()),
+                ],
+                period_seconds: 300,
+                statistic: "Average".to_string(),
+                region: Some("us-east-1".to_string()),
+            },
+            chart_spec: ChartSpec {
+                kind: ChartKind::Line,
+                x_axis: AxisSpec {
+                    column_index: 0,
+                    label: "ts".to_string(),
+                    kind: AxisKind::Time,
+                    unit: None,
+                },
+                series: vec![],
+                legend_visible: false,
+                decimation_threshold: 10_000,
+                binding: BindingSpec::default(),
+                track_source_indices: false,
+                y_scale: YScale::Linear,
+            },
+            bindings: BindingSpec::default(),
+            time_range_preset: None,
+            refresh_policy: SavedChartRefreshPolicy::Off,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// End-to-end integration: metric source upsert → reload → verify all fields
+    /// including dimensions order.
+    #[test]
+    fn test_metric_source_roundtrip_via_manager() {
+        let rt = temp_storage();
+        let conn = rt.viz_connection();
+        let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
+
+        let profile_id = Uuid::new_v4();
+        insert_test_profile(&conn, profile_id);
+
+        let chart = sample_metric_chart("my-metric", profile_id);
+        let chart_id = chart.id;
+
+        let mut manager = SavedChartManager::new(Arc::clone(&repo));
+        manager.upsert(chart);
+
+        // Reload from storage.
+        let manager2 = SavedChartManager::new(Arc::clone(&repo));
+        assert_eq!(manager2.all_charts().len(), 1);
+        let loaded = &manager2.all_charts()[0];
+        assert_eq!(loaded.id, chart_id);
+        assert!(loaded.is_metric_source());
+
+        if let SavedChartSource::Metric {
+            namespace,
+            metric_name,
+            dimensions,
+            period_seconds,
+            statistic,
+            region,
+        } = &loaded.source
+        {
+            assert_eq!(namespace, "AWS/EC2");
+            assert_eq!(metric_name, "CPUUtilization");
+            assert_eq!(dimensions.len(), 2);
+            assert_eq!(
+                dimensions[0],
+                ("InstanceId".to_string(), "i-12345".to_string())
+            );
+            assert_eq!(
+                dimensions[1],
+                ("Region".to_string(), "us-east-1".to_string())
+            );
+            assert_eq!(*period_seconds, 300);
+            assert_eq!(statistic, "Average");
+            assert_eq!(region.as_deref(), Some("us-east-1"));
+        } else {
+            panic!("expected Metric variant after reload");
+        }
     }
 }
