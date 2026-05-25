@@ -24,6 +24,8 @@ pub enum DocumentKind {
     Audit,
     // Standalone chart document
     Chart,
+    // Dashboard document (named collection of chart panels)
+    Dashboard,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -50,6 +52,7 @@ pub enum DocumentIcon {
     Collection,
     Audit,
     Chart,
+    Dashboard,
 }
 
 impl DocumentIcon {
@@ -65,6 +68,7 @@ impl DocumentIcon {
             Self::Collection => "folder",
             Self::Audit => "shield",
             Self::Chart => "bar-chart-2",
+            Self::Dashboard => "layout-dashboard",
         }
     }
 }

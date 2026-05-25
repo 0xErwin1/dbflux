@@ -2762,7 +2762,11 @@ mod tests {
         let bits = DriverCapabilities::DASHBOARD_IMPORT.bits();
 
         // Exactly one bit must be set (power of two).
-        assert_eq!(bits.count_ones(), 1, "DASHBOARD_IMPORT must be a power of two");
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "DASHBOARD_IMPORT must be a power of two"
+        );
 
         // No other named constant may share the same bit.
         for (name, cap) in DriverCapabilities::all().iter_names() {

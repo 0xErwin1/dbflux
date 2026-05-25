@@ -303,7 +303,8 @@ mod tests {
             panel(dashboard_id, 0, chart_id),
             panel(dashboard_id, 1, chart_id),
         ];
-        repo.replace_panels_for_dashboard(dashboard_id, &panels).expect("replace");
+        repo.replace_panels_for_dashboard(dashboard_id, &panels)
+            .expect("replace");
 
         let result = repo.list_for_dashboard(dashboard_id).expect("list");
         assert_eq!(result.len(), 3);
@@ -325,8 +326,12 @@ mod tests {
         let conn = Arc::new(Mutex::new(conn));
         let repo = DashboardPanelsRepository::new(Arc::clone(&conn));
 
-        let initial = vec![panel(dashboard_id, 0, chart_id), panel(dashboard_id, 1, chart_id)];
-        repo.replace_panels_for_dashboard(dashboard_id, &initial).expect("initial");
+        let initial = vec![
+            panel(dashboard_id, 0, chart_id),
+            panel(dashboard_id, 1, chart_id),
+        ];
+        repo.replace_panels_for_dashboard(dashboard_id, &initial)
+            .expect("initial");
 
         // grid_width = 0 violates CHECK (grid_width >= 1).
         let bad = vec![DashboardPanelDto {
@@ -343,7 +348,11 @@ mod tests {
         assert!(result.is_err(), "should fail due to CHECK constraint");
 
         let after = repo.list_for_dashboard(dashboard_id).expect("list after");
-        assert_eq!(after.len(), 2, "original 2 panels must survive the failed replace");
+        assert_eq!(
+            after.len(),
+            2,
+            "original 2 panels must survive the failed replace"
+        );
     }
 
     #[test]
@@ -364,7 +373,8 @@ mod tests {
             panel(dashboard_id, 0, real_chart_id),
             panel(dashboard_id, 1, ghost_chart_id),
         ];
-        repo.replace_panels_for_dashboard(dashboard_id, &panels).expect("replace");
+        repo.replace_panels_for_dashboard(dashboard_id, &panels)
+            .expect("replace");
 
         let orphans = repo.count_orphans().expect("count");
         assert_eq!(orphans, 1, "exactly 1 panel should be an orphan");
@@ -384,11 +394,8 @@ mod tests {
         let conn = Arc::new(Mutex::new(conn));
         let repo = DashboardPanelsRepository::new(Arc::clone(&conn));
 
-        repo.replace_panels_for_dashboard(
-            dashboard_id,
-            &[panel(dashboard_id, 0, chart_id)],
-        )
-        .expect("replace");
+        repo.replace_panels_for_dashboard(dashboard_id, &[panel(dashboard_id, 0, chart_id)])
+            .expect("replace");
 
         // Delete the chart.
         {
@@ -403,7 +410,11 @@ mod tests {
 
         // Panel row must still be present.
         let panels = repo.list_for_dashboard(dashboard_id).expect("list");
-        assert_eq!(panels.len(), 1, "panel must survive chart deletion (soft ref)");
+        assert_eq!(
+            panels.len(),
+            1,
+            "panel must survive chart deletion (soft ref)"
+        );
 
         let orphans = repo.count_orphans().expect("count");
         assert_eq!(orphans, 1, "panel is now an orphan");

@@ -193,12 +193,19 @@ mod tests {
             },
         ];
 
-        repo.replace_binding_y_for_chart(chart_id, &slots).expect("replace");
+        repo.replace_binding_y_for_chart(chart_id, &slots)
+            .expect("replace");
 
         let result = repo.list_for_chart(chart_id).expect("list");
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].slot_index, 0, "first row should have slot_index 0");
-        assert_eq!(result[1].slot_index, 1, "second row should have slot_index 1");
+        assert_eq!(
+            result[0].slot_index, 0,
+            "first row should have slot_index 0"
+        );
+        assert_eq!(
+            result[1].slot_index, 1,
+            "second row should have slot_index 1"
+        );
     }
 
     #[test]
@@ -218,7 +225,8 @@ mod tests {
                 column_index: 1,
             },
         ];
-        repo.replace_binding_y_for_chart(chart_id, &initial).expect("initial replace");
+        repo.replace_binding_y_for_chart(chart_id, &initial)
+            .expect("initial replace");
 
         // column_index = -1 violates CHECK (column_index >= 0).
         let bad = vec![BindingYDto {
@@ -229,7 +237,13 @@ mod tests {
         let result = repo.replace_binding_y_for_chart(chart_id, &bad);
         assert!(result.is_err(), "should fail due to CHECK constraint");
 
-        let after = repo.list_for_chart(chart_id).expect("list after failed replace");
-        assert_eq!(after.len(), 2, "original 2 rows must survive the failed replace");
+        let after = repo
+            .list_for_chart(chart_id)
+            .expect("list after failed replace");
+        assert_eq!(
+            after.len(),
+            2,
+            "original 2 rows must survive the failed replace"
+        );
     }
 }

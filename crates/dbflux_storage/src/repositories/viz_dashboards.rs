@@ -148,14 +148,11 @@ impl DashboardsRepository {
     pub fn delete(&self, id: Uuid) -> Result<(), StorageError> {
         let conn = self.conn.lock().map_err(lock_err)?;
 
-        conn.execute(
-            "DELETE FROM viz_dashboards WHERE id = ?1",
-            [id.to_string()],
-        )
-        .map_err(|source| StorageError::Sqlite {
-            path: DB_PATH.into(),
-            source,
-        })?;
+        conn.execute("DELETE FROM viz_dashboards WHERE id = ?1", [id.to_string()])
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
 
         Ok(())
     }
@@ -305,8 +302,14 @@ mod tests {
         assert_eq!(loaded.name, dto.name);
         assert_eq!(loaded.description, dto.description);
         assert_eq!(loaded.profile_id, dto.profile_id);
-        assert_eq!(loaded.shared_time_range_preset, dto.shared_time_range_preset);
-        assert_eq!(loaded.shared_refresh_policy_kind, dto.shared_refresh_policy_kind);
+        assert_eq!(
+            loaded.shared_time_range_preset,
+            dto.shared_time_range_preset
+        );
+        assert_eq!(
+            loaded.shared_refresh_policy_kind,
+            dto.shared_refresh_policy_kind
+        );
         assert_eq!(
             loaded.shared_refresh_policy_interval_secs,
             dto.shared_refresh_policy_interval_secs
@@ -328,7 +331,9 @@ mod tests {
         let panels_repo = DashboardPanelsRepository::new(Arc::clone(&conn));
 
         let id = Uuid::new_v4();
-        dashboard_repo.upsert(&make_dashboard(id, Some(profile_id))).expect("upsert");
+        dashboard_repo
+            .upsert(&make_dashboard(id, Some(profile_id)))
+            .expect("upsert");
         panels_repo
             .replace_panels_for_dashboard(
                 id,
@@ -348,7 +353,10 @@ mod tests {
         dashboard_repo.delete(id).expect("delete");
 
         let panels = panels_repo.list_for_dashboard(id).expect("list");
-        assert!(panels.is_empty(), "panels must be cascaded on dashboard delete");
+        assert!(
+            panels.is_empty(),
+            "panels must be cascaded on dashboard delete"
+        );
     }
 
     #[test]
@@ -362,7 +370,8 @@ mod tests {
         let repo = DashboardsRepository::new(Arc::clone(&conn));
 
         let id = Uuid::new_v4();
-        repo.upsert(&make_dashboard(id, Some(profile_id))).expect("upsert");
+        repo.upsert(&make_dashboard(id, Some(profile_id)))
+            .expect("upsert");
 
         // Delete the profile.
         {
@@ -375,7 +384,10 @@ mod tests {
                 .expect("delete profile");
         }
 
-        let loaded = repo.get_by_id(id).expect("get").expect("dashboard must still exist");
+        let loaded = repo
+            .get_by_id(id)
+            .expect("get")
+            .expect("dashboard must still exist");
         assert!(
             loaded.profile_id.is_none(),
             "profile_id must be NULL after profile deletion (SET NULL FK)"
@@ -399,6 +411,9 @@ mod tests {
             rusqlite::params![Uuid::new_v4().to_string(), profile_id.to_string()],
         );
 
-        assert!(result.is_err(), "should fail: interval kind requires interval_secs");
+        assert!(
+            result.is_err(),
+            "should fail: interval kind requires interval_secs"
+        );
     }
 }

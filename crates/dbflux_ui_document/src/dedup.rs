@@ -63,6 +63,11 @@ pub enum DocumentKey {
         namespace: String,
         metric_name: String,
     },
+
+    /// A dashboard document — a named collection of chart panels with a shared
+    /// time range. Deduplicated by `dashboard_id` so that opening the same
+    /// dashboard a second time focuses the existing tab.
+    Dashboard { dashboard_id: Uuid },
 }
 
 #[cfg(test)]
@@ -123,6 +128,10 @@ mod tests {
             metric_name: "CPUUtilization".to_string(),
         };
 
+        let dashboard = DocumentKey::Dashboard {
+            dashboard_id: Uuid::new_v4(),
+        };
+
         // Verify Clone is derived.
         let _ = table.clone();
         let _ = collection.clone();
@@ -132,6 +141,7 @@ mod tests {
         let _ = audit.clone();
         let _ = event_stream.clone();
         let _ = metric_chart.clone();
+        let _ = dashboard.clone();
 
         // Verify Debug is derived (format! would panic if not).
         let _ = format!("{:?}", table);

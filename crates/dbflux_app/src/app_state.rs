@@ -272,8 +272,7 @@ impl AppState {
         let saved_chart_binding_y_repo =
             Arc::new(SavedChartBindingYRepository::new(Arc::clone(&viz_conn)));
         let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&viz_conn)));
-        let dashboard_panels_repo =
-            Arc::new(DashboardPanelsRepository::new(Arc::clone(&viz_conn)));
+        let dashboard_panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&viz_conn)));
 
         let mut state = Self {
             facade,
@@ -3587,7 +3586,10 @@ mod tests {
         assert!(charts.is_empty(), "fresh DB must return empty saved charts");
 
         let dashboards = state.dashboards_repo.list().expect("list dashboards");
-        assert!(dashboards.is_empty(), "fresh DB must return empty dashboards");
+        assert!(
+            dashboards.is_empty(),
+            "fresh DB must return empty dashboards"
+        );
     }
 
     /// a driver whose `driver_key()` is `"builtin:influxdb"`.

@@ -216,13 +216,23 @@ mod tests {
             },
         ];
 
-        repo.replace_series_for_chart(chart_id, &series).expect("replace");
+        repo.replace_series_for_chart(chart_id, &series)
+            .expect("replace");
 
         let result = repo.list_for_chart(chart_id).expect("list");
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0].series_index, 0, "first row should have series_index 0");
-        assert_eq!(result[1].series_index, 1, "second row should have series_index 1");
-        assert_eq!(result[2].series_index, 2, "third row should have series_index 2");
+        assert_eq!(
+            result[0].series_index, 0,
+            "first row should have series_index 0"
+        );
+        assert_eq!(
+            result[1].series_index, 1,
+            "second row should have series_index 1"
+        );
+        assert_eq!(
+            result[2].series_index, 2,
+            "third row should have series_index 2"
+        );
     }
 
     #[test]
@@ -246,7 +256,8 @@ mod tests {
                 color_slot: 1,
             },
         ];
-        repo.replace_series_for_chart(chart_id, &initial).expect("initial replace");
+        repo.replace_series_for_chart(chart_id, &initial)
+            .expect("initial replace");
 
         // Attempt to replace with a series that violates CHECK (color_slot BETWEEN 0 AND 255).
         let bad = vec![SeriesDto {
@@ -260,7 +271,13 @@ mod tests {
         assert!(result.is_err(), "should fail due to CHECK constraint");
 
         // Original 2 rows must still be present.
-        let after = repo.list_for_chart(chart_id).expect("list after failed replace");
-        assert_eq!(after.len(), 2, "original 2 rows must survive the failed replace");
+        let after = repo
+            .list_for_chart(chart_id)
+            .expect("list after failed replace");
+        assert_eq!(
+            after.len(),
+            2,
+            "original 2 rows must survive the failed replace"
+        );
     }
 }

@@ -251,23 +251,18 @@ impl SavedChartsRepository {
                  WHERE id IN ({placeholders})"
             );
 
-            let mut stmt = conn
-                .prepare(&sql)
+            let mut stmt = conn.prepare(&sql).map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
+
+            stmt.query_map(rusqlite::params_from_iter(chart_ids.iter()), map_parent_row)
                 .map_err(|source| StorageError::Sqlite {
                     path: DB_PATH.into(),
                     source,
-                })?;
-
-            stmt.query_map(
-                rusqlite::params_from_iter(chart_ids.iter()),
-                map_parent_row,
-            )
-            .map_err(|source| StorageError::Sqlite {
-                path: DB_PATH.into(),
-                source,
-            })?
-            .filter_map(|r| r.ok())
-            .collect()
+                })?
+                .filter_map(|r| r.ok())
+                .collect()
         };
 
         // SELECT 2 + SELECT 3: children for all charts in the IN list.
@@ -454,8 +449,9 @@ impl SavedChartsRepository {
                  WHERE chart_id IN ({placeholders})
                  ORDER BY chart_id, series_index ASC"
             );
-            let mut stmt =
-                conn.prepare(&series_sql).map_err(|source| StorageError::Sqlite {
+            let mut stmt = conn
+                .prepare(&series_sql)
+                .map_err(|source| StorageError::Sqlite {
                     path: DB_PATH.into(),
                     source,
                 })?;
@@ -489,8 +485,9 @@ impl SavedChartsRepository {
                  WHERE chart_id IN ({placeholders})
                  ORDER BY chart_id, slot_index ASC"
             );
-            let mut stmt =
-                conn.prepare(&binding_y_sql).map_err(|source| StorageError::Sqlite {
+            let mut stmt = conn
+                .prepare(&binding_y_sql)
+                .map_err(|source| StorageError::Sqlite {
                     path: DB_PATH.into(),
                     source,
                 })?;
@@ -612,9 +609,21 @@ fn lock_err<T>(e: std::sync::PoisonError<T>) -> StorageError {
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 fn make_chart(id: Uuid, profile_id: Uuid, source_kind: &str) -> SavedChartDto {
-    let query = if source_kind == "query" { Some("SELECT 1".to_string()) } else { None };
-    let coll_db = if source_kind == "collection" { Some("mydb".to_string()) } else { None };
-    let coll_name = if source_kind == "collection" { Some("mycoll".to_string()) } else { None };
+    let query = if source_kind == "query" {
+        Some("SELECT 1".to_string())
+    } else {
+        None
+    };
+    let coll_db = if source_kind == "collection" {
+        Some("mydb".to_string())
+    } else {
+        None
+    };
+    let coll_name = if source_kind == "collection" {
+        Some("mycoll".to_string())
+    } else {
+        None
+    };
 
     SavedChartDto {
         id: id.to_string(),
@@ -723,7 +732,10 @@ mod tests {
         assert_eq!(loaded.x_axis_kind, dto.x_axis_kind);
         assert_eq!(loaded.binding_aggregation, dto.binding_aggregation);
         assert_eq!(loaded.refresh_policy_kind, dto.refresh_policy_kind);
-        assert_eq!(loaded.refresh_policy_interval_secs, dto.refresh_policy_interval_secs);
+        assert_eq!(
+            loaded.refresh_policy_interval_secs,
+            dto.refresh_policy_interval_secs
+        );
         assert_eq!(loaded.time_range_preset, dto.time_range_preset);
         assert_eq!(loaded.source_kind, "query");
         assert_eq!(loaded.source_query, dto.source_query);
@@ -747,11 +759,23 @@ mod tests {
 
         let loaded = repo.get_full_chart(id).expect("get").expect("should exist");
         assert_eq!(loaded.source_kind, "collection");
-        assert_eq!(loaded.source_collection_database, dto.source_collection_database);
+        assert_eq!(
+            loaded.source_collection_database,
+            dto.source_collection_database
+        );
         assert_eq!(loaded.source_collection_name, dto.source_collection_name);
-        assert_eq!(loaded.source_time_window_start_ms, dto.source_time_window_start_ms);
-        assert_eq!(loaded.source_time_window_end_ms, dto.source_time_window_end_ms);
-        assert_eq!(loaded.source_time_window_language, dto.source_time_window_language);
+        assert_eq!(
+            loaded.source_time_window_start_ms,
+            dto.source_time_window_start_ms
+        );
+        assert_eq!(
+            loaded.source_time_window_end_ms,
+            dto.source_time_window_end_ms
+        );
+        assert_eq!(
+            loaded.source_time_window_language,
+            dto.source_time_window_language
+        );
     }
 
     #[test]
@@ -946,7 +970,11 @@ mod tests {
         repo.delete(id).expect("delete chart");
 
         let panels = panels_repo.list_for_dashboard(dashboard_id).expect("list");
-        assert_eq!(panels.len(), 1, "panel must survive chart deletion (soft ref)");
+        assert_eq!(
+            panels.len(),
+            1,
+            "panel must survive chart deletion (soft ref)"
+        );
 
         let orphans = panels_repo.count_orphans().expect("count");
         assert_eq!(orphans, 1, "panel is now an orphan");
@@ -996,7 +1024,10 @@ mod tests {
                      'off')",
             rusqlite::params![Uuid::new_v4().to_string(), profile_id.to_string()],
         );
-        assert!(result.is_err(), "invalid chart_kind should violate CHECK constraint");
+        assert!(
+            result.is_err(),
+            "invalid chart_kind should violate CHECK constraint"
+        );
     }
 
     #[test]
@@ -1017,7 +1048,10 @@ mod tests {
                      'off')",
             rusqlite::params![Uuid::new_v4().to_string(), profile_id.to_string()],
         );
-        assert!(result.is_err(), "source_kind='query' with NULL source_query should violate CHECK");
+        assert!(
+            result.is_err(),
+            "source_kind='query' with NULL source_query should violate CHECK"
+        );
     }
 
     #[test]
@@ -1137,8 +1171,7 @@ mod tests {
         let count = VIZ_SELECT_COUNT.with(|c| c.get());
         // Expect exactly 3 viz_* SELECTs: panels IN-list, series IN-list, binding_y IN-list.
         assert_eq!(
-            count,
-            3,
+            count, 3,
             "list_full_for_dashboard must issue exactly 3 SELECTs against viz_ tables, got {count}"
         );
     }
