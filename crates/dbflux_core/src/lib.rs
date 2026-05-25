@@ -113,7 +113,7 @@ pub use query::{
     ReadTemplateOperation, ReadTemplateRequest, ResolvedWindow, Row, SemanticFieldRef,
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,
     SemanticRequest, SemanticRequestKind, SortDirection, SqlLanguageService, SqlMutationGenerator,
-    TSqlLanguageService, TableBrowseRequest, TableCountRequest, TableRef, TextPosition,
+    TableBrowseRequest, TableCountRequest, TableRef, TextPosition,
     TextPositionRange, TextRange, ValidationResult, classify_query_for_governance,
     classify_query_for_language, classify_sql_execution, contains_time_macros,
     detect_dangerous_mongo, detect_dangerous_query, detect_dangerous_redis, detect_dangerous_sql,
