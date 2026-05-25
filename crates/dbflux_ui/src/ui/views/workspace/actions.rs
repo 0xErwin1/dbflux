@@ -1779,6 +1779,127 @@ impl Workspace {
         }
     }
 
+    /// Opens a `DashboardDocument` for the given dashboard ID.
+    ///
+    /// If a tab for this dashboard is already open, focuses it instead of
+    /// creating a duplicate. Panel slots are built from the dashboard's
+    /// persisted panel list: for each panel, if the referenced `SavedChart`
+    /// exists and has a `Query` source, a live `ChartDocument` entity is
+    /// created (`Loaded`); otherwise the slot is `Orphan`.
+    ///
+    /// This method does not inspect `driver_id`; capability gating for the
+    /// import affordance is handled separately in the import flow.
+    #[allow(dead_code)]
+    pub(super) fn open_dashboard(
+        &mut self,
+        dashboard_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Dedup: focus the existing tab if the dashboard is already open.
+        let existing_id = self.tab_manager.read(cx).find_by_key(
+            &crate::ui::document::DocumentKey::Dashboard { dashboard_id },
+            cx,
+        );
+
+        if let Some(id) = existing_id {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(id, cx);
+            });
+            self.set_focus(FocusTarget::Document, window, cx);
+            return;
+        }
+
+        // Look up the dashboard metadata.
+        let dashboard_meta = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .dashboard_by_id(dashboard_id)
+            .cloned();
+
+        let Some(dashboard) = dashboard_meta else {
+            Toast::error("Dashboard not found")
+                .meta_right(now_hms())
+                .push(cx);
+            return;
+        };
+
+        // Build panel slots from persisted panels.
+        let panels: Vec<dbflux_ui_base::DashboardPanel> = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .panels_for_dashboard(dashboard_id)
+            .to_vec();
+
+        let app_state = self.app_state.clone();
+        let doc = cx.new(|cx| {
+            use crate::ui::document::DashboardDocument;
+            use crate::ui::document::DashboardPanelSlot;
+            use dbflux_components::common::time_range::view::TimeRangePanel;
+
+            // Build panel slots: Loaded when a Query-source chart exists,
+            // Orphan otherwise.
+            let panel_slots: Vec<DashboardPanelSlot> = panels
+                .iter()
+                .map(|panel| {
+                    let chart = app_state
+                        .read(cx)
+                        .saved_charts
+                        .all_charts()
+                        .iter()
+                        .find(|c| c.id == panel.saved_chart_id)
+                        .cloned();
+
+                    match chart {
+                        Some(saved_chart)
+                            if matches!(
+                                saved_chart.source,
+                                dbflux_components::saved_chart::SavedChartSource::Query { .. }
+                            ) =>
+                        {
+                            let app_state_inner = app_state.clone();
+                            let panel_entity = cx.new(|cx| {
+                                crate::ui::document::ChartDocument::from_saved(
+                                    &saved_chart,
+                                    app_state_inner,
+                                    window,
+                                    cx,
+                                )
+                                .expect("Query source validated before entity creation")
+                            });
+                            DashboardPanelSlot::Loaded {
+                                panel: panel_entity,
+                            }
+                        }
+                        _ => DashboardPanelSlot::Orphan {
+                            saved_chart_id: panel.saved_chart_id,
+                        },
+                    }
+                })
+                .collect();
+
+            // Build the shared time-range panel. Use the "24h" preset by
+            // default (preset index 3 matches Last24Hours in TimeRangePanel).
+            let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+
+            DashboardDocument::new(
+                dashboard_id,
+                dashboard.name.clone(),
+                panel_slots,
+                shared_time_range,
+                cx,
+            )
+        });
+
+        let pane = crate::ui::document::DashboardDocument::into_pane(doc, cx);
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Reconnects to profiles referenced by restored session documents.
     pub(super) fn reopen_last_connections(&mut self, cx: &mut Context<Self>) {
         let profile_ids: std::collections::HashSet<uuid::Uuid> = self

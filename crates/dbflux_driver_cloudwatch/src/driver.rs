@@ -21,6 +21,7 @@ use dbflux_core::{
     ValidationResult, Value,
 };
 
+use crate::dashboard_import::CloudWatchDashboardImporter;
 use crate::metric_catalog::{CloudWatchMetricCatalog, RealCloudWatchClient};
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -32,7 +33,8 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     query_language: QueryLanguage::Sql,
     capabilities: DriverCapabilities::AUTHENTICATION
         .union(DriverCapabilities::METRIC_SERIES)
-        .union(DriverCapabilities::METRIC_CATALOG),
+        .union(DriverCapabilities::METRIC_CATALOG)
+        .union(DriverCapabilities::DASHBOARD_IMPORT),
     default_port: None,
     uri_scheme: "cloudwatch".into(),
     icon: Icon::Logs,
@@ -82,6 +84,8 @@ struct CloudWatchConnection {
     config: CloudWatchProfileConfig,
     /// Metric catalog implementation backed by the same AWS metrics client.
     metric_catalog_impl: CloudWatchMetricCatalog,
+    /// Dashboard JSON importer — always present; returns `Some` from `dashboard_importer()`.
+    dashboard_importer_impl: CloudWatchDashboardImporter,
 }
 
 struct CloudWatchLanguageService;
@@ -183,6 +187,7 @@ impl DbDriver for CloudWatchDriver {
             metrics_client,
             config,
             metric_catalog_impl,
+            dashboard_importer_impl: CloudWatchDashboardImporter,
         }))
     }
 
@@ -201,6 +206,10 @@ impl Connection for CloudWatchConnection {
 
     fn metric_catalog(&self) -> Option<&dyn MetricCatalog> {
         Some(&self.metric_catalog_impl)
+    }
+
+    fn dashboard_importer(&self) -> Option<&dyn dbflux_core::DashboardImporter> {
+        Some(&self.dashboard_importer_impl)
     }
 
     fn ping(&self) -> Result<(), DbError> {

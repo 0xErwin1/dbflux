@@ -9,7 +9,9 @@
     )
 )]
 
+pub mod dashboard_import;
 pub mod driver;
 pub mod metric_catalog;
 
+pub use dashboard_import::CloudWatchDashboardImporter;
 pub use driver::{CLOUDWATCH_METADATA, CloudWatchDriver};
