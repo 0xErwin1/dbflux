@@ -102,12 +102,12 @@ impl Sidebar {
             .expanded(expanded)
     }
 
-    pub(super) fn build_tree_items(state: &AppState) -> Vec<TreeItem> {
+    pub(super) fn build_tree_items(state: &AppStateEntity) -> Vec<TreeItem> {
         Self::build_tree_items_with_errors(state, &HashMap::new())
     }
 
     pub(super) fn build_tree_items_with_errors(
-        state: &AppState,
+        state: &AppStateEntity,
         metric_fetch_errors: &HashMap<String, String>,
     ) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
@@ -156,7 +156,7 @@ impl Sidebar {
 
     fn build_tree_nodes_recursive_with_errors(
         nodes: &[&ConnectionTreeNode],
-        state: &AppState,
+        state: &AppStateEntity,
         metric_fetch_errors: &HashMap<String, String>,
     ) -> Vec<TreeItem> {
         let mut items = Vec::new();
@@ -203,7 +203,7 @@ impl Sidebar {
 
     fn build_profile_item_with_errors(
         profile: &dbflux_core::ConnectionProfile,
-        state: &AppState,
+        state: &AppStateEntity,
         metric_fetch_errors: &HashMap<String, String>,
     ) -> TreeItem {
         let profile_id = profile.id;
@@ -227,6 +227,12 @@ impl Sidebar {
             && let Some(ref schema) = connected.schema
         {
             let mut profile_children = Vec::new();
+
+            // Always prepend Dashboards and Saved Charts folders for every
+            // connected profile, regardless of driver type.
+            profile_children.push(Self::build_dashboards_folder_item(profile_id, state));
+            profile_children.push(Self::build_saved_charts_folder_item(profile_id, state));
+
             let strategy = connected.connection.schema_loading_strategy();
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
             let is_document_db = schema.is_document();
@@ -490,6 +496,103 @@ impl Sidebar {
         }
 
         profile_item
+    }
+
+    // -----------------------------------------------------------------------
+    // Dashboard and Saved Charts sidebar folder helpers
+    // -----------------------------------------------------------------------
+
+    /// Build the `DashboardsFolder` tree node for a connected profile.
+    ///
+    /// Children are one `DashboardItem` per dashboard returned by the manager,
+    /// sorted by `updated_at` descending. When no dashboards exist a single
+    /// non-clickable placeholder hints the user to right-click.
+    fn build_dashboards_folder_item(profile_id: Uuid, state: &AppStateEntity) -> TreeItem {
+        let children = Self::build_dashboard_children(profile_id, state);
+        TreeItem::new(
+            SchemaNodeId::DashboardsFolder { profile_id }.to_string(),
+            "Dashboards".to_string(),
+        )
+        .expanded(false)
+        .children(children)
+    }
+
+    /// Build the `SavedChartsFolder` tree node for a connected profile.
+    ///
+    /// Children are one `SavedChartItem` per chart returned by the manager,
+    /// sorted by `updated_at` descending. When no charts exist a placeholder
+    /// is shown.
+    fn build_saved_charts_folder_item(profile_id: Uuid, state: &AppStateEntity) -> TreeItem {
+        let children = Self::build_saved_chart_children(profile_id, state);
+        TreeItem::new(
+            SchemaNodeId::SavedChartsFolder { profile_id }.to_string(),
+            "Saved Charts".to_string(),
+        )
+        .expanded(false)
+        .children(children)
+    }
+
+    /// Build the `DashboardItem` children for the `DashboardsFolder`.
+    ///
+    /// Returns items sorted by `updated_at` descending (most recently updated
+    /// first). When the list is empty a non-clickable placeholder node is
+    /// returned so the folder does not appear empty to the user.
+    fn build_dashboard_children(profile_id: Uuid, state: &AppStateEntity) -> Vec<TreeItem> {
+        let mut dashboards = state.dashboards.dashboards_for_profile(profile_id);
+
+        dashboards.sort_by_key(|d| std::cmp::Reverse(d.updated_at));
+
+        if dashboards.is_empty() {
+            return vec![TreeItem::new(
+                format!("dashboards_empty:{profile_id}"),
+                "No dashboards yet — right-click to create".to_string(),
+            )];
+        }
+
+        dashboards
+            .into_iter()
+            .map(|d| {
+                TreeItem::new(
+                    SchemaNodeId::DashboardItem {
+                        profile_id,
+                        dashboard_id: d.id,
+                    }
+                    .to_string(),
+                    d.name.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Build the `SavedChartItem` children for the `SavedChartsFolder`.
+    ///
+    /// Returns items sorted by `updated_at` descending. When the list is empty
+    /// a non-clickable placeholder node is returned.
+    fn build_saved_chart_children(profile_id: Uuid, state: &AppStateEntity) -> Vec<TreeItem> {
+        let mut charts = state.saved_charts.charts_for_profile(profile_id);
+
+        charts.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
+
+        if charts.is_empty() {
+            return vec![TreeItem::new(
+                format!("saved_charts_empty:{profile_id}"),
+                "No saved charts yet".to_string(),
+            )];
+        }
+
+        charts
+            .into_iter()
+            .map(|c| {
+                TreeItem::new(
+                    SchemaNodeId::SavedChartItem {
+                        profile_id,
+                        chart_id: c.id,
+                    }
+                    .to_string(),
+                    c.name.clone(),
+                )
+            })
+            .collect()
     }
 
     pub(super) fn count_visible_entries(items: &[TreeItem]) -> usize {
@@ -2359,6 +2462,161 @@ mod tests {
         assert!(
             !super::should_collapse_database_wrapper(&dbs),
             "zero databases must not trigger collapse path (falls through to fallback branch)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // M — Dashboard and Saved Charts folder helpers (Phase M)
+    // -----------------------------------------------------------------------
+
+    /// Helper: build an AppStateEntity with in-memory storage and insert a
+    /// minimal profile row into `cfg_connection_profiles` so FK constraints
+    /// on the viz tables are satisfied. Returns the entity and the profile UUID.
+    fn make_state_with_profile() -> (dbflux_ui_base::AppStateEntity, Uuid) {
+        use dbflux_storage::bootstrap::StorageRuntime;
+
+        let rt = StorageRuntime::in_memory().unwrap();
+        let profile_id = Uuid::new_v4();
+
+        // Insert a row into cfg_connection_profiles so that FK constraints
+        // on viz_dashboards.profile_id and viz_saved_charts.profile_id succeed.
+        {
+            let conn = rt.viz_connection();
+            let guard = conn.lock().unwrap();
+            guard
+                .execute(
+                    "INSERT INTO cfg_connection_profiles (id, name) VALUES (?1, ?2)",
+                    rusqlite::params![profile_id.to_string(), "test"],
+                )
+                .unwrap();
+        }
+
+        let state = dbflux_ui_base::AppStateEntity::new_with_storage_runtime(rt);
+        (state, profile_id)
+    }
+
+    #[test]
+    fn test_build_dashboards_folder_item_id_contains_dashboards_folder() {
+        let (state, profile_id) = make_state_with_profile();
+        let item = Sidebar::build_dashboards_folder_item(profile_id, &state);
+        assert!(
+            item.id.as_ref().contains("DBF"),
+            "DashboardsFolder ID must contain the 'DBF' prefix"
+        );
+    }
+
+    #[test]
+    fn test_build_saved_charts_folder_item_id_contains_saved_charts_folder() {
+        let (state, profile_id) = make_state_with_profile();
+        let item = Sidebar::build_saved_charts_folder_item(profile_id, &state);
+        assert!(
+            item.id.as_ref().contains("SCRF"),
+            "SavedChartsFolder ID must contain the 'SCRF' prefix"
+        );
+    }
+
+    #[test]
+    fn test_build_dashboards_folder_empty_state_shows_placeholder() {
+        let (state, profile_id) = make_state_with_profile();
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].id.as_ref(),
+            format!("dashboards_empty:{profile_id}")
+        );
+        assert!(children[0].label.to_string().contains("No dashboards yet"));
+    }
+
+    #[test]
+    fn test_build_saved_charts_folder_empty_state_shows_placeholder() {
+        let (state, profile_id) = make_state_with_profile();
+        let children = Sidebar::build_saved_chart_children(profile_id, &state);
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].id.as_ref(),
+            format!("saved_charts_empty:{profile_id}")
+        );
+        assert!(
+            children[0]
+                .label
+                .to_string()
+                .contains("No saved charts yet")
+        );
+    }
+
+    #[test]
+    fn test_build_dashboard_children_one_item_per_row() {
+        use dbflux_components::SavedChartRefreshPolicy;
+        let (mut state, profile_id) = make_state_with_profile();
+
+        state
+            .dashboards
+            .create_dashboard(
+                "Dashboard A".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+        state
+            .dashboards
+            .create_dashboard(
+                "Dashboard B".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(children.len(), 2, "one DashboardItem per row");
+    }
+
+    #[test]
+    fn test_build_dashboard_children_sorted_by_updated_at_desc() {
+        use dbflux_components::SavedChartRefreshPolicy;
+        use std::time::Duration;
+        let (mut state, profile_id) = make_state_with_profile();
+
+        let id_old = state
+            .dashboards
+            .create_dashboard(
+                "Old".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        // Sleep briefly so timestamps differ (SQLite ms resolution).
+        std::thread::sleep(Duration::from_millis(5));
+
+        let id_new = state
+            .dashboards
+            .create_dashboard(
+                "New".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(children.len(), 2);
+
+        // "New" was created last so updated_at is greater → should appear first.
+        let first_id: dbflux_core::SchemaNodeId = children[0].id.as_ref().parse().unwrap();
+        assert!(
+            matches!(first_id, dbflux_core::SchemaNodeId::DashboardItem { dashboard_id, .. } if dashboard_id == id_new),
+            "most recently updated dashboard must be first"
+        );
+        let second_id: dbflux_core::SchemaNodeId = children[1].id.as_ref().parse().unwrap();
+        assert!(
+            matches!(second_id, dbflux_core::SchemaNodeId::DashboardItem { dashboard_id, .. } if dashboard_id == id_old)
         );
     }
 }

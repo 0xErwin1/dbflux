@@ -26,6 +26,10 @@ rfd.workspace = true
 dirs.workspace = true
 anyhow = "1"
 
+[dev-dependencies]
+dbflux_storage.workspace = true
+rusqlite.workspace = true
+
 [features]
 default = []
 # Passthroughs: sidebar code has no direct mcp/lua/aws gates, but these must
