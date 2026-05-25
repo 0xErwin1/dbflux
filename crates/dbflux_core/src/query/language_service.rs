@@ -323,33 +323,6 @@ impl LanguageService for SqlLanguageService {
     }
 }
 
-/// Language service for T-SQL (Microsoft SQL Server).
-///
-/// Behaves like `SqlLanguageService` for dangerous-query detection (the
-/// destructive keywords DROP/TRUNCATE/DELETE are spelled identically), but
-/// skips the live parse diagnostics entirely. The shared `tree-sitter-sequel`
-/// grammar follows generic ANSI SQL and flags T-SQL-only constructs as
-/// errors — `SELECT TOP n`, `OUTPUT INSERTED.*`, `MERGE`, `CROSS APPLY /
-/// OUTER APPLY`, table hints like `WITH (NOLOCK)`, `OFFSET … ROWS FETCH
-/// NEXT … ROWS ONLY`, etc. The server is the source of truth for syntax
-/// validity; surfacing parser false-positives in the editor only adds
-/// noise.
-pub struct TSqlLanguageService;
-
-impl LanguageService for TSqlLanguageService {
-    fn validate(&self, _query: &str) -> ValidationResult {
-        ValidationResult::Valid
-    }
-
-    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        detect_dangerous_sql(query)
-    }
-
-    fn editor_diagnostics(&self, _query: &str) -> Vec<EditorDiagnostic> {
-        Vec::new()
-    }
-}
-
 /// Produce editor diagnostics for SQL using tree-sitter error nodes.
 fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
     if query.trim().is_empty() {
