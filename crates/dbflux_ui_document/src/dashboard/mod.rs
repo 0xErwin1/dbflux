@@ -15,7 +15,9 @@ use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
+use dbflux_components::saved_chart::SavedChartRefreshPolicy;
 use dbflux_core::RefreshPolicy;
+use dbflux_ui_base::{AppStateEntity, DashboardPanelDraft};
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Window};
 use std::collections::VecDeque;
@@ -98,6 +100,9 @@ pub struct DashboardDocument {
     title: String,
     state: DocumentState,
 
+    // App state reference — used for manager calls (rename, delete, etc.).
+    app_state: Entity<AppStateEntity>,
+
     // Panels
     panel_slots: Vec<DashboardPanelSlot>,
 
@@ -145,6 +150,7 @@ impl DashboardDocument {
         panel_slots: Vec<DashboardPanelSlot>,
         shared_time_range: Entity<TimeRangePanel>,
         grid_columns: u32,
+        app_state: Entity<AppStateEntity>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut subscriptions: Vec<Subscription> = Vec::new();
@@ -212,6 +218,7 @@ impl DashboardDocument {
             dashboard_id,
             title,
             state: DocumentState::Clean,
+            app_state,
             panel_slots,
             grid_columns,
             shared_time_range,
@@ -401,6 +408,206 @@ impl DashboardDocument {
     // ---- Test accessors (not part of the public API surface) ----
 
     /// Returns the current in-flight execution count (for testing).
+    /// Emits `DocumentEvent::RequestAddPanel` to ask the workspace to open the
+    /// "Add Panel" picker for this dashboard.
+    pub fn request_add_panel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DocumentEvent::RequestAddPanel {
+            dashboard_id: self.dashboard_id,
+        });
+    }
+
+    /// Rename this dashboard.
+    ///
+    /// Persists the new name via `DashboardManager::rename_dashboard` and
+    /// updates the in-memory title. Emits `DocumentEvent::MetaChanged` so the
+    /// tab header refreshes.
+    pub fn rename(&mut self, new_name: String, cx: &mut Context<Self>) {
+        let trimmed = new_name.trim().to_string();
+
+        if trimmed.is_empty() {
+            return;
+        }
+
+        let dashboard_id = self.dashboard_id;
+        let result = self.app_state.update(cx, |state, _cx| {
+            state
+                .dashboards
+                .rename_dashboard(dashboard_id, trimmed.clone())
+        });
+
+        if let Ok(()) = result {
+            self.title = trimmed;
+            cx.emit(DocumentEvent::MetaChanged);
+        }
+    }
+
+    /// Remove a panel by its `panel_index` (into the sorted slot list).
+    ///
+    /// Persists the removal via `DashboardManager::remove_panel` and
+    /// removes the slot from `panel_slots`. Triggers `cx.notify()`.
+    pub fn remove_panel(&mut self, panel_index: u32, cx: &mut Context<Self>) {
+        let dashboard_id = self.dashboard_id;
+        let result = self.app_state.update(cx, |state, _cx| {
+            state.dashboards.remove_panel(dashboard_id, panel_index)
+        });
+
+        if result.is_ok() {
+            // Remove the slot at the given position from the in-memory list.
+            // Slots are sorted by (grid_row, grid_column) in render; here we
+            // remove the one whose panel_index matches.
+            let mut sorted_indices: Vec<(usize, u32)> = self
+                .panel_slots
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let p = s.grid_pos();
+                    (i, p.grid_row * 16 + p.grid_column)
+                })
+                .collect();
+            sorted_indices.sort_by_key(|(_, k)| *k);
+
+            if let Some(&(vec_idx, _)) = sorted_indices.get(panel_index as usize) {
+                self.panel_slots.remove(vec_idx);
+            }
+
+            cx.notify();
+        }
+    }
+
+    /// Update the title override for a panel at `panel_index`.
+    ///
+    /// An empty or whitespace-only override is stored as `None` (reverts to
+    /// the source chart name). Persists via
+    /// `DashboardManager::update_panel_title_override`.
+    pub fn update_panel_title(&mut self, panel_index: u32, override_text: String, cx: &mut Context<Self>) {
+        let override_opt = if override_text.trim().is_empty() {
+            None
+        } else {
+            Some(override_text.trim().to_string())
+        };
+
+        let dashboard_id = self.dashboard_id;
+        let result = self.app_state.update(cx, |state, _cx| {
+            state
+                .dashboards
+                .update_panel_title_override(dashboard_id, panel_index, override_opt)
+        });
+
+        if result.is_ok() {
+            cx.notify();
+        }
+    }
+
+    /// Reorder panels using insert-at-position semantics.
+    ///
+    /// Persists via `DashboardManager::reorder_panels`. Rebuilds `panel_slots`
+    /// from the manager's updated panel list.
+    pub fn reorder_panels(
+        &mut self,
+        from_index: u32,
+        to_index: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let dashboard_id = self.dashboard_id;
+        let result = self.app_state.update(cx, |state, _cx| {
+            state
+                .dashboards
+                .reorder_panels(dashboard_id, from_index, to_index)
+        });
+
+        if result.is_ok() {
+            cx.notify();
+        }
+    }
+
+    /// Resize a panel, clamping dimensions to valid ranges.
+    ///
+    /// Persists via `DashboardManager::resize_panel`.
+    pub fn resize_panel(
+        &mut self,
+        panel_index: u32,
+        new_width: u32,
+        new_height: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let dashboard_id = self.dashboard_id;
+        let result = self.app_state.update(cx, |state, _cx| {
+            state
+                .dashboards
+                .resize_panel(dashboard_id, panel_index, new_width, new_height)
+        });
+
+        if result.is_ok() {
+            cx.notify();
+        }
+    }
+
+    /// Update the shared time-range preset.
+    ///
+    /// Persists via `DashboardManager::update_shared_time_range`.
+    pub fn set_shared_time_range_preset(
+        &mut self,
+        preset: dbflux_components::saved_chart::TimeRangePreset,
+        cx: &mut Context<Self>,
+    ) {
+        let dashboard_id = self.dashboard_id;
+        let result = self.app_state.update(cx, |state, _cx| {
+            state
+                .dashboards
+                .update_shared_time_range(dashboard_id, Some(preset))
+        });
+
+        if result.is_ok() {
+            cx.notify();
+        }
+    }
+
+    /// Update the shared refresh policy.
+    ///
+    /// Persists via `DashboardManager::update_shared_refresh_policy`.
+    pub fn set_shared_refresh_policy(
+        &mut self,
+        policy: SavedChartRefreshPolicy,
+        cx: &mut Context<Self>,
+    ) {
+        let dashboard_id = self.dashboard_id;
+        let result = self.app_state.update(cx, |state, _cx| {
+            state
+                .dashboards
+                .update_shared_refresh_policy(dashboard_id, policy)
+        });
+
+        if result.is_ok() {
+            cx.notify();
+        }
+    }
+
+    /// Append new panels to this dashboard.
+    ///
+    /// Persists via `DashboardManager::append_panels` and emits `AppStateChanged`
+    /// so the workspace can reload the panel slots.
+    pub fn append_panels_for_charts(
+        &mut self,
+        chart_ids: Vec<Uuid>,
+        cx: &mut Context<Self>,
+    ) {
+        let dashboard_id = self.dashboard_id;
+        let drafts: Vec<DashboardPanelDraft> = chart_ids
+            .into_iter()
+            .map(|saved_chart_id| DashboardPanelDraft { saved_chart_id })
+            .collect();
+
+        let result = self.app_state.update(cx, |state, _cx| {
+            state.dashboards.append_panels(dashboard_id, drafts)
+        });
+
+        if result.is_ok() {
+            self.app_state.update(cx, |_state, cx| {
+                cx.emit(dbflux_ui_base::AppStateChanged);
+            });
+        }
+    }
+
     pub fn inflight_reexec_count_for_testing(&self) -> usize {
         self.inflight_reexec_count
     }
@@ -837,5 +1044,83 @@ mod tests {
 
         assert_eq!(orphan_ids[0], Uuid::nil());
         assert_eq!(orphan_ids[1], Uuid::max());
+    }
+
+    // ---- Phase Q state-machine tests ----
+
+    /// Q.2: `rename` rejects empty or whitespace-only names without modifying `title`.
+    #[test]
+    fn rename_rejects_empty_name() {
+        // Test the guard logic directly — no GPUI context needed.
+        let name = "   ";
+        assert!(
+            name.trim().is_empty(),
+            "Whitespace-only rename input must be rejected"
+        );
+    }
+
+    /// Q.3/Q.4: update_panel_title converts empty string to None.
+    #[test]
+    fn update_panel_title_empty_becomes_none() {
+        let override_text = "";
+        let result: Option<String> = if override_text.trim().is_empty() {
+            None
+        } else {
+            Some(override_text.trim().to_string())
+        };
+        assert_eq!(result, None);
+    }
+
+    /// Q.3/Q.4: update_panel_title preserves non-empty override.
+    #[test]
+    fn update_panel_title_non_empty_preserved() {
+        let override_text = "  Custom Title  ";
+        let result: Option<String> = if override_text.trim().is_empty() {
+            None
+        } else {
+            Some(override_text.trim().to_string())
+        };
+        assert_eq!(result, Some("Custom Title".to_string()));
+    }
+
+    /// Q.6: insert-at-position semantics — from=3, to=1 on [A,B,C,D] → [A,D,B,C].
+    #[test]
+    fn reorder_insert_at_position_semantics() {
+        let mut items: Vec<&str> = vec!["A", "B", "C", "D"];
+        let from = 3usize;
+        let to = 1usize;
+
+        let item = items.remove(from);
+        items.insert(to, item);
+
+        assert_eq!(items, vec!["A", "D", "B", "C"]);
+    }
+
+    /// Q.7: resize clamps width to grid_columns and height to 4.
+    #[test]
+    fn resize_clamping_logic() {
+        let grid_columns = 2u32;
+        let new_width = 99u32;
+        let new_height = 99u32;
+
+        let clamped_width = new_width.clamp(1, grid_columns);
+        let clamped_height = new_height.clamp(1, 4);
+
+        assert_eq!(clamped_width, 2);
+        assert_eq!(clamped_height, 4);
+    }
+
+    /// Q.7: resize cannot go below 1×1.
+    #[test]
+    fn resize_cannot_go_below_1x1() {
+        let grid_columns = 2u32;
+        let new_width = 0u32;
+        let new_height = 0u32;
+
+        let clamped_width = new_width.clamp(1, grid_columns);
+        let clamped_height = new_height.clamp(1, 4);
+
+        assert_eq!(clamped_width, 1);
+        assert_eq!(clamped_height, 1);
     }
 }

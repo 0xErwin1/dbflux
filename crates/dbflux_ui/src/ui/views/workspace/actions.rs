@@ -1897,9 +1897,20 @@ impl Workspace {
                     })
                     .collect();
 
-            // Build the shared time-range panel. Use the "24h" preset by
-            // default (preset index 3 matches Last24Hours in TimeRangePanel).
-            let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+            // Build the shared time-range panel using the persisted preset when
+            // available; fall back to Last24Hours (index 3) when the dashboard
+            // has no stored preset.
+            use dbflux_components::saved_chart::TimeRangePreset;
+            let (preset_placeholder, preset_index) =
+                match dashboard.shared_time_range_preset {
+                    Some(TimeRangePreset::Last15min) => ("15m", Some(0usize)),
+                    Some(TimeRangePreset::LastHour) => ("1h", Some(1)),
+                    Some(TimeRangePreset::Last6Hours) => ("6h", Some(2)),
+                    Some(TimeRangePreset::Last24Hours) | None => ("24h", Some(3)),
+                    Some(TimeRangePreset::Last7Days) => ("7d", Some(4)),
+                };
+            let shared_time_range =
+                cx.new(|cx| TimeRangePanel::new(preset_placeholder, preset_index, window, cx));
 
             DashboardDocument::new(
                 dashboard_id,
@@ -1907,6 +1918,7 @@ impl Workspace {
                 panel_slots,
                 shared_time_range,
                 dashboard.grid_columns,
+                app_state.clone(),
                 cx,
             )
         });
