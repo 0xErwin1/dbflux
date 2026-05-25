@@ -14,8 +14,8 @@ pub use generator::{
 pub use language_service::{
     DangerousQueryKind, Diagnostic, DiagnosticSeverity, EditorDiagnostic, LanguageService,
     SqlLanguageService, TextPosition, TextPositionRange, TextRange, ValidationResult,
-    classify_query_for_language, detect_dangerous_mongo, detect_dangerous_query,
-    detect_dangerous_redis, detect_dangerous_sql, strip_leading_comments,
+    classify_query_for_language, detect_dangerous_query, detect_dangerous_sql,
+    strip_leading_comments,
 };
 pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
 pub use semantic::{

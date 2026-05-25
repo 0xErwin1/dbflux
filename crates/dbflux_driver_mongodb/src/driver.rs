@@ -11,22 +11,22 @@ use std::sync::Arc;
 
 use bson::{Bson, Document, doc};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
+
+use crate::language_service::MongoLanguageService;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnKind, ColumnMeta,
     Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult,
-    DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind,
-    DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, Diagnostic,
-    DiagnosticSeverity, DocumentConnection, DocumentDelete, DocumentInsert, DocumentSchema,
-    DocumentUpdate, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    EditorDiagnostic, FieldInfo, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
-    FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection, LanguageService,
-    MONGODB_FORM, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
-    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row, SchemaDropTarget,
-    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef, SemanticFilter,
-    SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo,
-    TextPosition, TextPositionRange, TransactionCapabilities, ValidationResult, Value, ViewInfo,
-    WhereOperator, detect_dangerous_mongo, sanitize_uri,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DocumentDelete,
+    DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
+    DriverLimits, DriverMetadata, FieldInfo, FormFieldDef, FormFieldKind, FormSection, FormTab,
+    FormValues, FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection,
+    LanguageService, MONGODB_FORM, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row,
+    SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef,
+    SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig,
+    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -2356,115 +2356,6 @@ impl ConnectionExt for MongoConnection {
     fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
         None
     }
-}
-
-/// MongoDB language service that validates shell syntax and detects dangerous operations.
-struct MongoLanguageService;
-
-impl LanguageService for MongoLanguageService {
-    fn validate(&self, query: &str) -> ValidationResult {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return ValidationResult::Valid;
-        }
-
-        let lower = trimmed.to_lowercase();
-        if lower.starts_with("select ")
-            || lower.starts_with("insert into")
-            || lower.starts_with("update ")
-            || lower.starts_with("delete from")
-        {
-            return ValidationResult::WrongLanguage {
-                expected: QueryLanguage::MongoQuery,
-                message: "SQL syntax not supported for MongoDB. Use db.collection.method() or db.method() syntax."
-                    .to_string(),
-            };
-        }
-
-        match crate::query_parser::validate_query(query) {
-            Ok(_) => ValidationResult::Valid,
-            Err(e) => ValidationResult::SyntaxError(
-                Diagnostic::error(format!("Invalid MongoDB query: {}", e))
-                    .with_hint("Use db.collection.method() or db.method() syntax"),
-            ),
-        }
-    }
-
-    fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
-        detect_dangerous_mongo(query)
-    }
-
-    fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
-        let trimmed = query.trim();
-
-        if trimmed.is_empty() {
-            return vec![];
-        }
-
-        let lower = trimmed.to_lowercase();
-        if lower.starts_with("select ")
-            || lower.starts_with("insert into")
-            || lower.starts_with("update ")
-            || lower.starts_with("delete from")
-        {
-            return vec![EditorDiagnostic {
-                severity: DiagnosticSeverity::Error,
-                message: "SQL syntax not supported for MongoDB. Use db.collection.method() or db.method() syntax."
-                    .to_string(),
-                range: full_first_line_range(query),
-            }];
-        }
-
-        let errors = crate::query_parser::validate_query_positional(query);
-        errors
-            .into_iter()
-            .map(|err| {
-                let range = byte_offset_to_range(query, err.offset, err.len);
-                EditorDiagnostic {
-                    severity: DiagnosticSeverity::Error,
-                    message: err.message,
-                    range,
-                }
-            })
-            .collect()
-    }
-}
-
-fn byte_offset_to_range(source: &str, offset: usize, len: usize) -> TextPositionRange {
-    let clamped_offset = offset.min(source.len());
-    let clamped_end = (offset + len.max(1))
-        .min(source.len())
-        .max(clamped_offset + 1);
-
-    let start = byte_offset_to_position(source, clamped_offset);
-    let end = byte_offset_to_position(source, clamped_end);
-
-    if start == end {
-        let end_col = start.column + 1;
-        return TextPositionRange::new(start, TextPosition::new(start.line, end_col));
-    }
-
-    TextPositionRange::new(start, end)
-}
-
-fn byte_offset_to_position(source: &str, offset: usize) -> TextPosition {
-    let before = &source[..offset.min(source.len())];
-    let line = before.matches('\n').count() as u32;
-    let last_newline = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let column = before[last_newline..].chars().count() as u32;
-    TextPosition::new(line, column)
-}
-
-fn full_first_line_range(query: &str) -> TextPositionRange {
-    let first_line_len = query
-        .lines()
-        .next()
-        .map(|line| line.chars().count())
-        .unwrap_or(1) as u32;
-
-    let end_col = first_line_len.max(1);
-
-    TextPositionRange::new(TextPosition::new(0, 0), TextPosition::new(0, end_col))
 }
 
 /// Stub dialect for MongoDB. SQL generation is not used for document databases.
