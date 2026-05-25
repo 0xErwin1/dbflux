@@ -157,6 +157,49 @@ impl DashboardsRepository {
         Ok(())
     }
 
+    /// Returns the distinct dashboard IDs that have at least one panel referencing
+    /// `chart_id` via `viz_dashboard_panels.saved_chart_id`. Used by the
+    /// delete-saved-chart confirmation modal to show the orphan-impact count.
+    ///
+    /// SQL: `SELECT DISTINCT dashboard_id FROM viz_dashboard_panels
+    ///        WHERE saved_chart_id = ?1 ORDER BY dashboard_id`
+    pub fn find_dashboards_referencing_chart(
+        &self,
+        chart_id: Uuid,
+    ) -> Result<Vec<Uuid>, StorageError> {
+        let conn = self.conn.lock().map_err(lock_err)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT dashboard_id
+                 FROM viz_dashboard_panels
+                 WHERE saved_chart_id = ?1
+                 ORDER BY dashboard_id",
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
+
+        let ids: Vec<Uuid> = stmt
+            .query_map([chart_id.to_string()], |row| row.get::<_, String>(0))
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(|s| {
+                Uuid::parse_str(&s)
+                    .map_err(|e| {
+                        log::warn!("find_dashboards_referencing_chart: invalid uuid '{}': {e}", s);
+                    })
+                    .ok()
+            })
+            .collect();
+
+        Ok(ids)
+    }
+
     // Internal helper: runs a full SELECT with a caller-supplied ORDER BY clause.
     fn query_rows<P: rusqlite::Params>(
         conn: &Connection,
@@ -415,5 +458,134 @@ mod tests {
             result.is_err(),
             "should fail: interval kind requires interval_secs"
         );
+    }
+
+    // --- K.1 tests: find_dashboards_referencing_chart ---
+
+    fn setup_panels_db(suffix: &str) -> (Arc<Mutex<Connection>>, DashboardsRepository, DashboardPanelsRepository, Uuid) {
+        let path = temp_db(suffix);
+        let conn = open_database(&path).expect("open");
+        MigrationRegistry::new().run_all(&conn).expect("migrate");
+        let profile_id = insert_profile(&conn);
+        let conn = Arc::new(Mutex::new(conn));
+        let dashboards_repo = DashboardsRepository::new(Arc::clone(&conn));
+        let panels_repo = DashboardPanelsRepository::new(Arc::clone(&conn));
+        (conn, dashboards_repo, panels_repo, profile_id)
+    }
+
+    fn insert_dashboard(repo: &DashboardsRepository, profile_id: Uuid) -> Uuid {
+        let id = Uuid::new_v4();
+        repo.upsert(&make_dashboard(id, Some(profile_id))).expect("upsert dashboard");
+        id
+    }
+
+    fn insert_panel(panels_repo: &DashboardPanelsRepository, dashboard_id: Uuid, chart_id: Uuid, index: i64) {
+        panels_repo.replace_panels_for_dashboard(
+            dashboard_id,
+            &[DashboardPanelDto {
+                dashboard_id: dashboard_id.to_string(),
+                panel_index: index,
+                saved_chart_id: chart_id.to_string(),
+                title_override: None,
+                grid_row: 0,
+                grid_column: 0,
+                grid_width: 1,
+                grid_height: 1,
+            }],
+        ).expect("insert panel");
+    }
+
+    #[test]
+    fn test_find_dashboards_referencing_chart_returns_empty_when_none() {
+        let (_conn, repo, _panels_repo, _profile_id) = setup_panels_db("ref_empty");
+        let chart_id = Uuid::new_v4();
+        let result = repo.find_dashboards_referencing_chart(chart_id).expect("query");
+        assert!(result.is_empty(), "no panels reference the chart; should return empty");
+    }
+
+    #[test]
+    fn test_find_dashboards_referencing_chart_returns_single_dashboard() {
+        let (conn, repo, panels_repo, profile_id) = setup_panels_db("ref_single");
+        let chart_id = {
+            let locked = conn.lock().unwrap();
+            insert_chart(&locked, profile_id)
+        };
+        let dashboard_id = insert_dashboard(&repo, profile_id);
+        insert_panel(&panels_repo, dashboard_id, chart_id, 0);
+
+        let result = repo.find_dashboards_referencing_chart(chart_id).expect("query");
+        assert_eq!(result, vec![dashboard_id]);
+    }
+
+    #[test]
+    fn test_find_dashboards_referencing_chart_returns_distinct_dashboard_ids() {
+        let (conn, repo, panels_repo, profile_id) = setup_panels_db("ref_distinct");
+        let chart_x = {
+            let locked = conn.lock().unwrap();
+            insert_chart(&locked, profile_id)
+        };
+        let other_chart = {
+            let locked = conn.lock().unwrap();
+            insert_chart(&locked, profile_id)
+        };
+
+        let dashboard_a = insert_dashboard(&repo, profile_id);
+        let dashboard_b = insert_dashboard(&repo, profile_id);
+
+        // dashboard_a: one panel referencing chart_x
+        insert_panel(&panels_repo, dashboard_a, chart_x, 0);
+        // dashboard_b: two panels referencing chart_x (via replace_panels, can only use unique panel_index)
+        // We simulate "twice in B" by inserting a second chart also in B alongside chart_x
+        panels_repo.replace_panels_for_dashboard(
+            dashboard_b,
+            &[
+                DashboardPanelDto {
+                    dashboard_id: dashboard_b.to_string(),
+                    panel_index: 0,
+                    saved_chart_id: chart_x.to_string(),
+                    title_override: None,
+                    grid_row: 0,
+                    grid_column: 0,
+                    grid_width: 1,
+                    grid_height: 1,
+                },
+                DashboardPanelDto {
+                    dashboard_id: dashboard_b.to_string(),
+                    panel_index: 1,
+                    saved_chart_id: other_chart.to_string(),
+                    title_override: None,
+                    grid_row: 0,
+                    grid_column: 1,
+                    grid_width: 1,
+                    grid_height: 1,
+                },
+            ],
+        ).expect("insert panels b");
+
+        let mut result = repo.find_dashboards_referencing_chart(chart_x).expect("query");
+        result.sort();
+        let mut expected = vec![dashboard_a, dashboard_b];
+        expected.sort();
+        assert_eq!(result, expected, "should return exactly [A, B] without duplicates");
+    }
+
+    #[test]
+    fn test_find_dashboards_referencing_chart_returns_all_three() {
+        let (conn, repo, panels_repo, profile_id) = setup_panels_db("ref_three");
+        let chart_x = {
+            let locked = conn.lock().unwrap();
+            insert_chart(&locked, profile_id)
+        };
+
+        let d1 = insert_dashboard(&repo, profile_id);
+        let d2 = insert_dashboard(&repo, profile_id);
+        let d3 = insert_dashboard(&repo, profile_id);
+
+        insert_panel(&panels_repo, d1, chart_x, 0);
+        insert_panel(&panels_repo, d2, chart_x, 0);
+        insert_panel(&panels_repo, d3, chart_x, 0);
+
+        let result = repo.find_dashboards_referencing_chart(chart_x).expect("query");
+        assert_eq!(result.len(), 3, "should return all three referencing dashboards");
     }
 }
