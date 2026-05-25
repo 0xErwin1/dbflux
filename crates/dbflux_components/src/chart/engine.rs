@@ -80,7 +80,10 @@ pub(crate) struct RenderModel {
     // closure regenerates ticks dynamically at render time via `x_ticks_dynamic`.
     #[allow(dead_code)]
     pub x_ticks: Vec<TickLabel>,
-    /// Y-axis tick labels rendered to the left of the plot area.
+    /// Y-axis tick labels (build-time, target=5). Superseded by the dynamic
+    /// render-time path (`y_ticks_dynamic` in the paint closure); retained for
+    /// API stability and future flexibility.
+    #[allow(dead_code)]
     pub y_ticks: Vec<TickLabel>,
     /// Data-space X bounds.
     pub x_min: f64,
@@ -1079,16 +1082,17 @@ impl Render for ChartView {
 
         // For StackedBar, compute the true y ceiling by summing visible series
         // at each shared point index. Baseline = 0 when in range, else y_min.
-        let (y_max, _y_range, stacked_y_ticks) = if matches!(kind, ChartKind::StackedBar) {
+        // Y ticks are computed dynamically at render time from plot_h; only the
+        // adjusted y_max (stacked ceiling or bar headroom) needs to be captured.
+        let (y_max, _y_range) = if matches!(kind, ChartKind::StackedBar) {
             let padded_max = self.stacked_y_max();
             let new_range = (padded_max - y_min).max(1.0);
-            let ticks = ticks_numeric(y_min, padded_max, 5);
-            (padded_max, new_range, Some(ticks))
+            (padded_max, new_range)
         } else if needs_bar_layout {
             let padded_max = y_max + y_range * 0.08;
-            (padded_max, (padded_max - y_min).max(1.0), None)
+            (padded_max, (padded_max - y_min).max(1.0))
         } else {
-            (y_max, y_range, None)
+            (y_max, y_range)
         };
 
         let bar_x_inset_fraction: f32 = if needs_bar_layout {
@@ -1113,25 +1117,21 @@ impl Render for ChartView {
         let decimated = model.decimated.clone();
         let x_is_time = spec.x_axis.kind == AxisKind::Time;
 
-        // For StackedBar, override the Y ticks with the stacked-range ticks so
-        // both the gridlines and tick labels reflect the true stacked ceiling.
-        let effective_y_ticks = stacked_y_ticks.as_ref().unwrap_or(&model.y_ticks).clone();
-
-        // Tick label strings for in-canvas painting (Y data order; painting handles positioning).
-        let y_tick_labels: Vec<(f64, SharedString)> = effective_y_ticks
-            .iter()
-            .map(|t| (t.value, SharedString::from(t.label.clone())))
-            .collect();
+        // Y ticks are generated dynamically inside the paint closure based on
+        // the available plot_h. The closure captures the adjusted y bounds
+        // (y_min / y_max already reflect the StackedBar ceiling or bar headroom)
+        // and y_is_log so it can pick the right tick generator.
 
         // Clone for canvas closure.
         let decimated_canvas = decimated.clone();
         let palette_canvas = palette.clone();
-        let y_ticks_canvas = effective_y_ticks;
         let hover_x_canvas = hover_x;
-        let y_tick_labels_canvas = y_tick_labels.clone();
         let hidden_canvas = self.hidden.clone();
         let kind_canvas = kind;
         let bar_x_inset_canvas = bar_x_inset_fraction;
+        let y_min_canvas = y_min;
+        let y_max_canvas = y_max;
+        let y_is_log_canvas = y_is_log;
 
         // Shared plot-area bounds: written by the canvas prepaint closure,
         // read here to compute the readout and inside the on_mouse_move
@@ -1240,7 +1240,7 @@ impl Render for ChartView {
                                 // tick count ↔ plot_w ↔ widest label.
                                 let plot_w_provisional = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
                                 let x_tick_target =
-                                    ((plot_w_provisional / 120.0).round() as usize).clamp(4, 16);
+                                    ((plot_w_provisional / 120.0).round() as usize).clamp(3, 16);
                                 let x_ticks_dynamic = if x_is_time {
                                     ticks_time(x_min, x_max, x_tick_target)
                                 } else {
@@ -1300,6 +1300,24 @@ impl Render for ChartView {
                                 let plot_w = (w - left_pad - right_pad).max(1.0);
                                 let plot_h = (h - MARGIN_TOP - MARGIN_BOTTOM).max(1.0);
 
+                                // --- Dynamic Y-tick density ---
+                                //
+                                // Target scales with available plot height: one tick per ~60 px,
+                                // clamped to [3, 12]. This mirrors the dynamic X-tick path.
+                                // y_max_canvas already reflects the StackedBar ceiling or bar
+                                // headroom computed above; y_is_log_canvas selects the generator.
+                                let y_tick_target = ((plot_h / 60.0).round() as usize).clamp(3, 12);
+                                let y_ticks_dynamic = if y_is_log_canvas {
+                                    ticks_log(y_min_canvas, y_max_canvas, y_tick_target)
+                                } else {
+                                    ticks_numeric(y_min_canvas, y_max_canvas, y_tick_target)
+                                };
+                                let y_tick_labels_dynamic: Vec<(f64, SharedString)> =
+                                    y_ticks_dynamic
+                                        .iter()
+                                        .map(|t| (t.value, SharedString::from(t.label.clone())))
+                                        .collect();
+
                                 // Bars inset both edges by half a column so the
                                 // first/last bar fits; Line uses the full width
                                 // (inset fraction is 0).
@@ -1328,7 +1346,7 @@ impl Render for ChartView {
                                 // `tick.value` is in projection space (log1p or linear);
                                 // use the projection-space mapper, not data_to_screen_y.
                                 let gridline_color = theme.border;
-                                for tick in y_ticks_canvas
+                                for tick in y_ticks_dynamic
                                     .iter()
                                     .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
                                 {
@@ -1642,7 +1660,7 @@ impl Render for ChartView {
                                 // Right-aligned against the effective left margin so the
                                 // Y-tick column stays flush with the plot edge even when
                                 // the left guard fires. Pie has no axes — skip all tick labels.
-                                for (value, label) in y_tick_labels_canvas
+                                for (value, label) in y_tick_labels_dynamic
                                     .iter()
                                     .filter(|_| !matches!(kind_canvas, ChartKind::Pie))
                                 {
