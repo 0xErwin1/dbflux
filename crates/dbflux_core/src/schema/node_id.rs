@@ -1554,8 +1554,7 @@ impl FromStr for SchemaNodeId {
             P_SAVED_CHART_ITEM => {
                 let profile_id =
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
-                let chart_id =
-                    Uuid::parse_str(parts.get(2).ok_or_else(err)?).map_err(|_| err())?;
+                let chart_id = Uuid::parse_str(parts.get(2).ok_or_else(err)?).map_err(|_| err())?;
                 Ok(Self::SavedChartItem {
                     profile_id,
                     chart_id,

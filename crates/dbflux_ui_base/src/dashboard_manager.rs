@@ -35,6 +35,15 @@ pub struct Dashboard {
     pub updated_at: chrono::DateTime<Utc>,
 }
 
+/// Minimal payload for appending a new panel to a dashboard.
+///
+/// The manager assigns `panel_index`, `grid_row`, `grid_column`,
+/// `grid_width = 1`, `grid_height = 1`, and `title_override = None`.
+#[derive(Debug, Clone)]
+pub struct DashboardPanelDraft {
+    pub saved_chart_id: Uuid,
+}
+
 /// In-memory domain record for one panel slot in a dashboard.
 #[derive(Debug, Clone)]
 pub struct DashboardPanel {
@@ -220,6 +229,18 @@ fn refresh_policy_kind_to_str(p: SavedChartRefreshPolicy) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Grid helpers
+// ---------------------------------------------------------------------------
+
+/// Converts a dense linear `panel_index` to `(grid_row, grid_column)`.
+///
+/// `grid_columns` is clamped to a minimum of 1 to avoid division by zero.
+fn panel_index_to_grid(panel_index: u32, grid_columns: u32) -> (u32, u32) {
+    let cols = grid_columns.max(1);
+    (panel_index / cols, panel_index % cols)
+}
+
+// ---------------------------------------------------------------------------
 // DashboardManager
 // ---------------------------------------------------------------------------
 
@@ -358,6 +379,388 @@ impl DashboardManager {
             .unwrap_or(&[])
     }
 
+    /// Creates a new dashboard, persists it, and updates the cache.
+    /// Returns the new dashboard's UUID on success.
+    ///
+    /// The new dashboard starts with zero panels.
+    pub fn create_dashboard(
+        &mut self,
+        name: String,
+        description: Option<String>,
+        profile_id: Uuid,
+        shared_time_range_preset: Option<TimeRangePreset>,
+        shared_refresh_policy: SavedChartRefreshPolicy,
+    ) -> Result<Uuid, StorageError> {
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+
+        let dashboard = Dashboard {
+            id,
+            name,
+            description,
+            profile_id: Some(profile_id),
+            shared_time_range_preset,
+            shared_refresh_policy,
+            grid_columns: 2,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let dto = dashboard_to_dto(&dashboard);
+        self.dashboards_repo.upsert(&dto)?;
+
+        self.dashboards.push(dashboard);
+        self.panels.insert(id, Vec::new());
+
+        Ok(id)
+    }
+
+    /// Renames a dashboard, bumps `updated_at`, and updates the cache.
+    pub fn rename_dashboard(
+        &mut self,
+        dashboard_id: Uuid,
+        new_name: String,
+    ) -> Result<(), StorageError> {
+        let idx = self
+            .dashboards
+            .iter()
+            .position(|d| d.id == dashboard_id)
+            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
+
+        let mut updated = self.dashboards[idx].clone();
+        updated.name = new_name;
+        updated.updated_at = Utc::now();
+
+        let dto = dashboard_to_dto(&updated);
+        self.dashboards_repo.upsert(&dto)?;
+
+        self.dashboards[idx] = updated;
+        Ok(())
+    }
+
+    /// Deletes a dashboard row. SQLite CASCADE on `viz_dashboard_panels` handles
+    /// panel cleanup. Cache (dashboard + panels) is evicted only on success.
+    pub fn delete_dashboard(&mut self, dashboard_id: Uuid) -> Result<(), StorageError> {
+        self.dashboards_repo.delete(dashboard_id)?;
+        self.dashboards.retain(|d| d.id != dashboard_id);
+        self.panels.remove(&dashboard_id);
+        Ok(())
+    }
+
+    /// Deep-copies a dashboard: new UUID, name prefixed with "Copy of ", same
+    /// shared time range / refresh policy, panels copied with the same
+    /// `saved_chart_id` references and dense `panel_index` values.
+    ///
+    /// Returns the new dashboard's UUID.
+    pub fn duplicate_dashboard(&mut self, dashboard_id: Uuid) -> Result<Uuid, StorageError> {
+        let src = self
+            .dashboards
+            .iter()
+            .find(|d| d.id == dashboard_id)
+            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?
+            .clone();
+
+        let src_panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+
+        let new_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let new_dashboard = Dashboard {
+            id: new_id,
+            name: format!("Copy of {}", src.name),
+            description: src.description.clone(),
+            profile_id: src.profile_id,
+            shared_time_range_preset: src.shared_time_range_preset,
+            shared_refresh_policy: src.shared_refresh_policy,
+            grid_columns: src.grid_columns,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let new_panels: Vec<DashboardPanel> = src_panels
+            .iter()
+            .enumerate()
+            .map(|(i, p)| DashboardPanel {
+                dashboard_id: new_id,
+                panel_index: i as u32,
+                saved_chart_id: p.saved_chart_id,
+                title_override: p.title_override.clone(),
+                grid_row: p.grid_row,
+                grid_column: p.grid_column,
+                grid_width: p.grid_width,
+                grid_height: p.grid_height,
+            })
+            .collect();
+
+        let dto = dashboard_to_dto(&new_dashboard);
+        self.dashboards_repo.upsert(&dto)?;
+
+        let panel_dtos: Vec<DashboardPanelDto> = new_panels.iter().map(panel_to_dto).collect();
+        self.panels_repo
+            .replace_panels_for_dashboard(new_id, &panel_dtos)?;
+
+        self.dashboards.push(new_dashboard);
+        self.panels.insert(new_id, new_panels);
+
+        Ok(new_id)
+    }
+
+    /// Updates the shared time-range preset and bumps `updated_at`.
+    pub fn update_shared_time_range(
+        &mut self,
+        dashboard_id: Uuid,
+        preset: Option<TimeRangePreset>,
+    ) -> Result<(), StorageError> {
+        let idx = self
+            .dashboards
+            .iter()
+            .position(|d| d.id == dashboard_id)
+            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
+
+        let mut updated = self.dashboards[idx].clone();
+        updated.shared_time_range_preset = preset;
+        updated.updated_at = Utc::now();
+
+        let dto = dashboard_to_dto(&updated);
+        self.dashboards_repo.upsert(&dto)?;
+
+        self.dashboards[idx] = updated;
+        Ok(())
+    }
+
+    /// Updates the shared refresh policy and bumps `updated_at`.
+    pub fn update_shared_refresh_policy(
+        &mut self,
+        dashboard_id: Uuid,
+        policy: SavedChartRefreshPolicy,
+    ) -> Result<(), StorageError> {
+        let idx = self
+            .dashboards
+            .iter()
+            .position(|d| d.id == dashboard_id)
+            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
+
+        let mut updated = self.dashboards[idx].clone();
+        updated.shared_refresh_policy = policy;
+        updated.updated_at = Utc::now();
+
+        let dto = dashboard_to_dto(&updated);
+        self.dashboards_repo.upsert(&dto)?;
+
+        self.dashboards[idx] = updated;
+        Ok(())
+    }
+
+    /// Appends `drafts.len()` panels at the next contiguous grid slots.
+    ///
+    /// Each new panel starts at `grid_width = 1, grid_height = 1,
+    /// title_override = None`. `panel_index` is assigned dense starting
+    /// from the current count.
+    pub fn append_panels(
+        &mut self,
+        dashboard_id: Uuid,
+        drafts: Vec<DashboardPanelDraft>,
+    ) -> Result<(), StorageError> {
+        let grid_columns = self
+            .dashboards
+            .iter()
+            .find(|d| d.id == dashboard_id)
+            .map(|d| d.grid_columns)
+            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
+
+        let current_panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let base_index = current_panels.len() as u32;
+
+        let mut new_panels = current_panels.clone();
+
+        for (i, draft) in drafts.into_iter().enumerate() {
+            let panel_index = base_index + i as u32;
+            let (grid_row, grid_column) = panel_index_to_grid(panel_index, grid_columns);
+
+            new_panels.push(DashboardPanel {
+                dashboard_id,
+                panel_index,
+                saved_chart_id: draft.saved_chart_id,
+                title_override: None,
+                grid_row,
+                grid_column,
+                grid_width: 1,
+                grid_height: 1,
+            });
+        }
+
+        let dtos: Vec<DashboardPanelDto> = new_panels.iter().map(panel_to_dto).collect();
+        self.panels_repo
+            .replace_panels_for_dashboard(dashboard_id, &dtos)?;
+
+        self.panels.insert(dashboard_id, new_panels);
+        Ok(())
+    }
+
+    /// Removes the panel at `panel_index`, re-indexes remaining panels dense
+    /// (0..N-1), and persists via `replace_panels_for_dashboard`.
+    pub fn remove_panel(
+        &mut self,
+        dashboard_id: Uuid,
+        panel_index: u32,
+    ) -> Result<(), StorageError> {
+        let grid_columns = self
+            .dashboards
+            .iter()
+            .find(|d| d.id == dashboard_id)
+            .map(|d| d.grid_columns)
+            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
+
+        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+
+        // Sort by panel_index to ensure deterministic removal.
+        panels.sort_by_key(|p| p.panel_index);
+        panels.retain(|p| p.panel_index != panel_index);
+
+        // Re-index dense with recomputed grid positions.
+        let updated_panels: Vec<DashboardPanel> = panels
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut p)| {
+                p.panel_index = i as u32;
+                let (row, col) = panel_index_to_grid(i as u32, grid_columns);
+                p.grid_row = row;
+                p.grid_column = col;
+                p
+            })
+            .collect();
+
+        let dtos: Vec<DashboardPanelDto> = updated_panels.iter().map(panel_to_dto).collect();
+        self.panels_repo
+            .replace_panels_for_dashboard(dashboard_id, &dtos)?;
+
+        self.panels.insert(dashboard_id, updated_panels);
+        Ok(())
+    }
+
+    /// Reorders panels using insert-at-position semantics: the panel at
+    /// `from_index` is removed and inserted at `to_index`; all panels between
+    /// shift by one slot. Indices are rewritten dense (0..N-1).
+    pub fn reorder_panels(
+        &mut self,
+        dashboard_id: Uuid,
+        from_index: u32,
+        to_index: u32,
+    ) -> Result<(), StorageError> {
+        let grid_columns = self
+            .dashboards
+            .iter()
+            .find(|d| d.id == dashboard_id)
+            .map(|d| d.grid_columns)
+            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
+
+        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        panels.sort_by_key(|p| p.panel_index);
+
+        if from_index as usize >= panels.len() || to_index as usize > panels.len() {
+            return Err(StorageError::Data(format!(
+                "reorder_panels: from={from_index} to={to_index} out of range (len={})",
+                panels.len()
+            )));
+        }
+
+        let panel = panels.remove(from_index as usize);
+
+        // Clamp to_index after removal (length is now N-1).
+        let insert_at = (to_index as usize).min(panels.len());
+        panels.insert(insert_at, panel);
+
+        // Re-index dense with recomputed grid positions.
+        let updated_panels: Vec<DashboardPanel> = panels
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut p)| {
+                p.panel_index = i as u32;
+                let (row, col) = panel_index_to_grid(i as u32, grid_columns);
+                p.grid_row = row;
+                p.grid_column = col;
+                p
+            })
+            .collect();
+
+        let dtos: Vec<DashboardPanelDto> = updated_panels.iter().map(panel_to_dto).collect();
+        self.panels_repo
+            .replace_panels_for_dashboard(dashboard_id, &dtos)?;
+
+        self.panels.insert(dashboard_id, updated_panels);
+        Ok(())
+    }
+
+    /// Resizes the panel at `panel_index`. Clamps `new_width` to
+    /// `1..=grid_columns` and `new_height` to `1..=4`.
+    pub fn resize_panel(
+        &mut self,
+        dashboard_id: Uuid,
+        panel_index: u32,
+        new_width: u32,
+        new_height: u32,
+    ) -> Result<(), StorageError> {
+        let grid_columns = self
+            .dashboards
+            .iter()
+            .find(|d| d.id == dashboard_id)
+            .map(|d| d.grid_columns)
+            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
+
+        let clamped_width = new_width.clamp(1, grid_columns);
+        let clamped_height = new_height.clamp(1, 4);
+
+        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let panel = panels
+            .iter_mut()
+            .find(|p| p.panel_index == panel_index)
+            .ok_or_else(|| {
+                StorageError::Data(format!(
+                    "panel_index {panel_index} not found in dashboard {dashboard_id}"
+                ))
+            })?;
+
+        panel.grid_width = clamped_width;
+        panel.grid_height = clamped_height;
+
+        let dtos: Vec<DashboardPanelDto> = panels.iter().map(panel_to_dto).collect();
+        self.panels_repo
+            .replace_panels_for_dashboard(dashboard_id, &dtos)?;
+
+        self.panels.insert(dashboard_id, panels);
+        Ok(())
+    }
+
+    /// Sets or clears the per-panel title override. An empty string is treated
+    /// as `None` (reverts to source chart name).
+    pub fn update_panel_title_override(
+        &mut self,
+        dashboard_id: Uuid,
+        panel_index: u32,
+        override_text: Option<String>,
+    ) -> Result<(), StorageError> {
+        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let panel = panels
+            .iter_mut()
+            .find(|p| p.panel_index == panel_index)
+            .ok_or_else(|| {
+                StorageError::Data(format!(
+                    "panel_index {panel_index} not found in dashboard {dashboard_id}"
+                ))
+            })?;
+
+        // Normalize: empty string → None.
+        panel.title_override =
+            override_text.and_then(|s| if s.is_empty() { None } else { Some(s) });
+
+        let dtos: Vec<DashboardPanelDto> = panels.iter().map(panel_to_dto).collect();
+        self.panels_repo
+            .replace_panels_for_dashboard(dashboard_id, &dtos)?;
+
+        self.panels.insert(dashboard_id, panels);
+        Ok(())
+    }
+
     /// Remove a dashboard by id. Returns `true` if a record was removed.
     ///
     /// Cache (dashboards + panels) updated only on success.
@@ -419,6 +822,350 @@ mod tests {
             grid_width: 4,
             grid_height: 3,
         }
+    }
+
+    fn make_manager_with_rt() -> (DashboardManager, StorageRuntime) {
+        let rt = StorageRuntime::in_memory().unwrap();
+        let conn = rt.viz_connection();
+        let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&conn)));
+        let panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&conn)));
+        let mgr = DashboardManager::new(dashboards_repo, panels_repo);
+        (mgr, rt)
+    }
+
+    /// Inserts a minimal profile row and returns its UUID.
+    fn insert_profile(rt: &StorageRuntime) -> Uuid {
+        let id = Uuid::new_v4();
+        let conn_guard = rt.viz_connection();
+        let conn = conn_guard.lock().unwrap();
+        conn.execute(
+            "INSERT INTO cfg_connection_profiles (id, name) VALUES (?1, ?2)",
+            rusqlite::params![id.to_string(), "test-profile"],
+        )
+        .unwrap();
+        id
+    }
+
+    // ---- create_dashboard ---------------------------------------------------
+
+    #[test]
+    fn test_create_dashboard_persists_and_returns_id() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let id = mgr
+            .create_dashboard(
+                "Alpha".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let found = mgr.dashboard_by_id(id).expect("must be in cache");
+        assert_eq!(found.name, "Alpha");
+        assert_eq!(found.profile_id, Some(profile_id));
+        assert_eq!(mgr.panels_for_dashboard(id).len(), 0);
+    }
+
+    #[test]
+    fn test_create_dashboard_appears_in_dashboards_for_profile() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let id = mgr
+            .create_dashboard(
+                "Beta".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let list = mgr.dashboards_for_profile(profile_id);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, id);
+    }
+
+    // ---- rename_dashboard ---------------------------------------------------
+
+    #[test]
+    fn test_rename_dashboard_updates_name_in_cache() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let id = mgr
+            .create_dashboard(
+                "Old".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        mgr.rename_dashboard(id, "New".to_string()).unwrap();
+
+        assert_eq!(mgr.dashboard_by_id(id).unwrap().name, "New");
+    }
+
+    #[test]
+    fn test_rename_dashboard_not_found_returns_err() {
+        let (mut mgr, _rt) = make_manager_with_rt();
+        let result = mgr.rename_dashboard(Uuid::new_v4(), "X".to_string());
+        assert!(result.is_err());
+    }
+
+    // ---- delete_dashboard ---------------------------------------------------
+
+    #[test]
+    fn test_delete_dashboard_removes_from_cache() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        mgr.delete_dashboard(id).unwrap();
+
+        assert!(mgr.dashboard_by_id(id).is_none());
+        assert!(mgr.dashboards_for_profile(profile_id).is_empty());
+    }
+
+    // ---- duplicate_dashboard ------------------------------------------------
+
+    #[test]
+    fn test_duplicate_dashboard_creates_copy_with_copy_of_prefix() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let orig_id = mgr
+            .create_dashboard(
+                "Orig".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let dup_id = mgr.duplicate_dashboard(orig_id).unwrap();
+
+        assert_ne!(orig_id, dup_id);
+        let dup = mgr.dashboard_by_id(dup_id).unwrap();
+        assert_eq!(dup.name, "Copy of Orig");
+        assert_eq!(dup.profile_id, Some(profile_id));
+    }
+
+    // ---- append / remove / reorder / resize / title_override ---------------
+
+    #[test]
+    fn test_append_panels_assigns_dense_indices() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let drafts = vec![
+            DashboardPanelDraft {
+                saved_chart_id: Uuid::new_v4(),
+            },
+            DashboardPanelDraft {
+                saved_chart_id: Uuid::new_v4(),
+            },
+        ];
+        mgr.append_panels(dash_id, drafts).unwrap();
+
+        let panels = mgr.panels_for_dashboard(dash_id);
+        assert_eq!(panels.len(), 2);
+        assert_eq!(panels[0].panel_index, 0);
+        assert_eq!(panels[1].panel_index, 1);
+    }
+
+    #[test]
+    fn test_remove_panel_reindexes_remaining() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let chart_a = Uuid::new_v4();
+        let chart_b = Uuid::new_v4();
+        let chart_c = Uuid::new_v4();
+        mgr.append_panels(
+            dash_id,
+            vec![
+                DashboardPanelDraft {
+                    saved_chart_id: chart_a,
+                },
+                DashboardPanelDraft {
+                    saved_chart_id: chart_b,
+                },
+                DashboardPanelDraft {
+                    saved_chart_id: chart_c,
+                },
+            ],
+        )
+        .unwrap();
+
+        // Remove middle panel (index 1 = chart_b).
+        mgr.remove_panel(dash_id, 1).unwrap();
+
+        let panels = mgr.panels_for_dashboard(dash_id);
+        assert_eq!(panels.len(), 2);
+        assert_eq!(panels[0].panel_index, 0);
+        assert_eq!(panels[0].saved_chart_id, chart_a);
+        assert_eq!(panels[1].panel_index, 1);
+        assert_eq!(panels[1].saved_chart_id, chart_c);
+    }
+
+    #[test]
+    fn test_reorder_panels_insert_at_position_semantics() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        let chart_a = Uuid::new_v4();
+        let chart_b = Uuid::new_v4();
+        let chart_c = Uuid::new_v4();
+        mgr.append_panels(
+            dash_id,
+            vec![
+                DashboardPanelDraft {
+                    saved_chart_id: chart_a,
+                },
+                DashboardPanelDraft {
+                    saved_chart_id: chart_b,
+                },
+                DashboardPanelDraft {
+                    saved_chart_id: chart_c,
+                },
+            ],
+        )
+        .unwrap();
+
+        // Move panel 0 (chart_a) to position 2 → [B, C, A].
+        mgr.reorder_panels(dash_id, 0, 2).unwrap();
+
+        let panels = mgr.panels_for_dashboard(dash_id);
+        assert_eq!(panels[0].saved_chart_id, chart_b);
+        assert_eq!(panels[1].saved_chart_id, chart_c);
+        assert_eq!(panels[2].saved_chart_id, chart_a);
+    }
+
+    #[test]
+    fn test_resize_panel_clamps_to_grid_bounds() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        mgr.append_panels(
+            dash_id,
+            vec![DashboardPanelDraft {
+                saved_chart_id: Uuid::new_v4(),
+            }],
+        )
+        .unwrap();
+
+        // grid_columns defaults to 2; requesting width=99, height=99 should be clamped.
+        mgr.resize_panel(dash_id, 0, 99, 99).unwrap();
+
+        let panel = &mgr.panels_for_dashboard(dash_id)[0];
+        assert_eq!(panel.grid_width, 2); // clamped to grid_columns
+        assert_eq!(panel.grid_height, 4); // clamped to max 4
+    }
+
+    #[test]
+    fn test_update_panel_title_override_empty_string_becomes_none() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        mgr.append_panels(
+            dash_id,
+            vec![DashboardPanelDraft {
+                saved_chart_id: Uuid::new_v4(),
+            }],
+        )
+        .unwrap();
+
+        // Set a title override.
+        mgr.update_panel_title_override(dash_id, 0, Some("Custom".to_string()))
+            .unwrap();
+        assert_eq!(
+            mgr.panels_for_dashboard(dash_id)[0]
+                .title_override
+                .as_deref(),
+            Some("Custom")
+        );
+
+        // Clear with empty string.
+        mgr.update_panel_title_override(dash_id, 0, Some(String::new()))
+            .unwrap();
+        assert!(
+            mgr.panels_for_dashboard(dash_id)[0]
+                .title_override
+                .is_none()
+        );
+    }
+
+    // ---- panel_index_to_grid ------------------------------------------------
+
+    #[test]
+    fn test_panel_index_to_grid_two_columns() {
+        assert_eq!(panel_index_to_grid(0, 2), (0, 0));
+        assert_eq!(panel_index_to_grid(1, 2), (0, 1));
+        assert_eq!(panel_index_to_grid(2, 2), (1, 0));
+        assert_eq!(panel_index_to_grid(3, 2), (1, 1));
+    }
+
+    #[test]
+    fn test_panel_index_to_grid_zero_columns_does_not_panic() {
+        // grid_columns = 0 should be clamped to 1.
+        assert_eq!(panel_index_to_grid(0, 0), (0, 0));
+        assert_eq!(panel_index_to_grid(3, 0), (3, 0));
     }
 
     /// Design test #31: replace_panels is atomic; cache is updated only on
