@@ -1,4 +1,5 @@
 pub(crate) mod context;
+pub mod dashboard_import;
 pub(crate) mod hook;
 pub(crate) mod item_manager;
 pub mod manager;

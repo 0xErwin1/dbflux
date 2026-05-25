@@ -514,6 +514,13 @@ bitflags! {
         /// dimensions) via the `MetricCatalog` trait accessor on `Connection`.
         /// Independent from `METRIC_SERIES` — a driver MAY set one without the other.
         const METRIC_CATALOG = 1 << 50;
+
+        /// Driver can import a dashboard from a JSON blob via the `DashboardImporter` seam.
+        ///
+        /// When set, the UI exposes an \"Import dashboard\" affordance that calls
+        /// `Connection::dashboard_importer()` to parse the JSON. The check is purely
+        /// capability-driven — no `driver_id` comparison is needed.
+        const DASHBOARD_IMPORT = 1 << 51;
     }
 }
 
@@ -2737,6 +2744,35 @@ mod tests {
                 other.bits(),
                 "METRIC_SERIES bit ({bits}) collides with an existing flag ({})",
                 other.bits()
+            );
+        }
+    }
+
+    #[test]
+    fn test_dashboard_import_bit_value() {
+        assert_eq!(
+            DriverCapabilities::DASHBOARD_IMPORT.bits(),
+            1u64 << 51,
+            "DASHBOARD_IMPORT must equal 1 << 51"
+        );
+    }
+
+    #[test]
+    fn test_dashboard_import_no_collision() {
+        let bits = DriverCapabilities::DASHBOARD_IMPORT.bits();
+
+        // Exactly one bit must be set (power of two).
+        assert_eq!(bits.count_ones(), 1, "DASHBOARD_IMPORT must be a power of two");
+
+        // No other named constant may share the same bit.
+        for (name, cap) in DriverCapabilities::all().iter_names() {
+            if name == "DASHBOARD_IMPORT" {
+                continue;
+            }
+            assert_eq!(
+                cap.bits() & bits,
+                0,
+                "DASHBOARD_IMPORT bit (1 << 51) collides with existing flag '{name}'"
             );
         }
     }
