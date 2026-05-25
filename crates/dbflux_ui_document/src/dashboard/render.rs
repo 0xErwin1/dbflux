@@ -204,7 +204,10 @@ mod tests {
         // This is a compile-time / structural test: we verify the constant ID
         // used by the empty-state anchor is exactly "dashboard-empty-state".
         let id = "dashboard-empty-state";
-        assert!(!id.is_empty(), "Empty-state must have a stable DOM anchor ID");
+        assert!(
+            !id.is_empty(),
+            "Empty-state must have a stable DOM anchor ID"
+        );
     }
 
     /// Q.5: the panel-count branch used to select the CTA vs. grid renders the

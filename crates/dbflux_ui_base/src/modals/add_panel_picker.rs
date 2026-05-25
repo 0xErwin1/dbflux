@@ -47,8 +47,7 @@ pub struct ModalAddPanelPicker {
 
 impl ModalAddPanelPicker {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search charts..."));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search charts..."));
 
         Self {
             request: None,
@@ -64,12 +63,7 @@ impl ModalAddPanelPicker {
         self.visible
     }
 
-    pub fn open(
-        &mut self,
-        request: AddPanelRequest,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn open(&mut self, request: AddPanelRequest, window: &mut Window, cx: &mut Context<Self>) {
         self.request = Some(request);
         self.visible = true;
         self.selected_ids.clear();
@@ -121,10 +115,7 @@ impl ModalAddPanelPicker {
     }
 
     /// Returns filtered candidates matching the current search query (case-insensitive).
-    fn filtered_candidates<'a>(
-        candidates: &'a [SavedChart],
-        query: &str,
-    ) -> Vec<&'a SavedChart> {
+    fn filtered_candidates<'a>(candidates: &'a [SavedChart], query: &str) -> Vec<&'a SavedChart> {
         if query.is_empty() {
             return candidates.iter().collect();
         }
@@ -290,8 +281,8 @@ impl Render for ModalAddPanelPicker {
 #[cfg(test)]
 mod tests {
     use super::{AddPanelOutcome, AddPanelRequest, ModalAddPanelPicker};
-    use dbflux_components::saved_chart::{SavedChart, SavedChartRefreshPolicy, SavedChartSource};
     use dbflux_components::chart::ChartSpec;
+    use dbflux_components::saved_chart::{SavedChart, SavedChartRefreshPolicy, SavedChartSource};
     use uuid::Uuid;
 
     fn test_uuid() -> Uuid {

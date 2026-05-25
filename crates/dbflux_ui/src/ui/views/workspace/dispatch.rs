@@ -830,6 +830,11 @@ impl CommandDispatcher for Workspace {
                 true
             }
 
+            Command::NewDashboard => {
+                self.create_dashboard_from_palette(window, cx);
+                true
+            }
+
             Command::OpenTabMenu => {
                 self.tab_bar
                     .update(cx, |tb, cx| tb.open_context_menu_for_active(cx));

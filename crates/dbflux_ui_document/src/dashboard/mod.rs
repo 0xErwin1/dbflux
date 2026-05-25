@@ -479,7 +479,12 @@ impl DashboardDocument {
     /// An empty or whitespace-only override is stored as `None` (reverts to
     /// the source chart name). Persists via
     /// `DashboardManager::update_panel_title_override`.
-    pub fn update_panel_title(&mut self, panel_index: u32, override_text: String, cx: &mut Context<Self>) {
+    pub fn update_panel_title(
+        &mut self,
+        panel_index: u32,
+        override_text: String,
+        cx: &mut Context<Self>,
+    ) {
         let override_opt = if override_text.trim().is_empty() {
             None
         } else {
@@ -502,12 +507,7 @@ impl DashboardDocument {
     ///
     /// Persists via `DashboardManager::reorder_panels`. Rebuilds `panel_slots`
     /// from the manager's updated panel list.
-    pub fn reorder_panels(
-        &mut self,
-        from_index: u32,
-        to_index: u32,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn reorder_panels(&mut self, from_index: u32, to_index: u32, cx: &mut Context<Self>) {
         let dashboard_id = self.dashboard_id;
         let result = self.app_state.update(cx, |state, _cx| {
             state
@@ -586,11 +586,7 @@ impl DashboardDocument {
     ///
     /// Persists via `DashboardManager::append_panels` and emits `AppStateChanged`
     /// so the workspace can reload the panel slots.
-    pub fn append_panels_for_charts(
-        &mut self,
-        chart_ids: Vec<Uuid>,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn append_panels_for_charts(&mut self, chart_ids: Vec<Uuid>, cx: &mut Context<Self>) {
         let dashboard_id = self.dashboard_id;
         let drafts: Vec<DashboardPanelDraft> = chart_ids
             .into_iter()

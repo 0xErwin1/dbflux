@@ -89,15 +89,12 @@ impl Render for ModalDeleteDashboardConfirm {
                             .color(theme.danger),
                     )
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                Text::body(format!(
-                                    "Delete dashboard \"{dashboard_name}\"? This cannot be undone."
-                                ))
-                                .into_any_element(),
-                            ),
+                        div().flex_1().min_w_0().child(
+                            Text::body(format!(
+                                "Delete dashboard \"{dashboard_name}\"? This cannot be undone."
+                            ))
+                            .into_any_element(),
+                        ),
                     ),
             )
             .child(
@@ -128,9 +125,7 @@ impl Render for ModalDeleteDashboardConfirm {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .child(
-                Button::new("delete-dashboard-cancel", "Cancel").on_click(on_cancel),
-            )
+            .child(Button::new("delete-dashboard-cancel", "Cancel").on_click(on_cancel))
             .child(
                 Button::new("delete-dashboard-confirm", "Delete")
                     .danger()
@@ -237,15 +232,12 @@ impl Render for ModalDeleteSavedChartConfirm {
                             .color(theme.danger),
                     )
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                Text::body(format!(
-                                    "Delete saved chart \"{chart_name}\"? This cannot be undone."
-                                ))
-                                .into_any_element(),
-                            ),
+                        div().flex_1().min_w_0().child(
+                            Text::body(format!(
+                                "Delete saved chart \"{chart_name}\"? This cannot be undone."
+                            ))
+                            .into_any_element(),
+                        ),
                     ),
             )
             // Orphan-warning block: shown only when the chart is referenced by dashboards.
@@ -254,23 +246,14 @@ impl Render for ModalDeleteSavedChartConfirm {
                     referencing.iter().map(|(_, name)| name.clone()).collect();
                 let names_list = dashboard_names.join(", ");
 
-                el.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(Spacing::XS)
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.warning)
-                                .child(format!(
-                                    "This chart is used in {count} dashboard{s}: {names_list}. \
+                el.child(div().flex().flex_col().gap(Spacing::XS).child(
+                    div().text_sm().text_color(theme.warning).child(format!(
+                        "This chart is used in {count} dashboard{s}: {names_list}. \
                                      Panels that reference it will show broken placeholders.",
-                                    count = referencing.len(),
-                                    s = if referencing.len() == 1 { "" } else { "s" },
-                                )),
-                        ),
-                )
+                        count = referencing.len(),
+                        s = if referencing.len() == 1 { "" } else { "s" },
+                    )),
+                ))
             });
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
@@ -287,9 +270,7 @@ impl Render for ModalDeleteSavedChartConfirm {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .child(
-                Button::new("delete-chart-cancel", "Cancel").on_click(on_cancel),
-            )
+            .child(Button::new("delete-chart-cancel", "Cancel").on_click(on_cancel))
             .child(
                 Button::new("delete-chart-confirm", "Delete")
                     .danger()
@@ -340,7 +321,10 @@ mod tests {
     fn modal_delete_dashboard_confirm_is_not_visible_on_new() {
         // visible is initialized to false; check struct default directly.
         let visible = false;
-        assert!(!visible, "ModalDeleteDashboardConfirm must not be visible on construction");
+        assert!(
+            !visible,
+            "ModalDeleteDashboardConfirm must not be visible on construction"
+        );
     }
 
     #[test]
@@ -373,14 +357,16 @@ mod tests {
         };
 
         assert_eq!(req.referencing_dashboards.len(), 2);
-        assert!(req
-            .referencing_dashboards
-            .iter()
-            .any(|(_, n)| n == "Dashboard A"));
-        assert!(req
-            .referencing_dashboards
-            .iter()
-            .any(|(_, n)| n == "Dashboard B"));
+        assert!(
+            req.referencing_dashboards
+                .iter()
+                .any(|(_, n)| n == "Dashboard A")
+        );
+        assert!(
+            req.referencing_dashboards
+                .iter()
+                .any(|(_, n)| n == "Dashboard B")
+        );
     }
 
     #[test]

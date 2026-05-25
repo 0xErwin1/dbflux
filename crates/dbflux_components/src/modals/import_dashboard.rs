@@ -53,9 +53,7 @@ impl ModalImportDashboard {
                 .soft_wrap(true)
         });
 
-        let name_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Dashboard name")
-        });
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Dashboard name"));
 
         Self {
             visible: false,
@@ -139,8 +137,8 @@ impl ModalImportDashboard {
 
         // Update name field from JSON if user hasn't changed it away from the default.
         let current_name = self.name_input.read(cx).value().to_string();
-        let derived_name = Self::extract_json_name(&json_value)
-            .unwrap_or_else(|| DEFAULT_IMPORT_NAME.to_string());
+        let derived_name =
+            Self::extract_json_name(&json_value).unwrap_or_else(|| DEFAULT_IMPORT_NAME.to_string());
 
         let final_name = if current_name == DEFAULT_IMPORT_NAME {
             derived_name
@@ -195,12 +193,7 @@ impl Render for ModalImportDashboard {
             .child(Text::label("Dashboard name"))
             .child(Input::new(&name_input))
             .when_some(name_error, |el, err| {
-                el.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().danger)
-                        .child(err),
-                )
+                el.child(div().text_sm().text_color(cx.theme().danger).child(err))
             });
 
         let editor = JsonEditorView::new(
@@ -222,12 +215,11 @@ impl Render for ModalImportDashboard {
 
                     // Update name from parsed JSON when the user formats for the first time.
                     let current_name = this.name_input.read(cx).value().to_string();
-                    if current_name == DEFAULT_IMPORT_NAME {
-                        if let Some(name) = Self::extract_json_name(&formatted) {
-                            this.name_input.update(cx, |state, cx| {
-                                state.set_value(&name, window, cx);
-                            });
-                        }
+                    if current_name == DEFAULT_IMPORT_NAME
+                        && let Some(name) = Self::extract_json_name(&formatted)
+                    {
+                        this.name_input
+                            .update(cx, |state, cx| state.set_value(&name, window, cx));
                     }
                 }
             }),

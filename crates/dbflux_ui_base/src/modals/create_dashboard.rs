@@ -39,9 +39,7 @@ pub struct ModalCreateDashboard {
 
 impl ModalCreateDashboard {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let name_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Dashboard name")
-        });
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Dashboard name"));
 
         Self {
             request: None,
@@ -72,12 +70,16 @@ impl ModalCreateDashboard {
             state.focus(window, cx);
         });
 
-        let sub = cx.subscribe_in(&self.name_input.clone(), window, |this, _, event, window, cx| {
-            use dbflux_components::controls::InputEvent;
-            if let InputEvent::PressEnter { .. } = event {
-                this.confirm(window, cx);
-            }
-        });
+        let sub = cx.subscribe_in(
+            &self.name_input.clone(),
+            window,
+            |this, _, event, window, cx| {
+                use dbflux_components::controls::InputEvent;
+                if let InputEvent::PressEnter { .. } = event {
+                    this.confirm(window, cx);
+                }
+            },
+        );
         self._subscriptions = vec![sub];
 
         self.focus_handle.focus(window);
@@ -130,11 +132,7 @@ impl Render for ModalCreateDashboard {
             .child(Text::label("Dashboard name").into_any_element())
             .child(Input::new(&self.name_input))
             .when_some(validation_error, |el, err| {
-                el.child(
-                    div()
-                        .text_sm()
-                        .child(Text::body(err).into_any_element()),
-                )
+                el.child(div().text_sm().child(Text::body(err).into_any_element()))
             });
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
@@ -150,7 +148,11 @@ impl Render for ModalCreateDashboard {
             .items_center()
             .gap(Spacing::SM)
             .child(Button::new("create-dashboard-cancel", "Cancel").on_click(on_cancel))
-            .child(Button::new("create-dashboard-confirm", "Create").primary().on_click(on_confirm));
+            .child(
+                Button::new("create-dashboard-confirm", "Create")
+                    .primary()
+                    .on_click(on_confirm),
+            );
 
         ModalShell::new(
             "New dashboard",
@@ -176,10 +178,7 @@ mod tests {
     #[test]
     fn modal_create_dashboard_rejects_empty_name() {
         let name = "";
-        assert!(
-            name.trim().is_empty(),
-            "Empty name must be rejected"
-        );
+        assert!(name.trim().is_empty(), "Empty name must be rejected");
     }
 
     #[test]
@@ -195,7 +194,10 @@ mod tests {
     fn modal_create_dashboard_is_not_visible_on_new() {
         // visible is initialized to false; verify this without requiring a GPUI window.
         let visible = false;
-        assert!(!visible, "ModalCreateDashboard must not be visible on construction");
+        assert!(
+            !visible,
+            "ModalCreateDashboard must not be visible on construction"
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components;
+use dbflux_core::observability::actions::CONFIG_CHANGE;
 use dbflux_ui_base::modals::{
     AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
     DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
@@ -15,7 +16,6 @@ use dbflux_ui_base::modals::{
     ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm, ModalRenameItem, RenameItemOutcome,
     RenameItemRequest, RenameTarget,
 };
-use dbflux_core::observability::actions::CONFIG_CHANGE;
 
 #[cfg(feature = "mcp")]
 use crate::app::McpRuntimeEventRaised;
@@ -1396,9 +1396,19 @@ impl Workspace {
             PaletteCommand::new("refresh_mcp_governance", "Refresh MCP Governance", "View"),
             PaletteCommand::new("open_audit_viewer", "Open Audit Viewer", "View")
                 .with_shortcut(SC.open_audit_viewer),
-            // Charts
+            // Charts / Dashboards
             PaletteCommand::new("open_saved_chart", "Open Chart...", "Charts"),
+            PaletteCommand::new("new_dashboard", "New Dashboard...", "Dashboards"),
         ]
+    }
+
+    /// Test-only accessor to the list of default palette commands.
+    ///
+    /// Used by command_palette tests to verify command labels without
+    /// constructing a full `Workspace` entity.
+    #[cfg(test)]
+    pub fn palette_commands_for_test() -> Vec<PaletteCommand> {
+        Self::default_commands()
     }
 
     fn active_context(&self, cx: &Context<Self>) -> ContextId {

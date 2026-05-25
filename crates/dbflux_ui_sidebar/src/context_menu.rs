@@ -1272,15 +1272,13 @@ impl Sidebar {
                 self.show_ddl_confirm_modal(&item_id, "Collection", cx);
             }
             ContextMenuAction::NewDashboard => {
-                if let Some(SchemaNodeId::DashboardsFolder { profile_id }) =
-                    parse_node_id(&item_id)
+                if let Some(SchemaNodeId::DashboardsFolder { profile_id }) = parse_node_id(&item_id)
                 {
                     cx.emit(SidebarEvent::RequestCreateDashboard { profile_id });
                 }
             }
             ContextMenuAction::ImportDashboard => {
-                if let Some(SchemaNodeId::DashboardsFolder { profile_id }) =
-                    parse_node_id(&item_id)
+                if let Some(SchemaNodeId::DashboardsFolder { profile_id }) = parse_node_id(&item_id)
                 {
                     cx.emit(SidebarEvent::RequestImportDashboard { profile_id });
                 }
@@ -1312,22 +1310,19 @@ impl Sidebar {
                 // so users discover the feature; clicking it is a no-op for now.
             }
             ContextMenuAction::RenameSavedChart => {
-                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) =
-                    parse_node_id(&item_id)
+                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) = parse_node_id(&item_id)
                 {
                     cx.emit(SidebarEvent::RequestRenameSavedChart { chart_id });
                 }
             }
             ContextMenuAction::DeleteSavedChart => {
-                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) =
-                    parse_node_id(&item_id)
+                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) = parse_node_id(&item_id)
                 {
                     cx.emit(SidebarEvent::RequestDeleteSavedChart { chart_id });
                 }
             }
             ContextMenuAction::DuplicateSavedChart => {
-                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) =
-                    parse_node_id(&item_id)
+                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) = parse_node_id(&item_id)
                 {
                     cx.emit(SidebarEvent::RequestDuplicateSavedChart { chart_id });
                 }

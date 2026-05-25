@@ -64,7 +64,7 @@ pub enum PaletteItem {
         /// collection charts from query charts.
         is_collection_source: bool,
     },
-    /// "Import CloudWatch Dashboard" action (shown only when the active connection
+    /// "Import Dashboard from JSON" action (shown only when the active connection
     /// has the `DASHBOARD_IMPORT` capability).
     ImportDashboard,
 }
@@ -160,7 +160,7 @@ impl PaletteItem {
             } => {
                 format!("Script {} {}", name, relative_path)
             }
-            Self::ImportDashboard => "Charts Import CloudWatch Dashboard".to_string(),
+            Self::ImportDashboard => "Charts Import Dashboard from JSON".to_string(),
         }
     }
 
@@ -192,7 +192,7 @@ impl PaletteItem {
             Self::Script { name, .. } => ("Script".to_string(), name.clone()),
             Self::ImportDashboard => (
                 "Charts".to_string(),
-                "Import CloudWatch Dashboard...".to_string(),
+                "Import Dashboard from JSON...".to_string(),
             ),
         }
     }
@@ -482,7 +482,7 @@ pub enum PaletteSelection {
     OpenSavedChart {
         chart_id: Uuid,
     },
-    /// The user selected the "Import CloudWatch Dashboard" entry.
+    /// The user selected the "Import Dashboard from JSON" entry.
     ImportDashboard,
 }
 
@@ -1066,7 +1066,7 @@ impl Render for CommandPalette {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaletteCommand, palette_qualifier_text, palette_shortcut_text};
+    use super::{PaletteCommand, PaletteItem, palette_qualifier_text, palette_shortcut_text};
     use crate::ui::theme;
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
@@ -1187,5 +1187,85 @@ mod tests {
         assert!(source.contains(".bg(overlay_bg(theme))"));
         assert!(source.contains("this.hide(cx);"));
         assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
+    }
+
+    // R.1 — Import label cleanup
+
+    #[test]
+    fn command_palette_import_label_contains_no_cloudwatch() {
+        let (_category, label) = PaletteItem::ImportDashboard.display_label();
+        assert!(
+            !label.contains("CloudWatch"),
+            "ImportDashboard display label must not reference CloudWatch; got: {label:?}"
+        );
+        let search = PaletteItem::ImportDashboard.search_text();
+        assert!(
+            !search.contains("CloudWatch"),
+            "ImportDashboard search_text must not reference CloudWatch; got: {search:?}"
+        );
+    }
+
+    #[test]
+    fn command_palette_import_label_is_exactly_correct() {
+        let (_category, label) = PaletteItem::ImportDashboard.display_label();
+        assert_eq!(label, "Import Dashboard from JSON...");
+    }
+
+    // R.2 — New palette entries
+
+    #[test]
+    fn command_palette_contains_no_cloudwatch_substring_in_any_action_label() {
+        // All PaletteItem::Action entries come from default_commands(), which are
+        // turned into PaletteItem::Action. We verify none reference "CloudWatch".
+        use super::super::super::views::workspace::Workspace;
+
+        let commands = Workspace::palette_commands_for_test();
+        for cmd in &commands {
+            assert!(
+                !cmd.name.contains("CloudWatch"),
+                "Command {:?} name must not reference CloudWatch",
+                cmd.name
+            );
+            assert!(
+                !cmd.category.contains("CloudWatch"),
+                "Command {:?} category must not reference CloudWatch",
+                cmd.category
+            );
+        }
+    }
+
+    #[test]
+    fn command_palette_includes_new_dashboard_entry() {
+        use super::super::super::views::workspace::Workspace;
+
+        let commands = Workspace::palette_commands_for_test();
+        let found = commands
+            .iter()
+            .any(|c| c.name == "New Dashboard..." && c.category == "Dashboards");
+        assert!(
+            found,
+            "Palette must include 'Dashboards: New Dashboard...' entry"
+        );
+    }
+
+    #[test]
+    fn command_palette_does_not_include_import_dashboard_in_commands() {
+        // ImportDashboard is a PaletteItem::ImportDashboard, not a PaletteCommand.
+        // It should never appear in default_commands().
+        use super::super::super::views::workspace::Workspace;
+
+        let commands = Workspace::palette_commands_for_test();
+        let import_in_commands = commands
+            .iter()
+            .any(|c| c.name.contains("Import") && c.name.contains("Dashboard"));
+        assert!(
+            !import_in_commands,
+            "ImportDashboard must not appear in default_commands(); found: {:?}",
+            commands
+                .iter()
+                .filter(|c| c.name.contains("Import"))
+                .map(|c| c.name)
+                .collect::<Vec<_>>()
+        );
     }
 }

@@ -1901,14 +1901,13 @@ impl Workspace {
             // available; fall back to Last24Hours (index 3) when the dashboard
             // has no stored preset.
             use dbflux_components::saved_chart::TimeRangePreset;
-            let (preset_placeholder, preset_index) =
-                match dashboard.shared_time_range_preset {
-                    Some(TimeRangePreset::Last15min) => ("15m", Some(0usize)),
-                    Some(TimeRangePreset::LastHour) => ("1h", Some(1)),
-                    Some(TimeRangePreset::Last6Hours) => ("6h", Some(2)),
-                    Some(TimeRangePreset::Last24Hours) | None => ("24h", Some(3)),
-                    Some(TimeRangePreset::Last7Days) => ("7d", Some(4)),
-                };
+            let (preset_placeholder, preset_index) = match dashboard.shared_time_range_preset {
+                Some(TimeRangePreset::Last15min) => ("15m", Some(0usize)),
+                Some(TimeRangePreset::LastHour) => ("1h", Some(1)),
+                Some(TimeRangePreset::Last6Hours) => ("6h", Some(2)),
+                Some(TimeRangePreset::Last24Hours) | None => ("24h", Some(3)),
+                Some(TimeRangePreset::Last7Days) => ("7d", Some(4)),
+            };
             let shared_time_range =
                 cx.new(|cx| TimeRangePanel::new(preset_placeholder, preset_index, window, cx));
 
@@ -2132,6 +2131,37 @@ impl Workspace {
         });
     }
 
+    /// Open the "New Dashboard..." modal from the command palette.
+    ///
+    /// Uses the active connection's profile as the target profile. If no
+    /// connection is active but profiles exist, uses the first profile.
+    /// Shows a toast if no profiles are configured.
+    pub(super) fn create_dashboard_from_palette(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let profile_id = self
+            .app_state
+            .read(cx)
+            .active_connection()
+            .map(|c| c.profile.id)
+            .or_else(|| self.app_state.read(cx).profiles().first().map(|p| p.id));
+
+        match profile_id {
+            Some(profile_id) => {
+                self.modal_create_dashboard.update(cx, |modal, cx| {
+                    modal.open(CreateDashboardRequest { profile_id }, window, cx);
+                });
+            }
+            None => {
+                Toast::warning("Add a connection profile before creating a dashboard.")
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
+    }
+
     /// Called when `ModalCreateDashboard` emits `Confirmed`.
     ///
     /// Creates the dashboard in the manager, triggers a sidebar rebuild, and
@@ -2260,9 +2290,9 @@ impl Workspace {
             });
         }
 
-        let result = self
-            .app_state
-            .update(cx, |state, _cx| state.dashboards.delete_dashboard(dashboard_id));
+        let result = self.app_state.update(cx, |state, _cx| {
+            state.dashboards.delete_dashboard(dashboard_id)
+        });
 
         match result {
             Ok(()) => {
@@ -2280,11 +2310,7 @@ impl Workspace {
     }
 
     /// Duplicate a dashboard without a modal (immediate action).
-    pub(super) fn duplicate_dashboard(
-        &mut self,
-        dashboard_id: uuid::Uuid,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn duplicate_dashboard(&mut self, dashboard_id: uuid::Uuid, cx: &mut Context<Self>) {
         let result = self.app_state.update(cx, |state, _cx| {
             state.dashboards.duplicate_dashboard(dashboard_id)
         });
@@ -2452,14 +2478,10 @@ impl Workspace {
     }
 
     /// Duplicate a saved chart without a modal (immediate action).
-    pub(super) fn duplicate_saved_chart(
-        &mut self,
-        chart_id: uuid::Uuid,
-        cx: &mut Context<Self>,
-    ) {
-        let result = self
-            .app_state
-            .update(cx, |state, _cx| state.saved_charts.duplicate_chart(chart_id));
+    pub(super) fn duplicate_saved_chart(&mut self, chart_id: uuid::Uuid, cx: &mut Context<Self>) {
+        let result = self.app_state.update(cx, |state, _cx| {
+            state.saved_charts.duplicate_chart(chart_id)
+        });
 
         match result {
             Ok(_new_id) => {
@@ -2490,22 +2512,28 @@ impl Workspace {
             .dashboard_by_id(dashboard_id)
             .and_then(|d| d.profile_id);
 
-        let candidates: Vec<dbflux_components::saved_chart::SavedChart> = if let Some(pid) =
-            profile_id
-        {
-            self.app_state
-                .read(cx)
-                .saved_charts
-                .charts_for_profile(pid)
-                .into_iter()
-                .cloned()
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let candidates: Vec<dbflux_components::saved_chart::SavedChart> =
+            if let Some(pid) = profile_id {
+                self.app_state
+                    .read(cx)
+                    .saved_charts
+                    .charts_for_profile(pid)
+                    .into_iter()
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
         self.modal_add_panel.update(cx, |modal, cx| {
-            modal.open(AddPanelRequest { dashboard_id, candidates }, window, cx);
+            modal.open(
+                AddPanelRequest {
+                    dashboard_id,
+                    candidates,
+                },
+                window,
+                cx,
+            );
         });
     }
 

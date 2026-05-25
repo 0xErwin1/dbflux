@@ -131,36 +131,56 @@ pub enum SidebarEvent {
     /// Open or focus an existing dashboard tab.
     ///
     /// Emitted when the user clicks a `DashboardItem` node in the sidebar tree.
-    OpenDashboard { dashboard_id: Uuid },
+    OpenDashboard {
+        dashboard_id: Uuid,
+    },
 
     /// Open or focus an existing saved-chart tab.
     ///
     /// Emitted when the user clicks a `SavedChartItem` node in the sidebar tree.
-    OpenSavedChart { chart_id: Uuid },
+    OpenSavedChart {
+        chart_id: Uuid,
+    },
 
     /// Request to open the "New Dashboard" creation modal for a specific profile.
-    RequestCreateDashboard { profile_id: Uuid },
+    RequestCreateDashboard {
+        profile_id: Uuid,
+    },
 
     /// Request to open the "Import Dashboard from JSON" modal for a specific profile.
-    RequestImportDashboard { profile_id: Uuid },
+    RequestImportDashboard {
+        profile_id: Uuid,
+    },
 
     /// Request to open the rename modal for a specific dashboard.
-    RequestRenameDashboard { dashboard_id: Uuid },
+    RequestRenameDashboard {
+        dashboard_id: Uuid,
+    },
 
     /// Request to delete a specific dashboard (opens confirmation modal).
-    RequestDeleteDashboard { dashboard_id: Uuid },
+    RequestDeleteDashboard {
+        dashboard_id: Uuid,
+    },
 
     /// Request to duplicate a specific dashboard (no modal needed).
-    RequestDuplicateDashboard { dashboard_id: Uuid },
+    RequestDuplicateDashboard {
+        dashboard_id: Uuid,
+    },
 
     /// Request to open the rename modal for a specific saved chart.
-    RequestRenameSavedChart { chart_id: Uuid },
+    RequestRenameSavedChart {
+        chart_id: Uuid,
+    },
 
     /// Request to delete a specific saved chart (opens confirmation modal).
-    RequestDeleteSavedChart { chart_id: Uuid },
+    RequestDeleteSavedChart {
+        chart_id: Uuid,
+    },
 
     /// Request to duplicate a specific saved chart (no modal needed).
-    RequestDuplicateSavedChart { chart_id: Uuid },
+    RequestDuplicateSavedChart {
+        chart_id: Uuid,
+    },
 
     /// Request to prompt the user for an SSH tunnel passphrase.
     ///

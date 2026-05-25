@@ -63,7 +63,12 @@ impl ModalRenameItem {
         self.visible
     }
 
-    pub fn open(&mut self, request: RenameItemRequest, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open(
+        &mut self,
+        request: RenameItemRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let name = request.current_name.clone();
         self.request = Some(request);
         self.visible = true;
@@ -140,11 +145,7 @@ impl Render for ModalRenameItem {
             .gap(Spacing::SM)
             .child(Input::new(&self.input))
             .when_some(validation_error, |el, err| {
-                el.child(
-                    div()
-                        .text_sm()
-                        .child(Text::body(err).into_any_element()),
-                )
+                el.child(div().text_sm().child(Text::body(err).into_any_element()))
             });
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
@@ -160,7 +161,11 @@ impl Render for ModalRenameItem {
             .items_center()
             .gap(Spacing::SM)
             .child(Button::new("rename-item-cancel", "Cancel").on_click(on_cancel))
-            .child(Button::new("rename-item-confirm", "Rename").primary().on_click(on_confirm));
+            .child(
+                Button::new("rename-item-confirm", "Rename")
+                    .primary()
+                    .on_click(on_confirm),
+            );
 
         ModalShell::new(title, body.into_any_element(), footer.into_any_element())
             .width(gpui::px(400.0))
@@ -202,7 +207,10 @@ mod tests {
         // The visible flag is initialized to false in the constructor;
         // verify this without needing a full GPUI window.
         let visible = false;
-        assert!(!visible, "ModalRenameItem must not be visible on construction");
+        assert!(
+            !visible,
+            "ModalRenameItem must not be visible on construction"
+        );
     }
 
     #[test]
@@ -210,7 +218,10 @@ mod tests {
         // Validate the logic directly without GPUI since we have the validation
         // code accessible.
         let name = "   ";
-        assert!(name.trim().is_empty(), "Whitespace-only name must be empty after trim");
+        assert!(
+            name.trim().is_empty(),
+            "Whitespace-only name must be empty after trim"
+        );
     }
 
     #[test]

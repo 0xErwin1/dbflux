@@ -106,13 +106,15 @@ pub enum Command {
     #[cfg(feature = "mcp")]
     RefreshMcpGovernance,
 
-    // === Charts ===
+    // === Charts / Dashboards ===
     /// Open the saved-chart fuzzy overlay (lists all SavedCharts for the current profile).
     OpenSavedChart,
-    /// Open the "Import CloudWatch Dashboard" JSON paste modal.
+    /// Open the "Import Dashboard from JSON" paste modal.
     ///
     /// Only available when the active connection has `DASHBOARD_IMPORT` capability.
     ImportDashboard,
+    /// Open the "New Dashboard..." creation modal (profile picker then name input).
+    NewDashboard,
 }
 
 impl Command {
@@ -150,6 +152,7 @@ impl Command {
             "refresh_mcp_governance" => Some(Command::RefreshMcpGovernance),
             "open_saved_chart" => Some(Command::OpenSavedChart),
             "import_dashboard" => Some(Command::ImportDashboard),
+            "new_dashboard" => Some(Command::NewDashboard),
             _ => None,
         }
     }
@@ -247,7 +250,8 @@ impl Command {
             #[cfg(feature = "mcp")]
             Command::RefreshMcpGovernance => "Refresh MCP Governance",
             Command::OpenSavedChart => "Open Chart...",
-            Command::ImportDashboard => "Import CloudWatch Dashboard...",
+            Command::ImportDashboard => "Import Dashboard from JSON...",
+            Command::NewDashboard => "New Dashboard...",
         }
     }
 
@@ -341,7 +345,9 @@ impl Command {
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals | Command::RefreshMcpGovernance => "View",
 
-            Command::OpenSavedChart | Command::ImportDashboard => "Charts",
+            Command::OpenSavedChart | Command::ImportDashboard | Command::NewDashboard => {
+                "Dashboards"
+            }
         }
     }
 
