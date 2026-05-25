@@ -28,7 +28,8 @@ use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::controls::DropdownSelectionChanged;
 use dbflux_components::controls::Input;
-use dbflux_components::primitives::Text;
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -611,35 +612,21 @@ impl ChartDocument {
             (cv, fi)
         };
 
-        let Some(chart_view) = chart_view_opt else {
-            let placeholder = div()
+        let placeholder = |msg: &'static str| -> AnyElement {
+            div()
                 .p_2()
                 .text_size(FontSizes::XS)
                 .text_color(theme.muted_foreground)
-                .child("Rebuilding chart…")
-                .into_any_element();
-            return Some(
-                div()
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .bottom_0()
-                    .w(px(320.0))
-                    .flex()
-                    .flex_col()
-                    .border_l_1()
-                    .border_color(theme.border)
-                    .bg(theme.popover)
-                    .occlude()
-                    .child(
-                        div()
-                            .flex_grow()
-                            .min_h_0()
-                            .overflow_hidden()
-                            .child(placeholder),
-                    )
-                    .into_any_element(),
-            );
+                .child(msg)
+                .into_any_element()
+        };
+
+        let Some(chart_view) = chart_view_opt else {
+            return Some(self.wrap_stats_rail_chrome(
+                placeholder("Rebuilding chart…"),
+                theme,
+                &chart_colors,
+            ));
         };
 
         // Scope 2: read chart_view entity to capture all primitive values before
@@ -656,34 +643,11 @@ impl ChartDocument {
         };
 
         let Some(stats) = stats_opt else {
-            let placeholder = div()
-                .p_2()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
-                .child("No stats available for this series.")
-                .into_any_element();
-            return Some(
-                div()
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .bottom_0()
-                    .w(px(320.0))
-                    .flex()
-                    .flex_col()
-                    .border_l_1()
-                    .border_color(theme.border)
-                    .bg(theme.popover)
-                    .occlude()
-                    .child(
-                        div()
-                            .flex_grow()
-                            .min_h_0()
-                            .overflow_hidden()
-                            .child(placeholder),
-                    )
-                    .into_any_element(),
-            );
+            return Some(self.wrap_stats_rail_chrome(
+                placeholder("No stats available for this series."),
+                theme,
+                &chart_colors,
+            ));
         };
 
         let start_label = format_x_value(x_min, x_is_time);
@@ -806,21 +770,71 @@ impl ChartDocument {
             ))
             .into_any_element();
 
-        Some(
-            div()
-                .absolute()
-                .top_0()
-                .right_0()
-                .bottom_0()
-                .w(px(320.0))
-                .flex()
-                .flex_col()
-                .border_l_1()
-                .border_color(theme.border)
-                .bg(theme.popover)
-                .occlude()
-                .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
-                .into_any_element(),
-        )
+        Some(self.wrap_stats_rail_chrome(body, theme, &chart_colors))
+    }
+
+    /// Wraps a stats rail body in the absolute-right 320 px chrome, prefixed by
+    /// a header bar containing the "STATS" title and a close button that
+    /// dismisses the rail by setting `chart_rail_open = false` on the shell.
+    fn wrap_stats_rail_chrome(
+        &self,
+        body: AnyElement,
+        theme: &gpui_component::theme::Theme,
+        chart_colors: &ChartColors,
+    ) -> AnyElement {
+        let shell_for_close = self.chart_shell.clone();
+        let muted_fg = chart_colors.muted_fg;
+
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .px(px(14.0))
+            .py(Spacing::SM)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(muted_fg)
+                    .font_weight(FontWeight::BOLD)
+                    .child("STATS"),
+            )
+            .child(
+                div()
+                    .id("chart-doc-stats-rail-close")
+                    .w(px(20.0))
+                    .h(px(20.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(Radii::SM)
+                    .cursor_pointer()
+                    .hover(|h| h.bg(theme.muted))
+                    .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                        shell_for_close.update(cx, |s, cx| {
+                            s.chart_rail_open = false;
+                            cx.notify();
+                        });
+                    })
+                    .child(Icon::new(AppIcon::X).size(px(11.0)).color(muted_fg)),
+            );
+
+        div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .bottom_0()
+            .w(px(320.0))
+            .flex()
+            .flex_col()
+            .border_l_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
+            .occlude()
+            .child(header)
+            .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
+            .into_any_element()
     }
 }
