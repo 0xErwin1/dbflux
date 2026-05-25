@@ -34,8 +34,5 @@ pub mod sql_preview;
 mod style_guardrails;
 
 pub use composites::refresh_split_button;
-pub use saved_chart::{
-    SavedChart, SavedChartManager, SavedChartRefreshPolicy, SavedChartStore, TimeRangePreset,
-    open_saved_charts_store,
-};
+pub use saved_chart::{SavedChart, SavedChartRefreshPolicy, TimeRangePreset};
 pub use sql_preview::{SqlGenerationType, SqlPreviewContext};
