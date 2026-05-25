@@ -2095,6 +2095,109 @@ impl Workspace {
             });
         }
     }
+
+    // --- Phase P stubs: dashboard and saved-chart workspace actions ---
+    // Full implementations arrive in Phase P; these stubs wire the Phase N
+    // sidebar-event routing so the crate compiles before modals exist.
+
+    /// Open the "New Dashboard" creation modal for the given profile.
+    ///
+    /// Called when the user selects "New Dashboard..." from the sidebar context
+    /// menu on a DashboardsFolder node.
+    pub(super) fn create_dashboard_from_sidebar(
+        &mut self,
+        _profile_id: uuid::Uuid,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        // Phase P will open ModalCreateDashboard here.
+        log::info!("create_dashboard_from_sidebar: Phase P not yet implemented");
+    }
+
+    /// Open the "Import Dashboard from JSON" modal scoped to the given profile.
+    ///
+    /// Opens the existing import modal. Full profile-scoping (pre-selecting the
+    /// profile in the modal) is Phase O.6 work.
+    pub(super) fn import_dashboard_for_profile(
+        &mut self,
+        _profile_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.modal_import_dashboard.update(cx, |modal, cx| {
+            modal.open(window, cx);
+        });
+    }
+
+    /// Open the rename modal for a dashboard.
+    pub(super) fn rename_dashboard(
+        &mut self,
+        _dashboard_id: uuid::Uuid,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        // Phase P will open ModalRenameItem with RenameTarget::Dashboard here.
+        log::info!("rename_dashboard: Phase P not yet implemented");
+    }
+
+    /// Delete a dashboard after confirmation.
+    ///
+    /// The tab for the dashboard (if open) is closed before the row is removed
+    /// from the repository so the UI never references a deleted entity.
+    pub(super) fn delete_dashboard(
+        &mut self,
+        _dashboard_id: uuid::Uuid,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        // Phase P will open ModalDeleteDashboardConfirm here.
+        log::info!("delete_dashboard: Phase P not yet implemented");
+    }
+
+    /// Duplicate a dashboard without a modal (immediate action).
+    pub(super) fn duplicate_dashboard(
+        &mut self,
+        _dashboard_id: uuid::Uuid,
+        _cx: &mut Context<Self>,
+    ) {
+        // Phase P will call DashboardManager::duplicate_dashboard here.
+        log::info!("duplicate_dashboard: Phase P not yet implemented");
+    }
+
+    /// Open the rename modal for a saved chart.
+    pub(super) fn rename_saved_chart(
+        &mut self,
+        _chart_id: uuid::Uuid,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        // Phase P will open ModalRenameItem with RenameTarget::SavedChart here.
+        log::info!("rename_saved_chart: Phase P not yet implemented");
+    }
+
+    /// Delete a saved chart after confirmation.
+    ///
+    /// Shows the orphan-warning modal if the chart is referenced by any
+    /// dashboard panels, listing the affected dashboard names.
+    pub(super) fn delete_saved_chart(
+        &mut self,
+        _chart_id: uuid::Uuid,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        // Phase P will open ModalDeleteSavedChartConfirm with referencing_dashboards here.
+        log::info!("delete_saved_chart: Phase P not yet implemented");
+    }
+
+    /// Duplicate a saved chart without a modal (immediate action).
+    pub(super) fn duplicate_saved_chart(
+        &mut self,
+        _chart_id: uuid::Uuid,
+        _cx: &mut Context<Self>,
+    ) {
+        // Phase P will call SavedChartManager::duplicate_chart here.
+        log::info!("duplicate_saved_chart: Phase P not yet implemented");
+    }
 }
 
 #[cfg(test)]

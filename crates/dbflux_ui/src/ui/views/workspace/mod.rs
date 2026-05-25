@@ -771,6 +771,36 @@ impl Workspace {
                         cx,
                     );
                 }
+                SidebarEvent::OpenDashboard { dashboard_id } => {
+                    this.open_dashboard(*dashboard_id, window, cx);
+                }
+                SidebarEvent::OpenSavedChart { chart_id } => {
+                    this.open_saved_chart(*chart_id, window, cx);
+                }
+                SidebarEvent::RequestCreateDashboard { profile_id } => {
+                    this.create_dashboard_from_sidebar(*profile_id, window, cx);
+                }
+                SidebarEvent::RequestImportDashboard { profile_id } => {
+                    this.import_dashboard_for_profile(*profile_id, window, cx);
+                }
+                SidebarEvent::RequestRenameDashboard { dashboard_id } => {
+                    this.rename_dashboard(*dashboard_id, window, cx);
+                }
+                SidebarEvent::RequestDeleteDashboard { dashboard_id } => {
+                    this.delete_dashboard(*dashboard_id, window, cx);
+                }
+                SidebarEvent::RequestDuplicateDashboard { dashboard_id } => {
+                    this.duplicate_dashboard(*dashboard_id, cx);
+                }
+                SidebarEvent::RequestRenameSavedChart { chart_id } => {
+                    this.rename_saved_chart(*chart_id, window, cx);
+                }
+                SidebarEvent::RequestDeleteSavedChart { chart_id } => {
+                    this.delete_saved_chart(*chart_id, window, cx);
+                }
+                SidebarEvent::RequestDuplicateSavedChart { chart_id } => {
+                    this.duplicate_saved_chart(*chart_id, cx);
+                }
                 SidebarEvent::RequestTunnelAuth {
                     tunnel_id,
                     tunnel_name,

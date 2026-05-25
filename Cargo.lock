@@ -2975,6 +2975,7 @@ dependencies = [
  "dbflux_components",
  "dbflux_core",
  "dbflux_ssh",
+ "dbflux_storage",
  "dbflux_ui_base",
  "dbflux_ui_windows",
  "dirs 5.0.1",
@@ -2982,6 +2983,7 @@ dependencies = [
  "gpui-component",
  "log",
  "rfd",
+ "rusqlite",
  "serde_json",
  "uuid",
 ]

@@ -648,6 +648,112 @@ impl Sidebar {
                 items
             }
 
+            SchemaNodeKind::DashboardsFolder => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "New Dashboard...",
+                        ContextMenuAction::NewDashboard,
+                    )],
+                );
+
+                // "Import Dashboard from JSON..." is gated on the driver's
+                // DASHBOARD_IMPORT capability — only drivers that vend
+                // importable dashboard JSON (CloudWatch-style metric dashboards)
+                // advertise this bit.
+                let can_import = parse_node_id(item_id)
+                    .and_then(|node_id| {
+                        if let SchemaNodeId::DashboardsFolder { profile_id } = node_id {
+                            Some(profile_id)
+                        } else {
+                            None
+                        }
+                    })
+                    .and_then(|profile_id| {
+                        let state = self.app_state.read(cx);
+                        let conn = state.connections().get(&profile_id)?;
+                        Some(conn.connection.metadata().capabilities)
+                    })
+                    .is_some_and(|caps| {
+                        caps.contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
+                    });
+
+                if can_import {
+                    Self::append_menu_section(
+                        &mut items,
+                        [ContextMenuItem::item(
+                            "Import Dashboard from JSON...",
+                            ContextMenuAction::ImportDashboard,
+                        )],
+                    );
+                }
+
+                items
+            }
+
+            SchemaNodeKind::SavedChartsFolder => {
+                vec![ContextMenuItem::item(
+                    "New Saved Chart...",
+                    ContextMenuAction::NewSavedChart,
+                )]
+            }
+
+            SchemaNodeKind::DashboardItem => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("Rename...", ContextMenuAction::RenameDashboard),
+                        ContextMenuItem::item("Duplicate", ContextMenuAction::DuplicateDashboard),
+                    ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger(
+                        "Delete...",
+                        ContextMenuAction::DeleteDashboard,
+                    )],
+                );
+
+                items
+            }
+
+            SchemaNodeKind::SavedChartItem => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [
+                        ContextMenuItem::item("Rename...", ContextMenuAction::RenameSavedChart),
+                        ContextMenuItem::item("Duplicate", ContextMenuAction::DuplicateSavedChart),
+                    ],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::danger(
+                        "Delete...",
+                        ContextMenuAction::DeleteSavedChart,
+                    )],
+                );
+
+                items
+            }
+
             _ => vec![],
         }
     }
@@ -1028,10 +1134,17 @@ impl Sidebar {
             }
             ContextMenuAction::Open => {
                 let node_kind = parse_node_kind(&item_id);
-                if node_kind == SchemaNodeKind::Collection {
-                    self.browse_collection(&item_id, cx);
-                } else {
-                    self.browse_table(&item_id, cx);
+                match node_kind {
+                    SchemaNodeKind::Collection => {
+                        self.browse_collection(&item_id, cx);
+                    }
+                    SchemaNodeKind::DashboardItem | SchemaNodeKind::SavedChartItem => {
+                        // Delegate to execute_item which emits the correct sidebar event.
+                        self.execute_item(&item_id, cx);
+                    }
+                    _ => {
+                        self.browse_table(&item_id, cx);
+                    }
                 }
             }
             ContextMenuAction::OpenChildPicker => {
@@ -1157,6 +1270,67 @@ impl Sidebar {
             }
             ContextMenuAction::DropCollection => {
                 self.show_ddl_confirm_modal(&item_id, "Collection", cx);
+            }
+            ContextMenuAction::NewDashboard => {
+                if let Some(SchemaNodeId::DashboardsFolder { profile_id }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestCreateDashboard { profile_id });
+                }
+            }
+            ContextMenuAction::ImportDashboard => {
+                if let Some(SchemaNodeId::DashboardsFolder { profile_id }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestImportDashboard { profile_id });
+                }
+            }
+            ContextMenuAction::RenameDashboard => {
+                if let Some(SchemaNodeId::DashboardItem { dashboard_id, .. }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestRenameDashboard { dashboard_id });
+                }
+            }
+            ContextMenuAction::DeleteDashboard => {
+                if let Some(SchemaNodeId::DashboardItem { dashboard_id, .. }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestDeleteDashboard { dashboard_id });
+                }
+            }
+            ContextMenuAction::DuplicateDashboard => {
+                if let Some(SchemaNodeId::DashboardItem { dashboard_id, .. }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestDuplicateDashboard { dashboard_id });
+                }
+            }
+            ContextMenuAction::NewSavedChart => {
+                // No action needed from the context menu; "New Saved Chart" is only
+                // reachable by saving from a ChartDocument. The menu item is present
+                // so users discover the feature; clicking it is a no-op for now.
+            }
+            ContextMenuAction::RenameSavedChart => {
+                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestRenameSavedChart { chart_id });
+                }
+            }
+            ContextMenuAction::DeleteSavedChart => {
+                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestDeleteSavedChart { chart_id });
+                }
+            }
+            ContextMenuAction::DuplicateSavedChart => {
+                if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) =
+                    parse_node_id(&item_id)
+                {
+                    cx.emit(SidebarEvent::RequestDuplicateSavedChart { chart_id });
+                }
             }
         }
 
