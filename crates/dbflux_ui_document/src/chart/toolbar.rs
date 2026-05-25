@@ -268,13 +268,23 @@ pub fn render_chart_toolbar(
             on_save(window, cx);
         });
 
+    // Responsive layout: a single `flex_wrap` row that wraps onto multiple
+    // lines when the viewport gets narrower. Per the project pattern
+    // (`result_panel/mod.rs`), `flex_wrap` is incompatible with positional
+    // spacers, so no `flex_1` divider is inserted — items flow left-to-right
+    // and wrap naturally. `w_full` forces the row to its parent's width so
+    // overflow can be detected. `min_h` (instead of fixed `h`) lets the row
+    // grow vertically when items wrap.
     div()
         .flex()
         .flex_row()
+        .flex_wrap()
         .items_center()
-        .h(px(34.0))
+        .w_full()
+        .min_h(px(34.0))
         .px(Spacing::SM)
-        .gap(px(4.0))
+        .gap_x(px(4.0))
+        .gap_y(px(2.0))
         .border_b_1()
         .border_color(theme.border)
         .bg(theme.tab_bar)
@@ -296,8 +306,6 @@ pub fn render_chart_toolbar(
                         .child(window_label),
                 ),
         )
-        // Spacer
-        .child(div().flex_1())
         // Points · resolution
         .child(
             div()
