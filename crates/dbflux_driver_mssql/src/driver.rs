@@ -1391,7 +1391,7 @@ impl Connection for MssqlConnection {
         // WITH (NOLOCK), OFFSET ROWS FETCH NEXT, etc.). Returning the
         // T-SQL-aware service suppresses the noisy parse diagnostics
         // while keeping dangerous-query detection.
-        &dbflux_core::TSqlLanguageService
+        &crate::TSqlLanguageService
     }
 
     fn ping(&self) -> Result<(), DbError> {
