@@ -105,9 +105,8 @@ impl From<&str> for Diagnostic {
 
 /// Categories of potentially dangerous queries that require user confirmation.
 ///
-/// Each variant maps to a destructive pattern detected by heuristic analysis.
-/// Both SQL and document-database patterns are represented here so the core
-/// owns the full definition and the UI never needs to know query syntax.
+/// Each variant maps to a destructive pattern detected by driver-local or
+/// shared heuristic analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DangerousQueryKind {
     // SQL patterns
@@ -185,8 +184,26 @@ fn classify_mongo_query(query: &str) -> ExecutionClassification {
         return ExecutionClassification::Metadata;
     }
 
-    if let Some(kind) = detect_dangerous_mongo(query) {
-        return classification_from_dangerous_kind(kind);
+    if normalized.contains(".dropdatabase(") {
+        return ExecutionClassification::Destructive;
+    }
+
+    if normalized.contains(".drop(") && !normalized.contains(".dropdatabase(") {
+        return ExecutionClassification::Destructive;
+    }
+
+    if let Some(pos) = normalized.find(".deletemany(") {
+        let after_paren = &normalized[pos + 12..];
+        if is_empty_filter(after_paren) {
+            return ExecutionClassification::Write;
+        }
+    }
+
+    if let Some(pos) = normalized.find(".updatemany(") {
+        let after_paren = &normalized[pos + 12..];
+        if is_empty_filter(after_paren) {
+            return ExecutionClassification::Write;
+        }
     }
 
     if normalized.contains(".find(") || normalized.contains(".aggregate(") {
@@ -222,13 +239,18 @@ fn classify_redis_query(query: &str) -> ExecutionClassification {
         return ExecutionClassification::Metadata;
     }
 
-    if let Some(kind) = detect_dangerous_redis(query) {
-        return classification_from_dangerous_kind(kind);
-    }
-
     let Some(command) = normalized.split_whitespace().next() else {
         return ExecutionClassification::Metadata;
     };
+
+    match command {
+        "flushall" | "flushdb" => return ExecutionClassification::Destructive,
+        "del" if normalized.split_whitespace().skip(1).count() > 1 => {
+            return ExecutionClassification::Write;
+        }
+        "keys" => return ExecutionClassification::Read,
+        _ => {}
+    }
 
     match command {
         "info" | "dbsize" | "type" | "ttl" | "pttl" | "exists" | "llen" | "hget" | "hmget"
@@ -238,25 +260,6 @@ fn classify_redis_query(query: &str) -> ExecutionClassification {
         "command" | "help" => ExecutionClassification::Metadata,
         "config" | "acl" | "script" | "module" => ExecutionClassification::Admin,
         _ => ExecutionClassification::Write,
-    }
-}
-
-fn classification_from_dangerous_kind(kind: DangerousQueryKind) -> ExecutionClassification {
-    match kind {
-        DangerousQueryKind::Drop
-        | DangerousQueryKind::Truncate
-        | DangerousQueryKind::MongoDropCollection
-        | DangerousQueryKind::MongoDropDatabase
-        | DangerousQueryKind::RedisFlushAll
-        | DangerousQueryKind::RedisFlushDb => ExecutionClassification::Destructive,
-        DangerousQueryKind::DeleteNoWhere
-        | DangerousQueryKind::UpdateNoWhere
-        | DangerousQueryKind::MongoDeleteMany
-        | DangerousQueryKind::MongoUpdateMany
-        | DangerousQueryKind::RedisMultiDelete => ExecutionClassification::Write,
-        DangerousQueryKind::Alter => ExecutionClassification::Admin,
-        DangerousQueryKind::Script => ExecutionClassification::Write,
-        DangerousQueryKind::RedisKeysPattern => ExecutionClassification::Read,
     }
 }
 
@@ -487,76 +490,8 @@ pub fn detect_dangerous_sql(query: &str) -> Option<DangerousQueryKind> {
     detect_dangerous_single(statements[0])
 }
 
-/// Detect dangerous MongoDB shell commands using heuristic pattern matching.
-pub fn detect_dangerous_mongo(query: &str) -> Option<DangerousQueryKind> {
-    let normalized = query.trim().to_lowercase();
-
-    if normalized.contains(".dropdatabase(") {
-        return Some(DangerousQueryKind::MongoDropDatabase);
-    }
-
-    if normalized.contains(".drop(") && !normalized.contains(".dropdatabase(") {
-        return Some(DangerousQueryKind::MongoDropCollection);
-    }
-
-    if let Some(pos) = normalized.find(".deletemany(") {
-        let after_paren = &normalized[pos + 12..];
-        if is_empty_filter(after_paren) {
-            return Some(DangerousQueryKind::MongoDeleteMany);
-        }
-    }
-
-    if let Some(pos) = normalized.find(".updatemany(") {
-        let after_paren = &normalized[pos + 12..];
-        if is_empty_filter(after_paren) {
-            return Some(DangerousQueryKind::MongoUpdateMany);
-        }
-    }
-
-    None
-}
-
-/// Detect dangerous Redis commands using keyword matching.
-pub fn detect_dangerous_redis(query: &str) -> Option<DangerousQueryKind> {
-    let normalized = query.trim().to_lowercase();
-
-    let first_word = normalized.split_whitespace().next().unwrap_or("");
-
-    if first_word == "flushall" {
-        return Some(DangerousQueryKind::RedisFlushAll);
-    }
-
-    if first_word == "flushdb" {
-        return Some(DangerousQueryKind::RedisFlushDb);
-    }
-
-    if first_word == "del" {
-        let args: Vec<&str> = normalized.split_whitespace().skip(1).collect();
-        if args.len() > 1 {
-            return Some(DangerousQueryKind::RedisMultiDelete);
-        }
-    }
-
-    if first_word == "keys" {
-        return Some(DangerousQueryKind::RedisKeysPattern);
-    }
-
-    None
-}
-
-/// Unified entry point: auto-detects language and checks for dangerous patterns.
-///
-/// Detects MongoDB shell syntax (`db.`) vs SQL automatically.
+/// Unified entry point for shared SQL dangerous-query checks.
 pub fn detect_dangerous_query(query: &str) -> Option<DangerousQueryKind> {
-    let clean = strip_leading_comments(query);
-    if clean.is_empty() {
-        return None;
-    }
-
-    if clean.trim().starts_with("db.") {
-        return detect_dangerous_mongo(clean);
-    }
-
     detect_dangerous_sql(query)
 }
 
@@ -1087,116 +1022,10 @@ mod tests {
         assert!(!DangerousQueryKind::MongoUpdateMany.message().is_empty());
         assert!(!DangerousQueryKind::MongoDropCollection.message().is_empty());
         assert!(!DangerousQueryKind::MongoDropDatabase.message().is_empty());
-    }
-
-    // ==================== MongoDB tests ====================
-
-    #[test]
-    fn mongo_delete_many_empty_filter_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query("db.users.deleteMany({})"),
-            Some(DangerousQueryKind::MongoDeleteMany)
-        );
-    }
-
-    #[test]
-    fn mongo_delete_many_no_args_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query("db.users.deleteMany()"),
-            Some(DangerousQueryKind::MongoDeleteMany)
-        );
-    }
-
-    #[test]
-    fn mongo_delete_many_with_filter_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.deleteMany({"archived": true})"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_update_many_empty_filter_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.updateMany({}, {"$set": {"active": false}})"#),
-            Some(DangerousQueryKind::MongoUpdateMany)
-        );
-    }
-
-    #[test]
-    fn mongo_update_many_with_filter_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(
-                r#"db.users.updateMany({"status": "old"}, {"$set": {"archived": true}})"#
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_drop_collection_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query("db.temp_collection.drop()"),
-            Some(DangerousQueryKind::MongoDropCollection)
-        );
-    }
-
-    #[test]
-    fn mongo_drop_database_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_query("db.dropDatabase()"),
-            Some(DangerousQueryKind::MongoDropDatabase)
-        );
-    }
-
-    #[test]
-    fn mongo_find_is_safe() {
-        assert_eq!(detect_dangerous_query("db.users.find()"), None);
-        assert_eq!(detect_dangerous_query("db.users.find({})"), None);
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.find({"name": "John"})"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_delete_one_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.deleteOne({"_id": "123"})"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_insert_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.insertOne({"name": "Alice"})"#),
-            None
-        );
-        assert_eq!(
-            detect_dangerous_query(r#"db.users.insertMany([{"name": "A"}, {"name": "B"}])"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_aggregate_is_safe() {
-        assert_eq!(
-            detect_dangerous_query(r#"db.orders.aggregate([{"$match": {"status": "active"}}])"#),
-            None
-        );
-    }
-
-    #[test]
-    fn mongo_case_insensitive() {
-        assert_eq!(
-            detect_dangerous_query("db.users.DELETEMANY({})"),
-            Some(DangerousQueryKind::MongoDeleteMany)
-        );
-        assert_eq!(
-            detect_dangerous_query("db.users.DeleteMany({})"),
-            Some(DangerousQueryKind::MongoDeleteMany)
-        );
+        assert!(!DangerousQueryKind::RedisFlushAll.message().is_empty());
+        assert!(!DangerousQueryKind::RedisFlushDb.message().is_empty());
+        assert!(!DangerousQueryKind::RedisMultiDelete.message().is_empty());
+        assert!(!DangerousQueryKind::RedisKeysPattern.message().is_empty());
     }
 
     #[test]
@@ -1276,83 +1105,6 @@ END $$;"#;
         // A lone `$` is not a closed dollar-quoted block, so real errors still surface.
         let diags = sql_editor_diagnostics("SELEC $ FROM users");
         assert!(!diags.is_empty());
-    }
-
-    // ==================== Redis tests ====================
-
-    #[test]
-    fn redis_flushall_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_redis("FLUSHALL"),
-            Some(DangerousQueryKind::RedisFlushAll)
-        );
-        assert_eq!(
-            detect_dangerous_redis("flushall"),
-            Some(DangerousQueryKind::RedisFlushAll)
-        );
-        assert_eq!(
-            detect_dangerous_redis("FLUSHALL ASYNC"),
-            Some(DangerousQueryKind::RedisFlushAll)
-        );
-    }
-
-    #[test]
-    fn redis_flushdb_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_redis("FLUSHDB"),
-            Some(DangerousQueryKind::RedisFlushDb)
-        );
-        assert_eq!(
-            detect_dangerous_redis("flushdb ASYNC"),
-            Some(DangerousQueryKind::RedisFlushDb)
-        );
-    }
-
-    #[test]
-    fn redis_del_multi_key_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_redis("DEL key1 key2"),
-            Some(DangerousQueryKind::RedisMultiDelete)
-        );
-        assert_eq!(
-            detect_dangerous_redis("del a b c"),
-            Some(DangerousQueryKind::RedisMultiDelete)
-        );
-    }
-
-    #[test]
-    fn redis_del_single_key_is_safe() {
-        assert_eq!(detect_dangerous_redis("DEL mykey"), None);
-    }
-
-    #[test]
-    fn redis_keys_is_dangerous() {
-        assert_eq!(
-            detect_dangerous_redis("KEYS *"),
-            Some(DangerousQueryKind::RedisKeysPattern)
-        );
-        assert_eq!(
-            detect_dangerous_redis("keys user:*"),
-            Some(DangerousQueryKind::RedisKeysPattern)
-        );
-    }
-
-    #[test]
-    fn redis_get_is_safe() {
-        assert_eq!(detect_dangerous_redis("GET mykey"), None);
-    }
-
-    #[test]
-    fn redis_set_is_safe() {
-        assert_eq!(detect_dangerous_redis("SET mykey myvalue"), None);
-    }
-
-    #[test]
-    fn redis_kind_messages_are_non_empty() {
-        assert!(!DangerousQueryKind::RedisFlushAll.message().is_empty());
-        assert!(!DangerousQueryKind::RedisFlushDb.message().is_empty());
-        assert!(!DangerousQueryKind::RedisMultiDelete.message().is_empty());
-        assert!(!DangerousQueryKind::RedisKeysPattern.message().is_empty());
     }
 
     #[test]

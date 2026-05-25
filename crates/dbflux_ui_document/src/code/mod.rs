@@ -29,7 +29,7 @@ use dbflux_core::{
     DriftOutcome, DriverCapabilities, EditorDiagnostic as CoreEditorDiagnostic, ExecutionContext,
     ExecutionSourceContext, HistoryEntry, OutputReceiver, QueryLanguage, QueryRequest, QueryResult,
     RefreshPolicy, SchemaDriftDetected, SchemaLoadingStrategy, TaskTarget, ValidationResult,
-    check_schema_drift, detect_dangerous_query,
+    check_schema_drift,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};

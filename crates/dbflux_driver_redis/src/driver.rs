@@ -6,14 +6,16 @@ use std::time::Instant;
 use std::sync::Arc;
 
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
+
+use crate::language_service::RedisLanguageService;
 use dbflux_core::{
     ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DefaultSqlDialect, DeploymentClass, Diagnostic, DiagnosticSeverity,
-    DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata,
-    EditorDiagnostic, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
-    FormattedError, HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest,
-    KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    DdlCapabilities, DefaultSqlDialect, DeploymentClass, DiagnosticSeverity, DocumentConnection,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError,
+    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
+    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
     KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema, LanguageService,
     ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
@@ -22,7 +24,7 @@ use dbflux_core::{
     SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest,
     SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
     StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
-    ValidationResult, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
+    Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
 };
 use dbflux_ssh::SshTunnel;
 
@@ -2201,7 +2203,7 @@ fn split_command(input: &str) -> Result<Vec<String>, DbError> {
     Ok(items)
 }
 
-fn parse_command(input: &str) -> Result<Vec<String>, DbError> {
+pub(crate) fn parse_command(input: &str) -> Result<Vec<String>, DbError> {
     let cleaned = input
         .lines()
         .filter(|line| {
@@ -2218,74 +2220,6 @@ fn parse_command(input: &str) -> Result<Vec<String>, DbError> {
 
     let cleaned = cleaned.trim_end_matches(';').trim();
     split_command(cleaned)
-}
-
-struct RedisLanguageService;
-
-impl LanguageService for RedisLanguageService {
-    fn validate(&self, query: &str) -> ValidationResult {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return ValidationResult::Valid;
-        }
-
-        let lower = trimmed.to_lowercase();
-        if lower.starts_with("select ")
-            || lower.starts_with("insert ")
-            || lower.starts_with("update ")
-            || lower.starts_with("delete ")
-        {
-            return ValidationResult::WrongLanguage {
-                expected: QueryLanguage::RedisCommands,
-                message:
-                    "SQL syntax not supported for Redis. Use Redis command syntax (e.g. GET key)."
-                        .to_string(),
-            };
-        }
-
-        match parse_command(query) {
-            Ok(_) => ValidationResult::Valid,
-            Err(e) => ValidationResult::SyntaxError(
-                Diagnostic::error(format!("Invalid Redis command: {}", e))
-                    .with_hint("Use Redis command syntax, for example: SET mykey myvalue"),
-            ),
-        }
-    }
-
-    fn detect_dangerous(&self, query: &str) -> Option<dbflux_core::DangerousQueryKind> {
-        dbflux_core::detect_dangerous_redis(query)
-    }
-
-    fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return vec![];
-        }
-
-        let lower = trimmed.to_lowercase();
-        if lower.starts_with("select ")
-            || lower.starts_with("insert ")
-            || lower.starts_with("update ")
-            || lower.starts_with("delete ")
-        {
-            return vec![EditorDiagnostic {
-                severity: DiagnosticSeverity::Error,
-                message:
-                    "SQL syntax not supported for Redis. Use Redis command syntax (e.g. GET key)."
-                        .to_string(),
-                range: redis_first_line_range(query),
-            }];
-        }
-
-        match parse_command(query) {
-            Ok(tokens) => check_redis_arity(&tokens, query),
-            Err(e) => vec![EditorDiagnostic {
-                severity: DiagnosticSeverity::Error,
-                message: format!("Invalid Redis command: {}", e),
-                range: redis_first_line_range(query),
-            }],
-        }
-    }
 }
 
 /// Arity rule for a Redis command.
@@ -2373,7 +2307,7 @@ fn command_arity(command: &str) -> Option<Arity> {
 
 /// Check argument count for a parsed Redis command, returning diagnostics if
 /// the arity is wrong.
-fn check_redis_arity(tokens: &[String], query: &str) -> Vec<EditorDiagnostic> {
+pub(crate) fn check_redis_arity(tokens: &[String], query: &str) -> Vec<EditorDiagnostic> {
     if tokens.is_empty() {
         return vec![];
     }
@@ -2443,7 +2377,7 @@ fn check_pairing(command: &str, arg_count: usize) -> Option<String> {
     }
 }
 
-fn redis_first_line_range(query: &str) -> TextPositionRange {
+pub(crate) fn redis_first_line_range(query: &str) -> TextPositionRange {
     let first_line_len = query
         .lines()
         .next()
