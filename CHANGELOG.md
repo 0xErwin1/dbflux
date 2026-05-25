@@ -4,15 +4,6 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
-### Changed
-
-* **Sidebar collapses single-database wrapper** — Connections whose driver
-  exposes exactly one database (CloudWatch's `logs`, DynamoDB's default
-  region, single-file SQLite, etc.) no longer render the redundant database
-  level. Child nodes (Collections, Metrics, Tables) attach directly under the
-  connection node. Multi-database drivers (Postgres, MySQL, MongoDB) are
-  unaffected — the wrapper still discriminates between databases (#131).
-
 ### Added
 
 * **Metric picker rail tab for chart documents** — CloudWatch metric charts now
@@ -23,9 +14,23 @@ All notable changes to DBFlux will be documented in this file.
   session by `MetricCatalogCache`. No driver names or categories are hardcoded
   in the UI layer; the Metric tab is gated solely on the generic
   `METRIC_CATALOG` capability bit (#96).
+* **Time-range macros for InfluxQL and Flux** — user-written InfluxDB queries
+  can opt into UI-driven time-range substitution via Grafana-style tokens
+  (`$timeFilter`, `$__from`, `$__to` for InfluxQL; `v.timeRangeStart`,
+  `v.timeRangeStop` for Flux). Substitution happens at the execution
+  chokepoint in both `CodeDocument` and `ChartDocument`; the InfluxDB driver's
+  inject-when-absent path is skipped when macros are present so they take
+  precedence without double-injection. Queries without macros keep today's
+  byte-for-byte behavior. Documented in the driver README (#119).
 
 ### Changed
 
+* **Sidebar collapses single-database wrapper** — Connections whose driver
+  exposes exactly one database (CloudWatch's `logs`, DynamoDB's default
+  region, single-file SQLite, etc.) no longer render the redundant database
+  level. Child nodes (Collections, Metrics, Tables) attach directly under the
+  connection node. Multi-database drivers (Postgres, MySQL, MongoDB) are
+  unaffected — the wrapper still discriminates between databases (#131).
 * **CloudWatch metric catalog hardening** — The `RealCloudWatchClient` adapter
   now reuses a single long-lived Tokio runtime across `list_metrics` calls
   (previously a new runtime was constructed per call, wasting file descriptors
@@ -45,6 +50,23 @@ All notable changes to DBFlux will be documented in this file.
   across all dimensions) and immediately executes it. The picker rail opens
   alongside for refinement of dimensions, period, and statistic. Duplicate
   clicks on the same metric leaf focus the existing tab (#96).
+* **Centralized `TimeRangePanel` custom-picker rendering** — A new
+  `render_custom_picker_row` helper (and `CustomPickerSlots` for hosts that
+  need per-slot decoration) is shared across `ChartDocument`, `CodeDocument`,
+  the data-grid chart toolbar, and the audit document. The data-grid chart
+  toolbar gains the custom date/hour/minute picker that previously was
+  missing under "Custom…", and audit migrates off the last hand-rolled
+  row. Behavior-preserving — public accessors and emitted events are
+  unchanged (#121).
+* **Chart toolbar wraps on narrow viewports** — The shared chart toolbar
+  used by `ChartDocument` and `DataGridPanel` switched from a single
+  non-wrapping flex row to the codebase's responsive pattern
+  (`flex_wrap` + `gap_x/gap_y`, `min_h(34px)`). Trailing controls (TYPE
+  chips, Stats / PNG / Save) no longer push off-screen when the document
+  is narrow; rows grow downward instead of clipping (#136).
+* **Stats rail gains an in-rail close affordance** — `ChartDocument`'s Stats
+  rail now renders a header with a STATS title and an `×` close button so
+  users can dismiss it without hunting for the toolbar toggle (#136).
 
 ### Removed
 
@@ -60,7 +82,58 @@ All notable changes to DBFlux will be documented in this file.
   `ModalShell` primitive with consistent widths and a dedicated footer
   button row. Buttons no longer overflow into the body, and the
   Drop Database / Delete confirms no longer render at half the size of
-  the other confirm modals.
+  the other confirm modals (#130).
+* **Chart axis tick density on wide/tall plots** — Three targeted
+  adjustments to the chart engine raise tick density without over-ticking
+  small charts: `NICE_TIME_STEPS_MS` gains 2h / 3h / 12h / 2d / 3d entries
+  (a 3-week range with 12 target ticks no longer collapses to 3 weekly
+  ticks), the X-tick clamp floor drops from 4 to 3 so ~400px charts can
+  render 3 ticks, and the Y-axis target switches from a build-time
+  constant of 5 to a render-time `(plot_h / 60).clamp(3, 12)` that mirrors
+  the existing X dynamic path (covers line / area / StackedBar / log).
+  PR #123's dynamic edge-label padding is preserved (#132).
+* **`ChartDocument` Stats rail toggle now actually renders** — The toggle
+  state machine was complete but `render_chart_content` had no
+  `ChartRailTab::Stats` branch, so clicking Stats appeared to do nothing.
+  The rail now renders for query-result, saved-chart, and CloudWatch
+  metric hosts with SERIES / STATS / WINDOW / SOURCE sections matching
+  `DataGridPanel`. Closes #133 (#136).
+* **MySQL editor diagnostics no longer flag DCL statements** — the MySQL
+  driver was using the generic `SqlLanguageService` (tree-sitter-sequel
+  / ANSI SQL), which chokes on `CREATE USER 'u'@'h' IDENTIFIED BY '…'`,
+  `GRANT … TO 'u'@'h'`, `FLUSH PRIVILEGES`, etc., surfacing spurious
+  "Unexpected …" errors. A new `MySqlLanguageService` (mirrors the
+  MongoDB pattern) overrides `Connection::language_service()` to return
+  empty editor diagnostics — the server stays the source of truth.
+  MariaDB shares the impl and is covered automatically. Closes #126
+  (#128).
+* **`TimeRangePanel` window preserved against stale source-input
+  clobber** — The result-panel chart toolbar's panel emitted
+  `TimeRangeChanged` on every preset click, but `run_query_text` then
+  unconditionally rebuilt `exec_ctx.source` from the once-populated
+  `source_*_input` text fields, silently overwriting the panel's
+  selection. A new `pending_window_override` on `CodeDocument` carries
+  the authoritative panel bounds through a pure
+  `resolve_source_context` helper that gives the override precedence
+  over the input-driven fallback (and suppresses input validation
+  errors when an override is present). `ChartDocument` was unaffected
+  (no dual source of truth) (#124).
+* **X-axis edge labels no longer clipped on charts** — the label paint
+  loop centered labels on tick screen-X with no right-bound clamping,
+  and the fixed `MARGIN_RIGHT = 16` did not reserve space for label
+  overhang. A pre-shape pass in the paint closure now measures label
+  widths and derives effective horizontal padding as
+  `max(MARGIN_*, max_label_w / 2.0)` (base margins as a floor), with a
+  symmetric left-edge guard. The Y-tick column tracks the effective
+  left pad so it stays flush with the plot. Extracted as
+  `effective_x_label_padding` with 6 unit tests (#120).
+* **`ChartDocument` custom-range apply race** — `apply_custom_range`
+  now sets `pending_time_window` and `pending_chart_reexecute`
+  synchronously from the validated `(start_ms, end_ms)` returned by
+  the panel, instead of waiting for the deferred `TimeRangeChanged`
+  subscription. The subscription still fires for `selected_time_range`
+  mirroring, but re-execution is no longer gated on its delivery
+  timing (#121).
 
 ## [0.6.0-dev.8] - 2026-05-23
 
