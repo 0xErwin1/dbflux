@@ -43,3 +43,9 @@ pub mod ssh_tunnel_auth;
 pub mod ssh_tunnel_profiles;
 
 pub mod state;
+
+pub mod viz_saved_chart_series;
+pub mod viz_saved_chart_binding_y;
+pub mod viz_dashboard_panels;
+pub mod viz_dashboards;
+pub mod viz_saved_charts;

@@ -140,6 +140,7 @@ impl MigrationRegistry {
         registry.register(mod_007_session_exec_ctx_json::MigrationImpl);
         registry.register(mod_008_general_settings_style::MigrationImpl);
         registry.register(mod_009_mssql_instance::MigrationImpl);
+        registry.register(mod_010_viz_charts_and_dashboards::MigrationImpl);
         registry
     }
 
@@ -287,6 +288,7 @@ mod mod_006_rpc_service_api_contract;
 mod mod_007_session_exec_ctx_json;
 mod mod_008_general_settings_style;
 mod mod_009_mssql_instance;
+mod mod_010_viz_charts_and_dashboards;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -678,6 +680,67 @@ mod tests {
             )
             .unwrap();
         assert_eq!(applied, 1);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_010_all_viz_tables_present() {
+        let temp_dir = temp_dir("010_viz_tables");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        MigrationRegistry::new().run_all(&conn).unwrap();
+
+        let tables = table_names(&conn);
+
+        for expected in &[
+            "viz_saved_charts",
+            "viz_saved_chart_series",
+            "viz_saved_chart_binding_y",
+            "viz_dashboards",
+            "viz_dashboard_panels",
+        ] {
+            assert!(
+                tables.contains(*expected),
+                "table '{expected}' should exist after migration 010"
+            );
+        }
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_010_idempotent_rerun() {
+        let temp_dir = temp_dir("010_idempotent");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let registry = MigrationRegistry::new();
+
+        registry.run_all(&conn).unwrap();
+        // Second run must not error and all viz tables must still be present.
+        registry.run_all(&conn).unwrap();
+
+        let tables = table_names(&conn);
+        for expected in &[
+            "viz_saved_charts",
+            "viz_saved_chart_series",
+            "viz_saved_chart_binding_y",
+            "viz_dashboards",
+            "viz_dashboard_panels",
+        ] {
+            assert!(
+                tables.contains(*expected),
+                "table '{expected}' must still be present after idempotent rerun"
+            );
+        }
 
         drop(conn);
         let _ = std::fs::remove_dir_all(temp_dir);
