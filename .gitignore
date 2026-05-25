@@ -7,3 +7,5 @@ scripts/dbflux*
 .logs
 result
 .atl/
+# Local Pi runtime state
+.agent/
