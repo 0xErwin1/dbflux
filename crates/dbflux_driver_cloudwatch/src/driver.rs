@@ -16,10 +16,12 @@ use dbflux_core::{
     DbConfig, DbDriver, DbError, DbKind, DeploymentClass, DocumentSchema, DriverCapabilities,
     DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery,
     EventRecord, EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext,
-    FormValues, Icon, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
+    FormValues, Icon, MetricCatalog, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
     SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
     ValidationResult, Value,
 };
+
+use crate::metric_catalog::{CloudWatchMetricCatalog, RealCloudWatchClient};
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "cloudwatch".into(),
@@ -28,7 +30,9 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     category: DatabaseCategory::LogStream,
     deployment_class: Some(DeploymentClass::CloudManaged),
     query_language: QueryLanguage::Sql,
-    capabilities: DriverCapabilities::AUTHENTICATION.union(DriverCapabilities::METRIC_SERIES),
+    capabilities: DriverCapabilities::AUTHENTICATION
+        .union(DriverCapabilities::METRIC_SERIES)
+        .union(DriverCapabilities::METRIC_CATALOG),
     default_port: None,
     uri_scheme: "cloudwatch".into(),
     icon: Icon::Logs,
@@ -76,6 +80,8 @@ struct CloudWatchConnection {
     client: Client,
     metrics_client: aws_sdk_cloudwatch::Client,
     config: CloudWatchProfileConfig,
+    /// Metric catalog implementation backed by the same AWS metrics client.
+    metric_catalog_impl: CloudWatchMetricCatalog,
 }
 
 struct CloudWatchLanguageService;
@@ -168,10 +174,15 @@ impl DbDriver for CloudWatchDriver {
 
         probe_connection(&client, &config)?;
 
+        let metric_catalog_impl = CloudWatchMetricCatalog::new(Box::new(
+            RealCloudWatchClient::new(metrics_client.clone()),
+        ));
+
         Ok(Box::new(CloudWatchConnection {
             client,
             metrics_client,
             config,
+            metric_catalog_impl,
         }))
     }
 
@@ -186,6 +197,10 @@ impl DbDriver for CloudWatchDriver {
 impl Connection for CloudWatchConnection {
     fn metadata(&self) -> &DriverMetadata {
         &CLOUDWATCH_METADATA
+    }
+
+    fn metric_catalog(&self) -> Option<&dyn MetricCatalog> {
+        Some(&self.metric_catalog_impl)
     }
 
     fn ping(&self) -> Result<(), DbError> {
@@ -264,7 +279,7 @@ impl Connection for CloudWatchConnection {
             start_request = start_request.set_log_group_names(Some(log_groups.clone()));
         }
 
-        let start_output = runtime()?.block_on(start_request.send()).map_err(|error| {
+        let start_output = runtime().block_on(start_request.send()).map_err(|error| {
             DbError::query_failed(format!("CloudWatch StartQuery failed: {error}"))
         })?;
 
@@ -277,7 +292,7 @@ impl Connection for CloudWatchConnection {
         loop {
             attempts += 1;
 
-            let output = runtime()?
+            let output = runtime()
                 .block_on(
                     self.client
                         .get_query_results()
@@ -444,7 +459,7 @@ impl Connection for CloudWatchConnection {
                 operation = operation.next_token(token);
             }
 
-            let output = runtime()?.block_on(operation.send()).map_err(|error| {
+            let output = runtime().block_on(operation.send()).map_err(|error| {
                 DbError::query_failed(format!("CloudWatch FilterLogEvents failed: {error}"))
             })?;
 
@@ -796,7 +811,7 @@ impl CloudWatchConnection {
                 operation = operation.next_token(token);
             }
 
-            let output = runtime()?.block_on(operation.send()).map_err(|error| {
+            let output = runtime().block_on(operation.send()).map_err(|error| {
                 DbError::query_failed(format!("CloudWatch GetLogEvents failed: {error}"))
             })?;
 
@@ -1039,7 +1054,7 @@ fn build_clients(
         loader = loader.profile_name(profile);
     }
 
-    let sdk_config = runtime()?.block_on(loader.load());
+    let sdk_config = runtime().block_on(loader.load());
 
     if config.endpoint.is_none() {
         let logs_client = Client::new(&sdk_config);
@@ -1120,7 +1135,7 @@ fn execute_metric_query(
     let start_time = MetricsDateTime::from_millis(start_ms);
     let end_time = MetricsDateTime::from_millis(end_ms);
 
-    let output = runtime()?
+    let output = runtime()
         .block_on(
             client
                 .get_metric_data()
@@ -1296,7 +1311,7 @@ fn build_wide_metric_result(
 }
 
 fn probe_connection(client: &Client, config: &CloudWatchProfileConfig) -> Result<(), DbError> {
-    runtime()?
+    runtime()
         .block_on(client.describe_log_groups().limit(1).send())
         .map_err(|error| {
             DbError::connection_failed(format!(
@@ -1321,7 +1336,7 @@ fn fetch_log_groups(client: &Client) -> Result<Vec<CollectionInfo>, DbError> {
             operation = operation.next_token(token);
         }
 
-        let output = runtime()?.block_on(operation.send()).map_err(|error| {
+        let output = runtime().block_on(operation.send()).map_err(|error| {
             DbError::query_failed(format!("CloudWatch DescribeLogGroups failed: {error}"))
         })?;
 
@@ -1361,9 +1376,29 @@ fn current_time_ms() -> Result<i64, DbError> {
         .map_err(|_| DbError::query_failed("Current time does not fit in i64".to_string()))
 }
 
-fn runtime() -> Result<tokio::runtime::Runtime, DbError> {
-    tokio::runtime::Runtime::new()
-        .map_err(|error| DbError::connection_failed(format!("Tokio runtime setup failed: {error}")))
+/// Process-wide tokio runtime shared across every CloudWatch SDK call.
+///
+/// Building a fresh runtime per call (the previous behavior) was expensive in
+/// file descriptors and broke connection pooling — hyper's pool is keyed to the
+/// runtime that issued the request, so per-call runtimes defeated keep-alive.
+/// A `LazyLock<Runtime>` lives for the lifetime of the process and is never
+/// dropped, which also sidesteps any Runtime-in-async-context panic risk.
+///
+/// The runtime is shared with `RealCloudWatchClient::list_metrics` via the
+/// public `runtime()` accessor so SDK clients built here and exercised in
+/// metric_catalog.rs share one reactor.
+#[allow(clippy::expect_used)]
+pub(crate) static CLOUDWATCH_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    // Fatal at process scope: the driver cannot operate without a tokio
+    // runtime, and there is no recoverable path. A panic here surfaces the
+    // OS-level reason (typically EMFILE / out-of-memory).
+    tokio::runtime::Runtime::new().expect("CloudWatch driver failed to construct tokio runtime")
+});
+
+/// Accessor for the shared runtime. Returns `&'static Runtime` so callers
+/// chain `.block_on(...)` without an intermediate `?`.
+pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
+    &CLOUDWATCH_RUNTIME
 }
 
 fn build_message_details(message: Option<&str>) -> serde_json::Value {
@@ -1469,7 +1504,7 @@ fn fetch_log_stream_page(
         operation = operation.next_token(token.to_string());
     }
 
-    let output = runtime()?.block_on(operation.send()).map_err(|error| {
+    let output = runtime().block_on(operation.send()).map_err(|error| {
         DbError::query_failed(format!("CloudWatch DescribeLogStreams failed: {error}"))
     })?;
 

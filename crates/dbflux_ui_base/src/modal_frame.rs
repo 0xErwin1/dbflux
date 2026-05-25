@@ -132,10 +132,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_element_loop)]
     fn planned_modal_adopters_continue_to_flow_through_the_modal_frame_shim() {
         // sso_wizard.rs and sql_preview_modal.rs have migrated to dbflux_ui_base
         // and import ModalFrame directly; only the remaining dbflux_ui-local
-        // overlays are checked here.
+        // overlays are checked here. The single-element loop is intentional so
+        // additional planned adopters can be added without restructuring.
         for path in ["overlays/login_modal.rs"] {
             let source = read_feature_file(path);
 

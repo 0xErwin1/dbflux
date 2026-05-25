@@ -5,22 +5,50 @@
 //! `ChartHost` can mount a `ChartShell` to get full chart UX (toolbar,
 //! legend, rail, hidden-series management) without duplicating state.
 
-/// Active tab in the chart Configure/Stats rail.
+/// Active tab in the chart Configure/Stats/Metric rail.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChartRailTab {
     #[default]
     Configure,
     Stats,
+    /// Metric picker rail — visible only when the connection supports
+    /// `DriverCapabilities::METRIC_CATALOG`. Shows namespace / metric / dimension
+    /// selection columns and a config section with period + statistic controls.
+    Metric,
+}
+
+/// Events emitted by `ChartShell`.
+///
+/// Subscribed by `ChartDocument` to receive apply notifications from the
+/// metric picker rail without a direct entity reference cycle.
+pub enum ChartShellEvent {
+    /// The metric picker's Apply button was pressed.
+    ///
+    /// The payload is the constructed source as a cloneable box. `ChartDocument`
+    /// receives this and stashes it in `pending_data_source` for the render loop
+    /// to consume with a `Window` reference.
+    MetricPickerApplied(Box<dyn dbflux_components::chart::ChartDataSource>),
+}
+
+impl Clone for ChartShellEvent {
+    fn clone(&self) -> Self {
+        match self {
+            ChartShellEvent::MetricPickerApplied(src) => {
+                ChartShellEvent::MetricPickerApplied(src.clone_box())
+            }
+        }
+    }
 }
 
 use super::host::{ChartHost, HostAdapter};
+use super::metric_picker::MetricPickerState;
 use dbflux_components::chart::{
     AxisPill, BindingSpec, ChartDetection, ChartKind, ChartSpec, ChartView, DataPointRef,
     ManualChartSelection, SourceRowRef, YScale, detect_chart_columns,
 };
 use dbflux_core::{ColumnKind, ColumnMeta, QueryResult};
 use gpui::prelude::*;
-use gpui::{Context, Entity, Subscription, Window};
+use gpui::{Context, Entity, EventEmitter, Subscription, Window};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -99,7 +127,14 @@ pub struct ChartShell {
     /// User-selected chart kind (Line, Bar, …). Applied to every `ChartSpec`
     /// the shell produces, so it survives rebuilds triggered by binding edits.
     chart_kind: ChartKind,
+
+    // ---- metric picker ----
+    /// Present when the shell was opened in metric mode or the user switched
+    /// to the Metric rail tab. `None` for pure query-chart shells.
+    pub metric_picker: Option<MetricPickerState>,
 }
+
+impl EventEmitter<ChartShellEvent> for ChartShell {}
 
 impl ChartShell {
     /// Create a `ChartShell` for a native `ChartDocument` host.
@@ -134,7 +169,17 @@ impl ChartShell {
             axis_open_pill: None,
             y_scale: YScale::Linear,
             chart_kind: ChartKind::default(),
+            metric_picker: None,
         }
+    }
+
+    /// Set the initial rail tab and open state without touching subscriptions.
+    ///
+    /// Called during `ChartDocument` construction to open the Metric rail tab
+    /// immediately when a chart is opened from the sidebar tree.
+    pub fn set_initial_rail(&mut self, tab: ChartRailTab, open: bool) {
+        self.chart_rail_tab = tab;
+        self.chart_rail_open = open;
     }
 
     /// Returns `true` when the current detection result is `Ok` (chart available).

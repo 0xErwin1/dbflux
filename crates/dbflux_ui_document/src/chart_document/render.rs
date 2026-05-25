@@ -17,8 +17,9 @@
 //! The chart content area is rendered by `render_chart_content`, called from
 //! the `ViewHandle::render` closure built by `into_view_handle`.
 
-use super::ChartDocument;
+use super::{ChartDocument, ExecState};
 use crate::chart::ChartRailTab;
+use crate::chart::metric_picker_render::MetricPickerView;
 use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
 use dbflux_components::chart::{ChartDetection, axis_bar_element};
 use dbflux_components::common::time_range::state::TimeRange;
@@ -90,6 +91,13 @@ impl Render for ChartDocument {
             // Also trigger emit_initial so that the subscription fires on the
             // next render pass, keeping the dropdown and panel state consistent.
             panel.update(cx, |panel, cx| panel.emit_initial(cx));
+        }
+
+        // -- Consume pending data-source swap from MetricPickerApplied event.
+        // Must run before the reexecute drain so the new source is in place
+        // when the immediate re-execution request is issued.
+        if let Some(source) = self.pending_data_source.take() {
+            self.set_data_source(source, window, cx);
         }
 
         // -- Drain pending chart re-execute triggered by time-range changes.
@@ -199,9 +207,13 @@ impl ChartDocument {
     /// Called from the `ViewHandle::render` closure produced by
     /// `into_view_handle`. Pixel-equivalent to the former standalone render body
     /// minus the header row (which is now projected as chrome-row segments).
+    ///
+    /// When the Metric rail is open (i.e. `ChartRailTab::Metric` is active),
+    /// an absolute-positioned 320px panel is overlaid on the right edge showing
+    /// the `MetricPickerView` — same layout as the Stats rail in `DataGridPanel`.
     pub(super) fn render_chart_content(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme().clone();
@@ -215,8 +227,21 @@ impl ChartDocument {
             div().size_full().child(chart_entity).into_any_element()
         } else {
             // Degraded state: show a placeholder based on detection result.
+            // For self-executing sources (MetricSource) the copy is tailored to
+            // metric charts; for query/empty sources the generic copy is shown.
+            let is_metric = self.data_source.is_self_executing();
             let msg = match &chart_detection {
-                Some(ChartDetection::EmptyResult) | None => "Run the query to populate the chart.",
+                Some(ChartDetection::EmptyResult) | None => {
+                    if is_metric {
+                        if self.exec_state == ExecState::Running {
+                            "Loading metric data…"
+                        } else {
+                            "No data points for the selected window."
+                        }
+                    } else {
+                        "Run the query to populate the chart."
+                    }
+                }
                 Some(ChartDetection::NoTimeColumn) => "No time column detected in result.",
                 Some(ChartDetection::NoNumericSeries) => "No numeric series detected in result.",
                 Some(ChartDetection::Ok { .. }) => "Chart build failed.",
@@ -449,14 +474,63 @@ impl ChartDocument {
                 None
             };
 
+        // -- Metric picker rail (absolute overlay, right edge) --
+        // Rendered when the Metric tab is active and the shell has picker state.
+        // Uses the same absolute-right-panel layout as the Stats rail in DataGridPanel.
+        let metric_rail: Option<AnyElement> = {
+            let (rail_open, rail_tab) = {
+                let shell = self.chart_shell.read(cx);
+                (shell.chart_rail_open, shell.chart_rail_tab)
+            };
+
+            if rail_open && rail_tab == ChartRailTab::Metric {
+                // Single read+update path: render the picker inside one
+                // `update` closure so a concurrent clear of `metric_picker`
+                // (subscription, pending action) cannot turn the previously
+                // observed `Some` into a `None` between the read and the update.
+                let cache = self.app_state.read(cx).metric_catalog_cache().clone();
+                let rail_element: Option<AnyElement> = self.chart_shell.update(cx, |shell, cx| {
+                    shell.metric_picker.as_mut().map(|picker| {
+                        MetricPickerView {
+                            state: picker,
+                            cache: &cache,
+                        }
+                        .render(window, cx)
+                        .into_any_element()
+                    })
+                });
+
+                rail_element.map(|element| {
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .w(px(320.0))
+                        .flex()
+                        .flex_col()
+                        .border_l_1()
+                        .border_color(theme.border)
+                        .bg(theme.popover)
+                        .occlude()
+                        .child(div().flex_grow().min_h_0().overflow_hidden().child(element))
+                        .into_any_element()
+                })
+            } else {
+                None
+            }
+        };
+
         div()
             .flex()
             .flex_col()
             .size_full()
+            .relative() // needed so the absolute rail positions relative to this container
             .child(chart_toolbar_row)
             .when_some(custom_picker_row, |el, row| el.child(row))
             .child(axis_row)
             .child(div().flex_1().min_h_0().child(chart_area))
+            .when_some(metric_rail, |el, rail| el.child(rail))
             .into_any_element()
     }
 }

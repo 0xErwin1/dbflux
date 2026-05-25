@@ -804,11 +804,6 @@ impl CommandDispatcher for Workspace {
                 true
             }
 
-            Command::OpenMetricsChart => {
-                self.open_metrics_chart(window, cx);
-                true
-            }
-
             Command::OpenTabMenu => {
                 self.tab_bar
                     .update(cx, |tb, cx| tb.open_context_menu_for_active(cx));

@@ -86,6 +86,27 @@ pub enum SchemaNodeId {
         database: String,
     },
 
+    /// Root folder for the metric catalog under a CloudWatch connection.
+    /// Rendered as a sibling of "Collections" when `METRIC_CATALOG` capability is set.
+    MetricsFolder {
+        profile_id: Uuid,
+        database: String,
+    },
+    /// Expandable folder for a single CloudWatch namespace (e.g. `AWS/EC2`).
+    MetricNamespaceFolder {
+        profile_id: Uuid,
+        database: String,
+        namespace: String,
+    },
+    /// Clickable leaf for a single CloudWatch metric.
+    /// Clicking opens a ChartDocument pre-populated with this metric's defaults.
+    MetricLeaf {
+        profile_id: Uuid,
+        database: String,
+        namespace: String,
+        metric_name: String,
+    },
+
     // Object variants
     Table {
         profile_id: Uuid,
@@ -271,6 +292,9 @@ pub enum SchemaNodeKind {
     RoutinesFolder,
     RoutinesLoadingFolder,
     CollectionsFolder,
+    MetricsFolder,
+    MetricNamespaceFolder,
+    MetricLeaf,
     Table,
     View,
     Collection,
@@ -323,6 +347,9 @@ impl SchemaNodeId {
             Self::RoutinesFolder { .. } => SchemaNodeKind::RoutinesFolder,
             Self::RoutinesLoadingFolder { .. } => SchemaNodeKind::RoutinesLoadingFolder,
             Self::CollectionsFolder { .. } => SchemaNodeKind::CollectionsFolder,
+            Self::MetricsFolder { .. } => SchemaNodeKind::MetricsFolder,
+            Self::MetricNamespaceFolder { .. } => SchemaNodeKind::MetricNamespaceFolder,
+            Self::MetricLeaf { .. } => SchemaNodeKind::MetricLeaf,
             Self::Table { .. } => SchemaNodeKind::Table,
             Self::View { .. } => SchemaNodeKind::View,
             Self::Collection { .. } => SchemaNodeKind::Collection,
@@ -375,6 +402,9 @@ impl SchemaNodeId {
             | Self::RoutinesFolder { profile_id, .. }
             | Self::RoutinesLoadingFolder { profile_id, .. }
             | Self::CollectionsFolder { profile_id, .. }
+            | Self::MetricsFolder { profile_id, .. }
+            | Self::MetricNamespaceFolder { profile_id, .. }
+            | Self::MetricLeaf { profile_id, .. }
             | Self::Table { profile_id, .. }
             | Self::View { profile_id, .. }
             | Self::Collection { profile_id, .. }
@@ -453,6 +483,10 @@ const P_DEPENDENT_ITEM: &str = "DEP";
 const P_ROUTINES_FOLDER: &str = "RTF";
 const P_ROUTINES_LOADING: &str = "RTL";
 const P_ROUTINE: &str = "RT";
+// Metric catalog node prefixes (CloudWatch sidebar tree)
+const P_METRICS_FOLDER: &str = "MF";
+const P_METRIC_NS_FOLDER: &str = "MNF";
+const P_METRIC_LEAF: &str = "ML";
 
 impl fmt::Display for SchemaNodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -813,6 +847,35 @@ impl fmt::Display for SchemaNodeId {
                     f,
                     "{}|{}|{}|{}",
                     P_ROUTINE, profile_id, schema, specific_name
+                )
+            }
+            Self::MetricsFolder {
+                profile_id,
+                database,
+            } => {
+                write!(f, "{}|{}|{}", P_METRICS_FOLDER, profile_id, database)
+            }
+            Self::MetricNamespaceFolder {
+                profile_id,
+                database,
+                namespace,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}",
+                    P_METRIC_NS_FOLDER, profile_id, database, namespace
+                )
+            }
+            Self::MetricLeaf {
+                profile_id,
+                database,
+                namespace,
+                metric_name,
+            } => {
+                write!(
+                    f,
+                    "{}|{}|{}|{}|{}",
+                    P_METRIC_LEAF, profile_id, database, namespace, metric_name
                 )
             }
             Self::ScriptsFolder { path } => match path {
@@ -1371,6 +1434,43 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_METRICS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                Ok(Self::MetricsFolder {
+                    profile_id,
+                    database,
+                })
+            }
+
+            P_METRIC_NS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                let namespace = parts.get(3).ok_or_else(err)?.to_string();
+                Ok(Self::MetricNamespaceFolder {
+                    profile_id,
+                    database,
+                    namespace,
+                })
+            }
+
+            P_METRIC_LEAF => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let database = parts.get(2).ok_or_else(err)?.to_string();
+                let namespace = parts.get(3).ok_or_else(err)?.to_string();
+                // metric_name may contain slashes; splitn(6) gives us all remaining content
+                let metric_name = parts.get(4).ok_or_else(err)?.to_string();
+                Ok(Self::MetricLeaf {
+                    profile_id,
+                    database,
+                    namespace,
+                    metric_name,
+                })
+            }
+
             _ => Err(err()),
         }
     }
@@ -1406,6 +1506,9 @@ impl SchemaNodeKind {
                 | Self::ScriptFile
                 | Self::DependentsFolder
                 | Self::Routine
+                | Self::MetricsFolder
+                | Self::MetricNamespaceFolder
+                | Self::MetricLeaf
         )
     }
 
@@ -1430,6 +1533,8 @@ impl SchemaNodeKind {
                 | Self::CustomType
                 | Self::ScriptsFolder
                 | Self::DependentsFolder
+                | Self::MetricsFolder
+                | Self::MetricNamespaceFolder
         )
     }
 
@@ -1443,6 +1548,7 @@ impl SchemaNodeKind {
                 | Self::CollectionChildrenMore
                 | Self::ScriptFile
                 | Self::Routine
+                | Self::MetricLeaf
         )
     }
 }
@@ -1679,6 +1785,27 @@ mod tests {
             profile_id: uuid,
             schema: "public".into(),
             specific_name: "add(integer, integer)".into(),
+        });
+    }
+
+    #[test]
+    fn metric_nodes_round_trip_via_display_and_from_str() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        roundtrip(SchemaNodeId::MetricsFolder {
+            profile_id: uuid,
+            database: "default".into(),
+        });
+        roundtrip(SchemaNodeId::MetricNamespaceFolder {
+            profile_id: uuid,
+            database: "default".into(),
+            namespace: "AWS/EC2".into(),
+        });
+        roundtrip(SchemaNodeId::MetricLeaf {
+            profile_id: uuid,
+            database: "default".into(),
+            namespace: "AWS/EC2".into(),
+            metric_name: "CPUUtilization".into(),
         });
     }
 

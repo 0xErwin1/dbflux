@@ -1,5 +1,6 @@
 use super::*;
 use dbflux_core::{DbSchemaInfo, SchemaDropTarget, SchemaObjectKind};
+use dbflux_ui_base::AsyncUpdateResultExt;
 
 impl Sidebar {
     fn remove_database_from_snapshot(snapshot: &mut SchemaSnapshot, database: &str) {
@@ -352,11 +353,212 @@ impl Sidebar {
             }
         }
 
+        if let Some(SchemaNodeId::MetricsFolder {
+            profile_id,
+            database,
+        }) = &parsed
+        {
+            self.spawn_fetch_metric_namespaces(*profile_id, database, cx);
+        }
+
+        if let Some(SchemaNodeId::MetricNamespaceFolder {
+            profile_id,
+            database,
+            namespace,
+        }) = &parsed
+        {
+            self.spawn_fetch_metrics(*profile_id, database, namespace, cx);
+        }
+
         if matches!(parsed, Some(SchemaNodeId::Database { .. })) {
             self.handle_database_click(item_id, cx);
         }
 
         true
+    }
+
+    /// Fetch metric namespaces for a connection if the cache doesn't have them yet.
+    ///
+    /// Peeks the cache first; only spawns a background task on a miss. The task
+    /// writes through the cache and calls `cx.notify()` on completion so the tree
+    /// rebuilds and shows the namespace children.
+    pub(super) fn spawn_fetch_metric_namespaces(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let cache = self.app_state.read(cx).metric_catalog_cache().clone();
+
+        // Cache hit — no fetch needed.
+        if cache.peek_namespaces(profile_id).is_some() {
+            return;
+        }
+
+        // Deduplicate in-flight fetches: don't spawn a second task if one is running.
+        if self
+            .pending_metric_namespace_fetches
+            .contains_key(&profile_id)
+        {
+            return;
+        }
+
+        let connection = match self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+        {
+            Some(c) => c,
+            None => return,
+        };
+
+        let parent_id = SchemaNodeId::MetricsFolder {
+            profile_id,
+            database: database.to_string(),
+        }
+        .to_string();
+
+        let sidebar = cx.entity().clone();
+        let db_str = database.to_string();
+        // Background task only fetches; the cache write happens on the
+        // foreground task below, after the await. If the foreground task is
+        // dropped (e.g. disconnect_profile evicts it), the cache write is
+        // never executed and stale data from a previous account cannot land
+        // in the cache.
+        let background_task = cx.background_executor().spawn(async move {
+            let catalog = match connection.metric_catalog() {
+                Some(c) => c,
+                None => return Err("driver does not support metric catalog".to_string()),
+            };
+            catalog.list_namespaces().map_err(|e| e.to_string())
+        });
+
+        let task = cx.spawn(async move |_this, cx| {
+            let result = background_task.await;
+            cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.pending_metric_namespace_fetches.remove(&profile_id);
+                    match result {
+                        Ok(namespaces) => {
+                            cache.store_namespaces(profile_id, namespaces);
+                            sidebar.metric_fetch_errors.remove(&parent_id);
+                        }
+                        Err(msg) => {
+                            sidebar.metric_fetch_errors.insert(parent_id, msg.clone());
+                            log::warn!(
+                                "Failed to fetch metric namespaces for {}: {}",
+                                profile_id,
+                                msg
+                            );
+                        }
+                    }
+                    sidebar.rebuild_tree_with_overrides(cx);
+                });
+            })
+            .log_if_dropped();
+        });
+
+        self.pending_metric_namespace_fetches
+            .insert(profile_id, task);
+        let _ = db_str; // used via closure capture above
+    }
+
+    /// Fetch metrics for a specific namespace if the cache doesn't have them yet.
+    ///
+    /// Mirrors `spawn_fetch_metric_namespaces` but keyed by `(profile_id, namespace)`.
+    pub(super) fn spawn_fetch_metrics(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        namespace: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let cache = self.app_state.read(cx).metric_catalog_cache().clone();
+        let ns: dbflux_core::MetricNamespace = namespace.to_string();
+
+        // Cache hit — no fetch needed.
+        if cache.peek_metrics(profile_id, &ns).is_some() {
+            return;
+        }
+
+        let fetch_key = (profile_id, namespace.to_string());
+
+        // Deduplicate in-flight fetches.
+        if self.pending_metric_fetches.contains_key(&fetch_key) {
+            return;
+        }
+
+        let connection = match self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+        {
+            Some(c) => c,
+            None => return,
+        };
+
+        let parent_id = SchemaNodeId::MetricNamespaceFolder {
+            profile_id,
+            database: database.to_string(),
+            namespace: ns.clone(),
+        }
+        .to_string();
+
+        let sidebar = cx.entity().clone();
+        // Background task only fetches; the cache write happens on the
+        // foreground task below, after the await. Dropping the foreground task
+        // (e.g. on disconnect) prevents stale data from landing in the cache.
+        let background_task = cx.background_executor().spawn({
+            let ns_clone = ns.clone();
+            async move {
+                let catalog = match connection.metric_catalog() {
+                    Some(c) => c,
+                    None => return Err("driver does not support metric catalog".to_string()),
+                };
+                // Fetch first page only; pagination is not required for sidebar display.
+                catalog
+                    .list_metrics(&ns_clone, None)
+                    .map_err(|e| e.to_string())
+            }
+        });
+
+        let ns_key = fetch_key.clone();
+        let task = cx.spawn(async move |_this, cx| {
+            let result = background_task.await;
+            cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.pending_metric_fetches.remove(&ns_key);
+                    match result {
+                        Ok(page) => {
+                            cache.store_metrics_page(
+                                profile_id,
+                                ns.clone(),
+                                page.metrics,
+                                page.next_token,
+                            );
+                            sidebar.metric_fetch_errors.remove(&parent_id);
+                        }
+                        Err(msg) => {
+                            sidebar.metric_fetch_errors.insert(parent_id, msg.clone());
+                            log::warn!(
+                                "Failed to fetch metrics for {}/{}: {}",
+                                profile_id,
+                                ns_key.1,
+                                msg
+                            );
+                        }
+                    }
+                    sidebar.rebuild_tree_with_overrides(cx);
+                });
+            })
+            .log_if_dropped();
+        });
+
+        self.pending_metric_fetches.insert(fetch_key, task);
     }
 
     fn collection_node_is_event_stream(
