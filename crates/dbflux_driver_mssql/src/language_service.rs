@@ -51,12 +51,11 @@ mod tests {
     fn editor_diagnostics_returns_empty() {
         let svc = TSqlLanguageService;
 
-        assert!(svc
-            .editor_diagnostics("SELECT TOP 1 id FROM dbo.users WITH (NOLOCK)")
-            .is_empty());
-        assert!(svc
-            .editor_diagnostics("EXEC sp_helpdb 'master'")
-            .is_empty());
+        assert!(
+            svc.editor_diagnostics("SELECT TOP 1 id FROM dbo.users WITH (NOLOCK)")
+                .is_empty()
+        );
+        assert!(svc.editor_diagnostics("EXEC sp_helpdb 'master'").is_empty());
         assert!(svc.editor_diagnostics("").is_empty());
     }
 
