@@ -32,7 +32,7 @@ mod types;
 pub use audit::AuditDocument;
 pub use chart_document::ChartDocument;
 pub use code::CodeDocument;
-pub use dashboard::{DashboardDocument, DashboardPanelSlot};
+pub use dashboard::{DashboardDocument, DashboardPanelSlot, PanelGridPos};
 pub use data_document::DataDocument;
 pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 pub use data_view::{DataViewConfig, DataViewMode};
