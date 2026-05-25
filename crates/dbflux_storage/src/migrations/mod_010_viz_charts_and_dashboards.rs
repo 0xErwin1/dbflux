@@ -1,10 +1,11 @@
 //! Migration 010: Visualization domain tables for saved charts and dashboards.
 //!
-//! Creates five tables under the `viz_*` prefix:
+//! Creates six tables under the `viz_*` prefix:
 //!
 //! - `viz_saved_charts` — one row per saved chart (parent of series and binding_y)
 //! - `viz_saved_chart_series` — child table for `ChartSpec.series: Vec<SeriesSpec>`
 //! - `viz_saved_chart_binding_y` — child table for `BindingSpec.y: Vec<usize>`
+//! - `viz_saved_chart_source_metric_dimensions` — child table for `SavedChartSource::Metric.dimensions`
 //! - `viz_dashboards` — one row per dashboard
 //! - `viz_dashboard_panels` — child table for dashboard panel slots
 //!
@@ -16,6 +17,7 @@
 //! - `viz_saved_charts.profile_id → cfg_connection_profiles.id` ON DELETE CASCADE
 //! - `viz_saved_chart_series.chart_id → viz_saved_charts.id` ON DELETE CASCADE
 //! - `viz_saved_chart_binding_y.chart_id → viz_saved_charts.id` ON DELETE CASCADE
+//! - `viz_saved_chart_source_metric_dimensions.chart_id → viz_saved_charts.id` ON DELETE CASCADE
 //! - `viz_dashboard_panels.dashboard_id → viz_dashboards.id` ON DELETE CASCADE
 //! - `viz_dashboards.profile_id → cfg_connection_profiles.id` ON DELETE SET NULL
 //! - `viz_dashboard_panels.saved_chart_id` is a soft reference (NO FK) so deleting
@@ -84,7 +86,8 @@ CREATE TABLE IF NOT EXISTS viz_saved_charts (
         CHECK (binding_aggregation IN ('none', 'sum', 'avg', 'min', 'max')),
 
     -- SavedChartSource discriminator and fields
-    source_kind                       TEXT    NOT NULL CHECK (source_kind IN ('query', 'collection')),
+    source_kind                       TEXT    NOT NULL
+        CHECK (source_kind IN ('query', 'collection', 'metric')),
     source_query                      TEXT
         CHECK (source_kind != 'query' OR source_query IS NOT NULL),
     source_collection_database        TEXT
@@ -94,6 +97,17 @@ CREATE TABLE IF NOT EXISTS viz_saved_charts (
     source_time_window_start_ms       INTEGER,
     source_time_window_end_ms         INTEGER,
     source_time_window_language       TEXT,
+
+    -- Metric source fields (NULL for non-metric rows)
+    source_metric_namespace           TEXT
+        CHECK (source_kind != 'metric' OR source_metric_namespace IS NOT NULL),
+    source_metric_name                TEXT
+        CHECK (source_kind != 'metric' OR source_metric_name IS NOT NULL),
+    source_metric_period_seconds      INTEGER
+        CHECK (source_kind != 'metric' OR source_metric_period_seconds IS NOT NULL),
+    source_metric_statistic           TEXT
+        CHECK (source_kind != 'metric' OR source_metric_statistic IS NOT NULL),
+    source_metric_region              TEXT,
 
     -- SavedChart metadata
     time_range_preset                 TEXT
@@ -136,6 +150,25 @@ CREATE TABLE IF NOT EXISTS viz_saved_chart_binding_y (
 
     PRIMARY KEY (chart_id, slot_index)
 );
+
+-- --------------------------------------------------------------------------
+-- viz_saved_chart_source_metric_dimensions
+--   Child table for SavedChartSource::Metric.dimensions: Vec<(String, String)>
+--   Mirrors the viz_saved_chart_series / viz_saved_chart_binding_y pattern.
+--   Empty for non-metric charts; implicitly all rows deleted when chart deleted.
+-- --------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS viz_saved_chart_source_metric_dimensions (
+    chart_id      TEXT    NOT NULL
+        REFERENCES viz_saved_charts(id) ON DELETE CASCADE,
+    dim_index     INTEGER NOT NULL CHECK (dim_index >= 0),
+    dim_key       TEXT    NOT NULL,
+    dim_value     TEXT    NOT NULL,
+
+    PRIMARY KEY (chart_id, dim_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_viz_metric_dimensions_chart
+    ON viz_saved_chart_source_metric_dimensions (chart_id);
 
 -- --------------------------------------------------------------------------
 -- viz_dashboards — one row per dashboard

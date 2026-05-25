@@ -31,7 +31,9 @@ use uuid::Uuid;
 /// `Query` wraps a SQL/Flux/etc. query string and is executed inside
 /// `ChartDocument`. `Collection` represents a collection-browse source
 /// (Mongo collection, InfluxDB measurement) — opening it re-opens the
-/// underlying `DataDocument` in chart mode.
+/// underlying `DataDocument` in chart mode. `Metric` persists a CloudWatch
+/// metric source with native typed fields so the import round-trip is
+/// lossless and the chart opens via `MetricSource` rather than a raw query.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum SavedChartSource {
@@ -42,6 +44,20 @@ pub enum SavedChartSource {
         collection_ref: CollectionRef,
         /// The time window that was active when the chart was saved, if any.
         time_window: Option<ResolvedWindow>,
+    },
+    /// A CloudWatch metric source. On open, reconstructs a `MetricSource`
+    /// directly rather than routing through the Flux/SQL query path.
+    Metric {
+        namespace: String,
+        metric_name: String,
+        /// Ordered (name, value) dimension pairs. Empty for scalar metrics.
+        dimensions: Vec<(String, String)>,
+        /// Sampling period in seconds.
+        period_seconds: u32,
+        /// CloudWatch statistic (e.g. "Average", "Sum").
+        statistic: String,
+        /// AWS region override; `None` means use the connection's default region.
+        region: Option<String>,
     },
 }
 
@@ -176,17 +192,58 @@ impl SavedChart {
         }
     }
 
+    /// Create a new `SavedChart` from a CloudWatch metric source.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_metric(
+        name: String,
+        profile_id: Uuid,
+        namespace: String,
+        metric_name: String,
+        dimensions: Vec<(String, String)>,
+        period_seconds: u32,
+        statistic: String,
+        region: Option<String>,
+        chart_spec: ChartSpec,
+        bindings: BindingSpec,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            profile_id,
+            source: SavedChartSource::Metric {
+                namespace,
+                metric_name,
+                dimensions,
+                period_seconds,
+                statistic,
+                region,
+            },
+            chart_spec,
+            bindings,
+            time_range_preset: None,
+            refresh_policy: SavedChartRefreshPolicy::Off,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     /// Convenience: returns the query string if this chart has a `Query` source.
     pub fn query(&self) -> Option<&str> {
         match &self.source {
             SavedChartSource::Query { query } => Some(query.as_str()),
-            SavedChartSource::Collection { .. } => None,
+            SavedChartSource::Collection { .. } | SavedChartSource::Metric { .. } => None,
         }
     }
 
     /// Returns `true` if this chart has a `Collection` source.
     pub fn is_collection_source(&self) -> bool {
         matches!(self.source, SavedChartSource::Collection { .. })
+    }
+
+    /// Returns `true` if this chart has a `Metric` source.
+    pub fn is_metric_source(&self) -> bool {
+        matches!(self.source, SavedChartSource::Metric { .. })
     }
 }
 
@@ -259,6 +316,73 @@ mod tests {
                 aggregation: AggKind::None,
             },
         )
+    }
+
+    fn sample_metric_chart(name: &str, profile_id: Uuid) -> SavedChart {
+        SavedChart::new_metric(
+            name.to_string(),
+            profile_id,
+            "AWS/EC2".to_string(),
+            "CPUUtilization".to_string(),
+            vec![
+                ("InstanceId".to_string(), "i-12345".to_string()),
+                ("Region".to_string(), "us-east-1".to_string()),
+            ],
+            300,
+            "Average".to_string(),
+            Some("us-east-1".to_string()),
+            sample_spec(),
+            BindingSpec {
+                x: 0,
+                y: vec![1],
+                group_by: None,
+                filter: None,
+                aggregation: AggKind::None,
+            },
+        )
+    }
+
+    /// Metric source: `query()` returns `None` and `is_metric_source()` returns `true`.
+    #[test]
+    fn metric_source_query_returns_none() {
+        let profile_id = Uuid::new_v4();
+        let chart = sample_metric_chart("test", profile_id);
+        assert_eq!(chart.query(), None);
+        assert!(!chart.is_collection_source());
+        assert!(chart.is_metric_source());
+    }
+
+    /// Metric source: all fields survive a round-trip through `SavedChartSource`.
+    #[test]
+    fn metric_source_fields_accessible() {
+        let profile_id = Uuid::new_v4();
+        let chart = sample_metric_chart("my-chart", profile_id);
+        if let SavedChartSource::Metric {
+            namespace,
+            metric_name,
+            dimensions,
+            period_seconds,
+            statistic,
+            region,
+        } = &chart.source
+        {
+            assert_eq!(namespace, "AWS/EC2");
+            assert_eq!(metric_name, "CPUUtilization");
+            assert_eq!(dimensions.len(), 2);
+            assert_eq!(
+                dimensions[0],
+                ("InstanceId".to_string(), "i-12345".to_string())
+            );
+            assert_eq!(
+                dimensions[1],
+                ("Region".to_string(), "us-east-1".to_string())
+            );
+            assert_eq!(*period_seconds, 300);
+            assert_eq!(statistic, "Average");
+            assert_eq!(region.as_deref(), Some("us-east-1"));
+        } else {
+            panic!("expected Metric variant");
+        }
     }
 
     /// T-CE-I07: Query source query() helper returns Some.

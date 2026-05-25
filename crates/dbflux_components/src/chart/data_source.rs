@@ -464,6 +464,20 @@ pub fn resolve_source(source: &SavedChartSource) -> Box<dyn ChartDataSource> {
         SavedChartSource::Collection { collection_ref, .. } => Box::new(CollectionSource {
             collection_ref: collection_ref.clone(),
         }),
+        SavedChartSource::Metric {
+            namespace,
+            metric_name,
+            dimensions,
+            period_seconds,
+            statistic,
+            ..
+        } => Box::new(MetricSource {
+            namespace: namespace.clone(),
+            metric_name: metric_name.clone(),
+            dimensions: dimensions.clone(),
+            period_s: *period_seconds,
+            statistic: statistic.clone(),
+        }),
     }
 }
 
