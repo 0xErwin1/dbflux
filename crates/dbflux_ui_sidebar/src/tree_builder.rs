@@ -287,6 +287,13 @@ impl Sidebar {
                     );
                 }
             } else if !schema.databases().is_empty() {
+                // See `should_collapse_database_wrapper`: when the connection
+                // exposes a single trivial database (CloudWatch, DynamoDB,
+                // single-DB SQL, etc.) the wrapper adds no information vs the
+                // connection root. Children (Collections, Metrics, Tables)
+                // already embed `database` in their node IDs so routing is
+                // unaffected by the missing intermediate.
+                let collapse_single_db = should_collapse_database_wrapper(schema.databases());
                 for db in schema.databases() {
                     let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
                     let is_active_db = connected.active_database.as_deref() == Some(&db.name);
@@ -426,31 +433,35 @@ impl Sidebar {
                         Vec::new()
                     };
 
-                    let db_label = if is_pending {
-                        format!("{} (loading...)", db.name)
+                    if collapse_single_db {
+                        profile_children.extend(db_children);
                     } else {
-                        db.name.clone()
-                    };
+                        let db_label = if is_pending {
+                            format!("{} (loading...)", db.name)
+                        } else {
+                            db.name.clone()
+                        };
 
-                    let has_per_db_conn = connected.database_connections.contains_key(&db.name);
-                    let is_expanded = if uses_lazy_loading {
-                        is_active_db
-                    } else {
-                        db.is_current || has_per_db_conn
-                    };
+                        let has_per_db_conn = connected.database_connections.contains_key(&db.name);
+                        let is_expanded = if uses_lazy_loading {
+                            is_active_db
+                        } else {
+                            db.is_current || has_per_db_conn
+                        };
 
-                    profile_children.push(
-                        TreeItem::new(
-                            SchemaNodeId::Database {
-                                profile_id,
-                                name: db.name.clone(),
-                            }
-                            .to_string(),
-                            db_label,
-                        )
-                        .expanded(is_expanded)
-                        .children(db_children),
-                    );
+                        profile_children.push(
+                            TreeItem::new(
+                                SchemaNodeId::Database {
+                                    profile_id,
+                                    name: db.name.clone(),
+                                }
+                                .to_string(),
+                                db_label,
+                            )
+                            .expanded(is_expanded)
+                            .children(db_children),
+                        );
+                    }
                 }
             } else {
                 // No databases defined - use active_database or first schema as fallback
@@ -1702,6 +1713,21 @@ impl Sidebar {
     }
 }
 
+/// Return `true` when the sidebar should hide the database wrapper level for
+/// a connection.
+///
+/// The wrapper exists to disambiguate multiple databases under one connection.
+/// When a driver exposes a single trivial database (CloudWatch's `logs`,
+/// DynamoDB's default region, a SQLite file, etc.) the wrapper carries no
+/// information beyond what the connection node already shows, so children are
+/// rendered directly under the connection.
+///
+/// Multi-database drivers (Postgres, MySQL, MongoDB) are unaffected: with two
+/// or more databases the wrapper still discriminates between them.
+fn should_collapse_database_wrapper(databases: &[dbflux_core::DatabaseInfo]) -> bool {
+    databases.len() == 1
+}
+
 fn build_collection_field_items(
     profile_id: Uuid,
     collection_name: &str,
@@ -2295,5 +2321,44 @@ mod tests {
                 _ => panic!("expected CustomType variant"),
             }
         }
+    }
+
+    #[test]
+    fn collapse_wrapper_when_single_database() {
+        let dbs = vec![dbflux_core::DatabaseInfo {
+            name: "logs".to_string(),
+            is_current: true,
+        }];
+        assert!(
+            super::should_collapse_database_wrapper(&dbs),
+            "single database must collapse (CloudWatch/DynamoDB/SQLite case)"
+        );
+    }
+
+    #[test]
+    fn keep_wrapper_when_multiple_databases() {
+        let dbs = vec![
+            dbflux_core::DatabaseInfo {
+                name: "postgres".to_string(),
+                is_current: true,
+            },
+            dbflux_core::DatabaseInfo {
+                name: "app_prod".to_string(),
+                is_current: false,
+            },
+        ];
+        assert!(
+            !super::should_collapse_database_wrapper(&dbs),
+            "multiple databases must remain visible to discriminate them"
+        );
+    }
+
+    #[test]
+    fn keep_wrapper_when_zero_databases() {
+        let dbs: Vec<dbflux_core::DatabaseInfo> = vec![];
+        assert!(
+            !super::should_collapse_database_wrapper(&dbs),
+            "zero databases must not trigger collapse path (falls through to fallback branch)"
+        );
     }
 }
