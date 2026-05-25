@@ -622,6 +622,22 @@ impl Render for Workspace {
             .when(self.modal_import_dashboard.read(cx).is_visible(), |root| {
                 root.child(self.modal_import_dashboard.clone())
             })
+            .when(self.modal_create_dashboard.read(cx).is_visible(), |root| {
+                root.child(self.modal_create_dashboard.clone())
+            })
+            .when(self.modal_rename_item.read(cx).is_visible(), |root| {
+                root.child(self.modal_rename_item.clone())
+            })
+            .when(self.modal_delete_dashboard.read(cx).is_visible(), |root| {
+                root.child(self.modal_delete_dashboard.clone())
+            })
+            .when(
+                self.modal_delete_saved_chart.read(cx).is_visible(),
+                |root| root.child(self.modal_delete_saved_chart.clone()),
+            )
+            .when(self.modal_add_panel.read(cx).is_visible(), |root| {
+                root.child(self.modal_add_panel.clone())
+            })
             .child(
                 div()
                     .absolute()

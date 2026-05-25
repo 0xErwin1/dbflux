@@ -8,6 +8,13 @@ pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components;
+use dbflux_ui_base::modals::{
+    AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
+    DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
+    DeleteSavedChartRequest, ModalAddPanelPicker, ModalCreateDashboard,
+    ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm, ModalRenameItem, RenameItemOutcome,
+    RenameItemRequest, RenameTarget,
+};
 use dbflux_core::observability::actions::CONFIG_CHANGE;
 
 #[cfg(feature = "mcp")]
@@ -279,6 +286,13 @@ pub struct Workspace {
     /// Import Dashboard from JSON modal.
     modal_import_dashboard: Entity<crate::ui::overlays::modals::ModalImportDashboard>,
 
+    /// Dashboard / saved-chart management modals.
+    modal_create_dashboard: Entity<ModalCreateDashboard>,
+    modal_rename_item: Entity<ModalRenameItem>,
+    modal_delete_dashboard: Entity<ModalDeleteDashboardConfirm>,
+    modal_delete_saved_chart: Entity<ModalDeleteSavedChartConfirm>,
+    modal_add_panel: Entity<ModalAddPanelPicker>,
+
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
     pending_sql: Option<String>,
@@ -353,6 +367,12 @@ impl Workspace {
             cx.new(|cx| crate::ui::overlays::modals::ModalTunnelAuth::new(window, cx));
         let modal_import_dashboard =
             cx.new(|cx| crate::ui::overlays::modals::ModalImportDashboard::new(window, cx));
+
+        let modal_create_dashboard = cx.new(|cx| ModalCreateDashboard::new(window, cx));
+        let modal_rename_item = cx.new(|cx| ModalRenameItem::new(window, cx));
+        let modal_delete_dashboard = cx.new(ModalDeleteDashboardConfirm::new);
+        let modal_delete_saved_chart = cx.new(ModalDeleteSavedChartConfirm::new);
+        let modal_add_panel = cx.new(|cx| ModalAddPanelPicker::new(window, cx));
 
         // Subscribe: ModalDeleteConnection — on Confirmed, execute the pending delete.
         cx.subscribe(
@@ -563,6 +583,70 @@ impl Workspace {
             window,
             |this, _, event: &crate::ui::overlays::modals::ImportDashboardConfirmed, window, cx| {
                 this.run_dashboard_import(event.json.clone(), event.name.clone(), window, cx);
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalCreateDashboard — on Confirmed, create the dashboard and open it.
+        cx.subscribe_in(
+            &modal_create_dashboard,
+            window,
+            |this, _, outcome: &CreateDashboardOutcome, window, cx| {
+                if let CreateDashboardOutcome::Confirmed { profile_id, name } = outcome.clone() {
+                    this.on_create_dashboard_confirmed(profile_id, name, window, cx);
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalRenameItem — on Confirmed, apply the rename.
+        cx.subscribe_in(
+            &modal_rename_item,
+            window,
+            |this, _, outcome: &RenameItemOutcome, window, cx| {
+                if let RenameItemOutcome::Confirmed { target, new_name } = outcome.clone() {
+                    this.on_rename_item_confirmed(target, new_name, window, cx);
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalDeleteDashboardConfirm — on Confirmed, delete the dashboard.
+        cx.subscribe_in(
+            &modal_delete_dashboard,
+            window,
+            |this, _, outcome: &DeleteDashboardOutcome, window, cx| {
+                if let DeleteDashboardOutcome::Confirmed { dashboard_id } = *outcome {
+                    this.on_delete_dashboard_confirmed(dashboard_id, window, cx);
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalDeleteSavedChartConfirm — on Confirmed, delete the saved chart.
+        cx.subscribe_in(
+            &modal_delete_saved_chart,
+            window,
+            |this, _, outcome: &DeleteSavedChartOutcome, window, cx| {
+                if let DeleteSavedChartOutcome::Confirmed { chart_id } = *outcome {
+                    this.on_delete_saved_chart_confirmed(chart_id, window, cx);
+                }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalAddPanelPicker — on Confirmed, append panels to the dashboard.
+        cx.subscribe_in(
+            &modal_add_panel,
+            window,
+            |this, _, outcome: &AddPanelOutcome, window, cx| {
+                if let AddPanelOutcome::Confirmed {
+                    dashboard_id,
+                    chart_ids,
+                } = outcome.clone()
+                {
+                    this.on_add_panels_confirmed(dashboard_id, chart_ids, window, cx);
+                }
             },
         )
         .detach();
@@ -1004,6 +1088,9 @@ impl Workspace {
                     } => {
                         this.open_chart_from_query(query.clone(), *connection_id, window, cx);
                     }
+                    TabManagerEvent::RequestAddPanel { dashboard_id } => {
+                        this.open_add_panel_picker(*dashboard_id, window, cx);
+                    }
                     TabManagerEvent::Opened(_)
                     | TabManagerEvent::Closed(_)
                     | TabManagerEvent::Reordered => {
@@ -1041,6 +1128,11 @@ impl Workspace {
             pending_drop_table_item_id: None,
             modal_tunnel_auth,
             modal_import_dashboard,
+            modal_create_dashboard,
+            modal_rename_item,
+            modal_delete_dashboard,
+            modal_delete_saved_chart,
+            modal_add_panel,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,

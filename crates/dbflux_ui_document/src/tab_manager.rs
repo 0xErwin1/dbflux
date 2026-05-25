@@ -237,6 +237,11 @@ impl TabManager {
                         connection_id: *connection_id,
                     });
                 }
+                DocumentEvent::RequestAddPanel { dashboard_id } => {
+                    cx.emit(TabManagerEvent::RequestAddPanel {
+                        dashboard_id: *dashboard_id,
+                    });
+                }
                 _ => {}
             });
         });
@@ -604,6 +609,10 @@ pub enum TabManagerEvent {
     ChartThisQuery {
         query: String,
         connection_id: Option<uuid::Uuid>,
+    },
+    /// Dashboard document requested the workspace to open the "Add Panel" picker.
+    RequestAddPanel {
+        dashboard_id: uuid::Uuid,
     },
 }
 

@@ -31,4 +31,8 @@ pub enum DocumentEvent {
     /// Subscribers (e.g. the tab bar title chip) use this to refresh the
     /// displayed title without polling on every render.
     DataSourceChanged,
+    /// Dashboard document requests the workspace to open the "Add Panel" picker.
+    RequestAddPanel {
+        dashboard_id: uuid::Uuid,
+    },
 }

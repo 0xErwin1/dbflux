@@ -2111,12 +2111,50 @@ impl Workspace {
     /// menu on a DashboardsFolder node.
     pub(super) fn create_dashboard_from_sidebar(
         &mut self,
-        _profile_id: uuid::Uuid,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        profile_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
-        // Phase P will open ModalCreateDashboard here.
-        log::info!("create_dashboard_from_sidebar: Phase P not yet implemented");
+        self.modal_create_dashboard.update(cx, |modal, cx| {
+            modal.open(CreateDashboardRequest { profile_id }, window, cx);
+        });
+    }
+
+    /// Called when `ModalCreateDashboard` emits `Confirmed`.
+    ///
+    /// Creates the dashboard in the manager, triggers a sidebar rebuild, and
+    /// opens the new dashboard tab.
+    pub(super) fn on_create_dashboard_confirmed(
+        &mut self,
+        profile_id: uuid::Uuid,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self.app_state.update(cx, |state, _cx| {
+            state.dashboards.create_dashboard(
+                name.clone(),
+                None,
+                profile_id,
+                None,
+                dbflux_components::saved_chart::SavedChartRefreshPolicy::Off,
+            )
+        });
+
+        match result {
+            Ok(dashboard_id) => {
+                self.app_state.update(cx, |_state, cx| {
+                    cx.emit(AppStateChanged);
+                });
+                self.open_dashboard(dashboard_id, window, cx);
+            }
+            Err(e) => {
+                log::error!("Failed to create dashboard: {e}");
+                Toast::error(format!("Failed to create dashboard: {e}"))
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
     }
 
     /// Open the "Import Dashboard from JSON" modal scoped to the given profile.
@@ -2137,71 +2175,360 @@ impl Workspace {
     /// Open the rename modal for a dashboard.
     pub(super) fn rename_dashboard(
         &mut self,
-        _dashboard_id: uuid::Uuid,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        dashboard_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
-        // Phase P will open ModalRenameItem with RenameTarget::Dashboard here.
-        log::info!("rename_dashboard: Phase P not yet implemented");
+        let current_name = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .dashboard_by_id(dashboard_id)
+            .map(|d| d.name.clone())
+            .unwrap_or_default();
+
+        self.modal_rename_item.update(cx, |modal, cx| {
+            modal.open(
+                RenameItemRequest {
+                    target: RenameTarget::Dashboard { dashboard_id },
+                    current_name,
+                },
+                window,
+                cx,
+            );
+        });
     }
 
     /// Delete a dashboard after confirmation.
     ///
-    /// The tab for the dashboard (if open) is closed before the row is removed
-    /// from the repository so the UI never references a deleted entity.
+    /// Opens the delete confirmation modal. On confirm, the tab is closed
+    /// before the row is removed from the repository (see
+    /// `on_delete_dashboard_confirmed`).
     pub(super) fn delete_dashboard(
         &mut self,
-        _dashboard_id: uuid::Uuid,
+        dashboard_id: uuid::Uuid,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
-        // Phase P will open ModalDeleteDashboardConfirm here.
-        log::info!("delete_dashboard: Phase P not yet implemented");
+        let dashboard_name = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .dashboard_by_id(dashboard_id)
+            .map(|d| d.name.clone())
+            .unwrap_or_default();
+
+        self.modal_delete_dashboard.update(cx, |modal, cx| {
+            modal.open(
+                DeleteDashboardRequest {
+                    dashboard_id,
+                    dashboard_name,
+                },
+                cx,
+            );
+        });
+    }
+
+    /// Called when `ModalDeleteDashboardConfirm` emits `Confirmed`.
+    ///
+    /// Closes the open tab first, then deletes the dashboard row and panels,
+    /// then triggers a sidebar rebuild.
+    pub(super) fn on_delete_dashboard_confirmed(
+        &mut self,
+        dashboard_id: uuid::Uuid,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Close the open tab before deleting the row so the UI never references
+        // a deleted entity.
+        let key = crate::ui::document::DocumentKey::Dashboard { dashboard_id };
+        if let Some(doc_id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.close(doc_id, cx);
+            });
+        }
+
+        let result = self
+            .app_state
+            .update(cx, |state, _cx| state.dashboards.delete_dashboard(dashboard_id));
+
+        match result {
+            Ok(()) => {
+                self.app_state.update(cx, |_state, cx| {
+                    cx.emit(AppStateChanged);
+                });
+            }
+            Err(e) => {
+                log::error!("Failed to delete dashboard: {e}");
+                Toast::error(format!("Failed to delete dashboard: {e}"))
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
     }
 
     /// Duplicate a dashboard without a modal (immediate action).
     pub(super) fn duplicate_dashboard(
         &mut self,
-        _dashboard_id: uuid::Uuid,
-        _cx: &mut Context<Self>,
+        dashboard_id: uuid::Uuid,
+        cx: &mut Context<Self>,
     ) {
-        // Phase P will call DashboardManager::duplicate_dashboard here.
-        log::info!("duplicate_dashboard: Phase P not yet implemented");
+        let result = self.app_state.update(cx, |state, _cx| {
+            state.dashboards.duplicate_dashboard(dashboard_id)
+        });
+
+        match result {
+            Ok(_new_id) => {
+                self.app_state.update(cx, |_state, cx| {
+                    cx.emit(AppStateChanged);
+                });
+            }
+            Err(e) => {
+                log::error!("Failed to duplicate dashboard: {e}");
+                Toast::error(format!("Failed to duplicate dashboard: {e}"))
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
     }
 
     /// Open the rename modal for a saved chart.
     pub(super) fn rename_saved_chart(
         &mut self,
-        _chart_id: uuid::Uuid,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        chart_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
-        // Phase P will open ModalRenameItem with RenameTarget::SavedChart here.
-        log::info!("rename_saved_chart: Phase P not yet implemented");
+        let current_name = self
+            .app_state
+            .read(cx)
+            .saved_charts
+            .all_charts()
+            .iter()
+            .find(|c| c.id == chart_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+
+        self.modal_rename_item.update(cx, |modal, cx| {
+            modal.open(
+                RenameItemRequest {
+                    target: RenameTarget::SavedChart { chart_id },
+                    current_name,
+                },
+                window,
+                cx,
+            );
+        });
+    }
+
+    /// Called when `ModalRenameItem` emits `Confirmed`.
+    ///
+    /// Dispatches to the appropriate manager based on `RenameTarget`.
+    pub(super) fn on_rename_item_confirmed(
+        &mut self,
+        target: RenameTarget,
+        new_name: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = match &target {
+            RenameTarget::Dashboard { dashboard_id } => {
+                let id = *dashboard_id;
+                self.app_state.update(cx, |state, _cx| {
+                    state.dashboards.rename_dashboard(id, new_name)
+                })
+            }
+            RenameTarget::SavedChart { chart_id } => {
+                let id = *chart_id;
+                self.app_state.update(cx, |state, _cx| {
+                    state.saved_charts.rename_chart(id, new_name)
+                })
+            }
+        };
+
+        match result {
+            Ok(()) => {
+                self.app_state.update(cx, |_state, cx| {
+                    cx.emit(AppStateChanged);
+                });
+            }
+            Err(e) => {
+                log::error!("Failed to rename item: {e}");
+                Toast::error(format!("Failed to rename: {e}"))
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
     }
 
     /// Delete a saved chart after confirmation.
     ///
-    /// Shows the orphan-warning modal if the chart is referenced by any
-    /// dashboard panels, listing the affected dashboard names.
+    /// Pre-queries `find_dashboards_referencing_chart` to populate the
+    /// orphan-warning list in the confirmation modal.
     pub(super) fn delete_saved_chart(
         &mut self,
-        _chart_id: uuid::Uuid,
+        chart_id: uuid::Uuid,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
-        // Phase P will open ModalDeleteSavedChartConfirm with referencing_dashboards here.
-        log::info!("delete_saved_chart: Phase P not yet implemented");
+        let chart_name = self
+            .app_state
+            .read(cx)
+            .saved_charts
+            .all_charts()
+            .iter()
+            .find(|c| c.id == chart_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+
+        // Build the referencing-dashboard list for the orphan-warning block.
+        let referencing_ids = self
+            .app_state
+            .read(cx)
+            .storage_runtime()
+            .dashboards_repo()
+            .find_dashboards_referencing_chart(chart_id)
+            .unwrap_or_default();
+
+        let referencing_dashboards: Vec<(uuid::Uuid, String)> = referencing_ids
+            .into_iter()
+            .filter_map(|did| {
+                self.app_state
+                    .read(cx)
+                    .dashboards
+                    .dashboard_by_id(did)
+                    .map(|d| (did, d.name.clone()))
+            })
+            .collect();
+
+        self.modal_delete_saved_chart.update(cx, |modal, cx| {
+            modal.open(
+                DeleteSavedChartRequest {
+                    chart_id,
+                    chart_name,
+                    referencing_dashboards,
+                },
+                cx,
+            );
+        });
+    }
+
+    /// Called when `ModalDeleteSavedChartConfirm` emits `Confirmed`.
+    pub(super) fn on_delete_saved_chart_confirmed(
+        &mut self,
+        chart_id: uuid::Uuid,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self
+            .app_state
+            .update(cx, |state, _cx| state.saved_charts.delete_chart(chart_id));
+
+        match result {
+            Ok(()) => {
+                self.app_state.update(cx, |_state, cx| {
+                    cx.emit(AppStateChanged);
+                });
+            }
+            Err(e) => {
+                log::error!("Failed to delete saved chart: {e}");
+                Toast::error(format!("Failed to delete saved chart: {e}"))
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
     }
 
     /// Duplicate a saved chart without a modal (immediate action).
     pub(super) fn duplicate_saved_chart(
         &mut self,
-        _chart_id: uuid::Uuid,
-        _cx: &mut Context<Self>,
+        chart_id: uuid::Uuid,
+        cx: &mut Context<Self>,
     ) {
-        // Phase P will call SavedChartManager::duplicate_chart here.
-        log::info!("duplicate_saved_chart: Phase P not yet implemented");
+        let result = self
+            .app_state
+            .update(cx, |state, _cx| state.saved_charts.duplicate_chart(chart_id));
+
+        match result {
+            Ok(_new_id) => {
+                self.app_state.update(cx, |_state, cx| {
+                    cx.emit(AppStateChanged);
+                });
+            }
+            Err(e) => {
+                log::error!("Failed to duplicate saved chart: {e}");
+                Toast::error(format!("Failed to duplicate saved chart: {e}"))
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
+    }
+
+    /// Open the "Add Panel" picker for a specific dashboard.
+    pub(super) fn open_add_panel_picker(
+        &mut self,
+        dashboard_id: uuid::Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let profile_id = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .dashboard_by_id(dashboard_id)
+            .and_then(|d| d.profile_id);
+
+        let candidates: Vec<dbflux_components::saved_chart::SavedChart> = if let Some(pid) =
+            profile_id
+        {
+            self.app_state
+                .read(cx)
+                .saved_charts
+                .charts_for_profile(pid)
+                .into_iter()
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        self.modal_add_panel.update(cx, |modal, cx| {
+            modal.open(AddPanelRequest { dashboard_id, candidates }, window, cx);
+        });
+    }
+
+    /// Called when `ModalAddPanelPicker` emits `Confirmed`.
+    pub(super) fn on_add_panels_confirmed(
+        &mut self,
+        dashboard_id: uuid::Uuid,
+        chart_ids: Vec<uuid::Uuid>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_ui_base::DashboardPanelDraft;
+
+        let drafts: Vec<DashboardPanelDraft> = chart_ids
+            .into_iter()
+            .map(|saved_chart_id| DashboardPanelDraft { saved_chart_id })
+            .collect();
+
+        let result = self.app_state.update(cx, |state, _cx| {
+            state.dashboards.append_panels(dashboard_id, drafts)
+        });
+
+        match result {
+            Ok(()) => {
+                self.app_state.update(cx, |_state, cx| {
+                    cx.emit(AppStateChanged);
+                });
+            }
+            Err(e) => {
+                log::error!("Failed to add panels: {e}");
+                Toast::error(format!("Failed to add panels: {e}"))
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
     }
 }
 
