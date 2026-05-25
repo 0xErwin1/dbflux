@@ -3,9 +3,9 @@ use crate::chrome::{ToolbarButton, ToolbarButtonVariant, compact_top_bar};
 use dbflux_components::composites::split_toolbar_action;
 use dbflux_components::controls::Button;
 use dbflux_components::helpers::text_color_for_active;
+use dbflux_components::modals::shell::{ModalShell, ModalVariant};
 use dbflux_components::primitives::{
-    Badge, BadgeVariant, BannerBlock, BannerVariant, Icon, Text, focus_frame, overlay_bg,
-    surface_panel,
+    Badge, BadgeVariant, BannerBlock, BannerVariant, Icon, Text, focus_frame,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui_component::scroll::ScrollableElement;
@@ -605,9 +605,10 @@ impl CodeDocument {
     }
 
     fn render_script_confirm_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let entity = cx.entity().clone();
+        // Capture entity clones for each callback before building the footer.
         let entity_cancel = cx.entity().clone();
+        let entity_run = cx.entity().clone();
+        let entity_close = cx.entity().clone();
 
         let statement_count = self
             .pending_script_confirm
@@ -619,66 +620,46 @@ impl CodeDocument {
             statement_count
         );
 
-        div()
-            .id("script-confirm-modal-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let body = Text::caption(message).into_any_element();
+
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(350.0))
-                    .max_w(px(500.0))
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(Icon::new(AppIcon::TriangleAlert).size(px(20.0)).warning())
-                            .child(Text::heading("Run entire script")),
-                    )
-                    .child(Text::caption(message))
-                    .child(
-                        div().flex().justify_end().items_center().child(
-                            div()
-                                .flex()
-                                .gap(Spacing::SM)
-                                .child(Button::new("script-confirm-cancel-btn", "Cancel").on_click(
-                                    move |_, _, cx| {
-                                        entity_cancel.update(cx, |doc, cx| {
-                                            doc.cancel_script_query(cx);
-                                        });
-                                    },
-                                ))
-                                .child(
-                                    Button::new("script-confirm-run-btn", "Run Script").on_click(
-                                        move |_, window, cx| {
-                                            entity.update(cx, |doc, cx| {
-                                                doc.confirm_script_query(window, cx);
-                                            });
-                                        },
-                                    ),
-                                ),
-                        ),
-                    ),
+                Button::new("script-confirm-cancel-btn", "Cancel").on_click(move |_, _, cx| {
+                    entity_cancel.update(cx, |doc, cx| {
+                        doc.cancel_script_query(cx);
+                    });
+                }),
             )
+            .child(
+                Button::new("script-confirm-run-btn", "Run Script").on_click(
+                    move |_, window, cx| {
+                        entity_run.update(cx, |doc, cx| {
+                            doc.confirm_script_query(window, cx);
+                        });
+                    },
+                ),
+            )
+            .into_any_element();
+
+        ModalShell::new("Run entire script", body, footer)
+            .width(px(460.0))
+            .on_close(move |_, cx| {
+                entity_close.update(cx, |doc, cx| {
+                    doc.cancel_script_query(cx);
+                });
+            })
     }
 
     fn render_dangerous_query_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let entity = cx.entity().clone();
+
+        // Capture entity clones for each callback before building the footer.
+        let entity_run = cx.entity().clone();
         let entity_cancel = cx.entity().clone();
         let entity_suppress = cx.entity().clone();
+        let entity_close = cx.entity().clone();
 
         let (title, message) = self
             .pending_dangerous_query
@@ -704,81 +685,63 @@ impl CodeDocument {
             })
             .unwrap_or(("Warning", "This query may be dangerous."));
 
-        div()
-            .id("dangerous-query-modal-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let body = Text::caption(message).into_any_element();
+
+        let dont_ask_chip = div()
+            .id("dont-ask-again-btn")
             .flex()
             .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
+            .gap_1()
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .rounded(Radii::SM)
+            .cursor_pointer()
+            .hover(|d| d.bg(theme.secondary))
+            .on_click(move |_, window, cx| {
+                entity_suppress.update(cx, |doc, cx| {
+                    doc.confirm_dangerous_query(true, window, cx);
+                });
             })
+            .child(Text::caption("Don't ask again"));
+
+        let cancel_btn = Button::new("dangerous-cancel-btn", "Cancel").on_click(move |_, _, cx| {
+            entity_cancel.update(cx, |doc, cx| {
+                doc.cancel_dangerous_query(cx);
+            });
+        });
+
+        let run_anyway_btn = Button::new("dangerous-confirm-btn", "Run Anyway")
+            .danger()
+            .on_click(move |_, window, cx| {
+                entity_run.update(cx, |doc, cx| {
+                    doc.confirm_dangerous_query(false, window, cx);
+                });
+            });
+
+        // Footer: "Don't ask again" left-aligned, Cancel + Run Anyway right-aligned.
+        // The flex_1 spacer pushes the buttons to the right within the single footer AnyElement.
+        let footer = div()
+            .flex()
+            .items_center()
+            .child(dont_ask_chip)
+            .child(div().flex_1())
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(350.0))
-                    .max_w(px(500.0))
+                div()
                     .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(Icon::new(AppIcon::TriangleAlert).size(px(20.0)).warning())
-                            .child(Text::heading(title)),
-                    )
-                    .child(Text::caption(message))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_between()
-                            .items_center()
-                            .child(
-                                div()
-                                    .id("dont-ask-again-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(move |_, window, cx| {
-                                        entity_suppress.update(cx, |doc, cx| {
-                                            doc.confirm_dangerous_query(true, window, cx);
-                                        });
-                                    })
-                                    .child(Text::caption("Don't ask again")),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(Spacing::SM)
-                                    .child(Button::new("dangerous-cancel-btn", "Cancel").on_click(
-                                        move |_, _, cx| {
-                                            entity_cancel.update(cx, |doc, cx| {
-                                                doc.cancel_dangerous_query(cx);
-                                            });
-                                        },
-                                    ))
-                                    .child(
-                                        Button::new("dangerous-confirm-btn", "Run Anyway")
-                                            .danger()
-                                            .on_click(move |_, window, cx| {
-                                                entity.update(cx, |doc, cx| {
-                                                    doc.confirm_dangerous_query(false, window, cx);
-                                                });
-                                            }),
-                                    ),
-                            ),
-                    ),
+                    .gap(Spacing::SM)
+                    .child(cancel_btn)
+                    .child(run_anyway_btn),
             )
+            .into_any_element();
+
+        ModalShell::new(title, body, footer)
+            .width(px(460.0))
+            .variant(ModalVariant::Danger)
+            .on_close(move |_, cx| {
+                entity_close.update(cx, |doc, cx| {
+                    doc.cancel_dangerous_query(cx);
+                });
+            })
     }
 }
 
