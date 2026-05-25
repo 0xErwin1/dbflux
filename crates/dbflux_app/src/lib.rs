@@ -11,6 +11,7 @@ pub mod history_manager_sqlite;
 pub mod hook_executor;
 pub mod keymap;
 pub mod mcp_command;
+pub mod metric_catalog_cache;
 pub mod proxy;
 pub mod rpc_services;
 
@@ -18,4 +19,5 @@ pub use access_manager::AppAccessManager;
 pub use app_state::AppState;
 pub use auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
 pub use hook_executor::CompositeExecutor;
+pub use metric_catalog_cache::{MetricCatalogCache, MetricsPageView};
 pub use rpc_services::{ExternalDriverDiagnostic, ExternalDriverStage};
