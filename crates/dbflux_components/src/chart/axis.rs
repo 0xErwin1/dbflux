@@ -100,6 +100,9 @@ fn format_numeric(v: f64) -> String {
 // ---------------------------------------------------------------------------
 
 /// Step values for the time tick ladder (milliseconds).
+///
+/// Must remain strictly ascending. Each entry is a "nice" human-readable
+/// duration that `ticks_time` may select as a step boundary.
 const NICE_TIME_STEPS_MS: &[f64] = &[
     1_000.0,             // 1s
     5_000.0,             // 5s
@@ -108,8 +111,13 @@ const NICE_TIME_STEPS_MS: &[f64] = &[
     5.0 * 60_000.0,      // 5m
     15.0 * 60_000.0,     // 15m
     3_600_000.0,         // 1h
+    2.0 * 3_600_000.0,   // 2h
+    3.0 * 3_600_000.0,   // 3h
     6.0 * 3_600_000.0,   // 6h
+    12.0 * 3_600_000.0,  // 12h
     86_400_000.0,        // 1d
+    2.0 * 86_400_000.0,  // 2d
+    3.0 * 86_400_000.0,  // 3d
     7.0 * 86_400_000.0,  // 1w
     30.0 * 86_400_000.0, // ~1mo
 ];
@@ -494,5 +502,39 @@ mod tests {
                 t.label
             );
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tick density tests (issue #132)
+    // ---------------------------------------------------------------------------
+
+    /// A 3-week span with target 12 must produce at least 7 ticks.
+    ///
+    /// Before the ladder expansion the largest step ≤ raw_step was 1 week,
+    /// yielding only 3 ticks. Adding 2d and 3d entries ensures a step ≤ 3d is
+    /// chosen, producing ≥ 7 ticks across 21 days.
+    #[test]
+    fn ticks_time_3week_target12_yields_at_least_7() {
+        let span_ms = 21.0 * 86_400_000.0; // 21 days
+        let ticks = ticks_time(0.0, span_ms, 12);
+        assert!(
+            ticks.len() >= 7,
+            "expected >= 7 ticks for 3-week span target 12, got {}",
+            ticks.len()
+        );
+    }
+
+    /// `ticks_numeric` with target 13 over [0, 25] must produce at least 6 ticks.
+    ///
+    /// This acts as a non-regression anchor: the nice-step algorithm already
+    /// satisfies this for numeric axes, confirming the Y dynamic path will too.
+    #[test]
+    fn ticks_numeric_target13_range_0_25_yields_at_least_6() {
+        let ticks = ticks_numeric(0.0, 25.0, 13);
+        assert!(
+            ticks.len() >= 6,
+            "expected >= 6 ticks for [0, 25] target 13, got {}",
+            ticks.len()
+        );
     }
 }
