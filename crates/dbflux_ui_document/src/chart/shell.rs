@@ -6,7 +6,7 @@
 //! legend, rail, hidden-series management) without duplicating state.
 
 /// Active tab in the chart Configure/Stats/Metric rail.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChartRailTab {
     #[default]
     Configure,

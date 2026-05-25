@@ -1051,6 +1051,30 @@ impl ChartHost for ChartDocument {
     }
 }
 
+/// Returns `true` when `ChartDocument` should render the Stats rail.
+///
+/// The render branch in `render_chart_content` delegates to this predicate so
+/// tests can pin the gating logic without a GPUI runtime.
+fn should_render_stats_rail(rail_open: bool, rail_tab: crate::chart::ChartRailTab) -> bool {
+    rail_open && rail_tab == crate::chart::ChartRailTab::Stats
+}
+
+/// Returns the new `(open, tab)` state after the Stats toolbar button is clicked.
+///
+/// Toggling while already open on the Stats tab closes the rail. Clicking Stats
+/// from any other state (closed, or open on a different tab) opens the rail and
+/// switches to the Stats tab.
+fn toggle_stats_rail(
+    open: bool,
+    tab: crate::chart::ChartRailTab,
+) -> (bool, crate::chart::ChartRailTab) {
+    if open && tab == crate::chart::ChartRailTab::Stats {
+        (false, tab)
+    } else {
+        (true, crate::chart::ChartRailTab::Stats)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1512,6 +1536,86 @@ mod tests {
         assert!(
             title.contains("Invocations"),
             "title must include metric name: got {title:?}"
+        );
+    }
+
+    // ---- stats rail helpers ----
+
+    /// T-SR-01: `should_render_stats_rail` returns true when rail is open on Stats tab.
+    #[test]
+    fn should_render_stats_rail_when_open_and_stats() {
+        assert!(
+            super::should_render_stats_rail(true, crate::chart::ChartRailTab::Stats),
+            "rail must render when open and tab is Stats"
+        );
+    }
+
+    /// T-SR-02: `should_render_stats_rail` returns false when rail is closed.
+    #[test]
+    fn should_not_render_when_closed() {
+        assert!(
+            !super::should_render_stats_rail(false, crate::chart::ChartRailTab::Stats),
+            "rail must not render when closed"
+        );
+    }
+
+    /// T-SR-03: `should_render_stats_rail` returns false when a different tab is active.
+    #[test]
+    fn should_not_render_when_other_tab() {
+        assert!(
+            !super::should_render_stats_rail(true, crate::chart::ChartRailTab::Metric),
+            "rail must not render when tab is not Stats"
+        );
+    }
+
+    /// T-SR-04: toggling from closed state opens the rail on Stats tab.
+    #[test]
+    fn toggle_from_closed_opens_stats() {
+        let (open, tab) = super::toggle_stats_rail(false, crate::chart::ChartRailTab::Configure);
+        assert!(open, "toggle from closed must open the rail");
+        assert_eq!(
+            tab,
+            crate::chart::ChartRailTab::Stats,
+            "toggle from closed must set tab to Stats"
+        );
+    }
+
+    /// T-SR-05: toggling while open on Stats tab closes the rail.
+    #[test]
+    fn toggle_while_open_on_stats_closes() {
+        let (open, tab) = super::toggle_stats_rail(true, crate::chart::ChartRailTab::Stats);
+        assert!(!open, "toggle while open on Stats must close the rail");
+        assert_eq!(
+            tab,
+            crate::chart::ChartRailTab::Stats,
+            "closed toggle must preserve Stats tab identity"
+        );
+    }
+
+    /// T-SR-06: toggling while rail is open on Metric tab switches to Stats without closing.
+    #[test]
+    fn toggle_while_open_on_metric_switches_to_stats() {
+        let (open, tab) = super::toggle_stats_rail(true, crate::chart::ChartRailTab::Metric);
+        assert!(open, "switching from Metric to Stats must keep rail open");
+        assert_eq!(
+            tab,
+            crate::chart::ChartRailTab::Stats,
+            "switching from Metric must set tab to Stats"
+        );
+    }
+
+    /// T-SR-07: toggling while rail is open on Configure tab switches to Stats without closing.
+    #[test]
+    fn toggle_while_open_on_configure_switches_to_stats() {
+        let (open, tab) = super::toggle_stats_rail(true, crate::chart::ChartRailTab::Configure);
+        assert!(
+            open,
+            "switching from Configure to Stats must keep rail open"
+        );
+        assert_eq!(
+            tab,
+            crate::chart::ChartRailTab::Stats,
+            "switching from Configure must set tab to Stats"
         );
     }
 

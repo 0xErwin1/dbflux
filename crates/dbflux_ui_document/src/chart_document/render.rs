@@ -17,11 +17,13 @@
 //! The chart content area is rendered by `render_chart_content`, called from
 //! the `ViewHandle::render` closure built by `into_view_handle`.
 
-use super::{ChartDocument, ExecState};
+use super::{ChartDocument, ExecState, should_render_stats_rail, toggle_stats_rail};
 use crate::chart::ChartRailTab;
 use crate::chart::metric_picker_render::MetricPickerView;
 use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
-use dbflux_components::chart::{ChartDetection, axis_bar_element};
+use dbflux_components::chart::{
+    ChartDetection, ChartView, axis_bar_element, format_span, format_x_value, format_y_value,
+};
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::controls::DropdownSelectionChanged;
@@ -29,13 +31,53 @@ use dbflux_components::controls::Input;
 use dbflux_components::primitives::Text;
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::semantic::ChartColors;
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast, now_hms};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_component::{ActiveTheme, Disableable, Sizable};
 use std::sync::Arc;
+
+// Mirrors DataGridPanel::dock_* — flagged for future shared module.
+
+fn dock_section(
+    content: impl IntoElement,
+    theme: &gpui_component::theme::Theme,
+) -> impl IntoElement {
+    div()
+        .px(px(14.0))
+        .py(Spacing::MD)
+        .border_b_1()
+        .border_color(theme.border)
+        .child(content)
+}
+
+fn dock_header(label: &str, chart_colors: &ChartColors) -> impl IntoElement {
+    div()
+        .text_size(px(10.0))
+        .text_color(chart_colors.muted_fg)
+        .font_weight(FontWeight::BOLD)
+        .mb(Spacing::XXS)
+        .child(SharedString::from(label.to_uppercase()))
+}
+
+fn dock_kv_row(k: &str, v: impl IntoElement, chart_colors: &ChartColors) -> impl IntoElement {
+    div()
+        .flex()
+        .items_start()
+        .gap(Spacing::SM)
+        .py(px(2.0))
+        .child(
+            div()
+                .w(px(96.0))
+                .flex_shrink_0()
+                .text_size(px(10.0))
+                .text_color(chart_colors.muted_fg)
+                .child(SharedString::from(k.to_string())),
+        )
+        .child(div().flex_1().text_size(px(11.0)).child(v))
+}
 
 impl Render for ChartDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -298,12 +340,8 @@ impl ChartDocument {
                 }),
                 on_toggle_stats_rail: Arc::new(move |_window, cx| {
                     shell_for_stats.update(cx, |s, cx| {
-                        if s.chart_rail_open && s.chart_rail_tab == ChartRailTab::Stats {
-                            s.chart_rail_open = false;
-                        } else {
-                            s.chart_rail_open = true;
-                            s.chart_rail_tab = ChartRailTab::Stats;
-                        }
+                        (s.chart_rail_open, s.chart_rail_tab) =
+                            toggle_stats_rail(s.chart_rail_open, s.chart_rail_tab);
                         cx.notify();
                     });
                 }),
@@ -521,6 +559,20 @@ impl ChartDocument {
             }
         };
 
+        // -- Stats rail (absolute overlay, right edge) --
+        // Rendered when the Stats tab is active and the shell's rail is open.
+        let stats_rail: Option<AnyElement> = {
+            let (rail_open, rail_tab) = {
+                let shell = self.chart_shell.read(cx);
+                (shell.chart_rail_open, shell.chart_rail_tab)
+            };
+            if should_render_stats_rail(rail_open, rail_tab) {
+                self.render_stats_rail(&theme, cx)
+            } else {
+                None
+            }
+        };
+
         div()
             .flex()
             .flex_col()
@@ -531,6 +583,244 @@ impl ChartDocument {
             .child(axis_row)
             .child(div().flex_1().min_h_0().child(chart_area))
             .when_some(metric_rail, |el, rail| el.child(rail))
+            .when_some(stats_rail, |el, rail| el.child(rail))
             .into_any_element()
+    }
+
+    /// Render the 320 px Stats rail for the right-edge overlay.
+    ///
+    /// Returns `None` when the chart view is still being built or when no stats
+    /// are available for the focused series. Mirrors the layout produced by
+    /// `DataGridPanel::render_rail_stats_tab` with snapshot-style borrows to
+    /// satisfy GPUI's single-context borrow rules.
+    fn render_stats_rail(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut App,
+    ) -> Option<AnyElement> {
+        let chart_colors = ChartColors::for_current(cx);
+
+        // Scope 1: read chart_shell to capture chart_view and focused_idx.
+        let (chart_view_opt, focused_idx) = {
+            let shell = self.chart_shell.read(cx);
+            let cv = shell.chart_view().cloned();
+            let fi = cv
+                .as_ref()
+                .map(|cv| cv.read(cx).focused_series_idx())
+                .unwrap_or(shell.chart_focused_series_idx);
+            (cv, fi)
+        };
+
+        let Some(chart_view) = chart_view_opt else {
+            let placeholder = div()
+                .p_2()
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child("Rebuilding chart…")
+                .into_any_element();
+            return Some(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .w(px(320.0))
+                    .flex()
+                    .flex_col()
+                    .border_l_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .occlude()
+                    .child(
+                        div()
+                            .flex_grow()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(placeholder),
+                    )
+                    .into_any_element(),
+            );
+        };
+
+        // Scope 2: read chart_view entity to capture all primitive values before
+        // building the element tree. Borrows must be dropped before constructing
+        // elements — mirrors DataGridPanel::render_rail_stats_tab exactly.
+        let (stats_opt, label, color, x_min, x_max, x_is_time) = {
+            let view = chart_view.read(cx);
+            let stats = view.series_stats().get(focused_idx).copied().flatten();
+            let label = view.series_label(focused_idx).to_string();
+            let color = view.series_color(focused_idx, cx);
+            let (x_min, x_max) = view.data_x_bounds();
+            let x_is_time = view.x_is_time();
+            (stats, label, color, x_min, x_max, x_is_time)
+        };
+
+        let Some(stats) = stats_opt else {
+            let placeholder = div()
+                .p_2()
+                .text_size(FontSizes::XS)
+                .text_color(theme.muted_foreground)
+                .child("No stats available for this series.")
+                .into_any_element();
+            return Some(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .w(px(320.0))
+                    .flex()
+                    .flex_col()
+                    .border_l_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .occlude()
+                    .child(
+                        div()
+                            .flex_grow()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(placeholder),
+                    )
+                    .into_any_element(),
+            );
+        };
+
+        let start_label = format_x_value(x_min, x_is_time);
+        let end_label = format_x_value(x_max, x_is_time);
+        let span_label = format_span(x_max - x_min);
+        let points_count = self
+            .last_result
+            .as_ref()
+            .map(|r| r.row_count())
+            .unwrap_or(0);
+
+        let cyan_color = theme.cyan;
+        let primary_color = theme.primary;
+
+        let cyan_val = |v: f64| -> AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(cyan_color)
+                .child(SharedString::from(format_y_value(v)))
+                .into_any_element()
+        };
+        let primary_val = |v: f64| -> AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(primary_color)
+                .child(SharedString::from(format_y_value(v)))
+                .into_any_element()
+        };
+        let fg_val = |v: f64| -> AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.foreground)
+                .child(SharedString::from(format_y_value(v)))
+                .into_any_element()
+        };
+        let str_val = |s: String| -> AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.foreground)
+                .child(SharedString::from(s))
+                .into_any_element()
+        };
+        let unavail_val = || -> AnyElement {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.muted_foreground)
+                .italic()
+                .child("unavailable")
+                .into_any_element()
+        };
+
+        let body = div()
+            .id("chart-doc-rail-stats-scroll")
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            // SERIES header
+            .child(dock_section(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .child(div().w(px(10.0)).h(px(10.0)).rounded_sm().bg(color))
+                    .child(
+                        div()
+                            .text_size(FontSizes::XS)
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.foreground)
+                            .child(SharedString::from(label)),
+                    ),
+                theme,
+            ))
+            // STATS section
+            .child(dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(dock_header("Stats", &chart_colors))
+                    .child(dock_kv_row("min", cyan_val(stats.min), &chart_colors))
+                    .child(dock_kv_row("max", cyan_val(stats.max), &chart_colors))
+                    .child(dock_kv_row("avg", cyan_val(stats.avg), &chart_colors))
+                    .child(dock_kv_row("p50", fg_val(stats.p50), &chart_colors))
+                    .child(dock_kv_row("p95", fg_val(stats.p95), &chart_colors))
+                    .child(dock_kv_row("p99", primary_val(stats.p99), &chart_colors))
+                    .child(dock_kv_row("last", fg_val(stats.last), &chart_colors)),
+                theme,
+            ))
+            // WINDOW section
+            .child(dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(dock_header("Window", &chart_colors))
+                    .child(dock_kv_row("start", str_val(start_label), &chart_colors))
+                    .child(dock_kv_row("end", str_val(end_label), &chart_colors))
+                    .child(dock_kv_row("span", str_val(span_label), &chart_colors))
+                    .child(dock_kv_row(
+                        "points",
+                        str_val(format!("{}", points_count)),
+                        &chart_colors,
+                    )),
+                theme,
+            ))
+            // SOURCE section — placeholder until drivers populate QueryResult.metadata
+            .child(dock_section(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(dock_header("Source", &chart_colors))
+                    .child(dock_kv_row("measurement", unavail_val(), &chart_colors))
+                    .child(dock_kv_row("field", unavail_val(), &chart_colors))
+                    .child(dock_kv_row("host", unavail_val(), &chart_colors))
+                    .child(dock_kv_row("region", unavail_val(), &chart_colors)),
+                theme,
+            ))
+            .into_any_element();
+
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .w(px(320.0))
+                .flex()
+                .flex_col()
+                .border_l_1()
+                .border_color(theme.border)
+                .bg(theme.popover)
+                .occlude()
+                .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
+                .into_any_element(),
+        )
     }
 }
