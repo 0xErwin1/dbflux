@@ -117,8 +117,16 @@ impl DashboardImporter for CloudWatchDashboardImporter {
                 let mut dimensions: Vec<(String, String)> = Vec::new();
                 let mut i = 2;
                 while i + 1 < entry.len() {
-                    let key = entry.get(i).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let val = entry.get(i + 1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = entry
+                        .get(i)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let val = entry
+                        .get(i + 1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     if !key.is_empty() {
                         dimensions.push((key, val));
                     }

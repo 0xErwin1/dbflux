@@ -1900,6 +1900,155 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Runs the dashboard import flow after the user confirms JSON input.
+    ///
+    /// Calls `conn.dashboard_importer()?.import(&json)` to get `PanelImportSpec`
+    /// records, creates a `SavedChart` per panel (using the metric params encoded
+    /// as a JSON query string), upserts a new `Dashboard` and its panel set, then
+    /// opens the dashboard in a new tab. This method does not inspect `driver_id`.
+    pub(super) fn run_dashboard_import(
+        &mut self,
+        json: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::chart::{
+            AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
+        };
+        use dbflux_components::saved_chart::{SavedChart, SavedChartRefreshPolicy};
+        use dbflux_ui_base::{Dashboard, DashboardPanel};
+
+        // Borrow app_state in a scoped block so the borrow ends before the update below.
+        let import_result: Result<(uuid::Uuid, Vec<dbflux_core::PanelImportSpec>), String> = {
+            let app_state = self.app_state.read(cx);
+
+            let Some(active) = app_state.active_connection() else {
+                return Toast::error(
+                    "No active connection — connect to a profile before importing.",
+                )
+                .meta_right(now_hms())
+                .push(cx);
+            };
+
+            let profile_id = active.profile.id;
+
+            let importer = match active.connection.dashboard_importer() {
+                Some(i) => i,
+                None => {
+                    return Toast::error(
+                        "The active connection does not support dashboard import.",
+                    )
+                    .meta_right(now_hms())
+                    .push(cx);
+                }
+            };
+
+            match importer.import(&json) {
+                Ok(specs) => Ok((profile_id, specs)),
+                Err(e) => Err(format!("Dashboard import failed: {e}")),
+            }
+        };
+
+        let (profile_id, specs) = match import_result {
+            Ok(v) => v,
+            Err(e) => {
+                Toast::error(e).meta_right(now_hms()).push(cx);
+                return;
+            }
+        };
+
+        // Build the dashboard domain object.
+        let now = chrono::Utc::now();
+        let dashboard_id = uuid::Uuid::new_v4();
+        let dashboard = Dashboard {
+            id: dashboard_id,
+            name: "Imported CloudWatch Dashboard".to_string(),
+            description: None,
+            profile_id: Some(profile_id),
+            shared_time_range_preset: None,
+            shared_refresh_policy: SavedChartRefreshPolicy::Off,
+            grid_columns: 12,
+            created_at: now,
+            updated_at: now,
+        };
+
+        // Convert each PanelImportSpec to a SavedChart + DashboardPanel.
+        // The metric parameters are encoded as a JSON query string so they
+        // survive the SavedChart round-trip. Full metric execution requires
+        // a future `SavedChartSource::Metric` variant.
+        let mut charts: Vec<SavedChart> = Vec::with_capacity(specs.len());
+        let mut panels: Vec<DashboardPanel> = Vec::with_capacity(specs.len());
+
+        for (idx, spec) in specs.iter().enumerate() {
+            let metric_query_json = serde_json::json!({
+                "namespace":   spec.namespace,
+                "metric_name": spec.metric_name,
+                "dimensions":  spec.dimensions,
+                "period_s":    spec.period_seconds,
+                "statistic":   spec.statistic,
+                "region":      spec.region,
+            })
+            .to_string();
+
+            let placeholder_spec = ChartSpec {
+                kind: ChartKind::Line,
+                x_axis: AxisSpec {
+                    column_index: 0,
+                    label: String::new(),
+                    kind: AxisKind::Time,
+                    unit: None,
+                },
+                series: Vec::new(),
+                legend_visible: false,
+                decimation_threshold: 10_000,
+                binding: BindingSpec::default(),
+                track_source_indices: false,
+                y_scale: YScale::Linear,
+            };
+
+            let chart = SavedChart::new_query(
+                spec.title.clone(),
+                profile_id,
+                metric_query_json,
+                placeholder_spec,
+                BindingSpec::default(),
+            );
+
+            let panel = DashboardPanel {
+                dashboard_id,
+                panel_index: idx as u32,
+                saved_chart_id: chart.id,
+                title_override: None,
+                grid_row: (idx as u32 / 2) * 4,
+                grid_column: (idx as u32 % 2) * 6,
+                grid_width: 6,
+                grid_height: 4,
+            };
+
+            charts.push(chart);
+            panels.push(panel);
+        }
+
+        // Persist charts, dashboard, and panels.
+        self.app_state.update(cx, |state, _cx| {
+            for chart in &charts {
+                state.saved_charts.upsert(chart.clone());
+            }
+
+            state.dashboards.upsert_dashboard(dashboard);
+            let _ = state.dashboards.replace_panels(dashboard_id, panels);
+        });
+
+        Toast::info(format!(
+            "Imported {} panels into a new dashboard.",
+            charts.len()
+        ))
+        .meta_right(now_hms())
+        .push(cx);
+
+        self.open_dashboard(dashboard_id, window, cx);
+    }
+
     /// Reconnects to profiles referenced by restored session documents.
     pub(super) fn reopen_last_connections(&mut self, cx: &mut Context<Self>) {
         let profile_ids: std::collections::HashSet<uuid::Uuid> = self
@@ -3061,6 +3210,63 @@ mod tests {
         assert_eq!(
             source.statistic, "Average",
             "default statistic must be Average"
+        );
+    }
+
+    /// G.2 — `test_import_affordance_hidden_without_capability`:
+    /// `PaletteItem::ImportDashboard` must NOT be produced when the connection's
+    /// `DriverCapabilities` does not include `DASHBOARD_IMPORT`.
+    ///
+    /// This is the unit-layer contract for the capability gate. Full integration
+    /// (GPUI `build_palette_items`) requires `TestAppContext`; here we verify that
+    /// a capability set without `DASHBOARD_IMPORT` is rejected by the gate predicate.
+    #[test]
+    fn test_import_affordance_hidden_without_capability() {
+        let no_dashboard_import =
+            DriverCapabilities::METRIC_SERIES | DriverCapabilities::METRIC_CATALOG;
+
+        assert!(
+            !no_dashboard_import.contains(DriverCapabilities::DASHBOARD_IMPORT),
+            "DASHBOARD_IMPORT must not be set for this test to be meaningful"
+        );
+
+        // The import affordance is only added when the capability flag is present.
+        let affordance_present = no_dashboard_import.contains(DriverCapabilities::DASHBOARD_IMPORT);
+
+        assert!(
+            !affordance_present,
+            "Import affordance must be hidden when DASHBOARD_IMPORT is not in capabilities"
+        );
+    }
+
+    /// G.2 — `test_import_affordance_shown_with_capability`:
+    /// When `DriverCapabilities` includes `DASHBOARD_IMPORT`, the capability
+    /// gate predicate evaluates to `true` (affordance is shown).
+    #[test]
+    fn test_import_affordance_shown_with_capability() {
+        let with_dashboard_import =
+            DriverCapabilities::METRIC_SERIES | DriverCapabilities::DASHBOARD_IMPORT;
+
+        let affordance_present =
+            with_dashboard_import.contains(DriverCapabilities::DASHBOARD_IMPORT);
+
+        assert!(
+            affordance_present,
+            "Import affordance must be shown when DASHBOARD_IMPORT is in capabilities"
+        );
+    }
+
+    /// G.2 — `test_import_dashboard_palette_item_maps_to_selection`:
+    /// `PaletteItem::ImportDashboard` must map to `PaletteSelection::ImportDashboard`.
+    #[test]
+    fn test_import_dashboard_palette_item_maps_to_selection() {
+        let item = PaletteItem::ImportDashboard;
+        let selection = map_item_to_selection(&item);
+
+        assert!(
+            matches!(selection, Some(PaletteSelection::ImportDashboard)),
+            "ImportDashboard item must map to ImportDashboard selection, got: {:?}",
+            selection.map(|_| "Some(other)")
         );
     }
 

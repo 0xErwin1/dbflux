@@ -619,6 +619,9 @@ impl Render for Workspace {
             .when(self.modal_tunnel_auth.read(cx).is_visible(), |root| {
                 root.child(self.modal_tunnel_auth.clone())
             })
+            .when(self.modal_import_dashboard.read(cx).is_visible(), |root| {
+                root.child(self.modal_import_dashboard.clone())
+            })
             .child(
                 div()
                     .absolute()

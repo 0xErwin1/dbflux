@@ -64,6 +64,9 @@ pub enum PaletteItem {
         /// collection charts from query charts.
         is_collection_source: bool,
     },
+    /// "Import CloudWatch Dashboard" action (shown only when the active connection
+    /// has the `DASHBOARD_IMPORT` capability).
+    ImportDashboard,
 }
 
 /// Schema resource variants surfaced by connected profiles.
@@ -157,6 +160,7 @@ impl PaletteItem {
             } => {
                 format!("Script {} {}", name, relative_path)
             }
+            Self::ImportDashboard => "Charts Import CloudWatch Dashboard".to_string(),
         }
     }
 
@@ -186,6 +190,10 @@ impl PaletteItem {
                 }
             },
             Self::Script { name, .. } => ("Script".to_string(), name.clone()),
+            Self::ImportDashboard => (
+                "Charts".to_string(),
+                "Import CloudWatch Dashboard...".to_string(),
+            ),
         }
     }
 
@@ -195,6 +203,7 @@ impl PaletteItem {
             Self::Action { .. } => 0,
             Self::Connection { .. } => 1,
             Self::SavedChart { .. } => 2,
+            Self::ImportDashboard => 2,
             Self::Resource(_) => 3,
             Self::Script { .. } => 4,
         }
@@ -318,7 +327,7 @@ impl PaletteSection {
         match item {
             PaletteItem::Connection { .. } => Self::Connections,
             PaletteItem::Action { .. } => Self::Commands,
-            PaletteItem::SavedChart { .. } => Self::Charts,
+            PaletteItem::SavedChart { .. } | PaletteItem::ImportDashboard => Self::Charts,
             PaletteItem::Resource(_) => Self::Tables,
             PaletteItem::Script { .. } => Self::Scripts,
         }
@@ -473,6 +482,8 @@ pub enum PaletteSelection {
     OpenSavedChart {
         chart_id: Uuid,
     },
+    /// The user selected the "Import CloudWatch Dashboard" entry.
+    ImportDashboard,
 }
 
 pub struct CommandPaletteClosed;
@@ -727,6 +738,7 @@ impl CommandPalette {
                 PaletteItem::SavedChart { id, .. } => {
                     PaletteSelection::OpenSavedChart { chart_id: *id }
                 }
+                PaletteItem::ImportDashboard => PaletteSelection::ImportDashboard,
             };
 
             self.visible = false;
@@ -755,7 +767,8 @@ impl CommandPalette {
             PaletteItem::Connection { .. }
             | PaletteItem::Resource(_)
             | PaletteItem::Script { .. }
-            | PaletteItem::SavedChart { .. } => item
+            | PaletteItem::SavedChart { .. }
+            | PaletteItem::ImportDashboard => item
                 .qualifier()
                 .map(|q| palette_qualifier_text(q, is_selected, theme).into_any_element()),
         };

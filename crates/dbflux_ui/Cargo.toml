@@ -29,6 +29,7 @@ dbflux_driver_ipc.workspace = true
 dbflux_audit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 uuid.workspace = true
+chrono.workspace = true
 log.workspace = true
 env_logger.workspace = true
 serde_json.workspace = true

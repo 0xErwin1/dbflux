@@ -3,6 +3,7 @@ pub mod cell_editor;
 pub mod delete_connection;
 pub mod document_preview;
 pub mod drop_table;
+pub mod import_dashboard;
 pub mod schema_drift;
 pub mod shell;
 pub mod tunnel_auth;
@@ -19,6 +20,9 @@ pub use document_preview::{
     DOC_INDEX_NEW, DocumentPreviewClosedEvent, DocumentPreviewModal, DocumentPreviewSaveEvent,
 };
 pub use drop_table::{DropTableOutcome, DropTableRequest, ModalDropTable};
+pub use import_dashboard::{
+    ImportDashboardCancelled, ImportDashboardConfirmed, ModalImportDashboard,
+};
 pub use schema_drift::{
     ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
 };

@@ -804,6 +804,32 @@ impl CommandDispatcher for Workspace {
                 true
             }
 
+            Command::ImportDashboard => {
+                // Only available when the active connection has DASHBOARD_IMPORT.
+                let has_capability = self
+                    .app_state
+                    .read(cx)
+                    .active_connection()
+                    .map(|conn| {
+                        conn.connection
+                            .metadata()
+                            .capabilities
+                            .contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
+                    })
+                    .unwrap_or(false);
+
+                if has_capability {
+                    self.modal_import_dashboard.update(cx, |modal, cx| {
+                        modal.open(window, cx);
+                    });
+                } else {
+                    Toast::warning("The active connection does not support dashboard import.")
+                        .meta_right(now_hms())
+                        .push(cx);
+                }
+                true
+            }
+
             Command::OpenTabMenu => {
                 self.tab_bar
                     .update(cx, |tb, cx| tb.open_context_menu_for_active(cx));

@@ -203,6 +203,7 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
         PaletteItem::SavedChart { id, .. } => {
             Some(PaletteSelection::OpenSavedChart { chart_id: *id })
         }
+        PaletteItem::ImportDashboard => Some(PaletteSelection::ImportDashboard),
     }
 }
 
@@ -275,6 +276,8 @@ pub struct Workspace {
     pending_drop_table_item_id: Option<String>,
     /// SSH tunnel passphrase modal.
     modal_tunnel_auth: Entity<crate::ui::overlays::modals::ModalTunnelAuth>,
+    /// Import CloudWatch Dashboard JSON modal.
+    modal_import_dashboard: Entity<crate::ui::overlays::modals::ModalImportDashboard>,
 
     tasks_state: PanelState,
     pending_command: Option<&'static str>,
@@ -348,6 +351,8 @@ impl Workspace {
             cx.new(|cx| crate::ui::overlays::modals::ModalDropTable::new(window, cx));
         let modal_tunnel_auth =
             cx.new(|cx| crate::ui::overlays::modals::ModalTunnelAuth::new(window, cx));
+        let modal_import_dashboard =
+            cx.new(|cx| crate::ui::overlays::modals::ModalImportDashboard::new(window, cx));
 
         // Subscribe: ModalDeleteConnection — on Confirmed, execute the pending delete.
         cx.subscribe(
@@ -537,6 +542,11 @@ impl Workspace {
                 PaletteSelection::OpenSavedChart { chart_id } => {
                     this.open_saved_chart(*chart_id, window, cx);
                 }
+                PaletteSelection::ImportDashboard => {
+                    this.modal_import_dashboard.update(cx, |modal, cx| {
+                        modal.open(window, cx);
+                    });
+                }
             },
         )
         .detach();
@@ -545,6 +555,16 @@ impl Workspace {
             this.needs_focus_restore = true;
             cx.notify();
         })
+        .detach();
+
+        // Subscribe: ModalImportDashboard — on Confirmed, run the CloudWatch import flow.
+        cx.subscribe_in(
+            &modal_import_dashboard,
+            window,
+            |this, _, event: &crate::ui::overlays::modals::ImportDashboardConfirmed, window, cx| {
+                this.run_dashboard_import(event.json.clone(), window, cx);
+            },
+        )
         .detach();
 
         cx.subscribe_in(
@@ -990,6 +1010,7 @@ impl Workspace {
             modal_drop_table,
             pending_drop_table_item_id: None,
             modal_tunnel_auth,
+            modal_import_dashboard,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
             pending_sql: None,
@@ -1377,6 +1398,17 @@ impl Workspace {
         if let Some(dir) = app_state.scripts_directory() {
             let root = dir.root_path().to_path_buf();
             Self::flatten_script_entries(dir.entries(), &root, &mut items);
+        }
+
+        // Add the "Import CloudWatch Dashboard" entry only when the active
+        // connection advertises the DASHBOARD_IMPORT capability.
+        if app_state.active_connection().is_some_and(|a| {
+            a.connection
+                .metadata()
+                .capabilities
+                .contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
+        }) {
+            items.push(PaletteItem::ImportDashboard);
         }
 
         items
