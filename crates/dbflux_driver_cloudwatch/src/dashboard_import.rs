@@ -278,4 +278,55 @@ mod tests {
             "expected DbError::Parse"
         );
     }
+
+    /// Design test #56: `CloudWatchDashboardImporter` parses a valid single-panel
+    /// dashboard and returns `Some` (non-empty `Vec<PanelImportSpec>`).
+    #[test]
+    fn test_cloudwatch_dashboard_importer_returns_some() {
+        let json = r#"{
+            "widgets": [{
+                "type": "metric",
+                "properties": {
+                    "title": "CPU",
+                    "metrics": [["AWS/EC2", "CPUUtilization", "InstanceId", "i-1"]],
+                    "period": 60,
+                    "stat": "Sum",
+                    "region": "eu-west-1"
+                }
+            }]
+        }"#;
+
+        let importer = CloudWatchDashboardImporter;
+        let result = importer
+            .import(json)
+            .expect("valid CloudWatch JSON must parse");
+        assert!(
+            !result.is_empty(),
+            "CloudWatchDashboardImporter must return at least one PanelImportSpec"
+        );
+        assert_eq!(result[0].namespace, "AWS/EC2");
+        assert_eq!(result[0].metric_name, "CPUUtilization");
+        assert_eq!(result[0].statistic, "Sum");
+        assert_eq!(result[0].region.as_deref(), Some("eu-west-1"));
+    }
+
+    /// Design test #57: a non-CloudWatch JSON (missing "widgets" key) must fail
+    /// with `Err(DbError::Parse(_))` — confirming that `CloudWatchDashboardImporter`
+    /// does not silently accept arbitrary JSON.
+    #[test]
+    fn test_non_cloudwatch_returns_none() {
+        // Simulate a non-CloudWatch dashboard JSON (e.g., a Grafana export)
+        // that is valid JSON but does not contain "widgets".
+        let json = r#"{"panels": [], "title": "Grafana Dashboard"}"#;
+        let importer = CloudWatchDashboardImporter;
+        let result = importer.import(json);
+        assert!(
+            result.is_err(),
+            "non-CloudWatch JSON without 'widgets' must return Err"
+        );
+        assert!(
+            matches!(result.unwrap_err(), DbError::Parse(_)),
+            "expected DbError::Parse for non-CloudWatch JSON"
+        );
+    }
 }
