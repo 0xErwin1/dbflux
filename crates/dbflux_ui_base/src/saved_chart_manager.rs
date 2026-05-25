@@ -654,6 +654,81 @@ impl SavedChartManager {
         &self.items
     }
 
+    /// Look up a chart by its id.
+    pub fn chart_by_id(&self, id: Uuid) -> Option<&SavedChart> {
+        self.items.iter().find(|c| c.id == id)
+    }
+
+    /// Renames a chart, bumps `updated_at`, and updates the cache.
+    pub fn rename_chart(&mut self, id: Uuid, new_name: String) -> Result<(), StorageError> {
+        let idx = self
+            .items
+            .iter()
+            .position(|c| c.id == id)
+            .ok_or_else(|| StorageError::Data(format!("saved chart not found: {id}")))?;
+
+        let mut updated = self.items[idx].clone();
+        updated.name = new_name;
+        updated.updated_at = Utc::now();
+
+        let series = chart_to_series_dtos(&updated);
+        let binding_y = chart_to_binding_y_dtos(&updated);
+        let dto = chart_to_dto(&updated, series, binding_y);
+        self.repo.upsert(&dto)?;
+
+        self.items[idx] = updated;
+        Ok(())
+    }
+
+    /// Deletes a chart row and evicts it from the cache on success.
+    ///
+    /// Callers that hold a GPUI `Context<AppStateEntity>` must emit
+    /// `AppStateChanged` after a successful return so subscribers (the sidebar,
+    /// open `DashboardDocument` instances) rebuild and show broken-placeholders
+    /// for any panels that referenced this chart.
+    pub fn delete_chart(&mut self, id: Uuid) -> Result<(), StorageError> {
+        self.repo.delete(id)?;
+        self.items.retain(|c| c.id != id);
+        Ok(())
+    }
+
+    /// Deep-copies a chart: new UUID, name prefixed with "Copy of ", same
+    /// profile_id, chart spec, bindings, time range preset, and refresh policy.
+    ///
+    /// Returns the new chart's UUID.
+    pub fn duplicate_chart(&mut self, id: Uuid) -> Result<Uuid, StorageError> {
+        let src = self
+            .items
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| StorageError::Data(format!("saved chart not found: {id}")))?
+            .clone();
+
+        let now = Utc::now();
+        let new_id = Uuid::new_v4();
+
+        let new_chart = SavedChart {
+            id: new_id,
+            name: format!("Copy of {}", src.name),
+            profile_id: src.profile_id,
+            source: src.source.clone(),
+            chart_spec: src.chart_spec.clone(),
+            bindings: src.bindings.clone(),
+            time_range_preset: src.time_range_preset,
+            refresh_policy: src.refresh_policy,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let series = chart_to_series_dtos(&new_chart);
+        let binding_y = chart_to_binding_y_dtos(&new_chart);
+        let dto = chart_to_dto(&new_chart, series, binding_y);
+        self.repo.upsert(&dto)?;
+
+        self.items.push(new_chart);
+        Ok(new_id)
+    }
+
     /// Remove a chart by id. Returns `true` if a record was removed.
     ///
     /// The cache is updated only when the repository delete succeeds.
@@ -838,6 +913,103 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    // ---- rename_chart -------------------------------------------------------
+
+    #[test]
+    fn test_rename_chart_updates_name_in_cache() {
+        let rt = temp_storage();
+        let conn = rt.viz_connection();
+        let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
+        let profile_id = Uuid::new_v4();
+        insert_test_profile(&conn, profile_id);
+
+        let chart = sample_chart("Original", profile_id);
+        let id = chart.id;
+        let mut mgr = SavedChartManager::new(Arc::clone(&repo));
+        mgr.upsert(chart);
+
+        mgr.rename_chart(id, "Renamed".to_string()).unwrap();
+
+        assert_eq!(mgr.chart_by_id(id).unwrap().name, "Renamed");
+
+        // Verify persistence by reloading.
+        let mgr2 = SavedChartManager::new(repo);
+        assert_eq!(mgr2.chart_by_id(id).unwrap().name, "Renamed");
+    }
+
+    #[test]
+    fn test_rename_chart_not_found_returns_err() {
+        let rt = temp_storage();
+        let conn = rt.viz_connection();
+        let repo = Arc::new(SavedChartsRepository::new(conn));
+        let mut mgr = SavedChartManager::new(repo);
+        let result = mgr.rename_chart(Uuid::new_v4(), "X".to_string());
+        assert!(result.is_err());
+    }
+
+    // ---- delete_chart -------------------------------------------------------
+
+    #[test]
+    fn test_delete_chart_removes_from_cache_and_storage() {
+        let rt = temp_storage();
+        let conn = rt.viz_connection();
+        let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
+        let profile_id = Uuid::new_v4();
+        insert_test_profile(&conn, profile_id);
+
+        let chart = sample_chart("ToDelete", profile_id);
+        let id = chart.id;
+        let mut mgr = SavedChartManager::new(Arc::clone(&repo));
+        mgr.upsert(chart);
+        assert_eq!(mgr.all_charts().len(), 1);
+
+        mgr.delete_chart(id).unwrap();
+
+        assert!(mgr.chart_by_id(id).is_none());
+        assert!(mgr.all_charts().is_empty());
+
+        // Verify not in storage either.
+        let mgr2 = SavedChartManager::new(repo);
+        assert!(mgr2.all_charts().is_empty());
+    }
+
+    // ---- duplicate_chart ----------------------------------------------------
+
+    #[test]
+    fn test_duplicate_chart_creates_copy_with_copy_of_prefix() {
+        let rt = temp_storage();
+        let conn = rt.viz_connection();
+        let repo = Arc::new(SavedChartsRepository::new(Arc::clone(&conn)));
+        let profile_id = Uuid::new_v4();
+        insert_test_profile(&conn, profile_id);
+
+        let chart = sample_chart("Original", profile_id);
+        let orig_id = chart.id;
+        let mut mgr = SavedChartManager::new(Arc::clone(&repo));
+        mgr.upsert(chart);
+
+        let dup_id = mgr.duplicate_chart(orig_id).unwrap();
+
+        assert_ne!(orig_id, dup_id);
+        let dup = mgr.chart_by_id(dup_id).unwrap();
+        assert_eq!(dup.name, "Copy of Original");
+        assert_eq!(dup.profile_id, profile_id);
+
+        // Both must appear in storage.
+        let mgr2 = SavedChartManager::new(repo);
+        assert_eq!(mgr2.all_charts().len(), 2);
+    }
+
+    #[test]
+    fn test_duplicate_chart_not_found_returns_err() {
+        let rt = temp_storage();
+        let conn = rt.viz_connection();
+        let repo = Arc::new(SavedChartsRepository::new(conn));
+        let mut mgr = SavedChartManager::new(repo);
+        let result = mgr.duplicate_chart(Uuid::new_v4());
+        assert!(result.is_err());
     }
 
     /// End-to-end integration: metric source upsert → reload → verify all fields
