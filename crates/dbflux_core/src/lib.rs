@@ -115,9 +115,9 @@ pub use query::{
     SemanticRequest, SemanticRequestKind, SortDirection, SqlLanguageService, SqlMutationGenerator,
     TableBrowseRequest, TableCountRequest, TableRef, TextPosition, TextPositionRange, TextRange,
     ValidationResult, classify_query_for_governance, classify_query_for_language,
-    classify_sql_execution, contains_time_macros, detect_dangerous_mongo, detect_dangerous_query,
-    detect_dangerous_redis, detect_dangerous_sql, is_safe_read_query, parse_semantic_filter_json,
-    render_semantic_filter_sql, strip_leading_comments, substitute_time_macros,
+    classify_sql_execution, contains_time_macros, detect_dangerous_query, detect_dangerous_sql,
+    is_safe_read_query, parse_semantic_filter_json, render_semantic_filter_sql,
+    strip_leading_comments, substitute_time_macros,
 };
 
 pub use schema::node_id as schema_node_id;
