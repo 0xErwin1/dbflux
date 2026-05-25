@@ -4,11 +4,14 @@
 //! GPUI integration, sitting between the pure `dbflux_components` layer and the
 //! full `dbflux_ui` crate.
 
+#![recursion_limit = "1024"]
+
 pub mod app_state_entity;
 pub mod async_ext;
 pub mod dashboard_manager;
 pub mod keymap;
 pub mod modal_frame;
+pub mod modals;
 pub mod platform;
 pub mod saved_chart_manager;
 pub mod sql_preview_modal;

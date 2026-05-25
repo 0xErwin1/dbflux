@@ -1927,6 +1927,7 @@ impl Workspace {
     pub(super) fn run_dashboard_import(
         &mut self,
         json: String,
+        name: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1980,7 +1981,11 @@ impl Workspace {
         let dashboard_id = uuid::Uuid::new_v4();
         let dashboard = Dashboard {
             id: dashboard_id,
-            name: "Imported CloudWatch Dashboard".to_string(),
+            name: if name.trim().is_empty() {
+                "Imported Dashboard".to_string()
+            } else {
+                name
+            },
             description: None,
             profile_id: Some(profile_id),
             shared_time_range_preset: None,

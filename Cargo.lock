@@ -2939,6 +2939,7 @@ dependencies = [
  "gpui-component",
  "log",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "uuid",
 ]

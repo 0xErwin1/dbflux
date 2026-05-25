@@ -276,7 +276,7 @@ pub struct Workspace {
     pending_drop_table_item_id: Option<String>,
     /// SSH tunnel passphrase modal.
     modal_tunnel_auth: Entity<crate::ui::overlays::modals::ModalTunnelAuth>,
-    /// Import CloudWatch Dashboard JSON modal.
+    /// Import Dashboard from JSON modal.
     modal_import_dashboard: Entity<crate::ui::overlays::modals::ModalImportDashboard>,
 
     tasks_state: PanelState,
@@ -557,12 +557,12 @@ impl Workspace {
         })
         .detach();
 
-        // Subscribe: ModalImportDashboard — on Confirmed, run the CloudWatch import flow.
+        // Subscribe: ModalImportDashboard — on Confirmed, run the dashboard import flow.
         cx.subscribe_in(
             &modal_import_dashboard,
             window,
             |this, _, event: &crate::ui::overlays::modals::ImportDashboardConfirmed, window, cx| {
-                this.run_dashboard_import(event.json.clone(), window, cx);
+                this.run_dashboard_import(event.json.clone(), event.name.clone(), window, cx);
             },
         )
         .detach();
@@ -1430,7 +1430,7 @@ impl Workspace {
             Self::flatten_script_entries(dir.entries(), &root, &mut items);
         }
 
-        // Add the "Import CloudWatch Dashboard" entry only when the active
+        // Add the "Import Dashboard from JSON" entry only when the active
         // connection advertises the DASHBOARD_IMPORT capability.
         if app_state.active_connection().is_some_and(|a| {
             a.connection
