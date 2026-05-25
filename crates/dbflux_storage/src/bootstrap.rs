@@ -27,6 +27,9 @@ use crate::repositories::state::{
     saved_queries::SavedQueriesRepository, sessions::SessionRepository,
     ui_state::UiStateRepository,
 };
+use crate::repositories::viz_dashboard_panels::DashboardPanelsRepository;
+use crate::repositories::viz_dashboards::DashboardsRepository;
+use crate::repositories::viz_saved_charts::SavedChartsRepository;
 use crate::sqlite;
 
 /// An owned database connection wrapped in Arc for shared access.
@@ -238,6 +241,31 @@ impl StorageRuntime {
         // Wrap the connection in a Mutex for thread-safe access
         let conn = self.open_dbflux_db().expect("should open dbflux db");
         SavedFiltersRepository::new(Arc::new(Mutex::new(conn)))
+    }
+
+    /// Creates a shared `Arc<Mutex<Connection>>` for the viz repositories.
+    ///
+    /// All five viz repos that share this connection will serialize access
+    /// via the same mutex. Callers should create this once and clone the `Arc`
+    /// for each repository that needs it.
+    pub fn viz_connection(&self) -> Arc<std::sync::Mutex<rusqlite::Connection>> {
+        let conn = self.open_dbflux_db().expect("should open dbflux db");
+        Arc::new(std::sync::Mutex::new(conn))
+    }
+
+    /// Creates a `SavedChartsRepository` backed by the unified database.
+    pub fn saved_charts(&self) -> SavedChartsRepository {
+        SavedChartsRepository::new(self.viz_connection())
+    }
+
+    /// Creates a `DashboardsRepository` backed by the unified database.
+    pub fn dashboards_repo(&self) -> DashboardsRepository {
+        DashboardsRepository::new(self.viz_connection())
+    }
+
+    /// Creates a `DashboardPanelsRepository` backed by the unified database.
+    pub fn dashboard_panels_repo(&self) -> DashboardPanelsRepository {
+        DashboardPanelsRepository::new(self.viz_connection())
     }
 
     /// Returns the artifact store for scratch/shadow path management.

@@ -19,6 +19,11 @@ use dbflux_core::{
     ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
 };
 use dbflux_storage::bootstrap::StorageRuntime;
+use dbflux_storage::repositories::viz_dashboard_panels::DashboardPanelsRepository;
+use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
+use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
+use dbflux_storage::repositories::viz_saved_chart_series::SavedChartSeriesRepository;
+use dbflux_storage::repositories::viz_saved_charts::SavedChartsRepository;
 
 #[cfg(feature = "mcp")]
 use dbflux_mcp::{
@@ -123,6 +128,17 @@ pub struct AppState {
     pub session_passphrase_vault: Arc<RwLock<dbflux_ssh::SessionPassphraseVault>>,
     #[cfg(feature = "mcp")]
     mcp_runtime: McpRuntime,
+
+    /// Repository for `viz_saved_charts` and its child tables.
+    pub saved_charts_repo: Arc<SavedChartsRepository>,
+    /// Repository for `viz_saved_chart_series` child rows.
+    pub saved_chart_series_repo: Arc<SavedChartSeriesRepository>,
+    /// Repository for `viz_saved_chart_binding_y` child rows.
+    pub saved_chart_binding_y_repo: Arc<SavedChartBindingYRepository>,
+    /// Repository for `viz_dashboards`.
+    pub dashboards_repo: Arc<DashboardsRepository>,
+    /// Repository for `viz_dashboard_panels` child rows.
+    pub dashboard_panels_repo: Arc<DashboardPanelsRepository>,
 }
 
 impl AppState {
@@ -246,6 +262,19 @@ impl AppState {
         #[cfg(feature = "mcp")]
         let mcp_runtime = McpRuntime::new(audit_service.clone());
 
+        // Construct viz repositories sharing a single connection.
+        // Decision C.1: one shared Arc<Mutex<Connection>> is used for all five repos so
+        // they serialize through the same lock, matching the pattern used by saved_filters.
+        let viz_conn = storage_runtime.viz_connection();
+        let saved_charts_repo = Arc::new(SavedChartsRepository::new(Arc::clone(&viz_conn)));
+        let saved_chart_series_repo =
+            Arc::new(SavedChartSeriesRepository::new(Arc::clone(&viz_conn)));
+        let saved_chart_binding_y_repo =
+            Arc::new(SavedChartBindingYRepository::new(Arc::clone(&viz_conn)));
+        let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&viz_conn)));
+        let dashboard_panels_repo =
+            Arc::new(DashboardPanelsRepository::new(Arc::clone(&viz_conn)));
+
         let mut state = Self {
             facade,
             external_driver_diagnostics,
@@ -266,6 +295,11 @@ impl AppState {
             metric_catalog_cache: crate::metric_catalog_cache::MetricCatalogCache::new(),
             #[cfg(feature = "mcp")]
             mcp_runtime,
+            saved_charts_repo,
+            saved_chart_series_repo,
+            saved_chart_binding_y_repo,
+            dashboards_repo,
+            dashboard_panels_repo,
         };
 
         #[cfg(feature = "mcp")]
@@ -3541,6 +3575,21 @@ mod tests {
     }
 
     /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain
+    #[test]
+    fn test_appstate_repos_accessible() {
+        // Construct AppState with an in-memory StorageRuntime and verify that
+        // the viz repositories are accessible and return empty lists on a fresh DB.
+        let storage_runtime =
+            dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+        let state = AppState::new_with_storage_runtime(storage_runtime);
+
+        let charts = state.saved_charts_repo.list().expect("list saved_charts");
+        assert!(charts.is_empty(), "fresh DB must return empty saved charts");
+
+        let dashboards = state.dashboards_repo.list().expect("list dashboards");
+        assert!(dashboards.is_empty(), "fresh DB must return empty dashboards");
+    }
+
     /// a driver whose `driver_key()` is `"builtin:influxdb"`.
     #[test]
     #[cfg(feature = "influxdb")]
