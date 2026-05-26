@@ -17,8 +17,8 @@
 //!   document; the `Input` entity is lazily created when editing starts.
 //! - The toolbar always renders (even when there are zero panels).
 
-use dbflux_components::controls::{Button, InputState};
-use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
+use dbflux_components::controls::{Button, Dropdown, InputState};
+use dbflux_components::saved_chart::TimeRangePreset;
 use gpui::prelude::*;
 use gpui::{Context, CursorStyle, Entity, IntoElement, MouseButton, Pixels, Window, div, px};
 use gpui_component::InteractiveElementExt;
@@ -101,10 +101,12 @@ pub(crate) struct PanelContextMenu {
 /// Actions available in the per-panel context menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PanelMenuAction {
-    /// Removes the panel from the dashboard.
-    RemovePanel,
+    /// Opens the Configure popover for this panel.
+    Configure,
     /// Opens inline title-edit for this panel.
     EditTitle,
+    /// Removes the panel from the dashboard.
+    RemovePanel,
 }
 
 impl PanelContextMenu {
@@ -112,7 +114,11 @@ impl PanelContextMenu {
         Self {
             panel_index,
             position,
-            items: vec![PanelMenuAction::EditTitle, PanelMenuAction::RemovePanel],
+            items: vec![
+                PanelMenuAction::Configure,
+                PanelMenuAction::EditTitle,
+                PanelMenuAction::RemovePanel,
+            ],
             selected_index: 0,
         }
     }
@@ -150,18 +156,19 @@ pub(super) fn preset_label(preset: TimeRangePreset) -> &'static str {
 /// Renders (left to right):
 /// - Dashboard name: static label (double-click to start inline rename) or an
 ///   inline `Input` when `editing_dashboard_name` is true (Q.2).
-/// - Time-range preset buttons (5 quick selects).
-/// - Refresh policy indicator (Off / Interval N s / On Open) + simple toggle.
-/// - "+ Add Panel" button (always visible).
+/// - `TimeRangePanel` view (preset dropdown + Custom picker) — the canonical
+///   time-range chrome shared with `ChartDocument` and `AuditDocument`.
+/// - Refresh-policy `Dropdown` (Off / 10s / 30s / 1m / 5m).
+/// - "+ Add Panel" primary button anchored to the right edge.
 pub(super) fn dashboard_toolbar(
     dashboard: &DashboardDocument,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
-    let current_preset = dashboard.shared_time_range_preset;
-    let refresh_policy = dashboard.shared_refresh_policy;
     let editing_name = dashboard.editing_dashboard_name;
     let name_input = dashboard.dashboard_name_input.as_ref().cloned();
     let dashboard_title = dashboard.title().to_string();
+    let time_range_panel = dashboard.shared_time_range().clone();
+    let refresh_dropdown = dashboard.refresh_dropdown.clone();
 
     // Q.2: Dashboard name area — inline input when editing, double-click label otherwise.
     let name_area: gpui::AnyElement = if editing_name {
@@ -189,52 +196,13 @@ pub(super) fn dashboard_toolbar(
             .into_any_element()
     };
 
-    // Time-range preset row — five labeled buttons, the active one highlighted.
-    let preset_buttons = TIME_RANGE_PRESETS
-        .iter()
-        .enumerate()
-        .map(|(i, (preset, label))| {
-            let preset = *preset;
-            let is_active = current_preset == Some(preset);
-            let btn = if is_active {
-                Button::new(("dash-preset", i as u32), *label).primary()
-            } else {
-                Button::new(("dash-preset", i as u32), *label)
-            };
+    // Pull the preset dropdown out of the TimeRangePanel so the toolbar can
+    // host it inline rather than embedding the full panel (whose default
+    // render layout is vertically stacked). Custom-range pickers are rendered
+    // below the toolbar when the user picks "Custom…".
+    let preset_dropdown: Entity<Dropdown> = time_range_panel.read(cx).dropdown_time_range.clone();
 
-            let on_click = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                this.set_shared_time_range_preset(preset, cx);
-            });
-
-            btn.on_click(on_click)
-        });
-
-    // Refresh-policy toggle: cycle Off → OnOpen → Interval(60) → Off.
-    let refresh_label = match refresh_policy {
-        SavedChartRefreshPolicy::Off => "Refresh: Off",
-        SavedChartRefreshPolicy::OnOpen => "Refresh: On Open",
-        SavedChartRefreshPolicy::Interval { every_secs } => {
-            let _ = every_secs; // label computed inline below
-            "Refresh: Interval"
-        }
-    };
-    let refresh_label_owned: String = match refresh_policy {
-        SavedChartRefreshPolicy::Interval { every_secs } => {
-            format!("Refresh: every {every_secs}s")
-        }
-        _ => refresh_label.to_string(),
-    };
-
-    let on_refresh_toggle = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-        let next = match this.shared_refresh_policy {
-            SavedChartRefreshPolicy::Off => SavedChartRefreshPolicy::OnOpen,
-            SavedChartRefreshPolicy::OnOpen => SavedChartRefreshPolicy::Interval { every_secs: 60 },
-            SavedChartRefreshPolicy::Interval { .. } => SavedChartRefreshPolicy::Off,
-        };
-        this.set_shared_refresh_policy(next, cx);
-    });
-
-    // "+ Add Panel" toolbar button.
+    // "+ Add Panel" toolbar button (anchored right).
     let on_add_panel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
         this.request_add_panel(cx);
     });
@@ -248,9 +216,14 @@ pub(super) fn dashboard_toolbar(
         .p(px(8.0)) // guardrail-allow: toolbar padding
         .w_full()
         .child(name_area)
-        .children(preset_buttons)
-        .child(Button::new("dash-refresh-toggle", refresh_label_owned).on_click(on_refresh_toggle))
-        .child(Button::new("dash-add-panel-toolbar", "+ Add Panel").on_click(on_add_panel))
+        .child(preset_dropdown)
+        .child(refresh_dropdown)
+        .child(div().flex_1())
+        .child(
+            Button::new("dash-add-panel-toolbar", "+ Add Panel")
+                .primary()
+                .on_click(on_add_panel),
+        )
 }
 
 /// Returns the panel-header element for a single panel slot.
@@ -547,14 +520,16 @@ mod tests {
         assert_eq!(slot, 0);
     }
 
-    /// `PanelContextMenu` is constructed with the correct panel_index and two items.
+    /// `PanelContextMenu` is constructed with the correct panel_index and the
+    /// canonical action set in order: Configure, EditTitle, RemovePanel.
     #[test]
-    fn panel_context_menu_has_two_items() {
+    fn panel_context_menu_has_canonical_items() {
         let menu = PanelContextMenu::new(3, gpui::Point::default());
         assert_eq!(menu.panel_index, 3);
-        assert_eq!(menu.items.len(), 2);
-        assert_eq!(menu.items[0], PanelMenuAction::EditTitle);
-        assert_eq!(menu.items[1], PanelMenuAction::RemovePanel);
+        assert_eq!(menu.items.len(), 3);
+        assert_eq!(menu.items[0], PanelMenuAction::Configure);
+        assert_eq!(menu.items[1], PanelMenuAction::EditTitle);
+        assert_eq!(menu.items[2], PanelMenuAction::RemovePanel);
     }
 
     /// `DragReorderState` starts as active and preserves the from/drop indices.

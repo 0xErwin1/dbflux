@@ -1023,6 +1023,150 @@ impl ChartDocument {
         self.embedded
     }
 
+    // ---- Accessors used by host documents (e.g. DashboardDocument Configure popover) ----
+
+    /// Returns the current chart kind from the underlying `ChartShell`.
+    pub fn chart_kind(&self, cx: &App) -> dbflux_components::chart::ChartKind {
+        self.chart_shell.read(cx).chart_kind()
+    }
+
+    /// Returns the active binding spec from the underlying `ChartShell`.
+    pub fn active_bindings(&self, cx: &App) -> dbflux_components::chart::BindingSpec {
+        self.chart_shell.read(cx).active_bindings()
+    }
+
+    /// Returns the column metadata from the last successful execution, when present.
+    pub fn last_result_columns(&self) -> Option<Vec<dbflux_core::ColumnMeta>> {
+        self.last_result.as_ref().map(|r| r.columns.clone())
+    }
+
+    /// Returns the currently open axis pill on the underlying `ChartShell`.
+    pub fn axis_open_pill(&self, cx: &App) -> Option<dbflux_components::chart::AxisPill> {
+        self.chart_shell.read(cx).axis_open_pill
+    }
+
+    /// Toggle an axis pill open/closed on the underlying `ChartShell`.
+    pub fn toggle_axis_pill(
+        &mut self,
+        pill: dbflux_components::chart::AxisPill,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart_shell
+            .update(cx, |shell, cx| shell.toggle_axis_pill(pill, cx));
+    }
+
+    /// Apply a chart kind change through the underlying `ChartShell`. The shell
+    /// handles cx.notify() internally.
+    pub fn apply_chart_kind(
+        &mut self,
+        kind: dbflux_components::chart::ChartKind,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart_shell
+            .update(cx, |shell, cx| shell.set_chart_kind(kind, cx));
+    }
+
+    /// Apply a binding-spec change through the underlying `ChartShell`.
+    pub fn apply_binding_spec(
+        &mut self,
+        bindings: dbflux_components::chart::BindingSpec,
+        cx: &mut Context<Self>,
+    ) {
+        self.chart_shell
+            .update(cx, |shell, cx| shell.apply_bindings(bindings, cx));
+    }
+
+    /// Toggle the stats rail on the underlying `ChartShell`. Mirrors the
+    /// internal `on_toggle_stats_rail` handler used by `ChartDocument`'s own
+    /// toolbar so the dashboard Configure popover behaves identically.
+    pub fn toggle_stats_rail(&mut self, cx: &mut Context<Self>) {
+        self.chart_shell.update(cx, |shell, cx| {
+            let (open, tab) = if shell.chart_rail_open
+                && shell.chart_rail_tab == crate::chart::ChartRailTab::Stats
+            {
+                (false, shell.chart_rail_tab)
+            } else {
+                (true, crate::chart::ChartRailTab::Stats)
+            };
+            shell.chart_rail_open = open;
+            shell.chart_rail_tab = tab;
+            cx.notify();
+        });
+    }
+
+    /// Schedule a "PNG export coming soon" toast. The host document's render
+    /// loop drains `pending_toast` and surfaces it through the global toast host.
+    pub fn schedule_png_export_toast(&mut self, cx: &mut Context<Self>) {
+        self.pending_toast = Some(PendingToast {
+            message: "PNG export coming in v0.7".to_string(),
+            is_error: false,
+        });
+        cx.notify();
+    }
+
+    /// Persist the current `chart_spec` + bindings back to `SavedChart` storage.
+    ///
+    /// Looks up the chart record by `saved_chart_id` (no-op if the document was
+    /// never saved), mutates its `chart_spec` to reflect the latest in-memory
+    /// shell state, and re-upserts it. Failures are routed through
+    /// `record_storage_failure` and surfaced as a toast via `pending_toast`.
+    ///
+    /// Returns `true` on success, `false` if there was nothing to persist or
+    /// the upsert failed. After a successful persist the chart re-executes via
+    /// `mark_pending_reexecute` so the panel renders against the new bindings.
+    pub fn persist_chart_spec_and_reexecute(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(chart_id) = self.saved_chart_id else {
+            return false;
+        };
+
+        // Read the existing saved record so we preserve unrelated fields
+        // (name, profile_id, source, refresh_policy, time_range_preset, ...).
+        let existing = self
+            .app_state
+            .read(cx)
+            .saved_charts
+            .chart_by_id(chart_id)
+            .cloned();
+        let Some(mut saved) = existing else {
+            return false;
+        };
+
+        let kind = self.chart_kind(cx);
+        let bindings = self.active_bindings(cx);
+
+        saved.chart_spec.kind = kind;
+        saved.chart_spec.binding = bindings.clone();
+        saved.bindings = bindings;
+
+        let title = saved.name.clone();
+        let persist_result = self.app_state.update(cx, |state, _cx| {
+            state.saved_charts.upsert(saved).inspect_err(|e| {
+                state.record_storage_failure(
+                    dbflux_core::observability::actions::CONFIG_UPDATE,
+                    "saved_chart",
+                    chart_id.to_string(),
+                    format!("Failed to save chart '{title}'"),
+                    e.to_string(),
+                );
+            })
+        });
+
+        match persist_result {
+            Ok(_) => {
+                self.mark_pending_reexecute(cx);
+                true
+            }
+            Err(e) => {
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Failed to save chart: {e}"),
+                    is_error: true,
+                });
+                cx.notify();
+                false
+            }
+        }
+    }
+
     /// Produce a `ViewHandle` that lets `ResultPanel` host `ChartDocument`.
     ///
     /// The three header segments (title Left/0, Run Left/1, Save Right/0) are

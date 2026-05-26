@@ -8,6 +8,7 @@
 //! connection with concurrent queries.
 
 mod builder;
+mod configure_popover;
 pub mod pane;
 mod render;
 
@@ -17,7 +18,7 @@ use super::types::{DocumentId, DocumentState};
 use builder::{DragReorderState, DragResizeState, PanelContextMenu};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
-use dbflux_components::controls::InputState;
+use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
 use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity, DashboardPanel, DashboardPanelDraft};
@@ -25,6 +26,36 @@ use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Pixels, Point, Subscription, Window};
 use std::collections::VecDeque;
 use uuid::Uuid;
+
+/// Refresh-policy options exposed in the dashboard toolbar `Dropdown`.
+///
+/// Each entry pairs a `SavedChartRefreshPolicy` with the label shown in the
+/// dropdown trigger and items. Order is fixed so `index` lookups stay stable.
+pub(crate) const REFRESH_POLICY_OPTIONS: &[(SavedChartRefreshPolicy, &str)] = &[
+    (SavedChartRefreshPolicy::Off, "Off"),
+    (SavedChartRefreshPolicy::Interval { every_secs: 10 }, "10s"),
+    (SavedChartRefreshPolicy::Interval { every_secs: 30 }, "30s"),
+    (SavedChartRefreshPolicy::Interval { every_secs: 60 }, "1m"),
+    (SavedChartRefreshPolicy::Interval { every_secs: 300 }, "5m"),
+];
+
+/// Returns the index of `policy` inside `REFRESH_POLICY_OPTIONS`, falling back
+/// to `0` (Off) for any policy not in the canonical list.
+pub(crate) fn refresh_policy_index(policy: SavedChartRefreshPolicy) -> usize {
+    REFRESH_POLICY_OPTIONS
+        .iter()
+        .position(|(p, _)| *p == policy)
+        .unwrap_or(0)
+}
+
+/// Returns the policy at `index` inside `REFRESH_POLICY_OPTIONS`, falling
+/// back to `Off` for out-of-range indices.
+pub(crate) fn refresh_policy_from_index(index: usize) -> SavedChartRefreshPolicy {
+    REFRESH_POLICY_OPTIONS
+        .get(index)
+        .map(|(p, _)| *p)
+        .unwrap_or(SavedChartRefreshPolicy::Off)
+}
 
 /// Maximum number of panels that may re-execute concurrently.
 ///
@@ -183,6 +214,14 @@ pub struct DashboardDocument {
     /// the user to close and re-open the dashboard.
     pub(crate) pending_panels_sync: bool,
 
+    /// Refresh-policy `Dropdown` entity rendered in the toolbar. Wired through
+    /// `set_shared_refresh_policy` on `DropdownSelectionChanged`.
+    pub(crate) refresh_dropdown: Entity<Dropdown>,
+
+    /// Index of the panel whose Configure popover is currently open.
+    /// `None` means no popover is shown.
+    pub(crate) pending_configure_panel_index: Option<usize>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -248,6 +287,29 @@ impl DashboardDocument {
         );
         subscriptions.push(time_range_sub);
 
+        // Capture the user's preset choice from the TimeRangePanel's preset
+        // dropdown and persist it via `set_shared_time_range_preset`. The
+        // TimeRangeChanged event (above) only carries (start_ms, end_ms), so
+        // preset identity is read off the dropdown selection here.
+        let preset_dropdown = shared_time_range.read(cx).dropdown_time_range.clone();
+        let preset_persist_sub = cx.subscribe(
+            &preset_dropdown,
+            |this: &mut Self, _, event: &DropdownSelectionChanged, cx| {
+                let preset = match event.index {
+                    0 => Some(TimeRangePreset::Last15min),
+                    1 => Some(TimeRangePreset::LastHour),
+                    2 => Some(TimeRangePreset::Last6Hours),
+                    3 => Some(TimeRangePreset::Last24Hours),
+                    4 => Some(TimeRangePreset::Last7Days),
+                    _ => None,
+                };
+                if let Some(preset) = preset {
+                    this.set_shared_time_range_preset(preset, cx);
+                }
+            },
+        );
+        subscriptions.push(preset_persist_sub);
+
         // Subscribe each loaded panel to ExecutionFinished to drain the queue.
         for (idx, slot) in panel_slots.iter().enumerate() {
             if let DashboardPanelSlot::Loaded { panel, .. } = slot {
@@ -278,6 +340,29 @@ impl DashboardDocument {
                 cx.notify();
             });
         subscriptions.push(app_state_sub);
+
+        // Build the toolbar refresh-policy dropdown. Items mirror
+        // `REFRESH_POLICY_OPTIONS` exactly; the selected index reflects the
+        // persisted policy on construction.
+        let refresh_dropdown = cx.new(|_cx| {
+            let items: Vec<DropdownItem> = REFRESH_POLICY_OPTIONS
+                .iter()
+                .map(|(_, label)| DropdownItem::new(*label))
+                .collect();
+            Dropdown::new("dashboard-refresh")
+                .items(items)
+                .selected_index(Some(refresh_policy_index(shared_refresh_policy)))
+                .compact_trigger(true)
+        });
+
+        let refresh_dropdown_sub = cx.subscribe(
+            &refresh_dropdown,
+            |this: &mut Self, _, event: &DropdownSelectionChanged, cx| {
+                let policy = refresh_policy_from_index(event.index);
+                this.set_shared_refresh_policy(policy, cx);
+            },
+        );
+        subscriptions.push(refresh_dropdown_sub);
 
         // Clamp grid_columns to [1, 4] for V1. The schema permits 1–12 but
         // the render only supports up to 4 at this time.
@@ -310,8 +395,97 @@ impl DashboardDocument {
             drag_resize: None,
             panel_context_menu: None,
             pending_panels_sync: false,
+            refresh_dropdown,
+            pending_configure_panel_index: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    // ---- Configure popover (per-panel chart settings) ----
+
+    /// Open the per-panel Configure popover for the panel at `panel_index`.
+    pub fn start_configure_panel(&mut self, panel_index: usize, cx: &mut Context<Self>) {
+        self.pending_configure_panel_index = Some(panel_index);
+        cx.notify();
+    }
+
+    /// Close the Configure popover without applying any pending change.
+    pub fn close_configure_panel(&mut self, cx: &mut Context<Self>) {
+        if self.pending_configure_panel_index.is_some() {
+            self.pending_configure_panel_index = None;
+            cx.notify();
+        }
+    }
+
+    /// Returns the index of the panel whose Configure popover is currently open.
+    pub fn pending_configure_panel_index(&self) -> Option<usize> {
+        self.pending_configure_panel_index
+    }
+
+    /// Apply the chart kind to the panel at `panel_index` through its
+    /// `ChartDocument`. Persists the change and triggers re-execution.
+    /// No-op for `Orphan` slots or out-of-bounds indices.
+    pub fn configure_apply_chart_kind(
+        &mut self,
+        panel_index: usize,
+        kind: dbflux_components::chart::ChartKind,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(DashboardPanelSlot::Loaded { panel, .. }) = self.panel_slots.get(panel_index) {
+            let panel = panel.clone();
+            panel.update(cx, |doc, cx| {
+                doc.apply_chart_kind(kind, cx);
+            });
+        }
+    }
+
+    /// Apply a binding-spec change to the panel at `panel_index`.
+    pub fn configure_apply_bindings(
+        &mut self,
+        panel_index: usize,
+        bindings: dbflux_components::chart::BindingSpec,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(DashboardPanelSlot::Loaded { panel, .. }) = self.panel_slots.get(panel_index) {
+            let panel = panel.clone();
+            panel.update(cx, |doc, cx| {
+                doc.apply_binding_spec(bindings, cx);
+            });
+        }
+    }
+
+    /// Toggle the panel's stats rail.
+    pub fn configure_toggle_stats(&mut self, panel_index: usize, cx: &mut Context<Self>) {
+        if let Some(DashboardPanelSlot::Loaded { panel, .. }) = self.panel_slots.get(panel_index) {
+            let panel = panel.clone();
+            panel.update(cx, |doc, cx| {
+                doc.toggle_stats_rail(cx);
+            });
+        }
+    }
+
+    /// Schedule a "PNG export coming soon" toast on the panel.
+    pub fn configure_export_png(&mut self, panel_index: usize, cx: &mut Context<Self>) {
+        if let Some(DashboardPanelSlot::Loaded { panel, .. }) = self.panel_slots.get(panel_index) {
+            let panel = panel.clone();
+            panel.update(cx, |doc, cx| {
+                doc.schedule_png_export_toast(cx);
+            });
+        }
+    }
+
+    /// Persist the panel's current chart spec + bindings and trigger a
+    /// re-execute against the new configuration. Closes the popover on
+    /// completion (whether the persist succeeded or failed — the toast carries
+    /// the error message).
+    pub fn configure_apply_and_persist(&mut self, panel_index: usize, cx: &mut Context<Self>) {
+        if let Some(DashboardPanelSlot::Loaded { panel, .. }) = self.panel_slots.get(panel_index) {
+            let panel = panel.clone();
+            panel.update(cx, |doc, cx| {
+                doc.persist_chart_spec_and_reexecute(cx);
+            });
+        }
+        self.close_configure_panel(cx);
     }
 
     // ---- public accessors ----
@@ -881,6 +1055,9 @@ impl DashboardDocument {
         let panel_index = menu.panel_index;
 
         match action {
+            builder::PanelMenuAction::Configure => {
+                self.start_configure_panel(panel_index as usize, cx);
+            }
             builder::PanelMenuAction::RemovePanel => {
                 self.remove_panel(panel_index, cx);
             }
@@ -1901,6 +2078,77 @@ mod tests {
             "editing_dashboard_name must be false after cancel"
         );
         assert!(!has_input, "dashboard_name_input must be None after cancel");
+    }
+
+    /// Configure popover: `start_configure_panel` sets the pending index and
+    /// `close_configure_panel` clears it.
+    #[gpui::test]
+    fn configure_popover_open_close_round_trip(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let dashboard_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let dashboard_ref = dashboard_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let dashboard = make_empty_dashboard(app_state, window, cx);
+            dashboard_ref.replace(Some(dashboard.clone()));
+            gpui_component::Root::new(dashboard, window, cx)
+        });
+
+        let dashboard = dashboard_holder
+            .borrow()
+            .clone()
+            .expect("dashboard entity must be created");
+
+        // Default state: no popover open.
+        let pending = window.update(|_, cx| dashboard.read(cx).pending_configure_panel_index());
+        assert_eq!(
+            pending, None,
+            "pending_configure_panel_index must default to None"
+        );
+
+        // Open the popover at index 0 (valid even for an empty dashboard — the
+        // open/close state-machine does not validate the index; the render
+        // path returns None for missing slots so no popover is shown).
+        window.update(|_, cx| {
+            dashboard.update(cx, |doc, cx| doc.start_configure_panel(0, cx));
+        });
+        let pending = window.update(|_, cx| dashboard.read(cx).pending_configure_panel_index());
+        assert_eq!(
+            pending,
+            Some(0),
+            "start_configure_panel must set pending_configure_panel_index"
+        );
+
+        // Close the popover.
+        window.update(|_, cx| {
+            dashboard.update(cx, |doc, cx| doc.close_configure_panel(cx));
+        });
+        let pending = window.update(|_, cx| dashboard.read(cx).pending_configure_panel_index());
+        assert_eq!(
+            pending, None,
+            "close_configure_panel must clear pending_configure_panel_index"
+        );
+    }
+
+    /// Refresh-policy index ↔ policy round-trip is bijective for every entry
+    /// in `REFRESH_POLICY_OPTIONS`.
+    #[test]
+    fn refresh_policy_index_round_trip() {
+        for (i, (policy, _)) in REFRESH_POLICY_OPTIONS.iter().enumerate() {
+            assert_eq!(refresh_policy_index(*policy), i);
+            assert_eq!(refresh_policy_from_index(i), *policy);
+        }
+    }
+
+    /// Out-of-range index maps to `Off`.
+    #[test]
+    fn refresh_policy_from_index_out_of_range_is_off() {
+        assert_eq!(
+            refresh_policy_from_index(9999),
+            SavedChartRefreshPolicy::Off
+        );
     }
 
     /// Q.9 — `start_panel_title_edit` with an `Orphan` slot at index 0 must

@@ -26,6 +26,7 @@
 //!   inline `Input` instead of a static string (tab title rename, Q.2).
 
 use super::builder::{self, PanelMenuAction};
+use super::configure_popover;
 use super::{DashboardDocument, DashboardPanelSlot};
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::surface_card;
@@ -256,6 +257,7 @@ impl Render for DashboardDocument {
                 .enumerate()
                 .map(|(i, action)| {
                     let label = match action {
+                        PanelMenuAction::Configure => "Configure…",
                         PanelMenuAction::EditTitle => "Edit title…",
                         PanelMenuAction::RemovePanel => "Remove panel",
                     };
@@ -300,6 +302,21 @@ impl Render for DashboardDocument {
             div().id("panel-ctx-menu-placeholder").into_any_element()
         };
 
+        // Configure popover overlay — opened from kebab → Configure….
+        let configure_overlay: gpui::AnyElement =
+            if let Some(panel_index) = self.pending_configure_panel_index {
+                match configure_popover::render_configure_popover(self, panel_index, cx) {
+                    Some(el) => deferred(el).into_any_element(),
+                    None => div()
+                        .id("dashboard-configure-placeholder")
+                        .into_any_element(),
+                }
+            } else {
+                div()
+                    .id("dashboard-configure-placeholder")
+                    .into_any_element()
+            };
+
         div()
             .flex()
             .flex_col()
@@ -314,6 +331,7 @@ impl Render for DashboardDocument {
                     .children(panel_children),
             )
             .child(context_menu_overlay)
+            .child(configure_overlay)
     }
 }
 
@@ -532,10 +550,13 @@ mod tests {
         assert_eq!(TOOLBAR_BTN_ID, "dash-add-panel-toolbar");
     }
 
-    /// Q.9: toolbar refresh-toggle button ID is stable.
+    /// Toolbar refresh `Dropdown` ID is stable.
+    ///
+    /// Replaced the previous hand-rolled `dash-refresh-toggle` button. The
+    /// dropdown is now the canonical refresh control alongside `TimeRangePanel`.
     #[test]
     fn q9_refresh_toggle_id_stable() {
-        const REFRESH_ID: &str = "dash-refresh-toggle";
-        assert_eq!(REFRESH_ID, "dash-refresh-toggle");
+        const REFRESH_DROPDOWN_ID: &str = "dashboard-refresh";
+        assert_eq!(REFRESH_DROPDOWN_ID, "dashboard-refresh");
     }
 }
