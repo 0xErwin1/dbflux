@@ -318,26 +318,22 @@ impl DashboardManager {
 
     /// Insert or replace a dashboard by `id`.
     ///
-    /// Returns `true` when an existing record was replaced, `false` when a
-    /// new record was inserted. Cache updated only on success.
-    pub fn upsert_dashboard(&mut self, dashboard: Dashboard) -> bool {
+    /// Returns `Ok(true)` when an existing record was replaced, `Ok(false)`
+    /// when a new record was inserted. Cache updated only on success; on
+    /// failure the error propagates so the caller can surface a toast and
+    /// emit an audit event.
+    pub fn upsert_dashboard(&mut self, dashboard: Dashboard) -> Result<bool, StorageError> {
         let dto = dashboard_to_dto(&dashboard);
         let is_update = self.dashboards.iter().any(|d| d.id == dashboard.id);
 
-        match self.dashboards_repo.upsert(&dto) {
-            Ok(()) => {
-                if let Some(existing) = self.dashboards.iter_mut().find(|d| d.id == dashboard.id) {
-                    *existing = dashboard;
-                } else {
-                    self.dashboards.push(dashboard);
-                }
-                is_update
-            }
-            Err(e) => {
-                log::error!("DashboardManager: upsert_dashboard failed: {e}");
-                is_update
-            }
+        self.dashboards_repo.upsert(&dto)?;
+
+        if let Some(existing) = self.dashboards.iter_mut().find(|d| d.id == dashboard.id) {
+            *existing = dashboard;
+        } else {
+            self.dashboards.push(dashboard);
         }
+        Ok(is_update)
     }
 
     /// Replace all panels for a dashboard atomically.
@@ -761,26 +757,21 @@ impl DashboardManager {
         Ok(())
     }
 
-    /// Remove a dashboard by id. Returns `true` if a record was removed.
+    /// Remove a dashboard by id. Returns `Ok(true)` if a record was removed,
+    /// `Ok(false)` if no dashboard with that id was present.
     ///
-    /// Cache (dashboards + panels) updated only on success.
-    pub fn remove_dashboard(&mut self, id: Uuid) -> bool {
+    /// Cache (dashboards + panels) updated only on success; storage failures
+    /// propagate so the caller can surface a toast and emit an audit event.
+    pub fn remove_dashboard(&mut self, id: Uuid) -> Result<bool, StorageError> {
         let was_present = self.dashboards.iter().any(|d| d.id == id);
         if !was_present {
-            return false;
+            return Ok(false);
         }
 
-        match self.dashboards_repo.delete(id) {
-            Ok(()) => {
-                self.dashboards.retain(|d| d.id != id);
-                self.panels.remove(&id);
-                true
-            }
-            Err(e) => {
-                log::error!("DashboardManager: remove_dashboard failed: {e}");
-                false
-            }
-        }
+        self.dashboards_repo.delete(id)?;
+        self.dashboards.retain(|d| d.id != id);
+        self.panels.remove(&id);
+        Ok(true)
     }
 }
 

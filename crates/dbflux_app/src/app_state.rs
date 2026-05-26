@@ -2333,6 +2333,31 @@ impl AppState {
         self.audit_degraded
     }
 
+    /// Record a `Config` failure event for a storage write that did not
+    /// reach the database (typically a `StorageError` from a Manager).
+    ///
+    /// `action`, `object_type`, and `object_id` describe the attempted
+    /// mutation; `summary` is the human-readable headline shown in the audit
+    /// viewer; `error_message` carries the underlying error string. The
+    /// summary and error message must NOT contain secret values.
+    pub fn record_storage_failure(
+        &self,
+        action: dbflux_core::observability::AuditAction,
+        object_type: &'static str,
+        object_id: String,
+        summary: String,
+        error_message: String,
+    ) {
+        self.record_config_event(
+            EventOutcome::Failure,
+            action,
+            object_type,
+            object_id,
+            summary,
+            Some(error_message),
+        );
+    }
+
     pub fn connection_tree(&self) -> &dbflux_core::ConnectionTree {
         &self.facade.tree.tree
     }

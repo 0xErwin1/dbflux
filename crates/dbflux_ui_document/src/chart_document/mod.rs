@@ -955,16 +955,35 @@ impl ChartDocument {
         // Preserve the ID so upsert overwrites the existing record.
         saved.id = id;
 
-        self.app_state.update(cx, |state, _cx| {
-            state.saved_charts.upsert(saved);
+        let persist_result = self.app_state.update(cx, |state, _cx| {
+            state.saved_charts.upsert(saved).map_err(|e| {
+                state.record_storage_failure(
+                    dbflux_core::observability::actions::CONFIG_UPDATE,
+                    "saved_chart",
+                    id.to_string(),
+                    format!("Failed to save chart '{name}'"),
+                    e.to_string(),
+                );
+                e
+            })
         });
 
-        self.saved_chart_id = Some(id);
-        self.title = name;
-        self.pending_toast = Some(PendingToast {
-            message: "Chart saved".to_string(),
-            is_error: false,
-        });
+        match persist_result {
+            Ok(_) => {
+                self.saved_chart_id = Some(id);
+                self.title = name;
+                self.pending_toast = Some(PendingToast {
+                    message: "Chart saved".to_string(),
+                    is_error: false,
+                });
+            }
+            Err(e) => {
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Failed to save chart: {e}"),
+                    is_error: true,
+                });
+            }
+        }
 
         cx.notify();
     }

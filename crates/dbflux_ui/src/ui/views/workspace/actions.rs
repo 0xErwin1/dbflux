@@ -2061,15 +2061,57 @@ impl Workspace {
             panels.push(panel);
         }
 
-        // Persist charts, dashboard, and panels.
-        self.app_state.update(cx, |state, _cx| {
-            for chart in &charts {
-                state.saved_charts.upsert(chart.clone());
-            }
+        // Persist charts, dashboard, and panels. Collect the first storage
+        // failure so we can surface it to the user and record an audit event.
+        let persist_result: Result<(), (String, String)> = self
+            .app_state
+            .update(cx, |state, _cx| {
+                for chart in &charts {
+                    if let Err(e) = state.saved_charts.upsert(chart.clone()) {
+                        state.record_storage_failure(
+                            dbflux_core::observability::actions::CONFIG_CREATE,
+                            "saved_chart",
+                            chart.id.to_string(),
+                            format!("Failed to persist imported chart '{}'", chart.name),
+                            e.to_string(),
+                        );
+                        return Err((chart.name.clone(), e.to_string()));
+                    }
+                }
 
-            state.dashboards.upsert_dashboard(dashboard);
-            let _ = state.dashboards.replace_panels(dashboard_id, panels);
-        });
+                if let Err(e) = state.dashboards.upsert_dashboard(dashboard.clone()) {
+                    state.record_storage_failure(
+                        dbflux_core::observability::actions::CONFIG_CREATE,
+                        "dashboard",
+                        dashboard.id.to_string(),
+                        format!("Failed to persist imported dashboard '{}'", dashboard.name),
+                        e.to_string(),
+                    );
+                    return Err((dashboard.name.clone(), e.to_string()));
+                }
+
+                if let Err(e) = state.dashboards.replace_panels(dashboard_id, panels) {
+                    state.record_storage_failure(
+                        dbflux_core::observability::actions::CONFIG_UPDATE,
+                        "dashboard_panels",
+                        dashboard_id.to_string(),
+                        "Failed to persist imported dashboard panels".to_string(),
+                        e.to_string(),
+                    );
+                    return Err((dashboard.name.clone(), e.to_string()));
+                }
+
+                Ok(())
+            });
+
+        if let Err((name, message)) = persist_result {
+            Toast::error(format!(
+                "Failed to save dashboard '{name}': {message}"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
+            return;
+        }
 
         Toast::info(format!(
             "Imported {} panels into a new dashboard.",
@@ -2643,7 +2685,7 @@ impl Workspace {
         };
 
         let chart = SavedChart::new_query(
-            name,
+            name.clone(),
             profile_id,
             query,
             placeholder_spec,
@@ -2652,7 +2694,16 @@ impl Workspace {
         let chart_id = chart.id;
 
         let append_result = self.app_state.update(cx, |state, _cx| {
-            state.saved_charts.upsert(chart);
+            if let Err(e) = state.saved_charts.upsert(chart) {
+                state.record_storage_failure(
+                    dbflux_core::observability::actions::CONFIG_CREATE,
+                    "saved_chart",
+                    chart_id.to_string(),
+                    format!("Failed to persist chart '{name}' for new panel"),
+                    e.to_string(),
+                );
+                return Err(e);
+            }
             state.dashboards.append_panels(
                 dashboard_id,
                 vec![DashboardPanelDraft {
@@ -2714,7 +2765,7 @@ impl Workspace {
         };
 
         let chart = SavedChart::new_metric(
-            name,
+            name.clone(),
             profile_id,
             namespace,
             metric_name,
@@ -2728,7 +2779,16 @@ impl Workspace {
         let chart_id = chart.id;
 
         let append_result = self.app_state.update(cx, |state, _cx| {
-            state.saved_charts.upsert(chart);
+            if let Err(e) = state.saved_charts.upsert(chart) {
+                state.record_storage_failure(
+                    dbflux_core::observability::actions::CONFIG_CREATE,
+                    "saved_chart",
+                    chart_id.to_string(),
+                    format!("Failed to persist metric chart '{name}' for new panel"),
+                    e.to_string(),
+                );
+                return Err(e);
+            }
             state.dashboards.append_panels(
                 dashboard_id,
                 vec![DashboardPanelDraft {

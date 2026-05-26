@@ -615,30 +615,25 @@ impl SavedChartManager {
 
     /// Insert or replace a chart by `id`.
     ///
-    /// Returns `true` when an existing record was replaced, `false` when a
-    /// new record was inserted. The cache is updated only when the repository
-    /// write succeeds.
-    pub fn upsert(&mut self, chart: SavedChart) -> bool {
+    /// Returns `Ok(true)` when an existing record was replaced, `Ok(false)`
+    /// when a new record was inserted. The cache is updated only when the
+    /// repository write succeeds; on failure the error is propagated to the
+    /// caller so it can surface a toast and emit an audit event.
+    pub fn upsert(&mut self, chart: SavedChart) -> Result<bool, StorageError> {
         let series = chart_to_series_dtos(&chart);
         let binding_y = chart_to_binding_y_dtos(&chart);
         let dto = chart_to_dto(&chart, series, binding_y);
 
         let is_update = self.items.iter().any(|c| c.id == chart.id);
 
-        match self.repo.upsert(&dto) {
-            Ok(()) => {
-                if let Some(existing) = self.items.iter_mut().find(|c| c.id == chart.id) {
-                    *existing = chart;
-                } else {
-                    self.items.push(chart);
-                }
-                is_update
-            }
-            Err(e) => {
-                log::error!("SavedChartManager: upsert failed: {e}");
-                is_update
-            }
+        self.repo.upsert(&dto)?;
+
+        if let Some(existing) = self.items.iter_mut().find(|c| c.id == chart.id) {
+            *existing = chart;
+        } else {
+            self.items.push(chart);
         }
+        Ok(is_update)
     }
 
     /// All charts whose `profile_id` matches the given id.
@@ -732,22 +727,15 @@ impl SavedChartManager {
     /// Remove a chart by id. Returns `true` if a record was removed.
     ///
     /// The cache is updated only when the repository delete succeeds.
-    pub fn remove(&mut self, id: Uuid) -> bool {
+    pub fn remove(&mut self, id: Uuid) -> Result<bool, StorageError> {
         let was_present = self.items.iter().any(|c| c.id == id);
         if !was_present {
-            return false;
+            return Ok(false);
         }
 
-        match self.repo.delete(id) {
-            Ok(()) => {
-                self.items.retain(|c| c.id != id);
-                true
-            }
-            Err(e) => {
-                log::error!("SavedChartManager: delete failed: {e}");
-                false
-            }
-        }
+        self.repo.delete(id)?;
+        self.items.retain(|c| c.id != id);
+        Ok(true)
     }
 }
 

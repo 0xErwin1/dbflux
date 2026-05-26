@@ -943,13 +943,29 @@ impl DataGridPanel {
             _ => return,
         };
 
-        self.app_state.update(cx, |app, _cx| {
-            app.saved_charts.upsert(chart);
+        let chart_id = chart.id;
+        let persist_result = self.app_state.update(cx, |app, _cx| {
+            app.saved_charts.upsert(chart).map_err(|e| {
+                app.record_storage_failure(
+                    dbflux_core::observability::actions::CONFIG_CREATE,
+                    "saved_chart",
+                    chart_id.to_string(),
+                    format!("Failed to save chart '{name}'"),
+                    e.to_string(),
+                );
+                e
+            })
         });
 
-        self.pending_toast = Some(dbflux_ui_base::toast::PendingToast {
-            message: format!("Chart \"{}\" saved", name),
-            is_error: false,
+        self.pending_toast = Some(match persist_result {
+            Ok(_) => dbflux_ui_base::toast::PendingToast {
+                message: format!("Chart \"{}\" saved", name),
+                is_error: false,
+            },
+            Err(e) => dbflux_ui_base::toast::PendingToast {
+                message: format!("Failed to save chart \"{name}\": {e}"),
+                is_error: true,
+            },
         });
 
         cx.notify();
