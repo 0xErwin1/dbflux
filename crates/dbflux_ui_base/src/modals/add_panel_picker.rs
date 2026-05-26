@@ -7,8 +7,8 @@ use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::MetricDescriptor;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, IntoElement, MouseButton, Render,
-    SharedString, Subscription, Window, div, px,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, FontWeight, IntoElement,
+    MouseButton, Render, SharedString, Subscription, Window, div, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
@@ -465,6 +465,7 @@ impl ModalAddPanelPicker {
     fn render_tab_strip(&self, cx: &mut Context<Self>) -> AnyElement {
         let visible = self.visible_tabs();
         let active = self.active_tab;
+        let theme = cx.theme();
 
         let buttons: Vec<AnyElement> = visible
             .into_iter()
@@ -496,7 +497,10 @@ impl ModalAddPanelPicker {
         div()
             .flex()
             .items_center()
-            .gap(Spacing::XS)
+            .gap(Spacing::SM)
+            .pb(Spacing::SM)
+            .border_b_1()
+            .border_color(theme.border)
             .children(buttons)
             .into_any_element()
     }
@@ -518,7 +522,7 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Search").into_any_element())
+            .child(Text::subsection_label("Search").into_any_element())
             .child(Input::new(&self.search_input))
             .into_any_element();
 
@@ -586,7 +590,7 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Name").into_any_element())
+            .child(Text::subsection_label("Name").into_any_element())
             .child(Input::new(&self.query_name_input))
             .into_any_element();
 
@@ -595,7 +599,7 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Query").into_any_element())
+            .child(Text::subsection_label("Query").into_any_element())
             .child(
                 div()
                     .border_1()
@@ -614,14 +618,14 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Chart kind").into_any_element())
+            .child(Text::subsection_label("Chart kind").into_any_element())
             .child(self.render_chart_kind_picker(cx))
             .into_any_element();
 
         div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
+            .gap(Spacing::LG)
             .child(name_row)
             .child(query_row)
             .child(kind_row)
@@ -654,7 +658,12 @@ impl ModalAddPanelPicker {
                     .py(Spacing::XS)
                     .text_sm()
                     .cursor_pointer()
-                    .when(is_selected, |el| el.bg(theme.selection))
+                    .when(is_selected, |el| {
+                        el.bg(theme.accent)
+                            .text_color(theme.accent_foreground)
+                            .font_weight(FontWeight::SEMIBOLD)
+                    })
+                    .when(!is_selected, |el| el.hover(|s| s.bg(theme.muted)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
@@ -668,7 +677,6 @@ impl ModalAddPanelPicker {
             })
             .collect();
 
-        let theme = cx.theme();
         div()
             .border_1()
             .border_color(theme.border)
@@ -730,7 +738,12 @@ impl ModalAddPanelPicker {
                     .py(Spacing::XS)
                     .text_sm()
                     .cursor_pointer()
-                    .when(is_selected, |el| el.bg(theme.selection))
+                    .when(is_selected, |el| {
+                        el.bg(theme.accent)
+                            .text_color(theme.accent_foreground)
+                            .font_weight(FontWeight::SEMIBOLD)
+                    })
+                    .when(!is_selected, |el| el.hover(|s| s.bg(theme.muted)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
@@ -758,7 +771,7 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Name").into_any_element())
+            .child(Text::subsection_label("Name").into_any_element())
             .child(Input::new(&self.metric_name_input))
             .into_any_element();
 
@@ -769,7 +782,7 @@ impl ModalAddPanelPicker {
             .min_w_0()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Namespace").into_any_element())
+            .child(Text::subsection_label("Namespace").into_any_element())
             .child(Input::new(&self.metric_namespace_filter_input))
             .child(self.render_namespace_list(cx))
             .into_any_element();
@@ -780,7 +793,7 @@ impl ModalAddPanelPicker {
             .min_w_0()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Metric").into_any_element())
+            .child(Text::subsection_label("Metric").into_any_element())
             .child(self.render_metric_list(cx))
             .into_any_element();
 
@@ -797,7 +810,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .w(px(180.0))
-            .child(Text::label("Period (seconds)").into_any_element())
+            .child(Text::subsection_label("Period (seconds)").into_any_element())
             .child(Input::new(&self.metric_period_input))
             .into_any_element();
 
@@ -828,7 +841,7 @@ impl ModalAddPanelPicker {
             .flex_1()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Statistic").into_any_element())
+            .child(Text::subsection_label("Statistic").into_any_element())
             .child(
                 div()
                     .flex()
@@ -850,7 +863,7 @@ impl ModalAddPanelPicker {
         div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
+            .gap(Spacing::LG)
             .child(name_row)
             .child(picker_row)
             .child(period_stat_row)
@@ -885,7 +898,7 @@ impl Render for ModalAddPanelPicker {
         let body = div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
+            .gap(Spacing::LG)
             .child(tab_strip)
             .child(body_inner)
             .into_any_element();
