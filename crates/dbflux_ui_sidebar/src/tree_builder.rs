@@ -543,9 +543,23 @@ impl Sidebar {
         dashboards.sort_by_key(|d| std::cmp::Reverse(d.updated_at));
 
         if dashboards.is_empty() {
+            let can_import = state
+                .connections()
+                .get(&profile_id)
+                .map(|conn| conn.connection.metadata().capabilities)
+                .is_some_and(|caps| {
+                    caps.contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
+                });
+
+            let hint = if can_import {
+                "No dashboards yet — right-click to create or import"
+            } else {
+                "No dashboards yet — right-click to create"
+            };
+
             return vec![TreeItem::new(
                 format!("dashboards_empty:{profile_id}"),
-                "No dashboards yet — right-click to create".to_string(),
+                hint.to_string(),
             )];
         }
 
@@ -576,7 +590,7 @@ impl Sidebar {
         if charts.is_empty() {
             return vec![TreeItem::new(
                 format!("saved_charts_empty:{profile_id}"),
-                "No saved charts yet".to_string(),
+                "No saved charts yet — save a chart from a query result".to_string(),
             )];
         }
 
@@ -2617,6 +2631,159 @@ mod tests {
         let second_id: dbflux_core::SchemaNodeId = children[1].id.as_ref().parse().unwrap();
         assert!(
             matches!(second_id, dbflux_core::SchemaNodeId::DashboardItem { dashboard_id, .. } if dashboard_id == id_old)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Capability-aware empty hint tests (Gap 4)
+    // -----------------------------------------------------------------------
+
+    /// Minimal `Connection` implementation that lets tests control capability flags.
+    struct CapabilityConnection {
+        metadata: dbflux_core::DriverMetadata,
+    }
+
+    impl CapabilityConnection {
+        fn with_capabilities(capabilities: dbflux_core::DriverCapabilities) -> Self {
+            Self {
+                metadata: dbflux_core::DriverMetadata {
+                    id: "test".to_string(),
+                    display_name: "Test".to_string(),
+                    description: "test connection".to_string(),
+                    category: dbflux_core::DatabaseCategory::Relational,
+                    deployment_class: None,
+                    query_language: dbflux_core::QueryLanguage::Sql,
+                    capabilities,
+                    default_port: None,
+                    uri_scheme: "test".to_string(),
+                    icon: dbflux_core::Icon::Database,
+                    syntax: None,
+                    query: None,
+                    mutation: None,
+                    ddl: None,
+                    transactions: None,
+                    limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
+                    classification_override: None,
+                },
+            }
+        }
+    }
+
+    impl dbflux_core::Connection for CapabilityConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _req: &dbflux_core::QueryRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported(
+                "test connection".to_string(),
+            ))
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+    }
+
+    /// Build a minimal `ConnectedProfile` backed by `CapabilityConnection`.
+    fn make_connected_profile(
+        _profile_id: Uuid,
+        capabilities: dbflux_core::DriverCapabilities,
+    ) -> dbflux_core::ConnectedProfile {
+        use std::path::PathBuf;
+        use std::sync::Arc;
+        dbflux_core::ConnectedProfile {
+            profile: dbflux_core::ConnectionProfile::new(
+                "test",
+                dbflux_core::DbConfig::SQLite {
+                    path: PathBuf::from(":memory:"),
+                    connection_id: None,
+                },
+            ),
+            connection: Arc::new(CapabilityConnection::with_capabilities(capabilities)),
+            schema: None,
+            database_schemas: HashMap::new(),
+            table_details: HashMap::new(),
+            collection_children: HashMap::new(),
+            schema_types: HashMap::new(),
+            schema_indexes: HashMap::new(),
+            schema_foreign_keys: HashMap::new(),
+            schema_routines: HashMap::new(),
+            dependents_cache: HashMap::new(),
+            active_database: None,
+            redis_key_cache: dbflux_core::RedisKeyCache::default(),
+            database_connections: HashMap::new(),
+            proxy_tunnel: None,
+        }
+    }
+
+    #[test]
+    fn dashboard_empty_hint_includes_import_when_driver_has_dashboard_import_capability() {
+        let (mut state, profile_id) = make_state_with_profile();
+
+        let connected = make_connected_profile(
+            profile_id,
+            dbflux_core::DriverCapabilities::DASHBOARD_IMPORT,
+        );
+        state.connections_mut().insert(profile_id, connected);
+
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(
+            children.len(),
+            1,
+            "empty state must produce one placeholder"
+        );
+        let label = children[0].label.to_string().to_ascii_lowercase();
+        assert!(
+            label.contains("import"),
+            "hint must mention 'import' when driver has DASHBOARD_IMPORT: {label:?}"
+        );
+    }
+
+    #[test]
+    fn dashboard_empty_hint_excludes_import_when_driver_lacks_dashboard_import_capability() {
+        let (state, profile_id) = make_state_with_profile();
+        // No connected profile inserted — connection map stays empty.
+
+        let children = Sidebar::build_dashboard_children(profile_id, &state);
+        assert_eq!(
+            children.len(),
+            1,
+            "empty state must produce one placeholder"
+        );
+        let label = children[0].label.to_string().to_ascii_lowercase();
+        assert!(
+            !label.contains("import"),
+            "hint must not mention 'import' without DASHBOARD_IMPORT: {label:?}"
         );
     }
 }

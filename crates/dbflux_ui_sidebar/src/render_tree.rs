@@ -820,6 +820,10 @@ pub(super) fn render_tree_item(
                             | SchemaNodeKind::CustomType
                             | SchemaNodeKind::ScriptsFolder
                             | SchemaNodeKind::ScriptFile
+                            | SchemaNodeKind::DashboardsFolder
+                            | SchemaNodeKind::SavedChartsFolder
+                            | SchemaNodeKind::DashboardItem
+                            | SchemaNodeKind::SavedChartItem
                     ),
                     |el| {
                         let sidebar_for_menu = sidebar_entity.clone();
@@ -883,6 +887,10 @@ pub(super) fn render_tree_item(
                             | SchemaNodeKind::CustomType
                             | SchemaNodeKind::ScriptsFolder
                             | SchemaNodeKind::ScriptFile
+                            | SchemaNodeKind::DashboardsFolder
+                            | SchemaNodeKind::SavedChartsFolder
+                            | SchemaNodeKind::DashboardItem
+                            | SchemaNodeKind::SavedChartItem
                     ),
                     |el| {
                         let sidebar_for_ctx = sidebar_entity.clone();
@@ -919,6 +927,76 @@ pub(super) fn render_tree_item(
     }
 
     list_item
+}
+
+/// Returns the icon variant for a node kind without any color or theme context.
+///
+/// This is the testable core of `resolve_node_icon`. It covers only the icon
+/// selection; callers are responsible for applying the appropriate color.
+/// Returns `None` for kinds that fall through to the `_ =>` fallback (no
+/// dedicated icon).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn icon_for_node_kind(
+    node_kind: SchemaNodeKind,
+    label: &str,
+    parsed_id: &Option<SchemaNodeId>,
+) -> Option<AppIcon> {
+    match node_kind {
+        SchemaNodeKind::ConnectionFolder => Some(AppIcon::Folder),
+        SchemaNodeKind::Profile => None, // icon comes from the driver's Icon, handled separately
+        SchemaNodeKind::Database => Some(AppIcon::Database),
+        SchemaNodeKind::Schema => Some(AppIcon::Layers),
+        SchemaNodeKind::TablesFolder => Some(AppIcon::Table),
+        SchemaNodeKind::ViewsFolder => Some(AppIcon::Eye),
+        SchemaNodeKind::TypesFolder => Some(AppIcon::Braces),
+        SchemaNodeKind::Table => Some(AppIcon::Table),
+        SchemaNodeKind::View => Some(AppIcon::Eye),
+        SchemaNodeKind::CustomType => Some(AppIcon::Braces),
+        SchemaNodeKind::ColumnsFolder => Some(AppIcon::Columns),
+        SchemaNodeKind::IndexesFolder | SchemaNodeKind::SchemaIndexesFolder => Some(AppIcon::Hash),
+        SchemaNodeKind::ForeignKeysFolder | SchemaNodeKind::SchemaForeignKeysFolder => {
+            Some(AppIcon::KeyRound)
+        }
+        SchemaNodeKind::RoutinesFolder => Some(AppIcon::Parentheses),
+        SchemaNodeKind::Routine => Some(resolve_routine_kind_icon(label)),
+        SchemaNodeKind::ConstraintsFolder => Some(AppIcon::Lock),
+        SchemaNodeKind::Column => Some(resolve_column_type_icon(label)),
+        SchemaNodeKind::Index | SchemaNodeKind::SchemaIndex => Some(AppIcon::Hash),
+        SchemaNodeKind::ForeignKey | SchemaNodeKind::SchemaForeignKey => Some(AppIcon::KeyRound),
+        SchemaNodeKind::Constraint => Some(AppIcon::Lock),
+        SchemaNodeKind::CollectionsFolder => Some(AppIcon::Folder),
+        SchemaNodeKind::Collection => Some(AppIcon::Box),
+        SchemaNodeKind::CollectionChild => Some(AppIcon::ScrollText),
+        SchemaNodeKind::DatabaseIndexesFolder | SchemaNodeKind::CollectionIndexesFolder => {
+            Some(AppIcon::Hash)
+        }
+        SchemaNodeKind::CollectionFieldsFolder => Some(AppIcon::Columns),
+        SchemaNodeKind::CollectionField => Some(resolve_collection_field_type_icon(label)),
+        SchemaNodeKind::CollectionIndex => Some(AppIcon::Hash),
+        SchemaNodeKind::ScriptsFolder => Some(AppIcon::Folder),
+        SchemaNodeKind::ScriptFile => {
+            let icon = parsed_id
+                .as_ref()
+                .and_then(|n| match n {
+                    SchemaNodeId::ScriptFile { path } => Some(path.as_str()),
+                    _ => None,
+                })
+                .and_then(|p| dbflux_core::QueryLanguage::from_path(std::path::Path::new(p)))
+                .map(|lang| AppIcon::for_language(&lang))
+                .unwrap_or(AppIcon::ScrollText);
+            Some(icon)
+        }
+        SchemaNodeKind::DependentsFolder => Some(AppIcon::Link2),
+        SchemaNodeKind::DependentItem => Some(AppIcon::ExternalLink),
+        SchemaNodeKind::MetricsFolder => Some(AppIcon::ChartSpline),
+        SchemaNodeKind::MetricNamespaceFolder => Some(AppIcon::Folder),
+        SchemaNodeKind::MetricLeaf => Some(AppIcon::ChartSpline),
+        SchemaNodeKind::DashboardsFolder => Some(AppIcon::ChartColumnBig),
+        SchemaNodeKind::DashboardItem => Some(AppIcon::ChartColumnBig),
+        SchemaNodeKind::SavedChartsFolder => Some(AppIcon::ChartArea),
+        SchemaNodeKind::SavedChartItem => Some(AppIcon::ChartArea),
+        _ => None,
+    }
 }
 
 fn resolve_node_icon(
@@ -1012,6 +1090,14 @@ fn resolve_node_icon(
         SchemaNodeKind::MetricsFolder => (Some(AppIcon::ChartSpline), "", params.color_orange),
         SchemaNodeKind::MetricNamespaceFolder => (Some(AppIcon::Folder), "", params.color_orange),
         SchemaNodeKind::MetricLeaf => (Some(AppIcon::ChartSpline), "", params.color_teal),
+        SchemaNodeKind::DashboardsFolder => {
+            (Some(AppIcon::ChartColumnBig), "", params.color_orange)
+        }
+        SchemaNodeKind::DashboardItem => {
+            (Some(AppIcon::ChartColumnBig), "", theme.muted_foreground)
+        }
+        SchemaNodeKind::SavedChartsFolder => (Some(AppIcon::ChartArea), "", params.color_orange),
+        SchemaNodeKind::SavedChartItem => (Some(AppIcon::ChartArea), "", theme.muted_foreground),
         _ => (None, "", theme.muted_foreground),
     }
 }
@@ -1129,7 +1215,7 @@ fn resolve_label_color(
 
 #[cfg(test)]
 mod tests {
-    use super::sidebar_tree_label;
+    use super::{icon_for_node_kind, sidebar_tree_label};
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
     use dbflux_core::SchemaNodeKind;
@@ -1185,5 +1271,45 @@ mod tests {
         assert_eq!(folder.weight_override, Some(FontWeight::MEDIUM));
         assert_eq!(active_profile.weight_override, Some(FontWeight::SEMIBOLD));
         assert_eq!(active_database.weight_override, Some(FontWeight::SEMIBOLD));
+    }
+
+    // -----------------------------------------------------------------------
+    // Icon resolver — new dashboard / saved-charts node kinds
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dashboards_folder_icon_is_some() {
+        let icon = icon_for_node_kind(SchemaNodeKind::DashboardsFolder, "", &None);
+        assert!(
+            icon.is_some(),
+            "DashboardsFolder must have a dedicated icon (was None)"
+        );
+    }
+
+    #[test]
+    fn dashboard_item_icon_is_some() {
+        let icon = icon_for_node_kind(SchemaNodeKind::DashboardItem, "", &None);
+        assert!(
+            icon.is_some(),
+            "DashboardItem must have a dedicated icon (was None)"
+        );
+    }
+
+    #[test]
+    fn saved_charts_folder_icon_is_some() {
+        let icon = icon_for_node_kind(SchemaNodeKind::SavedChartsFolder, "", &None);
+        assert!(
+            icon.is_some(),
+            "SavedChartsFolder must have a dedicated icon (was None)"
+        );
+    }
+
+    #[test]
+    fn saved_chart_item_icon_is_some() {
+        let icon = icon_for_node_kind(SchemaNodeKind::SavedChartItem, "", &None);
+        assert!(
+            icon.is_some(),
+            "SavedChartItem must have a dedicated icon (was None)"
+        );
     }
 }
