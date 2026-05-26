@@ -1,6 +1,6 @@
 #define MyAppName "DBFlux"
 #ifndef MyAppVersion
-#define MyAppVersion "0.6.0-dev.8"
+#define MyAppVersion "0.6.0-dev.9"
 #endif
 #define MyAppPublisher "Ignacio Perez"
 #define MyAppURL "https://github.com/0xErwin1/dbflux"

@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-dev.9] - 2026-05-26
+
 ### Added
 
 * **Metric picker rail tab for chart documents** — CloudWatch metric charts now
@@ -158,6 +160,30 @@ All notable changes to DBFlux will be documented in this file.
   subscription. The subscription still fires for `selected_time_range`
   mirroring, but re-execution is no longer gated on its delivery
   timing (#121).
+* **Connection + sidebar UX batch** — cancelling a connect task now
+  also clears the profile-level pending-operation entry so the
+  sidebar exits the "(connecting...)" state immediately. Editing a
+  currently-connected profile surfaces a "Reconnect now / Later"
+  toast; the edit always persists and the live session refreshes
+  only on opt-in. Reopening Settings after closing it no longer
+  wastes the first click (stale window handle cleared on close and
+  on focus failure). Ctrl+click in the sidebar now seeds the
+  keyboard-focused item into the multi-selection before toggling,
+  matching the visual cursor (#145).
+* **Row inspector follows the active tab and selection** — the
+  workspace inspector rail used to be a singleton with no per-tab
+  state, so switching tabs left a previous table's inspector
+  rendered against the new tab's chrome. `DataGridPanel` now
+  remembers `(row, col)` when the inspector opens and re-snapshots
+  the row on tab activation, result refresh, and selection
+  changes (click / arrow keys). Rows that fall out of bounds after
+  a refresh close the rail cleanly. Explicit dismissal (× / ESC)
+  drops the cached coords so the rail stays closed on return.
+  Inspector column-name and value cells now share a flex layout
+  (140px / 220px basis) with ellipsis truncation, so long names
+  no longer wrap and resizing the rail redistributes width across
+  both columns. `Ctrl+A` / `Cmd+A` inside an inline cell editor
+  now selects the input text instead of all table rows (#145).
 
 ## [0.6.0-dev.8] - 2026-05-23
 
