@@ -163,6 +163,8 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::DependentsFolder
                 | SchemaNodeKind::MetricsFolder
                 | SchemaNodeKind::MetricNamespaceFolder
+                | SchemaNodeKind::DashboardsFolder
+                | SchemaNodeKind::SavedChartsFolder
         ));
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
