@@ -1627,4 +1627,226 @@ mod tests {
         // so Orphan slots are skipped. Structural compile guarantee only.
         let _ = slots.get_mut(0);
     }
+
+    // ---- GPUI render-level tests (Q.9) ----
+    //
+    // These tests exercise `DashboardDocument` as a live GPUI entity inside a
+    // window context. Fixture pattern copied from
+    // `data_grid_panel/mod.rs:2079-2120`.
+
+    fn isolated_test_app_state(cx: &mut gpui::TestAppContext) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        })
+    }
+
+    fn init_test_runtime(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| dbflux_ui_base::toast::ToastHost::new());
+            cx.set_global(dbflux_ui_base::toast::ToastGlobal { host });
+        });
+    }
+
+    /// Build a minimal `DashboardDocument` entity inside the given window
+    /// context, with zero panel slots and a fresh `TimeRangePanel`.
+    fn make_empty_dashboard(
+        app_state: gpui::Entity<AppStateEntity>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> gpui::Entity<DashboardDocument> {
+        let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", None, window, cx));
+
+        cx.new(|cx| {
+            DashboardDocument::new(
+                Uuid::nil(),
+                "Test Dashboard".to_string(),
+                Vec::new(),
+                shared_time_range,
+                2,
+                None,
+                SavedChartRefreshPolicy::Off,
+                app_state,
+                cx,
+            )
+        })
+    }
+
+    /// Q.9 — constructing a `DashboardDocument` with zero panels in a window
+    /// context and rendering it must not panic.
+    ///
+    /// The `Render` impl produces the empty-state "+ Add Panel" CTA when
+    /// `panel_slots` is empty. This test verifies the render path completes
+    /// without unwrap panics or out-of-bounds accesses.
+    #[gpui::test]
+    fn empty_dashboard_renders_without_panic(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        cx.add_window_view(|window, cx| {
+            let dashboard = make_empty_dashboard(app_state, window, cx);
+            gpui_component::Root::new(dashboard, window, cx)
+        });
+    }
+
+    /// Q.9 — `start_dashboard_name_edit` sets `editing_dashboard_name = true`
+    /// and populates `dashboard_name_input`; `cancel_dashboard_name_edit` clears
+    /// both fields.
+    #[gpui::test]
+    fn start_dashboard_name_edit_constructs_input_state(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let dashboard_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let dashboard_ref = dashboard_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let dashboard = make_empty_dashboard(app_state, window, cx);
+            dashboard_ref.replace(Some(dashboard.clone()));
+            gpui_component::Root::new(dashboard, window, cx)
+        });
+
+        let dashboard = dashboard_holder
+            .borrow()
+            .clone()
+            .expect("dashboard entity must be created");
+
+        // Before edit: both fields must be in their default cleared state.
+        let (editing, has_input) = window.update(|_, cx| {
+            let doc = dashboard.read(cx);
+            (
+                doc.editing_dashboard_name,
+                doc.dashboard_name_input.is_some(),
+            )
+        });
+        assert!(
+            !editing,
+            "editing_dashboard_name must be false before edit starts"
+        );
+        assert!(
+            !has_input,
+            "dashboard_name_input must be None before edit starts"
+        );
+
+        // Start the edit.
+        window.update(|window, cx| {
+            dashboard.update(cx, |doc, cx| {
+                doc.start_dashboard_name_edit(window, cx);
+            });
+        });
+
+        let (editing, has_input) = window.update(|_, cx| {
+            let doc = dashboard.read(cx);
+            (
+                doc.editing_dashboard_name,
+                doc.dashboard_name_input.is_some(),
+            )
+        });
+        assert!(editing, "editing_dashboard_name must be true after start");
+        assert!(has_input, "dashboard_name_input must be Some after start");
+
+        // Cancel the edit — both fields must be cleared again.
+        window.update(|_, cx| {
+            dashboard.update(cx, |doc, cx| {
+                doc.cancel_dashboard_name_edit(cx);
+            });
+        });
+
+        let (editing, has_input) = window.update(|_, cx| {
+            let doc = dashboard.read(cx);
+            (
+                doc.editing_dashboard_name,
+                doc.dashboard_name_input.is_some(),
+            )
+        });
+        assert!(
+            !editing,
+            "editing_dashboard_name must be false after cancel"
+        );
+        assert!(!has_input, "dashboard_name_input must be None after cancel");
+    }
+
+    /// Q.9 — `start_panel_title_edit` with an `Orphan` slot at index 0 must
+    /// leave `editing_title_panel_index` and `panel_title_input` unchanged
+    /// because the match arm for non-Loaded slots returns early.
+    ///
+    /// Note: testing with a `Loaded` slot requires constructing an
+    /// `Entity<ChartDocument>`. That is feasible (no live connection required at
+    /// construction time) but adds fixture depth beyond what is needed to verify
+    /// the Orphan early-return path. A separate test exercising the Loaded path
+    /// via `ChartDocument::new` can be added if needed.
+    #[gpui::test]
+    fn start_panel_title_edit_orphan_slot_leaves_state_unchanged(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let dashboard_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let dashboard_ref = dashboard_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", None, window, cx));
+
+            let orphan_slot = DashboardPanelSlot::Orphan {
+                saved_chart_id: Uuid::new_v4(),
+                grid_pos: PanelGridPos {
+                    grid_row: 0,
+                    grid_column: 0,
+                    grid_width: 1,
+                    grid_height: 1,
+                },
+            };
+
+            let dashboard = cx.new(|cx| {
+                DashboardDocument::new(
+                    Uuid::nil(),
+                    "Orphan Dashboard".to_string(),
+                    vec![orphan_slot],
+                    shared_time_range,
+                    2,
+                    None,
+                    SavedChartRefreshPolicy::Off,
+                    app_state,
+                    cx,
+                )
+            });
+
+            dashboard_ref.replace(Some(dashboard.clone()));
+            gpui_component::Root::new(dashboard, window, cx)
+        });
+
+        let dashboard = dashboard_holder
+            .borrow()
+            .clone()
+            .expect("dashboard entity must be created");
+
+        // Attempt to start a title edit on the orphan slot (index 0).
+        window.update(|window, cx| {
+            dashboard.update(cx, |doc, cx| {
+                doc.start_panel_title_edit(0, window, cx);
+            });
+        });
+
+        // Both edit fields must remain in their cleared default state because
+        // `start_panel_title_edit` returns early for non-Loaded slots.
+        let (editing_index, has_input) = window.update(|_, cx| {
+            let doc = dashboard.read(cx);
+            (
+                doc.editing_title_panel_index,
+                doc.panel_title_input.is_some(),
+            )
+        });
+        assert_eq!(
+            editing_index, None,
+            "editing_title_panel_index must remain None for an Orphan slot"
+        );
+        assert!(
+            !has_input,
+            "panel_title_input must remain None for an Orphan slot"
+        );
+    }
 }
