@@ -434,6 +434,7 @@ impl ModalAddPanelPicker {
         is_selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = cx.theme();
         let checkbox = div()
             .w(Heights::ICON_SM)
             .h(Heights::ICON_SM)
@@ -442,7 +443,7 @@ impl ModalAddPanelPicker {
             .flex()
             .items_center()
             .justify_center()
-            .when(is_selected, |el| el.bg(gpui::blue()))
+            .when(is_selected, |el| el.bg(theme.selection))
             .into_any_element();
 
         div()
@@ -600,8 +601,11 @@ impl ModalAddPanelPicker {
                     .border_1()
                     .border_color(theme.border)
                     .rounded(Radii::SM)
-                    .h(px(160.0))
-                    .child(Input::new(&self.query_input))
+                    .bg(theme.background)
+                    .h(px(320.0))
+                    .p(Spacing::SM)
+                    .overflow_hidden()
+                    .child(Input::new(&self.query_input).w_full().h_full())
                     .into_any_element(),
             )
             .into_any_element();
@@ -628,6 +632,7 @@ impl ModalAddPanelPicker {
         let Some(request) = self.request.as_ref() else {
             return div().into_any_element();
         };
+        let theme = cx.theme();
         let filter = self
             .metric_namespace_filter_input
             .read(cx)
@@ -649,7 +654,7 @@ impl ModalAddPanelPicker {
                     .py(Spacing::XS)
                     .text_sm()
                     .cursor_pointer()
-                    .when(is_selected, |el| el.bg(gpui::blue()))
+                    .when(is_selected, |el| el.bg(theme.selection))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
@@ -668,7 +673,7 @@ impl ModalAddPanelPicker {
             .border_1()
             .border_color(theme.border)
             .rounded(Radii::SM)
-            .h(px(140.0))
+            .h(px(260.0))
             .overflow_y_scrollbar()
             .children(rows)
             .into_any_element()
@@ -685,7 +690,7 @@ impl ModalAddPanelPicker {
                 .border_1()
                 .border_color(theme.border)
                 .rounded(Radii::SM)
-                .h(px(140.0))
+                .h(px(260.0))
                 .p(Spacing::SM)
                 .child(Text::body("Loading…").into_any_element())
                 .into_any_element();
@@ -696,7 +701,7 @@ impl ModalAddPanelPicker {
                 .border_1()
                 .border_color(theme.border)
                 .rounded(Radii::SM)
-                .h(px(140.0))
+                .h(px(260.0))
                 .p(Spacing::SM)
                 .child(Text::body("No metrics in this namespace.").into_any_element())
                 .into_any_element();
@@ -725,7 +730,7 @@ impl ModalAddPanelPicker {
                     .py(Spacing::XS)
                     .text_sm()
                     .cursor_pointer()
-                    .when(is_selected, |el| el.bg(gpui::blue()))
+                    .when(is_selected, |el| el.bg(theme.selection))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
@@ -742,7 +747,7 @@ impl ModalAddPanelPicker {
             .border_1()
             .border_color(theme.border)
             .rounded(Radii::SM)
-            .h(px(140.0))
+            .h(px(260.0))
             .overflow_y_scrollbar()
             .children(rows)
             .into_any_element()
@@ -757,8 +762,11 @@ impl ModalAddPanelPicker {
             .child(Input::new(&self.metric_name_input))
             .into_any_element();
 
-        let namespace_row = div()
+        // Two-column row: Namespace (with filter) on the left, Metric on the right.
+        let namespace_column = div()
             .flex()
+            .flex_1()
+            .min_w_0()
             .flex_col()
             .gap(Spacing::XS)
             .child(Text::label("Namespace").into_any_element())
@@ -766,18 +774,29 @@ impl ModalAddPanelPicker {
             .child(self.render_namespace_list(cx))
             .into_any_element();
 
-        let metric_row = div()
+        let metric_column = div()
             .flex()
+            .flex_1()
+            .min_w_0()
             .flex_col()
             .gap(Spacing::XS)
             .child(Text::label("Metric").into_any_element())
             .child(self.render_metric_list(cx))
             .into_any_element();
 
+        let picker_row = div()
+            .flex()
+            .items_start()
+            .gap(Spacing::MD)
+            .child(namespace_column)
+            .child(metric_column)
+            .into_any_element();
+
         let period_row = div()
             .flex()
             .flex_col()
             .gap(Spacing::XS)
+            .w(px(180.0))
             .child(Text::label("Period (seconds)").into_any_element())
             .child(Input::new(&self.metric_period_input))
             .into_any_element();
@@ -804,8 +823,9 @@ impl ModalAddPanelPicker {
             })
             .collect();
 
-        let stat_row = div()
+        let stat_column = div()
             .flex()
+            .flex_1()
             .flex_col()
             .gap(Spacing::XS)
             .child(Text::label("Statistic").into_any_element())
@@ -819,15 +839,21 @@ impl ModalAddPanelPicker {
             )
             .into_any_element();
 
+        let period_stat_row = div()
+            .flex()
+            .items_end()
+            .gap(Spacing::MD)
+            .child(period_row)
+            .child(stat_column)
+            .into_any_element();
+
         div()
             .flex()
             .flex_col()
             .gap(Spacing::MD)
             .child(name_row)
-            .child(namespace_row)
-            .child(metric_row)
-            .child(period_row)
-            .child(stat_row)
+            .child(picker_row)
+            .child(period_stat_row)
             .into_any_element()
     }
 }
@@ -886,7 +912,7 @@ impl Render for ModalAddPanelPicker {
             );
 
         ModalShell::new("Add panels", body, footer.into_any_element())
-            .width(gpui::px(600.0))
+            .width(gpui::px(900.0))
             .into_any_element()
     }
 }
