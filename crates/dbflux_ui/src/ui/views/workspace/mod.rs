@@ -14,7 +14,7 @@ use dbflux_ui_base::modals::{
     DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
     DeleteSavedChartRequest, ModalAddPanelPicker, ModalCreateDashboard,
     ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm, ModalRenameItem, RenameItemOutcome,
-    RenameItemRequest, RenameTarget,
+    RenameItemRequest, RenameTarget, RequestMetricsForNamespace,
 };
 
 #[cfg(feature = "mcp")]
@@ -635,18 +635,68 @@ impl Workspace {
         )
         .detach();
 
-        // Subscribe: ModalAddPanelPicker — on Confirmed, append panels to the dashboard.
+        // Subscribe: ModalAddPanelPicker — handle all three submission paths.
         cx.subscribe_in(
             &modal_add_panel,
             window,
-            |this, _, outcome: &AddPanelOutcome, window, cx| {
-                if let AddPanelOutcome::Confirmed {
+            |this, _, outcome: &AddPanelOutcome, window, cx| match outcome.clone() {
+                AddPanelOutcome::Confirmed {
                     dashboard_id,
                     chart_ids,
-                } = outcome.clone()
-                {
+                } => {
                     this.on_add_panels_confirmed(dashboard_id, chart_ids, window, cx);
                 }
+                AddPanelOutcome::CreateFromQuery {
+                    dashboard_id,
+                    profile_id,
+                    name,
+                    query,
+                    chart_kind,
+                } => {
+                    this.on_create_panel_from_query(
+                        dashboard_id,
+                        profile_id,
+                        name,
+                        query,
+                        chart_kind,
+                        window,
+                        cx,
+                    );
+                }
+                AddPanelOutcome::CreateFromMetric {
+                    dashboard_id,
+                    profile_id,
+                    name,
+                    namespace,
+                    metric_name,
+                    dimensions,
+                    period_seconds,
+                    statistic,
+                } => {
+                    this.on_create_panel_from_metric(
+                        dashboard_id,
+                        profile_id,
+                        name,
+                        namespace,
+                        metric_name,
+                        dimensions,
+                        period_seconds,
+                        statistic,
+                        window,
+                        cx,
+                    );
+                }
+                AddPanelOutcome::Cancelled => {}
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalAddPanelPicker — fetch metrics for a namespace on demand.
+        cx.subscribe_in(
+            &modal_add_panel,
+            window,
+            |this, modal, ev: &RequestMetricsForNamespace, _window, cx| {
+                this.on_request_metrics_for_namespace(modal.clone(), ev.clone(), cx);
             },
         )
         .detach();

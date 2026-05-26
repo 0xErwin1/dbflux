@@ -2508,7 +2508,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let profile_id = self
+        let profile_id_opt = self
             .app_state
             .read(cx)
             .dashboards
@@ -2516,7 +2516,7 @@ impl Workspace {
             .and_then(|d| d.profile_id);
 
         let candidates: Vec<dbflux_components::saved_chart::SavedChart> =
-            if let Some(pid) = profile_id {
+            if let Some(pid) = profile_id_opt {
                 self.app_state
                     .read(cx)
                     .saved_charts
@@ -2528,16 +2528,226 @@ impl Workspace {
                 Vec::new()
             };
 
+        // Pre-load metric namespaces and detect capability for the active
+        // connection backing this dashboard's profile (driver-agnostic via
+        // DriverCapabilities::METRIC_CATALOG + the metric_catalog() seam).
+        let (profile_id, has_metric_catalog, metric_namespaces) = if let Some(pid) = profile_id_opt
+        {
+            let app_state = self.app_state.read(cx);
+            if let Some(connected) = app_state.connections().get(&pid) {
+                let has = connected
+                    .connection
+                    .metadata()
+                    .capabilities
+                    .contains(DriverCapabilities::METRIC_CATALOG);
+                let namespaces = if has {
+                    match connected.connection.metric_catalog() {
+                        Some(catalog) => match catalog.list_namespaces() {
+                            Ok(list) => list,
+                            Err(e) => {
+                                log::warn!("Failed to load metric namespaces: {e}");
+                                Vec::new()
+                            }
+                        },
+                        None => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                };
+                (pid, has, namespaces)
+            } else {
+                (pid, false, Vec::new())
+            }
+        } else {
+            (uuid::Uuid::nil(), false, Vec::new())
+        };
+
         self.modal_add_panel.update(cx, |modal, cx| {
             modal.open(
                 AddPanelRequest {
                     dashboard_id,
+                    profile_id,
                     candidates,
+                    has_metric_catalog,
+                    metric_namespaces,
                 },
                 window,
                 cx,
             );
         });
+    }
+
+    /// Fetch metrics for a namespace and push them back into the modal.
+    pub(super) fn on_request_metrics_for_namespace(
+        &mut self,
+        modal: gpui::Entity<dbflux_ui_base::modals::ModalAddPanelPicker>,
+        ev: dbflux_ui_base::modals::RequestMetricsForNamespace,
+        cx: &mut Context<Self>,
+    ) {
+        let metrics = {
+            let app_state = self.app_state.read(cx);
+            match app_state.connections().get(&ev.profile_id) {
+                Some(connected) => match connected.connection.metric_catalog() {
+                    Some(catalog) => match catalog.list_metrics(&ev.namespace, None) {
+                        Ok(page) => page.metrics,
+                        Err(e) => {
+                            Toast::error(format!("Failed to load metrics: {e}"))
+                                .meta_right(now_hms())
+                                .push(cx);
+                            Vec::new()
+                        }
+                    },
+                    None => Vec::new(),
+                },
+                None => Vec::new(),
+            }
+        };
+
+        modal.update(cx, |m, cx| {
+            m.set_metrics_for_namespace(ev.namespace, metrics, cx);
+        });
+    }
+
+    /// Build a new SavedChart from a user-typed query, persist it, and append
+    /// it as a panel to the target dashboard.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn on_create_panel_from_query(
+        &mut self,
+        dashboard_id: uuid::Uuid,
+        profile_id: uuid::Uuid,
+        name: String,
+        query: String,
+        chart_kind: dbflux_components::chart::ChartKind,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::chart::{AxisKind, AxisSpec, BindingSpec, ChartSpec, YScale};
+        use dbflux_components::saved_chart::SavedChart;
+        use dbflux_ui_base::DashboardPanelDraft;
+
+        let placeholder_spec = ChartSpec {
+            kind: chart_kind,
+            x_axis: AxisSpec {
+                column_index: 0,
+                label: String::new(),
+                kind: AxisKind::Time,
+                unit: None,
+            },
+            series: Vec::new(),
+            legend_visible: false,
+            decimation_threshold: 10_000,
+            binding: BindingSpec::default(),
+            track_source_indices: false,
+            y_scale: YScale::Linear,
+        };
+
+        let chart = SavedChart::new_query(
+            name,
+            profile_id,
+            query,
+            placeholder_spec,
+            BindingSpec::default(),
+        );
+        let chart_id = chart.id;
+
+        let append_result = self.app_state.update(cx, |state, _cx| {
+            state.saved_charts.upsert(chart);
+            state.dashboards.append_panels(
+                dashboard_id,
+                vec![DashboardPanelDraft {
+                    saved_chart_id: chart_id,
+                }],
+            )
+        });
+
+        match append_result {
+            Ok(()) => {
+                self.app_state.update(cx, |_state, cx| {
+                    cx.emit(AppStateChanged);
+                });
+            }
+            Err(e) => {
+                Toast::error(format!("Failed to add panel: {e}"))
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
+    }
+
+    /// Build a new SavedChart from a metric selection, persist it, and append
+    /// it as a panel to the target dashboard.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn on_create_panel_from_metric(
+        &mut self,
+        dashboard_id: uuid::Uuid,
+        profile_id: uuid::Uuid,
+        name: String,
+        namespace: String,
+        metric_name: String,
+        dimensions: Vec<(String, String)>,
+        period_seconds: u32,
+        statistic: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use dbflux_components::chart::{
+            AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
+        };
+        use dbflux_components::saved_chart::SavedChart;
+        use dbflux_ui_base::DashboardPanelDraft;
+
+        let placeholder_spec = ChartSpec {
+            kind: ChartKind::Line,
+            x_axis: AxisSpec {
+                column_index: 0,
+                label: String::new(),
+                kind: AxisKind::Time,
+                unit: None,
+            },
+            series: Vec::new(),
+            legend_visible: false,
+            decimation_threshold: 10_000,
+            binding: BindingSpec::default(),
+            track_source_indices: false,
+            y_scale: YScale::Linear,
+        };
+
+        let chart = SavedChart::new_metric(
+            name,
+            profile_id,
+            namespace,
+            metric_name,
+            dimensions,
+            period_seconds,
+            statistic,
+            None,
+            placeholder_spec,
+            BindingSpec::default(),
+        );
+        let chart_id = chart.id;
+
+        let append_result = self.app_state.update(cx, |state, _cx| {
+            state.saved_charts.upsert(chart);
+            state.dashboards.append_panels(
+                dashboard_id,
+                vec![DashboardPanelDraft {
+                    saved_chart_id: chart_id,
+                }],
+            )
+        });
+
+        match append_result {
+            Ok(()) => {
+                self.app_state.update(cx, |_state, cx| {
+                    cx.emit(AppStateChanged);
+                });
+            }
+            Err(e) => {
+                Toast::error(format!("Failed to add panel: {e}"))
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        }
     }
 
     /// Called when `ModalAddPanelPicker` emits `Confirmed`.
