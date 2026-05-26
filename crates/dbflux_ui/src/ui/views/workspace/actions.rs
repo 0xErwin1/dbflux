@@ -1887,6 +1887,7 @@ impl Workspace {
                                 DashboardPanelSlot::Loaded {
                                     panel: panel_entity,
                                     grid_pos,
+                                    title_override: panel.title_override.clone(),
                                 }
                             }
                             _ => DashboardPanelSlot::Orphan {

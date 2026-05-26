@@ -265,7 +265,7 @@ pub(super) fn panel_header(
     panel_index: u32,
     title: &str,
     editing_input: Option<&Entity<InputState>>,
-    drag_active: bool,
+    _drag_active: bool,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
     let is_editing = editing_input.is_some();
@@ -305,12 +305,6 @@ pub(super) fn panel_header(
     } else {
         None
     };
-
-    // Drop indicator: add a visual highlight when this is the current drop target.
-    let is_drop_target = drag_active && {
-        false // drop target rendered via the grid wrapper; header just dims
-    };
-    let _ = is_drop_target;
 
     // Close / remove button.
     let on_remove = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {

@@ -104,9 +104,20 @@ impl Render for DashboardDocument {
                 };
 
                 // Build the title string for this panel.
-                // TODO: read title_override from manager cache when available;
-                // for now render the panel's saved chart name via the slot kind.
-                let panel_title = format!("Panel {}", panel_index + 1);
+                // Priority: title_override (when Some and non-empty) → chart name.
+                // Orphan slots fall through to "Chart not found" in the match below.
+                let panel_title = match slot {
+                    DashboardPanelSlot::Loaded {
+                        panel,
+                        title_override,
+                        ..
+                    } => title_override
+                        .as_ref()
+                        .filter(|s| !s.trim().is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| panel.read(cx).title()),
+                    DashboardPanelSlot::Orphan { .. } => "Chart not found".to_string(),
+                };
 
                 // Check whether this panel is in inline-edit mode.
                 let editing_input = if self.editing_title_panel_index == Some(panel_index) {
