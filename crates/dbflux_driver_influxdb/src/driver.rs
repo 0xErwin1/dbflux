@@ -8,8 +8,9 @@ use std::sync::LazyLock;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DriverCapabilities, DriverFormDef, DriverKey, DriverMetadata, FormValues, INFLUXDB_FORM, Icon,
-    InfluxVersion, QueryLanguage,
+    DriverCapabilities, DriverFormDef, DriverKey, DriverMetadata, FormFieldKind, FormSection,
+    FormTab, FormValues, Icon, InfluxVersion, QueryLanguage, field, field_required, when_checked,
+    when_unchecked, with_default, with_help,
 };
 
 use crate::connection::InfluxConnection;
@@ -45,6 +46,80 @@ pub static INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+});
+
+pub static INFLUXDB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![
+            FormSection {
+                title: "Version".into(),
+                fields: vec![with_help(
+                    with_default(
+                        field(
+                            "use_v2",
+                            "Use InfluxDB v2 (token auth / Flux)",
+                            FormFieldKind::Checkbox,
+                            "",
+                        ),
+                        "true",
+                    ),
+                    "Enable for InfluxDB v2+ (token-based auth). Disable for InfluxDB v1 (username/password).",
+                )],
+            },
+            FormSection {
+                title: "Connection".into(),
+                fields: vec![
+                    field_required("url", "URL", FormFieldKind::Text, "http://localhost:8086"),
+                    when_checked(
+                        field("org", "Organization", FormFieldKind::Text, "my-org"),
+                        "use_v2",
+                    ),
+                    when_checked(
+                        with_help(
+                            field(
+                                "bucket",
+                                "Default bucket (optional)",
+                                FormFieldKind::Text,
+                                "my-bucket",
+                            ),
+                            "Pre-selects a bucket in the query editor. Leave blank to choose per-query from the dropdown.",
+                        ),
+                        "use_v2",
+                    ),
+                    when_unchecked(
+                        with_help(
+                            field(
+                                "database",
+                                "Default database (optional)",
+                                FormFieldKind::Text,
+                                "mydb",
+                            ),
+                            "Pre-selects a database in the query editor. Leave blank to choose per-query from the dropdown.",
+                        ),
+                        "use_v2",
+                    ),
+                    when_unchecked(
+                        field(
+                            "retention_policy",
+                            "Retention Policy",
+                            FormFieldKind::Text,
+                            "autogen",
+                        ),
+                        "use_v2",
+                    ),
+                ],
+            },
+            FormSection {
+                title: "Authentication".into(),
+                fields: vec![when_unchecked(
+                    field("user", "User", FormFieldKind::Text, "optional"),
+                    "use_v2",
+                )],
+            },
+        ],
+    }],
 });
 
 // ---------------------------------------------------------------------------
@@ -543,6 +618,103 @@ mod tests {
             Some("autogen")
         );
         assert_eq!(values.get("user").map(|s| s.as_str()), Some("admin"));
+    }
+
+    #[test]
+    fn influxdb_form_v2_fields_are_gated_on_use_v2_checkbox() {
+        let url_field = INFLUXDB_FORM.field("url").expect("url field must exist");
+        assert!(url_field.required, "url must be required");
+        assert!(
+            url_field.enabled_when_checked.is_none() && url_field.enabled_when_unchecked.is_none(),
+            "url must not be version-gated"
+        );
+
+        for v2_field_id in &["org", "bucket"] {
+            let field = INFLUXDB_FORM
+                .field(v2_field_id)
+                .unwrap_or_else(|| panic!("field '{}' must exist in INFLUXDB_FORM", v2_field_id));
+
+            assert_eq!(
+                field.enabled_when_checked.as_deref(),
+                Some("use_v2"),
+                "field '{}' must be visible only when use_v2 is checked",
+                v2_field_id
+            );
+        }
+
+        for v1_field_id in &["database", "retention_policy", "user"] {
+            let field = INFLUXDB_FORM
+                .field(v1_field_id)
+                .unwrap_or_else(|| panic!("field '{}' must exist in INFLUXDB_FORM", v1_field_id));
+
+            assert_eq!(
+                field.enabled_when_unchecked.as_deref(),
+                Some("use_v2"),
+                "field '{}' must be visible only when use_v2 is unchecked",
+                v1_field_id
+            );
+        }
+
+        for delegated_id in &["token", "password"] {
+            assert!(
+                INFLUXDB_FORM.field(delegated_id).is_none(),
+                "field '{}' should NOT live in INFLUXDB_FORM (handled by the generic password section)",
+                delegated_id
+            );
+        }
+    }
+
+    #[test]
+    fn influxdb_form_bucket_is_optional_in_v2_mode() {
+        let bucket_field = INFLUXDB_FORM
+            .field("bucket")
+            .expect("bucket field must exist");
+        assert!(
+            !bucket_field.required,
+            "bucket must be optional for v2 connections (users choose per-query)"
+        );
+        assert!(
+            bucket_field.help.is_some(),
+            "bucket field must have help text explaining it pre-selects in the editor"
+        );
+    }
+
+    #[test]
+    fn influxdb_form_database_is_optional_in_v1_mode() {
+        let db_field = INFLUXDB_FORM
+            .field("database")
+            .expect("database field must exist");
+        assert!(
+            !db_field.required,
+            "database must be optional for v1 connections (users choose per-query)"
+        );
+
+        let rp_field = INFLUXDB_FORM
+            .field("retention_policy")
+            .expect("retention_policy field must exist");
+        assert!(
+            !rp_field.required,
+            "retention_policy must be optional (v1 default is 'autogen')"
+        );
+    }
+
+    #[test]
+    fn influxdb_form_has_no_ssh_tab() {
+        assert!(
+            !INFLUXDB_FORM.supports_ssh(),
+            "INFLUXDB_FORM must not include an SSH tab in Phase A"
+        );
+    }
+
+    #[test]
+    fn influxdb_form_use_v2_defaults_to_true() {
+        let use_v2 = INFLUXDB_FORM
+            .field("use_v2")
+            .expect("use_v2 checkbox must exist");
+        assert_eq!(
+            use_v2.default_value, "true",
+            "use_v2 must default to true (V2 is default)"
+        );
     }
 
     #[test]

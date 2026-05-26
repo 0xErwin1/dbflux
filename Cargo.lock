@@ -2868,7 +2868,15 @@ name = "dbflux_test_support"
 version = "0.6.0-dev.8"
 dependencies = [
  "dbflux_core",
+ "dbflux_driver_cloudwatch",
+ "dbflux_driver_dynamodb",
+ "dbflux_driver_influxdb",
+ "dbflux_driver_mongodb",
+ "dbflux_driver_mssql",
+ "dbflux_driver_mysql",
+ "dbflux_driver_postgres",
  "dbflux_driver_redis",
+ "dbflux_driver_sqlite",
  "dbflux_ipc",
  "interprocess",
  "reqwest",

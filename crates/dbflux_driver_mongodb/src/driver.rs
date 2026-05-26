@@ -21,16 +21,80 @@ use dbflux_core::{
     DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
     DriverLimits, DriverMetadata, FieldInfo, FormFieldDef, FormFieldKind, FormSection, FormTab,
     FormValues, FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection,
-    LanguageService, MONGODB_FORM, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row,
-    SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef,
-    SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig,
-    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, sanitize_uri,
+    LanguageService, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
+    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row, SchemaDropTarget,
+    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef, SemanticFilter,
+    SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo,
+    TransactionCapabilities, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
 use uuid::Uuid;
+
+pub static MONGODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
+        FormTab {
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
+                FormSection {
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "mongodb://host:port or mongodb+srv://...",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "27017"),
+                                "27017",
+                            ),
+                            "use_uri",
+                        ),
+                        field(
+                            "database",
+                            "Database",
+                            FormFieldKind::Text,
+                            "optional - leave empty to browse all",
+                        ),
+                    ],
+                },
+                FormSection {
+                    title: "Authentication".into(),
+                    fields: vec![
+                        field("user", "User", FormFieldKind::Text, "optional"),
+                        field_password(),
+                        when_unchecked(
+                            field(
+                                "auth_database",
+                                "Auth Database",
+                                FormFieldKind::Text,
+                                "admin (default)",
+                            ),
+                            "use_uri",
+                        ),
+                    ],
+                },
+            ],
+        },
+        ssh_tab(),
+    ],
+});
 
 /// MongoDB driver metadata.
 pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {

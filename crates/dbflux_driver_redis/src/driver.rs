@@ -20,13 +20,72 @@ use dbflux_core::{
     KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema, LanguageService,
     ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
     OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, REDIS_FORM, RelationalConnection,
-    SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest,
-    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection, SchemaDropTarget,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, SetAddRequest,
+    SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
     StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
-    Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, sanitize_uri,
+    Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, field, field_password, field_required,
+    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
+
+pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
+        FormTab {
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
+                FormSection {
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "redis://localhost:6379/0",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "6379"),
+                                "6379",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field("database", "Database Index", FormFieldKind::Number, "0"),
+                                "0",
+                            ),
+                            "use_uri",
+                        ),
+                    ],
+                },
+                FormSection {
+                    title: "Authentication".into(),
+                    fields: vec![
+                        when_unchecked(
+                            field("user", "User", FormFieldKind::Text, "optional"),
+                            "use_uri",
+                        ),
+                        field_password(),
+                    ],
+                },
+            ],
+        },
+        ssh_tab(),
+    ],
+});
 
 fn plan_redis_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
     static GENERATOR: crate::command_generator::RedisCommandGenerator =

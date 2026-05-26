@@ -20,4 +20,4 @@ pub mod metadata;
 pub mod parser;
 pub mod query_generator;
 
-pub use driver::{INFLUXDB_METADATA, InfluxDriver};
+pub use driver::{INFLUXDB_FORM, INFLUXDB_METADATA, InfluxDriver};
