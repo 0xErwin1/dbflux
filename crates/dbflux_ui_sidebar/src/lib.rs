@@ -1240,10 +1240,10 @@ impl Sidebar {
                     .read(cx)
                     .selected_entry()
                     .map(|entry| entry.item().id.to_string());
-                if let Some(cursor_id) = cursor_id {
-                    if cursor_id != item_id {
-                        self.toggle_selection(&cursor_id, cx);
-                    }
+                if let Some(cursor_id) = cursor_id
+                    && cursor_id != item_id
+                {
+                    self.toggle_selection(&cursor_id, cx);
                 }
             }
 
