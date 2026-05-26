@@ -108,7 +108,11 @@ pub fn init(cx: &mut App) {
         // Ctrl elsewhere. Use it for the system-standard commands so macOS
         // gets the expected Cmd shortcut without binding the literal Ctrl
         // chord too (which would shadow editor interrupt semantics on Mac).
-        KeyBinding::new("secondary-a", SelectAll, Some(CONTEXT)),
+        //
+        // Scope this to "table without an active Input" so that ctrl-a /
+        // cmd-a inside an inline cell editor (or any other Input nested in
+        // the table) selects the input's text instead of all rows.
+        KeyBinding::new("secondary-a", SelectAll, Some("Results && !Input")),
         KeyBinding::new("escape", ClearSelection, Some(CONTEXT)),
         // Copy
         KeyBinding::new("secondary-c", Copy, Some(CONTEXT)),
