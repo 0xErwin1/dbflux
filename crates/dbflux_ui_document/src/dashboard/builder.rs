@@ -273,8 +273,8 @@ pub(super) fn panel_header(
 
     // Start inline title edit on single click (only when not editing).
     let on_title_click = if !is_editing {
-        let on_click = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-            this.start_panel_title_edit(panel_index, cx);
+        let on_click = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+            this.start_panel_title_edit(panel_index, window, cx);
         });
         Some(on_click)
     } else {
@@ -336,24 +336,17 @@ pub(super) fn panel_header(
     }
 
     if let Some(input_state) = editing_input {
-        let input_state = input_state.clone();
-        let commit_click = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-            let _ = this;
-            let _ = cx;
-            let _ = &input_state;
-        });
-        // Render the input; commit/cancel is handled by InputEvent subscriptions
-        // established in `start_panel_title_edit`.
-        header = header
-            .child(
-                dbflux_components::controls::Input::new(
-                    // SAFETY: input state was passed in as borrow; we re-clone.
-                    editing_input.unwrap(),
-                )
+        // Render the input inline. Commit and cancel are handled entirely by
+        // the InputEvent subscription established in `start_panel_title_edit`.
+        debug_assert!(
+            editing_input.is_some(),
+            "editing_input must be Some when editing_title_panel_index is set"
+        );
+        header = header.child(
+            dbflux_components::controls::Input::new(input_state)
                 .w_full()
                 .small(),
-            )
-            .on_click(commit_click); // no-op click; blur handles commit
+        );
     } else {
         let title_elem = if let Some(on_click) = on_title_click {
             div()

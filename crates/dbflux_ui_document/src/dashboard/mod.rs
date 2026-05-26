@@ -147,6 +147,10 @@ pub struct DashboardDocument {
     /// Created when `start_panel_title_edit` is called; dropped on commit/cancel.
     pub(crate) panel_title_input: Option<Entity<InputState>>,
 
+    /// Subscription for `InputEvent`s emitted by `panel_title_input`.
+    /// Dropped on commit or cancel to stop receiving events.
+    _panel_title_edit_subscription: Option<Subscription>,
+
     /// Whether the dashboard tab title itself is in inline-edit mode.
     pub(crate) editing_dashboard_name: bool,
 
@@ -273,6 +277,7 @@ impl DashboardDocument {
             shared_refresh_policy,
             editing_title_panel_index: None,
             panel_title_input: None,
+            _panel_title_edit_subscription: None,
             editing_dashboard_name: false,
             dashboard_name_input: None,
             _dashboard_name_edit_subscription: None,
@@ -323,11 +328,14 @@ impl DashboardDocument {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if let Command::Cancel = cmd
-            && self.editing_dashboard_name
-        {
-            self.cancel_dashboard_name_edit(cx);
-            return true;
+        if let Command::Cancel = cmd {
+            if self.editing_dashboard_name {
+                self.cancel_dashboard_name_edit(cx);
+                return true;
+            } else if self.editing_title_panel_index.is_some() {
+                self.cancel_panel_title_edit(cx);
+                return true;
+            }
         }
         false
     }
@@ -648,33 +656,68 @@ impl DashboardDocument {
 
     /// Enter inline-edit mode for the title of panel at `panel_index`.
     ///
-    /// Creates an `InputState` pre-populated with the current title, subscribes
-    /// to `PressEnter` / `Blur` for commit and `Escape` / `Blur` for cancel.
-    pub fn start_panel_title_edit(&mut self, panel_index: u32, cx: &mut Context<Self>) {
+    /// Constructs an `InputState` pre-populated with the current panel title,
+    /// subscribes to `InputEvent::PressEnter` and `InputEvent::Blur` for commit,
+    /// and stores both the entity and the subscription handle so they drop on
+    /// commit or cancel. Only `Loaded` slots have an editable title; calling this
+    /// on an `Orphan` slot is a no-op.
+    pub fn start_panel_title_edit(
+        &mut self,
+        panel_index: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Already editing this panel — do nothing.
         if self.editing_title_panel_index == Some(panel_index) {
             return;
         }
 
+        // Only loaded slots carry a real title to edit.
+        let current_title = match self.panel_slots.get(panel_index as usize) {
+            Some(DashboardPanelSlot::Loaded { panel, .. }) => panel.read(cx).title(),
+            _ => return,
+        };
+
         // Cancel any other in-progress edit first.
         self.cancel_panel_title_edit(cx);
 
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(&current_title, window, cx);
+            state
+        });
+
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            move |this, entity, event: &dbflux_components::controls::InputEvent, _window, cx| {
+                match event {
+                    dbflux_components::controls::InputEvent::PressEnter { secondary: false } => {
+                        let value = entity.read(cx).value().to_string();
+                        if let Some(idx) = this.editing_title_panel_index.take() {
+                            this.update_panel_title(idx, value, cx);
+                        }
+                        this.panel_title_input = None;
+                        this._panel_title_edit_subscription = None;
+                        cx.notify();
+                    }
+                    dbflux_components::controls::InputEvent::Blur => {
+                        let value = entity.read(cx).value().to_string();
+                        if let Some(idx) = this.editing_title_panel_index.take() {
+                            this.update_panel_title(idx, value, cx);
+                        }
+                        this.panel_title_input = None;
+                        this._panel_title_edit_subscription = None;
+                        cx.notify();
+                    }
+                    _ => {}
+                }
+            },
+        );
+
+        self.panel_title_input = Some(input);
+        self._panel_title_edit_subscription = Some(subscription);
         self.editing_title_panel_index = Some(panel_index);
-        cx.notify();
-    }
-
-    /// Commit the inline title edit with the value from `panel_title_input`.
-    pub fn commit_panel_title_edit(&mut self, cx: &mut Context<Self>) {
-        let Some(panel_index) = self.editing_title_panel_index.take() else {
-            return;
-        };
-        self.panel_title_input = None;
-
-        // The value is read from the InputState entity and forwarded to
-        // `update_panel_title`. This method is called from the InputEvent
-        // subscription in render.rs; the value has already been captured
-        // via the listener closure.
-        let _ = panel_index;
         cx.notify();
     }
 
@@ -683,6 +726,7 @@ impl DashboardDocument {
         if self.editing_title_panel_index.is_some() {
             self.editing_title_panel_index = None;
             self.panel_title_input = None;
+            self._panel_title_edit_subscription = None;
             cx.notify();
         }
     }
@@ -775,7 +819,12 @@ impl DashboardDocument {
     }
 
     /// Execute the context-menu action at `item_index` and close the menu.
-    pub fn execute_panel_context_menu_item(&mut self, item_index: usize, cx: &mut Context<Self>) {
+    pub fn execute_panel_context_menu_item(
+        &mut self,
+        item_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(menu) = self.panel_context_menu.take() else {
             return;
         };
@@ -789,7 +838,7 @@ impl DashboardDocument {
                 self.remove_panel(panel_index, cx);
             }
             builder::PanelMenuAction::EditTitle => {
-                self.start_panel_title_edit(panel_index, cx);
+                self.start_panel_title_edit(panel_index, window, cx);
             }
         }
     }

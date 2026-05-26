@@ -228,8 +228,8 @@ impl Render for DashboardDocument {
                         PanelMenuAction::EditTitle => "Edit title…",
                         PanelMenuAction::RemovePanel => "Remove panel",
                     };
-                    let on_click = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                        this.execute_panel_context_menu_item(i, cx);
+                    let on_click = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                        this.execute_panel_context_menu_item(i, window, cx);
                     });
                     Button::new(("ctx-item", i as u32), label)
                         .on_click(on_click)
