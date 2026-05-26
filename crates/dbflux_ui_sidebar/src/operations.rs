@@ -2529,6 +2529,66 @@ impl Sidebar {
         self.connect_to_profile_inner(profile_id, None, false, cx);
     }
 
+    /// Disconnect a live session and reconnect once the connection has fully
+    /// cleared. Used by the "Reconnect now" prompt that fires after the user
+    /// edits a profile that is currently connected — the new settings only take
+    /// effect on a fresh connect, but the pending-operation map blocks a
+    /// back-to-back call, so we wait for the disconnect to drain first.
+    pub fn reconnect_profile_after_edit(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        if !self
+            .app_state
+            .read(cx)
+            .connections()
+            .contains_key(&profile_id)
+        {
+            // Not connected — just connect.
+            self.connect_to_profile(profile_id, cx);
+            return;
+        }
+
+        self.disconnect_profile(profile_id, cx);
+
+        let app_state = self.app_state.clone();
+        let sidebar = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            // Poll until the connection has been removed from the live map
+            // (capped at ~5s to avoid hanging if the disconnect stalls).
+            for _ in 0..50 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+
+                let cleared = cx
+                    .update(|cx| {
+                        let still_connected =
+                            app_state.read(cx).connections().contains_key(&profile_id);
+                        let still_pending =
+                            app_state.read(cx).is_operation_pending(profile_id, None);
+                        !still_connected && !still_pending
+                    })
+                    .unwrap_or(false);
+
+                if cleared {
+                    break;
+                }
+            }
+
+            if let Err(error) = cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.connect_to_profile(profile_id, cx);
+                });
+            }) {
+                log::warn!(
+                    "Failed to trigger reconnect after edit for profile {}: {:?}",
+                    profile_id,
+                    error
+                );
+            }
+        })
+        .detach();
+    }
+
     /// Retry a connection with an explicit SSH passphrase supplied by the user via the modal.
     ///
     /// If this attempt also fails with a passphrase error, the modal will reopen showing

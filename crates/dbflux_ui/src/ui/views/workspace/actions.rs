@@ -130,14 +130,21 @@ impl Workspace {
     pub(super) fn open_settings(&self, cx: &mut Context<Self>) {
         let app_state = self.app_state.clone();
 
-        // Check if settings window is already open - if so, focus it
+        // If a settings window is already open, focus it and return. If the
+        // stored handle is stale (window was closed without us being notified),
+        // clear it and fall through to open a fresh window.
         if let Some(handle) = app_state.read(cx).settings_window {
-            if let Err(e) = handle.update(cx, |_root, window, _cx| {
+            match handle.update(cx, |_root, window, _cx| {
                 window.activate_window();
             }) {
-                log::warn!("Failed to activate existing settings window: {:?}", e);
+                Ok(_) => return,
+                Err(e) => {
+                    log::warn!("Stale settings window handle, reopening: {:?}", e);
+                    app_state.update(cx, |state, _| {
+                        state.settings_window = None;
+                    });
+                }
             }
-            return;
         }
 
         let workspace = cx.entity().clone();
@@ -155,7 +162,15 @@ impl Workspace {
         };
         platform::apply_window_options(&mut options, 800.0, 600.0);
 
+        let app_state_for_close = app_state.clone();
         if let Ok(handle) = cx.open_window(options, |window, cx| {
+            window.on_window_should_close(cx, move |_window, cx| {
+                app_state_for_close.update(cx, |state, _| {
+                    state.settings_window = None;
+                });
+                true
+            });
+
             let settings = cx.new(|cx| SettingsWindow::new(app_state.clone(), window, cx));
 
             cx.subscribe(
