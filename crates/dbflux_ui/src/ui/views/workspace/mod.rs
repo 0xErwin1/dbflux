@@ -1429,6 +1429,31 @@ impl Workspace {
             return ContextId::SqlPreviewModal;
         }
 
+        // Text-input-bearing modals must own the keymap so the underlying
+        // sidebar/document context does not consume typed characters as
+        // command shortcuts. Returning `TextInput` (which has no parent in
+        // the keymap fallback chain) ensures only input-level bindings fire.
+        if self.modal_import_dashboard.read(cx).is_visible()
+            || self.modal_create_dashboard.read(cx).is_visible()
+            || self.modal_rename_item.read(cx).is_visible()
+            || self.modal_add_panel.read(cx).is_visible()
+            || self.modal_drop_table.read(cx).is_visible()
+            || self.modal_tunnel_auth.read(cx).is_visible()
+        {
+            return ContextId::TextInput;
+        }
+
+        // Confirm-only modals (no text input) still need to swallow keys so
+        // global shortcuts do not run while the user is reading a confirmation
+        // dialog.
+        if self.modal_delete_connection.read(cx).is_visible()
+            || self.modal_unsaved_changes.read(cx).is_visible()
+            || self.modal_delete_dashboard.read(cx).is_visible()
+            || self.modal_delete_saved_chart.read(cx).is_visible()
+        {
+            return ContextId::ConfirmModal;
+        }
+
         if self.tab_bar.read(cx).has_context_menu_open() {
             return ContextId::ContextMenu;
         }
