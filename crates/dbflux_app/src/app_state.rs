@@ -2262,10 +2262,23 @@ impl AppState {
             .map(|task| task.id)
             .collect();
 
-        connect_task_ids
+        let cancelled = connect_task_ids
             .into_iter()
             .filter(|task_id| self.facade.tasks.cancel(*task_id))
-            .count()
+            .count();
+
+        // Clear the profile-level pending-operation entry so the sidebar can
+        // reflect the cancelled state and the user can retry without waiting
+        // for the (potentially long-running) async connect task to unwind.
+        // `finish_pending_operation` is a HashSet remove, so the eventual
+        // duplicate call from the async task's own cancellation path is a no-op.
+        if cancelled > 0 {
+            self.facade
+                .connections
+                .finish_pending_operation(profile_id, None);
+        }
+
+        cancelled
     }
 
     pub fn connections_mut(&mut self) -> &mut HashMap<Uuid, ConnectedProfile> {

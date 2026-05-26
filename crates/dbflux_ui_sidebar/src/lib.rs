@@ -776,7 +776,22 @@ impl Sidebar {
 
         let app_state_subscription = cx.subscribe(
             &app_state,
-            |this, _app_state, _event: &AppStateChanged, cx| {
+            |this, app_state, _event: &AppStateChanged, cx| {
+                // Consume cross-window prompts deposited by the Connection
+                // Manager and the toast action callbacks before refreshing,
+                // so the resulting UI updates are batched into this tick.
+                let edit_prompt_profile =
+                    app_state.update(cx, |state, _| state.pending_edit_reconnect_prompt.take());
+                if let Some(profile_id) = edit_prompt_profile {
+                    this.show_edit_reconnect_toast(profile_id, &app_state, cx);
+                }
+
+                let reconnect_profile =
+                    app_state.update(cx, |state, _| state.pending_reconnect_request.take());
+                if let Some(profile_id) = reconnect_profile {
+                    this.reconnect_profile_after_edit(profile_id, cx);
+                }
+
                 this.refresh_tree(cx);
                 this.refresh_scripts_tree(cx);
             },
@@ -1005,6 +1020,41 @@ impl Sidebar {
         cx.notify();
     }
 
+    fn show_edit_reconnect_toast(
+        &mut self,
+        profile_id: Uuid,
+        app_state: &Entity<AppStateEntity>,
+        cx: &mut Context<Self>,
+    ) {
+        let profile_name = app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .map(|profile| profile.name.clone())
+            .unwrap_or_else(|| "connection".to_string());
+
+        let app_state_for_action = app_state.clone();
+        let reconnect_action =
+            dbflux_ui_base::toast::ToastAction::new("edit-reconnect-now", "Reconnect now")
+                .primary()
+                .on_click(move |cx| {
+                    app_state_for_action.update(cx, |state, cx| {
+                        state.pending_reconnect_request = Some(profile_id);
+                        cx.emit(AppStateChanged);
+                    });
+                });
+
+        let later_action = dbflux_ui_base::toast::ToastAction::new("edit-reconnect-later", "Later");
+
+        dbflux_ui_base::toast::Toast::info(format!("'{}' updated", profile_name))
+            .body("Reconnect to apply the changes to the live session.")
+            .meta_right(dbflux_ui_base::toast::now_hms())
+            .action(reconnect_action)
+            .action(later_action)
+            .push(cx);
+    }
+
     fn active_tree_state(&self) -> &Entity<TreeState> {
         match self.active_tab {
             SidebarTab::Connections => &self.tree_state,
@@ -1181,6 +1231,22 @@ impl Sidebar {
 
         // Ctrl/Cmd+Click: toggle item in active tab multi-selection.
         if with_ctrl && click_count == 1 {
+            // If the user has only a keyboard cursor (no prior multi-selection),
+            // seed the cursor item into the selection so ctrl+click extends from
+            // the visually focused item instead of replacing it.
+            if !self.has_multi_selection() {
+                let cursor_id = self
+                    .active_tree_state()
+                    .read(cx)
+                    .selected_entry()
+                    .map(|entry| entry.item().id.to_string());
+                if let Some(cursor_id) = cursor_id
+                    && cursor_id != item_id
+                {
+                    self.toggle_selection(&cursor_id, cx);
+                }
+            }
+
             self.toggle_selection(item_id, cx);
 
             if let Some(idx) = self.find_item_index(item_id, cx) {

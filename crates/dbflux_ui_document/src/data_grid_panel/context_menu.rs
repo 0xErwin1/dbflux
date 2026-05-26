@@ -2349,6 +2349,16 @@ impl DataGridPanel {
         let state = table_state.read(cx);
         let model = state.model();
 
+        // The remembered row may now be out of bounds after a refresh shrinks
+        // the result. Drop the cached state and hide the rail rather than
+        // showing a phantom row of nulls.
+        if row >= model.row_count() {
+            self.inspector_row = None;
+            self.row_inspector_content = None;
+            cx.emit(DataGridEvent::CloseInspector);
+            return;
+        }
+
         let pk_cols: std::collections::HashSet<usize> =
             state.pk_columns().iter().copied().collect();
         let fk_cols = state.fk_columns().clone();
@@ -2414,6 +2424,10 @@ impl DataGridPanel {
 
         // Fire FK resolution against the (possibly reused) content entity.
         self.fire_fk_resolution(fk_references, content.clone(), cx);
+
+        // Remember the active coordinates so refresh / tab activation /
+        // selection navigation can rebuild the snapshot from fresh data.
+        self.inspector_row = Some((row, col));
 
         // Tell the workspace to mount/replace the inspector rail.
         let title = SharedString::from(row_label);

@@ -96,6 +96,11 @@ pub struct PaneHandle {
 
     /// Returns a session snapshot for code documents (used by session manifest).
     pub session_tab_snapshot: Option<Box<dyn Fn(&App) -> Option<CodeSessionTabSnapshot>>>,
+
+    /// Tells the document that the workspace inspector was dismissed by the
+    /// user (× button or ESC). Documents that own inspector state clear it
+    /// here so the rail stays closed on subsequent tab activations.
+    pub mark_inspector_closed: Option<Box<dyn Fn(&mut App)>>,
 }
 
 impl PaneHandle {
@@ -146,6 +151,7 @@ impl PaneHandle {
             matches_event_stream: None,
             is_file_backed_empty: None,
             session_tab_snapshot: None,
+            mark_inspector_closed: None,
         }
     }
 
