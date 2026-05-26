@@ -21,6 +21,7 @@ use dbflux_components::controls::{Button, InputState};
 use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use gpui::prelude::*;
 use gpui::{Context, CursorStyle, Entity, IntoElement, MouseButton, Pixels, Window, div, px};
+use gpui_component::InteractiveElementExt;
 
 use super::DashboardDocument;
 
@@ -164,31 +165,19 @@ pub(super) fn dashboard_toolbar(
 
     // Q.2: Dashboard name area — inline input when editing, double-click label otherwise.
     let name_area: gpui::AnyElement = if editing_name {
-        if let Some(input_state) = name_input {
-            let on_commit = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                // Commit on blur is handled by InputEvent subscription in
-                // start_dashboard_name_edit; this click handler is a no-op placeholder.
-                let _ = this;
-                let _ = cx;
-            });
-            div()
-                .id("dashboard-name-edit")
-                .flex_shrink_0()
-                .child(dbflux_components::controls::Input::new(&input_state).small())
-                .on_click(on_commit)
-                .into_any_element()
-        } else {
-            // Input state not yet constructed — show static title as fallback.
-            div()
-                .id("dashboard-name-static-fallback")
-                .flex_shrink_0()
-                .text_sm()
-                .child(dashboard_title)
-                .into_any_element()
-        }
+        debug_assert!(
+            name_input.is_some(),
+            "dashboard_name_input must be Some when editing_dashboard_name is true"
+        );
+        let input_state = name_input.expect("InputState must be present when editing");
+        div()
+            .id("dashboard-name-edit")
+            .flex_shrink_0()
+            .child(dbflux_components::controls::Input::new(&input_state).small())
+            .into_any_element()
     } else {
-        let on_double_click = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            this.start_dashboard_name_edit(cx);
+        let on_double_click = cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+            this.start_dashboard_name_edit(window, cx);
         });
         div()
             .id("dashboard-name-label")
@@ -196,7 +185,7 @@ pub(super) fn dashboard_toolbar(
             .text_sm()
             .cursor(CursorStyle::PointingHand)
             .child(dashboard_title)
-            .on_click(on_double_click)
+            .on_double_click(on_double_click)
             .into_any_element()
     };
 

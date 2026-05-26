@@ -37,3 +37,6 @@ mcp = ["dbflux_mcp", "dbflux_policy", "dbflux_app/mcp", "dbflux_ui_base/mcp"]
 # mismatched feature sets across the workspace.
 lua = ["dbflux_app/lua", "dbflux_ui_base/lua"]
 aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

@@ -153,6 +153,10 @@ pub struct DashboardDocument {
     /// `InputState` entity for the dashboard-name inline edit.
     pub(crate) dashboard_name_input: Option<Entity<InputState>>,
 
+    /// Subscription for `InputEvent`s emitted by `dashboard_name_input`.
+    /// Dropped on commit or cancel to stop receiving events.
+    _dashboard_name_edit_subscription: Option<Subscription>,
+
     /// Active drag-reorder state. `None` when no drag is in progress.
     pub(crate) drag_reorder: Option<DragReorderState>,
 
@@ -271,6 +275,7 @@ impl DashboardDocument {
             panel_title_input: None,
             editing_dashboard_name: false,
             dashboard_name_input: None,
+            _dashboard_name_edit_subscription: None,
             drag_reorder: None,
             drag_resize: None,
             panel_context_menu: None,
@@ -314,10 +319,16 @@ impl DashboardDocument {
 
     pub fn dispatch_command(
         &mut self,
-        _cmd: Command,
+        cmd: Command,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
+        if let Command::Cancel = cmd
+            && self.editing_dashboard_name
+        {
+            self.cancel_dashboard_name_edit(cx);
+            return true;
+        }
         false
     }
 
@@ -679,10 +690,42 @@ impl DashboardDocument {
     // ---- Visual builder: inline dashboard-name edit (Q.2) ----
 
     /// Enter inline-edit mode for the dashboard tab title (double-click on tab).
-    pub fn start_dashboard_name_edit(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// Constructs an `InputState` pre-populated with the current title, subscribes
+    /// to `InputEvent::PressEnter` and `InputEvent::Blur` for commit, and stores
+    /// the entity in `dashboard_name_input`. The subscription is dropped when
+    /// `commit_dashboard_name_edit` or `cancel_dashboard_name_edit` is called.
+    pub fn start_dashboard_name_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editing_dashboard_name {
             return;
         }
+
+        let current_title = self.title().to_string();
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(&current_title, window, cx);
+            state
+        });
+
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this, entity, event: &dbflux_components::controls::InputEvent, _window, cx| match event
+            {
+                dbflux_components::controls::InputEvent::PressEnter { secondary: false } => {
+                    let value = entity.read(cx).value().to_string();
+                    this.commit_dashboard_name_edit(value, cx);
+                }
+                dbflux_components::controls::InputEvent::Blur => {
+                    let value = entity.read(cx).value().to_string();
+                    this.commit_dashboard_name_edit(value, cx);
+                }
+                _ => {}
+            },
+        );
+
+        self.dashboard_name_input = Some(input);
+        self._dashboard_name_edit_subscription = Some(subscription);
         self.editing_dashboard_name = true;
         cx.notify();
     }
@@ -693,6 +736,7 @@ impl DashboardDocument {
     pub fn commit_dashboard_name_edit(&mut self, new_name: String, cx: &mut Context<Self>) {
         self.editing_dashboard_name = false;
         self.dashboard_name_input = None;
+        self._dashboard_name_edit_subscription = None;
         let trimmed = new_name.trim().to_string();
         if !trimmed.is_empty() {
             self.rename(trimmed, cx);
@@ -705,6 +749,7 @@ impl DashboardDocument {
     pub fn cancel_dashboard_name_edit(&mut self, cx: &mut Context<Self>) {
         self.editing_dashboard_name = false;
         self.dashboard_name_input = None;
+        self._dashboard_name_edit_subscription = None;
         cx.notify();
     }
 
