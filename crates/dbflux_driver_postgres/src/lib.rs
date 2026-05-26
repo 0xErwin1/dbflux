@@ -11,4 +11,4 @@
 
 pub mod driver;
 
-pub use driver::{METADATA, PostgresDriver};
+pub use driver::{METADATA, POSTGRES_FORM, PostgresDriver};

@@ -12,5 +12,5 @@
 pub mod driver;
 pub mod language_service;
 
-pub use driver::{MARIADB_METADATA, MYSQL_METADATA, MysqlDriver};
+pub use driver::{MARIADB_METADATA, MYSQL_FORM, MYSQL_METADATA, MysqlDriver};
 pub use language_service::MySqlLanguageService;

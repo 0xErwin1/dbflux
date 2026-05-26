@@ -15,18 +15,19 @@ use dbflux_core::{
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData,
-    IndexInfo, IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn,
-    POSTGRES_FORM, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo, RoutineKind, Row,
-    RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
-    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
-    SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, TypeDefinition, Value,
-    ViewInfo, WhereOperator, generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri,
+    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab,
+    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
+    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo,
+    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required, field_use_uri,
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -469,6 +470,75 @@ impl CodeGenerator for PostgresCodeGenerator {
 }
 
 // =============================================================================
+
+pub static POSTGRES_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![
+        FormTab {
+            id: "main".into(),
+            label: "Main".into(),
+            sections: vec![
+                FormSection {
+                    title: "Server".into(),
+                    fields: vec![
+                        field_use_uri(),
+                        when_checked(
+                            field_required(
+                                "uri",
+                                "Connection URI",
+                                FormFieldKind::Text,
+                                "postgresql://user:pass@localhost:5432/db",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("host", "Host", FormFieldKind::Text, "localhost"),
+                                "localhost",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required("port", "Port", FormFieldKind::Number, "5432"),
+                                "5432",
+                            ),
+                            "use_uri",
+                        ),
+                        when_unchecked(
+                            with_default(
+                                field_required(
+                                    "database",
+                                    "Database",
+                                    FormFieldKind::Text,
+                                    "postgres",
+                                ),
+                                "postgres",
+                            ),
+                            "use_uri",
+                        ),
+                    ],
+                },
+                FormSection {
+                    title: "Authentication".into(),
+                    fields: vec![
+                        when_unchecked(
+                            with_default(
+                                field_required("user", "User", FormFieldKind::Text, "postgres"),
+                                "postgres",
+                            ),
+                            "use_uri",
+                        ),
+                        with_help(
+                            field_password(),
+                            "via Auth Profile · resolved at runtime, never persisted on disk",
+                        ),
+                    ],
+                },
+            ],
+        },
+        ssh_tab(),
+    ],
+});
 
 pub struct PostgresDriver;
 

@@ -12,18 +12,30 @@ use dbflux_core::{
     CreateIndexRequest, CrudResult, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
     DbSchemaInfo, DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection,
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropIndexRequest,
-    ExplainRequest, ForeignKeyInfo, FormValues, FormattedError, Icon, IndexData, IndexInfo,
-    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
-    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
-    RelationalSchema, Row, RowDelete, RowInsert, RowPatch, SQLITE_FORM, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
-    SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo,
-    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
+    ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues, FormattedError, Icon,
+    IndexData, IndexInfo, IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn,
+    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
+    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
+    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, Value, ViewInfo,
+    WhereOperator, field_file_path, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_update_template,
     render_semantic_filter_sql,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
+
+pub static SQLITE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![FormSection {
+            title: "Database".into(),
+            fields: vec![field_file_path()],
+        }],
+    }],
+});
 
 /// Connection pool for in-memory SQLite databases.
 /// Key is "profile_id:connection_id", value is the pooled connection.

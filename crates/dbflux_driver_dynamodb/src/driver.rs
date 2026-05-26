@@ -22,22 +22,56 @@ use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, CollectionInfo,
     CollectionRef, ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt,
-    ConnectionProfile, DYNAMODB_FORM, DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig,
-    DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DocumentConnection,
+    ConnectionProfile, DangerousQueryKind, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver,
+    DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass, DocumentConnection,
     DocumentDelete, DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities,
-    DriverFormDef, DriverLimits, DriverMetadata, FieldInfo, FormValues, FormattedError, Icon,
-    IndexData, IndexDirection, KeyValueConnection, LanguageService, MutationCapabilities,
-    OrderByColumn, Pagination, PaginationStyle, QueryCapabilities, QueryErrorFormatter,
-    QueryGenerator, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
-    SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef,
-    SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, TableInfo,
-    TransactionCapabilities, ValidationResult, Value, WhereOperator,
+    DriverFormDef, DriverLimits, DriverMetadata, FieldInfo, FormFieldKind, FormSection, FormTab,
+    FormValues, FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection,
+    LanguageService, MutationCapabilities, OrderByColumn, Pagination, PaginationStyle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryLanguage, QueryRequest,
+    QueryResult, RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
+    SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
+    SemanticRequest, SqlDialect, TableInfo, TransactionCapabilities, ValidationResult, Value,
+    WhereOperator, field, field_required,
 };
 
 use crate::query_generator::DynamoQueryGenerator;
 use crate::query_parser::{
     DynamoCommandEnvelope, DynamoFilterFallback, DynamoReadOptions, parse_command_envelope,
 };
+
+pub static DYNAMODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![
+            FormSection {
+                title: "AWS".into(),
+                fields: vec![
+                    field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
+                    field(
+                        "profile",
+                        "Profile",
+                        FormFieldKind::Text,
+                        "optional AWS profile",
+                    ),
+                ],
+            },
+            FormSection {
+                title: "Target".into(),
+                fields: vec![
+                    field(
+                        "endpoint",
+                        "Endpoint Override",
+                        FormFieldKind::Text,
+                        "http://localhost:8000",
+                    ),
+                    field("table", "Default Table", FormFieldKind::Text, "optional"),
+                ],
+            },
+        ],
+    }],
+});
 
 const DYNAMODB_DEFAULT_DATABASE: &str = "dynamodb";
 const DYNAMODB_BATCH_WRITE_WINDOW: usize = 25;
