@@ -1876,13 +1876,19 @@ impl Workspace {
                             {
                                 let app_state_inner = app_state.clone();
                                 let panel_entity = cx.new(|cx| {
-                                    crate::ui::document::ChartDocument::from_saved(
+                                    let mut doc = crate::ui::document::ChartDocument::from_saved(
                                         &saved_chart,
                                         app_state_inner,
                                         window,
                                         cx,
                                     )
-                                    .expect("Query/Metric source validated before entity creation")
+                                    .expect("Query/Metric source validated before entity creation");
+                                    // Mark embedded so the chart's own chrome
+                                    // (title/Run/Save segments + internal
+                                    // toolbar row) is suppressed; the
+                                    // dashboard panel provides the chrome.
+                                    doc.set_embedded(true, cx);
+                                    doc
                                 });
                                 DashboardPanelSlot::Loaded {
                                     panel: panel_entity,
@@ -2063,9 +2069,8 @@ impl Workspace {
 
         // Persist charts, dashboard, and panels. Collect the first storage
         // failure so we can surface it to the user and record an audit event.
-        let persist_result: Result<(), (String, String)> = self
-            .app_state
-            .update(cx, |state, _cx| {
+        let persist_result: Result<(), (String, String)> =
+            self.app_state.update(cx, |state, _cx| {
                 for chart in &charts {
                     if let Err(e) = state.saved_charts.upsert(chart.clone()) {
                         state.record_storage_failure(
@@ -2105,11 +2110,9 @@ impl Workspace {
             });
 
         if let Err((name, message)) = persist_result {
-            Toast::error(format!(
-                "Failed to save dashboard '{name}': {message}"
-            ))
-            .meta_right(now_hms())
-            .push(cx);
+            Toast::error(format!("Failed to save dashboard '{name}': {message}"))
+                .meta_right(now_hms())
+                .push(cx);
             return;
         }
 

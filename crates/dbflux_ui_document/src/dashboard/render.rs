@@ -28,6 +28,7 @@
 use super::builder::{self, PanelMenuAction};
 use super::{DashboardDocument, DashboardPanelSlot};
 use dbflux_components::controls::Button;
+use dbflux_components::primitives::surface_card;
 use gpui::prelude::*;
 use gpui::{Context, IntoElement, MouseButton, Window, deferred, div, px};
 
@@ -38,7 +39,15 @@ pub(crate) const MIN_PANEL_HEIGHT_PX: f32 = 240.0;
 pub(crate) const PANEL_HEIGHT_STEP_PX: f32 = 120.0;
 
 impl Render for DashboardDocument {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Reconcile in-memory slots with the manager when AppStateChanged
+        // signalled a possible mutation (panel added through the workspace
+        // Add-Panel flow). This is the bridge that makes new panels visible
+        // without forcing the user to close and re-open the dashboard.
+        if std::mem::take(&mut self.pending_panels_sync) {
+            let _ = self.reconcile_panels_from_manager(window, cx);
+        }
+
         let grid_columns = self.grid_columns;
 
         // Dashboard toolbar (always visible — even with zero panels).
@@ -188,10 +197,15 @@ impl Render for DashboardDocument {
                         (panel_height_px, panel_wrapper)
                     };
 
-                let panel_element = match slot {
-                    DashboardPanelSlot::Loaded { panel, .. } => effective_width_wrapper
-                        .id(("panel-slot", panel_index))
-                        .h(px(effective_height))
+                // Each panel is wrapped in a card surface so it has the
+                // standard background + border + rounded corners. The card
+                // sits inside the width wrapper and fills it completely; the
+                // resize handle is positioned absolutely on the card's
+                // bottom-right corner.
+                let panel_card = match slot {
+                    DashboardPanelSlot::Loaded { panel, .. } => surface_card(cx)
+                        .id(("panel-card", panel_index))
+                        .size_full()
                         .overflow_hidden()
                         .relative()
                         .flex()
@@ -200,11 +214,10 @@ impl Render for DashboardDocument {
                         .child(header)
                         .child(div().flex_1().overflow_hidden().child(panel.clone()))
                         .child(resize_handle)
-                        .on_mouse_move(on_mouse_move)
                         .into_any_element(),
-                    DashboardPanelSlot::Orphan { .. } => effective_width_wrapper
-                        .id(("panel-slot", panel_index))
-                        .h(px(effective_height))
+                    DashboardPanelSlot::Orphan { .. } => surface_card(cx)
+                        .id(("panel-card", panel_index))
+                        .size_full()
                         .relative()
                         .flex()
                         .flex_col()
@@ -218,9 +231,16 @@ impl Render for DashboardDocument {
                                 .child("Chart not found — saved chart was deleted"),
                         )
                         .child(resize_handle)
-                        .on_mouse_move(on_mouse_move)
                         .into_any_element(),
                 };
+
+                let panel_element = effective_width_wrapper
+                    .id(("panel-slot", panel_index))
+                    .h(px(effective_height))
+                    .p(px(4.0)) // guardrail-allow: gutter around each card so neighbouring cards don't touch
+                    .on_mouse_move(on_mouse_move)
+                    .child(panel_card)
+                    .into_any_element();
 
                 panel_children.push(panel_element);
             }

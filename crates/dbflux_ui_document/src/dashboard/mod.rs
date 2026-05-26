@@ -20,7 +20,7 @@ use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePan
 use dbflux_components::controls::InputState;
 use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use dbflux_core::RefreshPolicy;
-use dbflux_ui_base::{AppStateEntity, DashboardPanelDraft};
+use dbflux_ui_base::{AppStateChanged, AppStateEntity, DashboardPanel, DashboardPanelDraft};
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Pixels, Point, Subscription, Window};
 use std::collections::VecDeque;
@@ -177,6 +177,12 @@ pub struct DashboardDocument {
     /// Per-panel context menu, open when the user right-clicks a panel header.
     pub(crate) panel_context_menu: Option<PanelContextMenu>,
 
+    /// Set to `true` when `AppStateChanged` fires; the next render frame
+    /// reconciles `panel_slots` against the manager's authoritative panel list
+    /// so that panels added via the Add-Panel modal appear without requiring
+    /// the user to close and re-open the dashboard.
+    pub(crate) pending_panels_sync: bool,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -261,6 +267,18 @@ impl DashboardDocument {
             }
         }
 
+        // Subscribe to AppStateChanged so panels added through the
+        // workspace's Add-Panel flow (which writes to the manager and emits
+        // AppStateChanged) trigger a render-time reconciliation of
+        // `panel_slots` — without this the new panel only appears after the
+        // user closes and re-opens the dashboard.
+        let app_state_sub =
+            cx.subscribe(&app_state, |this: &mut Self, _, _: &AppStateChanged, cx| {
+                this.pending_panels_sync = true;
+                cx.notify();
+            });
+        subscriptions.push(app_state_sub);
+
         // Clamp grid_columns to [1, 4] for V1. The schema permits 1–12 but
         // the render only supports up to 4 at this time.
         let grid_columns = grid_columns.clamp(1, 4);
@@ -291,6 +309,7 @@ impl DashboardDocument {
             drag_reorder: None,
             drag_resize: None,
             panel_context_menu: None,
+            pending_panels_sync: false,
             _subscriptions: subscriptions,
         }
     }
@@ -976,6 +995,119 @@ impl DashboardDocument {
             state.current_height,
             cx,
         );
+    }
+
+    /// Reconcile `panel_slots` with the manager's authoritative panel list.
+    ///
+    /// Called from the render loop when `pending_panels_sync` is set (triggered
+    /// by `AppStateChanged`). For every persisted panel whose `saved_chart_id`
+    /// is not already represented in `panel_slots`, build a new `Loaded` (or
+    /// `Orphan`) slot and append it. Existing slots are preserved as-is so
+    /// in-memory edits (title overrides, drag-resize ghosts, in-flight
+    /// queries) are not lost. Returns the number of slots appended.
+    ///
+    /// Returns 0 when the dashboard already matches the manager's state.
+    pub fn reconcile_panels_from_manager(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        use dbflux_components::saved_chart::SavedChartSource;
+
+        // Snapshot the manager's panels for this dashboard.
+        let persisted_panels: Vec<DashboardPanel> = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .panels_for_dashboard(self.dashboard_id)
+            .to_vec();
+
+        // Build a set of saved_chart_ids already represented in our slots.
+        // Loaded panels may report `None` if the chart was never saved (a
+        // safety net — Loaded slots in a dashboard always come from saved
+        // charts, but the type permits None).
+        let existing_chart_ids: std::collections::HashSet<Uuid> = self
+            .panel_slots
+            .iter()
+            .filter_map(|slot| match slot {
+                DashboardPanelSlot::Loaded { panel, .. } => panel.read(cx).saved_chart_id(),
+                DashboardPanelSlot::Orphan { saved_chart_id, .. } => Some(*saved_chart_id),
+            })
+            .collect();
+
+        let mut appended = 0usize;
+        for panel in persisted_panels.iter() {
+            if existing_chart_ids.contains(&panel.saved_chart_id) {
+                continue;
+            }
+
+            let grid_pos = PanelGridPos {
+                grid_row: panel.grid_row,
+                grid_column: panel.grid_column,
+                grid_width: panel.grid_width,
+                grid_height: panel.grid_height,
+            };
+
+            let saved_chart = self
+                .app_state
+                .read(cx)
+                .saved_charts
+                .all_charts()
+                .iter()
+                .find(|c| c.id == panel.saved_chart_id)
+                .cloned();
+
+            let new_slot = match saved_chart {
+                Some(chart)
+                    if matches!(
+                        chart.source,
+                        SavedChartSource::Query { .. } | SavedChartSource::Metric { .. }
+                    ) =>
+                {
+                    let app_state_inner = self.app_state.clone();
+                    let title_override = panel.title_override.clone();
+                    let panel_entity = cx.new(|cx| {
+                        let mut doc =
+                            ChartDocument::from_saved(&chart, app_state_inner, window, cx)
+                                .expect("Query/Metric source validated by match guard");
+                        doc.set_embedded(true, cx);
+                        doc
+                    });
+
+                    // Subscribe the new panel to ExecutionFinished for the
+                    // semaphore. The slot index is the position the panel
+                    // will occupy after the push below.
+                    let slot_idx = self.panel_slots.len();
+                    let sub = cx.subscribe(
+                        &panel_entity,
+                        move |this: &mut Self,
+                              _panel,
+                              event: &DocumentEvent,
+                              cx: &mut Context<Self>| {
+                            if matches!(event, DocumentEvent::ExecutionFinished) {
+                                this.on_panel_execution_finished(slot_idx, cx);
+                            }
+                        },
+                    );
+                    self._subscriptions.push(sub);
+
+                    DashboardPanelSlot::Loaded {
+                        panel: panel_entity,
+                        grid_pos,
+                        title_override,
+                    }
+                }
+                _ => DashboardPanelSlot::Orphan {
+                    saved_chart_id: panel.saved_chart_id,
+                    grid_pos,
+                },
+            };
+
+            self.panel_slots.push(new_slot);
+            appended += 1;
+        }
+
+        appended
     }
 
     /// Append new panels to this dashboard.

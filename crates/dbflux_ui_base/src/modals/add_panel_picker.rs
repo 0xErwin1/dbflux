@@ -148,6 +148,10 @@ pub struct ModalAddPanelPicker {
     // Metric-tab state.
     metric_name_input: Entity<InputState>,
     metric_namespace_filter_input: Entity<InputState>,
+    /// Free-text filter applied to the metric list in the right column of the
+    /// metric picker tab. Case-insensitive substring match against
+    /// `metric_name` and against each `dimension key=value` pair.
+    metric_metric_filter_input: Entity<InputState>,
     metric_namespace_selected: Option<String>,
     metric_metrics_for_namespace: HashMap<String, Vec<MetricDescriptor>>,
     metric_metric_selected: Option<usize>,
@@ -171,6 +175,8 @@ impl ModalAddPanelPicker {
         let metric_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Panel name"));
         let metric_namespace_filter_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter namespaces…"));
+        let metric_metric_filter_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter metrics…"));
         let metric_period_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("Period (seconds)");
             s.set_value("60", window, cx);
@@ -189,6 +195,7 @@ impl ModalAddPanelPicker {
             query_chart_kind: ChartKind::Line,
             metric_name_input,
             metric_namespace_filter_input,
+            metric_metric_filter_input,
             metric_namespace_selected: None,
             metric_metrics_for_namespace: HashMap::new(),
             metric_metric_selected: None,
@@ -239,6 +246,9 @@ impl ModalAddPanelPicker {
         self.metric_namespace_filter_input.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
+        self.metric_metric_filter_input.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
         self.metric_period_input.update(cx, |state, cx| {
             state.set_value("60", window, cx);
         });
@@ -250,6 +260,7 @@ impl ModalAddPanelPicker {
             &self.query_input,
             &self.metric_name_input,
             &self.metric_namespace_filter_input,
+            &self.metric_metric_filter_input,
             &self.metric_period_input,
         ] {
             let sub = cx.subscribe_in(input, window, |_this, _, event: &InputEvent, _, cx| {
@@ -718,11 +729,49 @@ impl ModalAddPanelPicker {
                 .into_any_element();
         }
 
-        let selected = self.metric_metric_selected;
-        let rows: Vec<AnyElement> = metrics
+        // Apply the user-supplied filter (case-insensitive substring match)
+        // against the metric name AND against each `key=value` dimension pair.
+        // We preserve the original index so selection state still maps onto
+        // the cached `metric_metrics_for_namespace` entry.
+        let filter = self
+            .metric_metric_filter_input
+            .read(cx)
+            .value()
+            .to_string()
+            .to_lowercase();
+
+        let filtered: Vec<(usize, &MetricDescriptor)> = metrics
             .iter()
             .enumerate()
+            .filter(|(_, m)| {
+                if filter.is_empty() {
+                    return true;
+                }
+                if m.metric_name.to_lowercase().contains(&filter) {
+                    return true;
+                }
+                m.dimensions
+                    .iter()
+                    .any(|(k, v)| format!("{k}={v}").to_lowercase().contains(&filter))
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            return div()
+                .border_1()
+                .border_color(theme.border)
+                .rounded(Radii::SM)
+                .h(px(260.0))
+                .p(Spacing::SM)
+                .child(Text::body("No metrics match the filter.").into_any_element())
+                .into_any_element();
+        }
+
+        let selected = self.metric_metric_selected;
+        let rows: Vec<AnyElement> = filtered
+            .iter()
             .map(|(idx, m)| {
+                let idx = *idx;
                 let is_selected = selected == Some(idx);
                 let dim_summary = if m.dimensions.is_empty() {
                     String::new()
@@ -797,6 +846,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(Text::subsection_label("Metric").into_any_element())
+            .child(Input::new(&self.metric_metric_filter_input))
             .child(self.render_metric_list(cx))
             .into_any_element();
 

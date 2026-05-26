@@ -132,6 +132,13 @@ pub struct ChartDocument {
     /// TimeRangePanel construction; set to `Some` by `render.rs`).
     pub(super) result_panel: Option<Entity<ResultPanel>>,
 
+    /// When `true`, this chart is embedded inside another document (e.g. a
+    /// `DashboardDocument` panel) and must suppress its own chrome — the
+    /// header segments (title/Run/Save) and the internal chart toolbar row
+    /// (TYPE/Stats/PNG/Save) are not rendered. The host document supplies the
+    /// surrounding chrome instead.
+    pub(super) embedded: bool,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -252,6 +259,7 @@ impl ChartDocument {
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             result_panel: None,
+            embedded: false,
             _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
         }
     }
@@ -438,6 +446,7 @@ impl ChartDocument {
             name_prompt: None,
             pending_toast: None,
             result_panel: None,
+            embedded: false,
             focus_handle: cx.focus_handle(),
             focus_mode: ChartDocFocus::default(),
             _subscriptions: vec![metric_apply_sub, app_state_disconnect_sub],
@@ -996,6 +1005,24 @@ impl ChartDocument {
 
     // ---- ViewHandle construction ----
 
+    /// Mark this chart document as embedded inside another document (typically
+    /// a `DashboardDocument` panel).
+    ///
+    /// When embedded, the chart suppresses its own header segments (title /
+    /// Run / Save) and its internal chart toolbar row (TYPE / Stats / PNG /
+    /// Save chart). The host document provides the surrounding chrome.
+    pub fn set_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
+        if self.embedded != embedded {
+            self.embedded = embedded;
+            cx.notify();
+        }
+    }
+
+    /// Returns whether this chart is in embedded mode.
+    pub fn is_embedded(&self) -> bool {
+        self.embedded
+    }
+
     /// Produce a `ViewHandle` that lets `ResultPanel` host `ChartDocument`.
     ///
     /// The three header segments (title Left/0, Run Left/1, Save Right/0) are
@@ -1033,7 +1060,13 @@ impl ChartDocument {
     /// - `Left/0`: document title label
     /// - `Left/1`: Run / Running… primary button
     /// - `Right/0`: Save button
-    fn header_segments(entity: Entity<Self>, _cx: &App) -> Vec<ToolbarSegment> {
+    fn header_segments(entity: Entity<Self>, cx: &App) -> Vec<ToolbarSegment> {
+        // When embedded inside another document (e.g. a DashboardDocument
+        // panel) the host owns the chrome and no segments should be rendered.
+        if entity.read(cx).embedded {
+            return Vec::new();
+        }
+
         use dbflux_components::primitives::Text;
         use dbflux_components::tokens::Spacing;
         use gpui_component::button::{Button, ButtonVariant, ButtonVariants};

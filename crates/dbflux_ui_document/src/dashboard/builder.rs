@@ -306,9 +306,11 @@ pub(super) fn panel_header(
         None
     };
 
-    // Close / remove button.
-    let on_remove = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-        this.remove_panel(panel_index, cx);
+    // Kebab menu button — opens the same context menu as right-click, but
+    // gives keyboard/mouse users a discoverable affordance. Replaces the
+    // previous standalone "×" close button.
+    let on_kebab_click = cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+        this.open_panel_context_menu(panel_index, event.position(), cx);
     });
 
     let mut header = div()
@@ -360,9 +362,14 @@ pub(super) fn panel_header(
                 .into_any_element()
         };
 
-        let remove_btn = Button::new(("panel-remove", panel_index), "×").on_click(on_remove);
+        // Kebab menu trigger — replaces the previous standalone "×" close
+        // button. Opens the same context menu as right-click on the header,
+        // so destructive actions (Remove panel) sit behind one extra click.
+        let kebab_btn = Button::new(("panel-kebab", panel_index), "⋯")
+            .ghost()
+            .on_click(on_kebab_click);
 
-        header = header.child(title_elem).child(remove_btn);
+        header = header.child(title_elem).child(kebab_btn);
     }
 
     header

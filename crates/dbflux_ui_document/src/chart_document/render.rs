@@ -298,6 +298,11 @@ impl ChartDocument {
                 .into_any_element()
         };
 
+        // When embedded inside another document (e.g. a DashboardDocument
+        // panel) the host owns the chrome — skip the chart-internal toolbar
+        // and axis rows entirely so the chart canvas fills the panel card.
+        let embedded = self.embedded;
+
         // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / PNG / Save --
         let chart_toolbar_row = {
             let resolved_window = self
@@ -579,9 +584,12 @@ impl ChartDocument {
             .flex_col()
             .size_full()
             .relative() // needed so the absolute rail positions relative to this container
-            .child(chart_toolbar_row)
-            .when_some(custom_picker_row, |el, row| el.child(row))
-            .child(axis_row)
+            .when(!embedded, |el| el.child(chart_toolbar_row))
+            .when_some(
+                if embedded { None } else { custom_picker_row },
+                |el, row| el.child(row),
+            )
+            .when(!embedded, |el| el.child(axis_row))
             .child(div().flex_1().min_h_0().child(chart_area))
             .when_some(metric_rail, |el, rail| el.child(rail))
             .when_some(stats_rail, |el, rail| el.child(rail))
