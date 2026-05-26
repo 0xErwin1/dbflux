@@ -15,7 +15,15 @@ path = "src/lib.rs"
 [dependencies]
 dbflux_core.workspace = true
 dbflux_ipc.workspace = true
+dbflux_driver_cloudwatch.workspace = true
+dbflux_driver_dynamodb.workspace = true
+dbflux_driver_influxdb.workspace = true
+dbflux_driver_mongodb.workspace = true
+dbflux_driver_mssql.workspace = true
+dbflux_driver_mysql.workspace = true
+dbflux_driver_postgres.workspace = true
 dbflux_driver_redis.workspace = true
+dbflux_driver_sqlite.workspace = true
 serde_json.workspace = true
 testcontainers = "0.15"
 interprocess.workspace = true

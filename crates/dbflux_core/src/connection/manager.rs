@@ -2269,10 +2269,11 @@ mod tests {
     // --- ConnectProfileParams::execute tests ---
 
     use crate::{
-        DatabaseCategory, DriverFormDef, FormValues, Icon, POSTGRES_FORM, SshAuthMethod,
-        SshTunnelConfig,
+        DatabaseCategory, DriverFormDef, FormValues, Icon, SshAuthMethod, SshTunnelConfig,
     };
     use std::sync::LazyLock;
+
+    static TEST_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef { tabs: vec![] });
 
     struct TestDriver {
         metadata: DriverMetadata,
@@ -2303,7 +2304,7 @@ mod tests {
                     ssl_cert_fields: None,
                     classification_override: None,
                 },
-                form: &POSTGRES_FORM,
+                form: &TEST_FORM,
             })
         }
     }
