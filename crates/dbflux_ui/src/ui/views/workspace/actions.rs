@@ -1917,6 +1917,8 @@ impl Workspace {
                 panel_slots,
                 shared_time_range,
                 dashboard.grid_columns,
+                dashboard.shared_time_range_preset,
+                dashboard.shared_refresh_policy,
                 app_state.clone(),
                 cx,
             )

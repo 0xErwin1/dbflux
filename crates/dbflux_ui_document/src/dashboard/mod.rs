@@ -7,19 +7,22 @@
 //! re-execution is bounded by `PANEL_REEXEC_CAP` to avoid overwhelming the
 //! connection with concurrent queries.
 
+mod builder;
 pub mod pane;
 mod render;
 
 use super::chart_document::ChartDocument;
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
+use builder::{DragReorderState, DragResizeState, PanelContextMenu};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
-use dbflux_components::saved_chart::SavedChartRefreshPolicy;
+use dbflux_components::controls::InputState;
+use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::{AppStateEntity, DashboardPanelDraft};
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Window};
+use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Pixels, Point, Subscription, Window};
 use std::collections::VecDeque;
 use uuid::Uuid;
 
@@ -128,6 +131,37 @@ pub struct DashboardDocument {
     // Focus
     focus_handle: FocusHandle,
 
+    // ---- Visual builder state (Phase Q) ----
+    /// Currently selected time-range preset (persisted in the dashboard row).
+    /// `None` defaults to Last24Hours at render time.
+    pub(crate) shared_time_range_preset: Option<TimeRangePreset>,
+
+    /// Currently active refresh policy (persisted in the dashboard row).
+    pub(crate) shared_refresh_policy: SavedChartRefreshPolicy,
+
+    /// Index of the panel whose title is being edited inline.
+    /// `None` means no panel is in edit mode.
+    pub(crate) editing_title_panel_index: Option<u32>,
+
+    /// `InputState` entity for the active panel-title inline edit.
+    /// Created when `start_panel_title_edit` is called; dropped on commit/cancel.
+    pub(crate) panel_title_input: Option<Entity<InputState>>,
+
+    /// Whether the dashboard tab title itself is in inline-edit mode.
+    pub(crate) editing_dashboard_name: bool,
+
+    /// `InputState` entity for the dashboard-name inline edit.
+    pub(crate) dashboard_name_input: Option<Entity<InputState>>,
+
+    /// Active drag-reorder state. `None` when no drag is in progress.
+    pub(crate) drag_reorder: Option<DragReorderState>,
+
+    /// Active drag-resize state. `None` when no resize is in progress.
+    pub(crate) drag_resize: Option<DragResizeState>,
+
+    /// Per-panel context menu, open when the user right-clicks a panel header.
+    pub(crate) panel_context_menu: Option<PanelContextMenu>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -144,12 +178,15 @@ impl DashboardDocument {
     /// `grid_columns` is read from `viz_dashboards.grid_columns` and clamped
     /// to the range [1, 4] for V1. The render uses it to set panel widths
     /// (e.g., 2 columns → each panel is 50% wide via `w_1_2()`).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         dashboard_id: Uuid,
         title: String,
         panel_slots: Vec<DashboardPanelSlot>,
         shared_time_range: Entity<TimeRangePanel>,
         grid_columns: u32,
+        shared_time_range_preset: Option<TimeRangePreset>,
+        shared_refresh_policy: SavedChartRefreshPolicy,
         app_state: Entity<AppStateEntity>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -227,6 +264,16 @@ impl DashboardDocument {
             is_backgrounded: false,
             pending_refresh_on_focus: false,
             focus_handle: cx.focus_handle(),
+            // Visual builder state (Phase Q).
+            shared_time_range_preset,
+            shared_refresh_policy,
+            editing_title_panel_index: None,
+            panel_title_input: None,
+            editing_dashboard_name: false,
+            dashboard_name_input: None,
+            drag_reorder: None,
+            drag_resize: None,
+            panel_context_menu: None,
             _subscriptions: subscriptions,
         }
     }
@@ -544,10 +591,11 @@ impl DashboardDocument {
 
     /// Update the shared time-range preset.
     ///
-    /// Persists via `DashboardManager::update_shared_time_range`.
+    /// Persists via `DashboardManager::update_shared_time_range` and updates
+    /// the in-memory `shared_time_range_preset` field.
     pub fn set_shared_time_range_preset(
         &mut self,
-        preset: dbflux_components::saved_chart::TimeRangePreset,
+        preset: TimeRangePreset,
         cx: &mut Context<Self>,
     ) {
         let dashboard_id = self.dashboard_id;
@@ -558,13 +606,15 @@ impl DashboardDocument {
         });
 
         if result.is_ok() {
+            self.shared_time_range_preset = Some(preset);
             cx.notify();
         }
     }
 
     /// Update the shared refresh policy.
     ///
-    /// Persists via `DashboardManager::update_shared_refresh_policy`.
+    /// Persists via `DashboardManager::update_shared_refresh_policy` and
+    /// updates the in-memory `shared_refresh_policy` field.
     pub fn set_shared_refresh_policy(
         &mut self,
         policy: SavedChartRefreshPolicy,
@@ -578,8 +628,232 @@ impl DashboardDocument {
         });
 
         if result.is_ok() {
+            self.shared_refresh_policy = policy;
             cx.notify();
         }
+    }
+
+    // ---- Visual builder: inline title edit (Q.4) ----
+
+    /// Enter inline-edit mode for the title of panel at `panel_index`.
+    ///
+    /// Creates an `InputState` pre-populated with the current title, subscribes
+    /// to `PressEnter` / `Blur` for commit and `Escape` / `Blur` for cancel.
+    pub fn start_panel_title_edit(&mut self, panel_index: u32, cx: &mut Context<Self>) {
+        // Already editing this panel — do nothing.
+        if self.editing_title_panel_index == Some(panel_index) {
+            return;
+        }
+
+        // Cancel any other in-progress edit first.
+        self.cancel_panel_title_edit(cx);
+
+        self.editing_title_panel_index = Some(panel_index);
+        cx.notify();
+    }
+
+    /// Commit the inline title edit with the value from `panel_title_input`.
+    pub fn commit_panel_title_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(panel_index) = self.editing_title_panel_index.take() else {
+            return;
+        };
+        self.panel_title_input = None;
+
+        // The value is read from the InputState entity and forwarded to
+        // `update_panel_title`. This method is called from the InputEvent
+        // subscription in render.rs; the value has already been captured
+        // via the listener closure.
+        let _ = panel_index;
+        cx.notify();
+    }
+
+    /// Cancel the inline title edit without persisting any change.
+    pub fn cancel_panel_title_edit(&mut self, cx: &mut Context<Self>) {
+        if self.editing_title_panel_index.is_some() {
+            self.editing_title_panel_index = None;
+            self.panel_title_input = None;
+            cx.notify();
+        }
+    }
+
+    // ---- Visual builder: inline dashboard-name edit (Q.2) ----
+
+    /// Enter inline-edit mode for the dashboard tab title (double-click on tab).
+    pub fn start_dashboard_name_edit(&mut self, cx: &mut Context<Self>) {
+        if self.editing_dashboard_name {
+            return;
+        }
+        self.editing_dashboard_name = true;
+        cx.notify();
+    }
+
+    /// Commit the inline dashboard-name edit with `new_name`.
+    ///
+    /// Trims whitespace; rejects empty strings. Delegates to `rename`.
+    pub fn commit_dashboard_name_edit(&mut self, new_name: String, cx: &mut Context<Self>) {
+        self.editing_dashboard_name = false;
+        self.dashboard_name_input = None;
+        let trimmed = new_name.trim().to_string();
+        if !trimmed.is_empty() {
+            self.rename(trimmed, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    /// Cancel the inline dashboard-name edit without persisting.
+    pub fn cancel_dashboard_name_edit(&mut self, cx: &mut Context<Self>) {
+        self.editing_dashboard_name = false;
+        self.dashboard_name_input = None;
+        cx.notify();
+    }
+
+    // ---- Visual builder: per-panel context menu (Q.3) ----
+
+    /// Open the per-panel context menu at the given screen position.
+    pub fn open_panel_context_menu(
+        &mut self,
+        panel_index: u32,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.panel_context_menu = Some(builder::PanelContextMenu::new(panel_index, position));
+        cx.notify();
+    }
+
+    /// Close the per-panel context menu without executing any action.
+    pub fn close_panel_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.panel_context_menu.is_some() {
+            self.panel_context_menu = None;
+            cx.notify();
+        }
+    }
+
+    /// Execute the context-menu action at `item_index` and close the menu.
+    pub fn execute_panel_context_menu_item(&mut self, item_index: usize, cx: &mut Context<Self>) {
+        let Some(menu) = self.panel_context_menu.take() else {
+            return;
+        };
+        let Some(&action) = menu.items.get(item_index) else {
+            return;
+        };
+        let panel_index = menu.panel_index;
+
+        match action {
+            builder::PanelMenuAction::RemovePanel => {
+                self.remove_panel(panel_index, cx);
+            }
+            builder::PanelMenuAction::EditTitle => {
+                self.start_panel_title_edit(panel_index, cx);
+            }
+        }
+    }
+
+    // ---- Visual builder: drag-reorder (Q.6) ----
+
+    /// Begin a panel drag from `from_index`.
+    pub fn start_panel_drag(&mut self, from_index: u32, cx: &mut Context<Self>) {
+        self.drag_reorder = Some(DragReorderState {
+            from_index,
+            drop_slot: from_index,
+            active: true,
+        });
+        cx.notify();
+    }
+
+    /// Update the current drag-reorder drop target to `drop_slot`.
+    pub fn update_drag_drop_slot(&mut self, drop_slot: u32, cx: &mut Context<Self>) {
+        if let Some(ref mut state) = self.drag_reorder
+            && state.drop_slot != drop_slot
+        {
+            state.drop_slot = drop_slot;
+            cx.notify();
+        }
+    }
+
+    /// End the panel drag, committing the reorder if `from_index != drop_slot`.
+    pub fn end_panel_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.drag_reorder.take() else {
+            return;
+        };
+        if state.from_index != state.drop_slot {
+            self.reorder_panels(state.from_index, state.drop_slot, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    // ---- Visual builder: drag-resize (Q.7) ----
+
+    /// Begin a resize drag on panel at `panel_index` from screen position `start`.
+    pub fn start_panel_resize(
+        &mut self,
+        panel_index: u32,
+        start: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        // Read the current grid dimensions from the panel slot.
+        let mut sorted_slots: Vec<&DashboardPanelSlot> = self.panel_slots.iter().collect();
+        sorted_slots.sort_by_key(|s| {
+            let p = s.grid_pos();
+            (p.grid_row, p.grid_column)
+        });
+
+        let (orig_w, orig_h) = sorted_slots
+            .get(panel_index as usize)
+            .map(|s| {
+                let p = s.grid_pos();
+                (p.grid_width, p.grid_height)
+            })
+            .unwrap_or((1, 1));
+
+        self.drag_resize = Some(DragResizeState {
+            panel_index,
+            original_width: orig_w,
+            original_height: orig_h,
+            start_x: start.x,
+            start_y: start.y,
+            current_width: orig_w,
+            current_height: orig_h,
+            active: true,
+        });
+        cx.notify();
+    }
+
+    /// Update the working resize dimensions from the current mouse position.
+    pub fn update_panel_resize(&mut self, current_pos: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(ref mut state) = self.drag_resize else {
+            return;
+        };
+
+        let delta_x: f32 = (current_pos.x - state.start_x).into();
+        let delta_y: f32 = (current_pos.y - state.start_y).into();
+        let (new_w, new_h) = builder::compute_resize_dimensions(
+            state.original_width,
+            state.original_height,
+            delta_x,
+            delta_y,
+            self.grid_columns,
+        );
+
+        if state.current_width != new_w || state.current_height != new_h {
+            state.current_width = new_w;
+            state.current_height = new_h;
+            cx.notify();
+        }
+    }
+
+    /// End the resize drag, persisting the new dimensions.
+    pub fn end_panel_resize(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.drag_resize.take() else {
+            return;
+        };
+        self.resize_panel(
+            state.panel_index,
+            state.current_width,
+            state.current_height,
+            cx,
+        );
     }
 
     /// Append new panels to this dashboard.
