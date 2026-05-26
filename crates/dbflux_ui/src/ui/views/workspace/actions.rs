@@ -2570,6 +2570,7 @@ impl Workspace {
                     candidates,
                     has_metric_catalog,
                     metric_namespaces,
+                    metric_namespaces_loading: false,
                 },
                 window,
                 cx,

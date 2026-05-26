@@ -141,6 +141,7 @@ impl MigrationRegistry {
         registry.register(mod_008_general_settings_style::MigrationImpl);
         registry.register(mod_009_mssql_instance::MigrationImpl);
         registry.register(mod_010_viz_charts_and_dashboards::MigrationImpl);
+        registry.register(mod_011_viz_saved_chart_metric_source::MigrationImpl);
         registry
     }
 
@@ -289,6 +290,7 @@ mod mod_007_session_exec_ctx_json;
 mod mod_008_general_settings_style;
 mod mod_009_mssql_instance;
 mod mod_010_viz_charts_and_dashboards;
+mod mod_011_viz_saved_chart_metric_source;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -636,6 +638,20 @@ mod tests {
             );
             INSERT INTO cfg_services (socket_id, enabled, command, startup_timeout_ms)
             VALUES ('legacy-socket', 1, 'dbflux-driver-host', 5000);
+
+            -- Pre-create the cfg_connection_profiles stub that migrations
+            -- registered after 001_initial expect to exist. The test
+            -- pretends 001_initial already ran without actually creating its
+            -- tables, so subsequent migrations (mod_010+ in particular) that
+            -- reference cfg_connection_profiles via FK fail when SQLite tries
+            -- to resolve those references during table rebuilds.
+            CREATE TABLE IF NOT EXISTS cfg_connection_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                driver_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             "#,
         )
         .unwrap();

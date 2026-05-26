@@ -65,8 +65,11 @@ pub struct AddPanelRequest {
     pub candidates: Vec<SavedChart>,
     /// Whether the connection advertises `DriverCapabilities::METRIC_CATALOG`.
     pub has_metric_catalog: bool,
-    /// Pre-loaded namespaces (empty when no catalog).
+    /// Pre-loaded namespaces (empty when no catalog or when still loading).
     pub metric_namespaces: Vec<String>,
+    /// True while a background fetch for `metric_namespaces` is in flight.
+    /// The modal renders a "Loading namespaces…" placeholder while true.
+    pub metric_namespaces_loading: bool,
 }
 
 /// Active tab in the picker.
