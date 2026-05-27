@@ -32,7 +32,6 @@ use dbflux_core::{
 };
 use dbflux_ui_base::app_state_entity::{AppStateChanged, AppStateEntity};
 use dbflux_ui_windows::connection_manager::ConnectionManagerWindow;
-use dbflux_ui_windows::settings::SettingsWindow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;

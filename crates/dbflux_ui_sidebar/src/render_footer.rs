@@ -1,6 +1,5 @@
 use super::*;
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
-use dbflux_ui_base::platform;
 
 impl Sidebar {
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -53,33 +52,13 @@ impl Sidebar {
                     .hover(|d| d.bg(theme.secondary))
                     .on_click(move |_, _, cx| {
                         let sidebar = sidebar.clone();
-
-                        let app_state_for_window = app_state.clone();
-                        let mut options = WindowOptions {
-                            app_id: Some("dbflux".into()),
-                            titlebar: Some(TitlebarOptions {
-                                title: Some("Settings".into()),
-                                ..Default::default()
-                            }),
-                            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                                None,
-                                size(px(950.0), px(700.0)),
-                                cx,
-                            ))),
-                            focus: true,
-                            ..Default::default()
-                        };
-                        platform::apply_window_options(&mut options, 800.0, 600.0);
-
-                        let _ = cx.open_window(
-                            options,
-                            |window, cx| {
-                                let settings = cx.new(|cx| {
-                                    SettingsWindow::new(app_state_for_window, window, cx)
-                                });
-
+                        dbflux_ui_windows::settings::open_or_focus_settings(
+                            app_state.clone(),
+                            None,
+                            cx,
+                            move |settings, cx| {
                                 cx.subscribe(
-                                    &settings,
+                                    settings,
                                     move |_settings, event: &dbflux_ui_windows::settings::SettingsEvent, cx| {
                                         sidebar.update(cx, |_this, cx| {
                                             match event {
@@ -92,8 +71,6 @@ impl Sidebar {
                                     },
                                 )
                                 .detach();
-
-                                cx.new(|cx| Root::new(settings, window, cx))
                             },
                         );
                     })

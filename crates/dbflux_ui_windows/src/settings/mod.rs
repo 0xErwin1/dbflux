@@ -13,6 +13,7 @@ mod keybindings;
 mod keybindings_section;
 mod layout;
 mod lifecycle;
+mod open_window;
 
 #[cfg(feature = "mcp")]
 mod mcp_section;
@@ -47,6 +48,7 @@ use proxies_section::ProxiesSection;
 use services_section::ServicesSection;
 use ssh_tunnels_section::SshTunnelsSection;
 
+pub use self::open_window::open_or_focus_settings;
 pub use self::section_trait::{SettingsSection, SettingsSectionId};
 
 const SETTINGS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(220.0);

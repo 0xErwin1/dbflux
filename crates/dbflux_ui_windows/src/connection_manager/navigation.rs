@@ -1,12 +1,10 @@
-use crate::settings::{SettingsSectionId, SettingsWindow};
+use crate::settings::SettingsSectionId;
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::DropdownItem;
 use dbflux_core::FormFieldKind;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
-use dbflux_ui_base::platform;
 use gpui::*;
-use gpui_component::Root;
 
 use super::{
     AccessTabMode, ActiveTab, ConnectionManagerWindow, DismissEvent, DriverFocus, EditState,
@@ -1649,28 +1647,12 @@ impl ConnectionManagerWindow {
         section: SettingsSectionId,
         cx: &mut Context<Self>,
     ) {
-        // Phase 3: settings_window removed from AppState - always open a new window
-        // TODO: Phase 4 will track settings window in AppStateEntity
-        let app_state = self.app_state.clone();
-        let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
-
-        let mut options = WindowOptions {
-            app_id: Some("dbflux".into()),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Settings".into()),
-                ..Default::default()
-            }),
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            focus: true,
-            ..Default::default()
-        };
-        platform::apply_window_options(&mut options, 800.0, 600.0);
-
-        let _ = cx.open_window(options, move |window, cx| {
-            let settings = cx
-                .new(|cx| SettingsWindow::new_with_section(app_state.clone(), section, window, cx));
-            cx.new(|cx| Root::new(settings, window, cx))
-        });
+        crate::settings::open_or_focus_settings(
+            self.app_state.clone(),
+            Some(section),
+            cx,
+            |_settings, _cx| {},
+        );
     }
 
     pub(super) fn activate_focused_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -38,7 +38,6 @@ use crate::ui::views::sidebar::{Sidebar, SidebarEvent, SidebarTab};
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::TasksPanel;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
-use crate::ui::windows::settings::SettingsWindow;
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
 use dbflux_core::{ExecutionContext, QueryLanguage};
