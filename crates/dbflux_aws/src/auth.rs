@@ -1934,49 +1934,25 @@ fn sso_cache_dir() -> PathBuf {
 
 /// Reads the SSO cache file for the given start URL.
 ///
-/// Tries the hash-based filename first (fast path). If not found, scans all
-/// `.json` files in the cache directory and returns the first one whose
-/// `startUrl` field matches the normalized URL (ignoring trailing slashes).
-/// Returns `None` if no matching file exists or it cannot be read.
+/// AWS CLI v2 uses two different cache filename schemes:
+/// - Legacy: the file is named `sha1(start_url)` (with or without trailing slash).
+/// - Modern (`sso_session` block in `~/.aws/config`): the file is named
+///   `sha1(session_name)` instead, completely decoupled from the start URL.
+///
+/// Both schemes write the start URL into the file's `startUrl` JSON field, so
+/// the only reliable way to find the *current* token is to scan every `.json`
+/// file in the cache directory, match by `startUrl` content, and pick the most
+/// recently modified one. Relying on the hash-derived filename causes stale
+/// hash-matched files to mask fresh session-keyed tokens, leaving the login
+/// polling loop spinning forever after a successful `aws sso login`.
 fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
-    // Fast path: exact hash match. The AWS CLI may write the cache under either
-    // the trimmed or trailing-slash form of the URL, and stale files from a
-    // previous variant can coexist with a freshly-written one. Pick the most
-    // recently modified file among the candidates so a fresh `aws sso login`
-    // always wins over a stale prior cache entry.
-    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf, String)> = None;
-    for candidate in [normalized_url, &format!("{}/", normalized_url)] {
-        let hash = Sha1::digest(candidate.as_bytes());
-        let path = sso_cache_dir().join(format!("{:x}.json", hash));
-
-        let metadata = match std::fs::metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let mtime = metadata
-            .modified()
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        match &newest {
-            Some((current_mtime, _, _)) if *current_mtime >= mtime => {}
-            _ => newest = Some((mtime, path, contents)),
-        }
-    }
-    if let Some((_, path, contents)) = newest {
-        log::debug!("SSO cache hit (hash match): {}", path.display());
-        return Some(contents);
-    }
-
-    // Slow path: scan all files and compare by startUrl field value.
     let dir = sso_cache_dir();
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
         Err(_) => return None,
     };
+
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf, String)> = None;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -1994,12 +1970,27 @@ fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
             Err(_) => continue,
         };
 
-        if let Some(url) = parsed.get("startUrl").and_then(|v| v.as_str())
-            && url.trim_end_matches('/') == normalized_url
-        {
-            log::debug!("SSO cache hit (startUrl scan): {}", path.display());
-            return Some(contents);
+        let Some(url) = parsed.get("startUrl").and_then(|v| v.as_str()) else {
+            continue;
+        };
+
+        if url.trim_end_matches('/') != normalized_url {
+            continue;
         }
+
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        match &newest {
+            Some((current_mtime, _, _)) if *current_mtime >= mtime => {}
+            _ => newest = Some((mtime, path, contents)),
+        }
+    }
+
+    if let Some((_, path, contents)) = newest {
+        log::debug!("SSO cache hit: {}", path.display());
+        return Some(contents);
     }
 
     log::debug!("SSO cache miss for URL: {}", normalized_url);

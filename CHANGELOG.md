@@ -4,6 +4,50 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **AWS SSO sessions as first-class auth profiles** — A new `aws-sso-session`
+  auth provider models the `[sso-session NAME]` block of `~/.aws/config` as
+  its own profile, and `aws-sso` profiles reference it via a generic
+  `FormFieldKind::AuthProfileRef` dropdown instead of duplicating
+  `sso_start_url` / `sso_region` inline. A new `expand_auth_profile_refs`
+  pass merges the referenced session's fields into consumers at pipeline-input
+  and MCP-resolution time (consumer overrides win). Settings now renders the
+  selected session as inert text via `disabled_when_field_set`, and the
+  AWS-profile importer routes `[sso-session …]` blocks into the session
+  provider so re-importing matches sessions by name. Account/role dropdowns
+  always probe with a session marker, so they populate as soon as a valid
+  SSO session exists without forcing a new login.
+
+### Changed
+
+* **Single Settings window across all entry points** — The four entry points
+  that opened Settings (workspace action, auth-profiles deep link, Connection
+  Manager section jump, sidebar footer) now all funnel through a shared
+  `open_or_focus_settings` helper. Previously only the workspace path used
+  `AppState::settings_window` for dedup, so the other three could stack
+  duplicate Settings windows on top of each other.
+
+### Fixed
+
+* **AWS SSO login no longer hangs after a successful browser flow** — The
+  cache lookup that polled for the new SSO token relied on
+  `sha1(start_url)` as the filename. AWS CLI v2 actually names the file
+  `sha1(session_name)` whenever the profile uses an `sso_session` block, so
+  the fast path silently returned an unrelated, expired file and the polling
+  loop spun forever even after `aws sso login` printed *"Successfully logged
+  into Start URL"*. `find_sso_cache_contents` now always scans the cache
+  directory and picks the newest entry whose `startUrl` field matches,
+  covering both the legacy URL-keyed and modern session-keyed schemes.
+* **Inline SSO login panel replaces the cross-window modal** — The login
+  panel, verification URL, *Open Browser* / *Copy URL* / *Cancel* buttons,
+  and the new `abort_sso_login` plumbing now live inside the Auth Profiles
+  settings section. Cancel actually kills the running `aws sso login` child
+  process via a shared abort flag and a per-profile abort registry. The
+  stdout scanner was also rewritten with a bounded `recv_timeout` loop so
+  PKCE-flow URLs (which never print `user_code=`) are surfaced immediately
+  instead of blocking indefinitely.
+
 ## [0.6.0-dev.9] - 2026-05-26
 
 ### Added
