@@ -23,6 +23,9 @@ use dbflux_core::{
 };
 
 use crate::dashboard_import::CloudWatchDashboardImporter;
+use crate::dashboard_source::{
+    CloudWatchDashboardSource, RealCloudWatchDashboardApi, resolve_account_id,
+};
 use crate::metric_catalog::{CloudWatchMetricCatalog, RealCloudWatchClient};
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -35,7 +38,8 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     capabilities: DriverCapabilities::AUTHENTICATION
         .union(DriverCapabilities::METRIC_SERIES)
         .union(DriverCapabilities::METRIC_CATALOG)
-        .union(DriverCapabilities::DASHBOARD_IMPORT),
+        .union(DriverCapabilities::DASHBOARD_IMPORT)
+        .union(DriverCapabilities::DASHBOARD_SYNC),
     default_port: None,
     uri_scheme: "cloudwatch".into(),
     icon: Icon::Logs,
@@ -112,6 +116,10 @@ struct CloudWatchConnection {
     metric_catalog_impl: CloudWatchMetricCatalog,
     /// Dashboard JSON importer — always present; returns `Some` from `dashboard_importer()`.
     dashboard_importer_impl: CloudWatchDashboardImporter,
+    /// Dashboard sync source — always present; returns `Some` from `dashboard_source()`.
+    /// `account_id` inside may be `None` when STS lookup failed at connect time
+    /// (best-effort per spec R7.1; downstream marks such dashboards detached).
+    dashboard_source_impl: CloudWatchDashboardSource,
 }
 
 struct CloudWatchLanguageService;
@@ -200,7 +208,7 @@ impl DbDriver for CloudWatchDriver {
         _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = profile_config(&profile.config)?;
-        let (client, metrics_client) = build_clients(&config)?;
+        let (client, metrics_client, sdk_config) = build_clients_with_sdk_config(&config)?;
 
         probe_connection(&client, &config)?;
 
@@ -208,12 +216,24 @@ impl DbDriver for CloudWatchDriver {
             RealCloudWatchClient::new(metrics_client.clone()),
         ));
 
+        // STS GetCallerIdentity is best-effort: failure does NOT abort the
+        // connection. Dashboards imported with a `None` account id are
+        // treated as detached (spec R7.1, S1.D).
+        let account_id = runtime().block_on(resolve_account_id(&sdk_config));
+
+        let dashboard_source_impl = CloudWatchDashboardSource::new(
+            Box::new(RealCloudWatchDashboardApi::new(metrics_client.clone())),
+            account_id,
+            config.region.clone(),
+        );
+
         Ok(Box::new(CloudWatchConnection {
             client,
             metrics_client,
             config,
             metric_catalog_impl,
             dashboard_importer_impl: CloudWatchDashboardImporter,
+            dashboard_source_impl,
         }))
     }
 
@@ -236,6 +256,10 @@ impl Connection for CloudWatchConnection {
 
     fn dashboard_importer(&self) -> Option<&dyn dbflux_core::DashboardImporter> {
         Some(&self.dashboard_importer_impl)
+    }
+
+    fn dashboard_source(&self) -> Option<&dyn dbflux_core::DashboardSource> {
+        Some(&self.dashboard_source_impl)
     }
 
     fn ping(&self) -> Result<(), DbError> {
@@ -1074,6 +1098,16 @@ fn profile_config(config: &DbConfig) -> Result<CloudWatchProfileConfig, DbError>
 fn build_clients(
     config: &CloudWatchProfileConfig,
 ) -> Result<(Client, aws_sdk_cloudwatch::Client), DbError> {
+    let (logs_client, metrics_client, _sdk_config) = build_clients_with_sdk_config(config)?;
+    Ok((logs_client, metrics_client))
+}
+
+/// Same as [`build_clients`] but also returns the underlying `SdkConfig` so
+/// callers can spin up auxiliary clients (e.g. STS for `GetCallerIdentity`)
+/// without re-loading credentials.
+fn build_clients_with_sdk_config(
+    config: &CloudWatchProfileConfig,
+) -> Result<(Client, aws_sdk_cloudwatch::Client, aws_config::SdkConfig), DbError> {
     let mut loader =
         aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
 
@@ -1086,7 +1120,7 @@ fn build_clients(
     if config.endpoint.is_none() {
         let logs_client = Client::new(&sdk_config);
         let metrics_client = aws_sdk_cloudwatch::Client::new(&sdk_config);
-        return Ok((logs_client, metrics_client));
+        return Ok((logs_client, metrics_client, sdk_config));
     }
 
     let mut logs_builder = CloudWatchConfigBuilder::from(&sdk_config);
@@ -1100,7 +1134,7 @@ fn build_clients(
     let logs_client = Client::from_conf(logs_builder.build());
     let metrics_client = aws_sdk_cloudwatch::Client::from_conf(metrics_builder.build());
 
-    Ok((logs_client, metrics_client))
+    Ok((logs_client, metrics_client, sdk_config))
 }
 
 /// Guard: reject period_s == 0 before any network I/O.
@@ -1820,6 +1854,19 @@ mod tests {
                 .capabilities
                 .contains(DriverCapabilities::METRIC_SERIES),
             "CLOUDWATCH_METADATA must advertise METRIC_SERIES capability"
+        );
+    }
+
+    #[test]
+    fn cloudwatch_metadata_advertises_dashboard_import_and_sync() {
+        let caps = CLOUDWATCH_METADATA.capabilities;
+        assert!(
+            caps.contains(DriverCapabilities::DASHBOARD_IMPORT),
+            "DASHBOARD_IMPORT must remain on the CW driver"
+        );
+        assert!(
+            caps.contains(DriverCapabilities::DASHBOARD_SYNC),
+            "DASHBOARD_SYNC must be advertised so the UI surfaces sync affordances"
         );
     }
 }

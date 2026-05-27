@@ -2541,9 +2541,11 @@ dependencies = [
 name = "dbflux_driver_cloudwatch"
 version = "0.6.0-dev.9"
 dependencies = [
+ "async-trait",
  "aws-config",
  "aws-sdk-cloudwatch",
  "aws-sdk-cloudwatchlogs",
+ "aws-sdk-sts",
  "dbflux_core",
  "log",
  "serde_json",
