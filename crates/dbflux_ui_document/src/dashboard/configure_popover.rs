@@ -134,10 +134,14 @@ fn render_chart_kind_row(
             let on_click = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
                 this.configure_apply_chart_kind(panel_index, kind, cx);
             });
+            // Inactive kinds use the default Button variant so the border
+            // makes them readable as buttons against the modal background.
+            // `.ghost()` produced borderless transparent boxes which blended
+            // into the modal and looked like static text.
             let btn = if is_active {
                 Button::new(*id, *label).primary().on_click(on_click)
             } else {
-                Button::new(*id, *label).ghost().on_click(on_click)
+                Button::new(*id, *label).on_click(on_click)
             };
             btn.into_any_element()
         })
@@ -243,16 +247,8 @@ fn render_actions_row(panel_index: usize, cx: &mut Context<DashboardDocument>) -
         .flex()
         .flex_row()
         .gap(Spacing::SM)
-        .child(
-            Button::new("configure-stats", "Stats")
-                .ghost()
-                .on_click(on_stats),
-        )
-        .child(
-            Button::new("configure-png", "Export PNG")
-                .ghost()
-                .on_click(on_png),
-        )
+        .child(Button::new("configure-stats", "Stats").on_click(on_stats))
+        .child(Button::new("configure-png", "Export PNG").on_click(on_png))
         .into_any_element()
 }
 

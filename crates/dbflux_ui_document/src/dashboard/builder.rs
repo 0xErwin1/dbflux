@@ -17,8 +17,9 @@
 //!   document; the `Input` entity is lazily created when editing starts.
 //! - The toolbar always renders (even when there are zero panels).
 
-use crate::chrome::compact_top_bar;
-use dbflux_components::controls::{Button, Dropdown, InputState};
+use crate::chrome::{ToolbarButton, ToolbarButtonVariant, compact_top_bar};
+use dbflux_components::composites::refresh_split_button;
+use dbflux_components::controls::{Dropdown, InputState};
 use dbflux_components::saved_chart::TimeRangePreset;
 use dbflux_components::tokens::{Radii, Spacing};
 use gpui::prelude::*;
@@ -90,9 +91,11 @@ pub(super) const DRAG_RESIZE_PX_PER_ROW: f32 = 80.0;
 #[derive(Debug, Clone)]
 pub(crate) struct PanelContextMenu {
     /// Which panel the menu belongs to.
+    ///
+    /// Position is no longer tracked: the kebab menu anchors inline next to
+    /// its panel's `⋯` button via `.relative()` + `.absolute().top()`. See
+    /// `builder::panel_header` for the wrapper that hosts the floating menu.
     pub panel_index: u32,
-    /// Approximate screen position where the menu was opened.
-    pub position: gpui::Point<Pixels>,
     /// The available menu items.
     pub items: Vec<PanelMenuAction>,
     /// Keyboard-navigation cursor (0-based into `items`).
@@ -112,10 +115,9 @@ pub(crate) enum PanelMenuAction {
 }
 
 impl PanelContextMenu {
-    pub(super) fn new(panel_index: u32, position: gpui::Point<Pixels>) -> Self {
+    pub(super) fn new(panel_index: u32) -> Self {
         Self {
             panel_index,
-            position,
             items: vec![
                 PanelMenuAction::Configure,
                 PanelMenuAction::EditTitle,
@@ -170,51 +172,120 @@ pub(super) fn dashboard_toolbar(
     dashboard: &DashboardDocument,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
+    use dbflux_components::common::time_range::TimeRange;
+    use dbflux_components::common::time_range::view::TimeRangePanel;
+
     let theme = cx.theme().clone();
     let time_range_panel = dashboard.shared_time_range().clone();
     let refresh_dropdown = dashboard.refresh_dropdown.clone();
 
-    // Pull the preset dropdown out of the TimeRangePanel so the toolbar can
-    // host it inline rather than embedding the full panel (whose default
-    // render layout is vertically stacked). Custom-range pickers are rendered
-    // below the toolbar when the user picks "Custom…".
+    // Preset dropdown lifted out of the TimeRangePanel so the toolbar embeds
+    // the control inline. The TimeRangePanel itself stays the owner of state;
+    // we only render its child widgets.
     let preset_dropdown: Entity<Dropdown> = time_range_panel.read(cx).dropdown_time_range.clone();
+    let selected_time_range = time_range_panel.read(cx).selected_time_range;
+    let custom_range_visible = selected_time_range == Some(TimeRange::Custom);
 
-    // Content-sized wrappers around the dropdowns. Direct flex children stretch
-    // because `Dropdown::render` applies `w_full()` to its container; the
-    // wrapper acts as a flex item with intrinsic width so the control collapses
-    // to its content.
+    // Content-sized wrapper — `Dropdown::render` applies `w_full()` internally,
+    // which stretches as a direct flex child. The wrapper acts as an
+    // intrinsic-width flex item so the control collapses to content.
     let time_control = div()
         .flex_shrink_0()
         .rounded(Radii::SM)
         .child(preset_dropdown);
 
-    let refresh_control = div()
-        .flex_shrink_0()
-        .rounded(Radii::SM)
-        .child(refresh_dropdown);
+    // Refresh split-button — same helper AuditDocument uses, so the visual
+    // language matches the rest of the app. Manual click re-executes every
+    // loaded panel; the dropdown segment sets the auto-refresh interval.
+    let weak = cx.weak_entity();
+    let refresh_btn = refresh_split_button(
+        "dashboard-refresh-split",
+        dashboard.shared_refresh_policy_as_core(),
+        false,
+        false,
+        refresh_dropdown,
+        move |_window, cx| {
+            if let Some(doc) = weak.upgrade() {
+                doc.update(cx, |this, cx| this.refresh_all_loaded_panels(cx));
+            }
+        },
+        &theme,
+    );
 
-    // "+ Add Panel" toolbar button (anchored right).
+    let refresh_control = div().flex_shrink_0().child(refresh_btn);
+
+    // "+ Add Panel" toolbar button — `ToolbarButton` keeps the 28 px row
+    // height that matches every other DBFlux toolbar (data grid, audit, code).
     let on_add_panel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
         this.request_add_panel(cx);
     });
 
     let add_btn = div().flex_shrink_0().ml_auto().child(
-        Button::new("dash-add-panel-toolbar", "+ Add Panel")
-            .primary()
-            .on_click(on_add_panel),
+        ToolbarButton::new("dash-add-panel-toolbar")
+            .label("+ Add Panel")
+            .variant(ToolbarButtonVariant::Primary)
+            .on_click(move |event, window, app| on_add_panel(event, window, app)),
     );
 
-    compact_top_bar(
-        &theme,
-        [
-            time_control.into_any_element(),
-            refresh_control.into_any_element(),
-            add_btn.into_any_element(),
-        ],
-    )
-    .id("dashboard-toolbar")
-    .gap(Spacing::SM)
+    // Items pushed in order. When Custom is selected, the picker slots are
+    // inserted between the preset dropdown and the refresh control, mirroring
+    // AuditDocument exactly so users see a familiar custom-range row.
+    let mut items: Vec<gpui::AnyElement> = vec![time_control.into_any_element()];
+
+    if custom_range_visible {
+        let custom_controls = build_custom_time_controls(&time_range_panel, cx);
+        items.push(custom_controls.into_any_element());
+    }
+
+    items.push(refresh_control.into_any_element());
+    items.push(add_btn.into_any_element());
+
+    let _ = TimeRangePanel::preset_items; // touch import to keep linter happy
+    compact_top_bar(&theme, items)
+        .id("dashboard-toolbar")
+        .gap(Spacing::SM)
+}
+
+/// Build the custom-range row (date picker + start/end hour/minute + Apply)
+/// using the shared `TimeRangePanel::custom_picker_slots` API.
+///
+/// Returns a flex row containing each picker so it appears inline in the
+/// toolbar exactly the way `AuditDocument` renders the same controls.
+fn build_custom_time_controls(
+    panel: &Entity<dbflux_components::common::time_range::view::TimeRangePanel>,
+    cx: &mut Context<DashboardDocument>,
+) -> impl IntoElement {
+    let slots = panel.read(cx).custom_picker_slots(px(220.0), cx);
+    let weak_panel = panel.downgrade();
+
+    let can_apply = panel.read(cx).can_apply_custom_range(cx);
+    let on_apply = move |_event: &gpui::ClickEvent, _w: &mut Window, app: &mut App| {
+        if let Some(panel) = weak_panel.upgrade() {
+            panel.update(app, |panel, cx| {
+                let _ = panel.apply_custom_range(cx);
+            });
+        }
+    };
+
+    div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(slots.date_picker)
+        .child(slots.from_label)
+        .child(slots.start_hour)
+        .child(slots.start_minute)
+        .child(slots.to_label)
+        .child(slots.end_hour)
+        .child(slots.end_minute)
+        .child(
+            ToolbarButton::new("dashboard-custom-time-apply")
+                .label("Apply")
+                .variant(ToolbarButtonVariant::Default)
+                .disabled(!can_apply)
+                .on_click(on_apply),
+        )
 }
 
 /// Returns the panel-header element for a single panel slot.
@@ -230,6 +301,7 @@ pub(super) fn panel_header(
     title: &str,
     editing_input: Option<&Entity<InputState>>,
     _drag_active: bool,
+    menu_open: bool,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
     let is_editing = editing_input.is_some();
@@ -245,9 +317,10 @@ pub(super) fn panel_header(
         None
     };
 
-    // Context menu on right-click.
-    let on_right_click = cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-        this.open_panel_context_menu(panel_index, event.position, cx);
+    // Context menu on right-click — anchors inline next to this panel's
+    // kebab, so no event position is captured.
+    let on_right_click = cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
+        this.open_panel_context_menu(panel_index, cx);
     });
 
     // Drag start on header mouse-down (only when not editing).
@@ -271,15 +344,11 @@ pub(super) fn panel_header(
     };
 
     // Kebab menu button — opens the same context menu as right-click, but
-    // gives keyboard/mouse users a discoverable affordance.
-    //
-    // Position-on-click strategy: capture the actual click position on
-    // mouse-down (the menu is opened from `on_click`, but the position we want
-    // is where the kebab glyph sits). `ClickEvent::up.position` is the cursor
-    // position at release, which is effectively the kebab button's screen
-    // coordinates — that's what the floating menu anchors to.
-    let on_kebab_click = cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-        this.open_panel_context_menu(panel_index, event.position(), cx);
+    // gives keyboard/mouse users a discoverable affordance. The menu floats
+    // inline next to the trigger via the `.relative()` wrapper built below,
+    // so the click position is irrelevant.
+    let on_kebab_click = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+        this.open_panel_context_menu(panel_index, cx);
     });
     // Prevent the header's left-mouse-down handler (which starts a panel drag)
     // from also firing when the user presses the kebab button.
@@ -341,9 +410,16 @@ pub(super) fn panel_header(
         // effect. Adding a border on hover would reflow the header (the user
         // reported this as a layout shift); leaving the box dimensions static
         // and only changing `bg` avoids any reflow.
+        //
+        // The menu items are rendered as an absolute sibling inside this
+        // `.relative()` wrapper so the floating panel anchors *directly* next
+        // to the kebab regardless of the dashboard's window offset. This
+        // avoids the window-vs-local coordinate mismatch the previous
+        // click-position implementation suffered from.
         let theme = cx.theme();
         let hover_bg = theme.secondary;
-        let kebab_btn = div()
+
+        let kebab_trigger = div()
             .id(("panel-kebab", panel_index))
             .flex_shrink_0()
             .px_1()
@@ -355,10 +431,75 @@ pub(super) fn panel_header(
             .on_mouse_down(MouseButton::Left, on_kebab_mouse_down)
             .on_click(on_kebab_click);
 
-        header = header.child(title_elem).child(kebab_btn);
+        let menu_panel = if menu_open {
+            Some(panel_kebab_menu(panel_index, cx))
+        } else {
+            None
+        };
+
+        let kebab_wrapper = div()
+            .relative()
+            .flex_shrink_0()
+            .child(kebab_trigger)
+            .when_some(menu_panel, |el, panel| {
+                el.child(
+                    gpui::deferred(
+                        div()
+                            .absolute()
+                            .top(px(20.0)) // sit just below the kebab glyph
+                            .right(px(0.0))
+                            .child(panel),
+                    )
+                    .with_priority(2),
+                )
+            });
+
+        header = header.child(title_elem).child(kebab_wrapper);
     }
 
     header
+}
+
+/// Build the floating menu panel for the panel at `panel_index`.
+///
+/// Renders the same `MenuItem` chain used by the sidebar (icons, separator,
+/// danger color for `Remove panel`). Click handlers stash the chosen action
+/// in `pending_panel_menu_action`; the action is consumed at the start of the
+/// next `render` pass where a real `Window` is available.
+fn panel_kebab_menu(panel_index: u32, cx: &mut Context<DashboardDocument>) -> gpui::AnyElement {
+    use dbflux_components::composites::{MenuItem, render_menu_items};
+    use dbflux_components::icons::AppIcon;
+
+    // Items mirror the sidebar's two-section layout: actions, then a
+    // separator, then the destructive `Remove panel`.
+    let menu_items: Vec<MenuItem> = vec![
+        MenuItem::new("Configure…").icon(AppIcon::Settings),
+        MenuItem::new("Edit title…").icon(AppIcon::Pencil),
+        MenuItem::separator(),
+        MenuItem::new("Remove panel").icon(AppIcon::Delete).danger(),
+    ];
+
+    // The visible items list contains a separator, so map visual index back
+    // to the domain `PanelMenuAction` order (Configure=0, EditTitle=1,
+    // RemovePanel=2).
+    let visual_to_action: Vec<Option<usize>> = vec![Some(0), Some(1), None, Some(2)];
+
+    let weak = cx.weak_entity();
+    let on_click = move |visual_idx: usize, app: &mut gpui::App| {
+        let Some(Some(action_idx)) = visual_to_action.get(visual_idx).copied() else {
+            return;
+        };
+        if let Some(doc) = weak.upgrade() {
+            doc.update(app, |this, cx| {
+                this.pending_panel_menu_action = Some(action_idx);
+                cx.notify();
+            });
+        }
+    };
+    let on_hover = move |_: usize, _: &mut gpui::App| {};
+
+    let panel_id = format!("panel-ctx-menu-{}", panel_index);
+    render_menu_items(&panel_id, &menu_items, None, on_click, on_hover, cx).into_any_element()
 }
 
 /// Returns the bottom-right resize handle element for a panel slot.
@@ -537,7 +678,7 @@ mod tests {
     /// canonical action set in order: Configure, EditTitle, RemovePanel.
     #[test]
     fn panel_context_menu_has_canonical_items() {
-        let menu = PanelContextMenu::new(3, gpui::Point::default());
+        let menu = PanelContextMenu::new(3);
         assert_eq!(menu.panel_index, 3);
         assert_eq!(menu.items.len(), 3);
         assert_eq!(menu.items[0], PanelMenuAction::Configure);

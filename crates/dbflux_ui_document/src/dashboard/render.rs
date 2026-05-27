@@ -26,12 +26,11 @@
 //!   tab title alone. `editing_dashboard_name` state remains so renaming via
 //!   the tab title still works through `start_dashboard_name_edit`.
 
-use super::builder::{self, PanelMenuAction};
+use super::builder;
 use super::configure_popover;
 use super::{DashboardDocument, DashboardPanelSlot};
-use dbflux_components::composites::{MenuItem, render_menu_items, render_menu_overlay};
+use dbflux_components::composites::render_menu_overlay;
 use dbflux_components::controls::Button;
-use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::surface_card;
 use gpui::prelude::*;
 use gpui::{Context, IntoElement, Window, deferred, div, px};
@@ -149,11 +148,17 @@ impl Render for DashboardDocument {
                 // add a visible top border.
                 let is_drop_target = drag_active && drag_drop_slot == panel_index;
 
+                let menu_open_for_this = self
+                    .panel_context_menu
+                    .as_ref()
+                    .is_some_and(|m| m.panel_index == panel_index);
+
                 let header: gpui::AnyElement = builder::panel_header(
                     panel_index,
                     &panel_title,
                     editing_input,
                     drag_active,
+                    menu_open_for_this,
                     cx,
                 )
                 .into_any_element();
@@ -256,52 +261,11 @@ impl Render for DashboardDocument {
             }
         }
 
-        // Per-panel context menu overlay — uses the same shared chrome the
-        // sidebar and tab-bar use (`render_menu_overlay` + `render_menu_items`
-        // from `dbflux_components::composites`). The menu anchors at the
-        // exact click position captured from the kebab `⋯` button.
-        let context_menu_overlay = if let Some(ref menu) = self.panel_context_menu {
-            let menu_pos = menu.position;
-            let items = menu.items.clone();
-
-            // Map domain `PanelMenuAction`s to the shared visual `MenuItem`
-            // type. Keeps the dashboard chrome identical to the sidebar
-            // (icons, separator, danger color for destructive actions).
-            let menu_items: Vec<MenuItem> = items
-                .iter()
-                .enumerate()
-                .flat_map(|(i, action)| {
-                    let mut entries: Vec<MenuItem> = Vec::new();
-                    // Separator before the destructive `Remove panel` action.
-                    if matches!(action, PanelMenuAction::RemovePanel) && i > 0 {
-                        entries.push(MenuItem::separator());
-                    }
-                    let item = match action {
-                        PanelMenuAction::Configure => {
-                            MenuItem::new("Configure…").icon(AppIcon::Settings)
-                        }
-                        PanelMenuAction::EditTitle => {
-                            MenuItem::new("Edit title…").icon(AppIcon::Pencil)
-                        }
-                        PanelMenuAction::RemovePanel => {
-                            MenuItem::new("Remove panel").icon(AppIcon::Delete).danger()
-                        }
-                    };
-                    entries.push(item);
-                    entries
-                })
-                .collect();
-
-            // Recover the action index after the separator-injection above so
-            // the click handler still resolves to the correct domain action.
-            // `menu_items` may contain separator entries that must be skipped.
-            let selectable_indices: Vec<usize> = menu_items
-                .iter()
-                .enumerate()
-                .filter_map(|(i, mi)| (!mi.is_separator).then_some(i))
-                .collect();
-
-            // Overlay: dismiss the menu on any outside click.
+        // Dismissal-only overlay — covers the whole document so any click
+        // outside the kebab menu closes it. The menu itself is rendered
+        // inline next to each panel's kebab (see `builder::panel_header`),
+        // so its position is independent of dashboard window coordinates.
+        let context_menu_overlay = if self.panel_context_menu.is_some() {
             let weak_dismiss = cx.weak_entity();
             let overlay = render_menu_overlay("panel-ctx-menu-overlay", move |_event, cx| {
                 if let Some(doc) = weak_dismiss.upgrade() {
@@ -309,46 +273,16 @@ impl Render for DashboardDocument {
                 }
             });
 
-            // Click handler: stash the chosen action in a pending field. The
-            // next `render` pass executes it with a real `Window` handle (the
-            // standard `pending_*` pattern documented in CLAUDE.md). This is
-            // necessary because `start_panel_title_edit` requires a `Window`
-            // which is not available inside an `App`-only click callback.
-            let selectable_for_click = selectable_indices.clone();
-            let weak_click = cx.weak_entity();
-            let on_click = move |visual_idx: usize, cx: &mut gpui::App| {
-                let Some(action_idx) = selectable_for_click.iter().position(|i| *i == visual_idx)
-                else {
-                    return;
-                };
-                if let Some(doc) = weak_click.upgrade() {
-                    doc.update(cx, |this, cx| {
-                        this.pending_panel_menu_action = Some(action_idx);
-                        cx.notify();
-                    });
-                }
-            };
-            let on_hover = |_: usize, _: &mut gpui::App| {};
-
             deferred(
                 div()
-                    .id("panel-ctx-menu-layer")
+                    .id("panel-ctx-menu-dismiss-layer")
                     .absolute()
                     .top_0()
                     .left_0()
                     .size_full()
-                    .child(overlay)
-                    .child(div().absolute().top(menu_pos.y).left(menu_pos.x).child(
-                        render_menu_items(
-                            "panel-ctx-menu",
-                            &menu_items,
-                            None,
-                            on_click,
-                            on_hover,
-                            cx,
-                        ),
-                    )),
+                    .child(overlay),
             )
+            .with_priority(1)
             .into_any_element()
         } else {
             div().id("panel-ctx-menu-placeholder").into_any_element()

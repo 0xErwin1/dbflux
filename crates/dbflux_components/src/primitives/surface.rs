@@ -68,8 +68,14 @@ pub fn inspect_surface_role(role: SurfaceRole) -> SurfaceInspection {
             edge: None,
             radius: Radii::LG,
         },
+        // Modal body uses the same base background as the app's main panes
+        // (settings main pane, document content area). Switching from
+        // `Popover` to `Background` gives child controls — inputs, buttons,
+        // chart-kind chips — enough contrast against the modal body to stay
+        // readable; with the previous `Popover` slot, default-variant buttons
+        // shared the modal bg and became invisible.
         SurfaceRole::ModalContainer => SurfaceInspection {
-            background: SurfaceThemeColorSlot::Popover,
+            background: SurfaceThemeColorSlot::Background,
             edge: Some(ChromeEdgeRole::Popover),
             radius: Radii::LG,
         },
@@ -235,8 +241,12 @@ mod tests {
         assert_eq!(scrim.edge, None);
         assert_eq!(scrim.radius, Radii::LG);
 
+        // ModalContainer intentionally matches the app's main background slot
+        // (same surface as Settings' main pane / document content). This
+        // distinguishes modals from `Raised` popovers, which still use
+        // `Popover` and a smaller radius.
         let modal = inspect_surface_role(SurfaceRole::ModalContainer);
-        assert_eq!(modal.background, SurfaceThemeColorSlot::Popover);
+        assert_eq!(modal.background, SurfaceThemeColorSlot::Background);
         assert_eq!(modal.edge, Some(ChromeEdgeRole::Popover));
         assert_eq!(modal.radius, Radii::LG);
 

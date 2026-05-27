@@ -449,21 +449,54 @@ impl ModalAddPanelPicker {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
-        let checkbox = div()
+
+        let checkbox_bg = if is_selected {
+            theme.primary
+        } else {
+            theme.background
+        };
+        let checkbox_border = if is_selected {
+            theme.primary
+        } else {
+            theme.input
+        };
+
+        let mut checkbox = div()
             .w(Heights::ICON_SM)
             .h(Heights::ICON_SM)
             .border_1()
+            .border_color(checkbox_border)
             .rounded_sm()
             .flex()
             .items_center()
             .justify_center()
-            .when(is_selected, |el| el.bg(theme.selection))
-            .into_any_element();
+            .bg(checkbox_bg);
+
+        if is_selected {
+            checkbox = checkbox.child(
+                dbflux_components::primitives::Text::caption("✓").color(theme.primary_foreground),
+            );
+        }
+
+        let row_bg = if is_selected {
+            theme.accent.opacity(0.18)
+        } else {
+            gpui::transparent_black()
+        };
+        let hover_bg = theme.secondary;
+
+        let row_id = ("add-panel-chart-row", chart_id.as_u128() as u64);
 
         div()
+            .id(row_id)
             .flex()
             .items_center()
             .gap(Spacing::SM)
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .rounded(dbflux_components::tokens::Radii::SM)
+            .bg(row_bg)
+            .when(!is_selected, |el| el.hover(move |d| d.bg(hover_bg)))
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -471,7 +504,7 @@ impl ModalAddPanelPicker {
                     this.toggle_chart(chart_id, cx);
                 }),
             )
-            .child(checkbox)
+            .child(checkbox.into_any_element())
             .child(div().flex_1().text_sm().child(chart_name))
             .into_any_element()
     }

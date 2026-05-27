@@ -872,6 +872,41 @@ impl DashboardDocument {
         }
     }
 
+    /// Returns the shared refresh policy mapped to the canonical
+    /// `dbflux_core::RefreshPolicy` used by `refresh_split_button`.
+    ///
+    /// The dashboard persists `SavedChartRefreshPolicy` (Off/Interval/OnOpen);
+    /// the split-button helper only needs a label and `is_auto()` indication,
+    /// so OnOpen collapses to Manual (no continuous auto-refresh display).
+    pub fn shared_refresh_policy_as_core(&self) -> RefreshPolicy {
+        match self.shared_refresh_policy {
+            SavedChartRefreshPolicy::Off | SavedChartRefreshPolicy::OnOpen => RefreshPolicy::Manual,
+            SavedChartRefreshPolicy::Interval { every_secs } => {
+                RefreshPolicy::Interval { every_secs }
+            }
+        }
+    }
+
+    /// Request a re-execution for every loaded panel in the dashboard.
+    ///
+    /// Used by the toolbar's manual Refresh action. Orphan slots are ignored.
+    /// Each `Loaded` slot is fed through `request_reexec_for_slot`, which
+    /// already respects the per-dashboard concurrency cap.
+    pub fn refresh_all_loaded_panels(&mut self, cx: &mut Context<Self>) {
+        let loaded_indices: Vec<usize> = self
+            .panel_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, slot)| {
+                matches!(slot, DashboardPanelSlot::Loaded { .. }).then_some(idx)
+            })
+            .collect();
+
+        for idx in loaded_indices {
+            self.request_reexec_for_slot(idx, cx);
+        }
+    }
+
     // ---- Visual builder: inline title edit (Q.4) ----
 
     /// Enter inline-edit mode for the title of panel at `panel_index`.
@@ -1028,14 +1063,12 @@ impl DashboardDocument {
 
     // ---- Visual builder: per-panel context menu (Q.3) ----
 
-    /// Open the per-panel context menu at the given screen position.
-    pub fn open_panel_context_menu(
-        &mut self,
-        panel_index: u32,
-        position: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        self.panel_context_menu = Some(builder::PanelContextMenu::new(panel_index, position));
+    /// Open the per-panel context menu for `panel_index`.
+    ///
+    /// The menu anchors inline next to the panel's kebab via a relative
+    /// wrapper in `builder::panel_header`, so no screen position is needed.
+    pub fn open_panel_context_menu(&mut self, panel_index: u32, cx: &mut Context<Self>) {
+        self.panel_context_menu = Some(builder::PanelContextMenu::new(panel_index));
         cx.notify();
     }
 
