@@ -85,6 +85,64 @@ pub fn ensure_aws_profile_configured(config: &SsoProfileConfig) -> Result<(), Db
     })
 }
 
+/// Writes both a session-form `[profile NAME]` block (with `sso_session =`
+/// indirection) and the referenced `[sso-session SESSION]` block to
+/// `~/.aws/config`. Both blocks are fully rewritten so any stale keys (e.g.
+/// a stray `sso_region =` inside the profile block) are cleaned up.
+fn ensure_aws_profile_configured_with_session(
+    profile_name: &str,
+    session_name: &str,
+    region: &str,
+    sso_account_id: &str,
+    sso_role_name: &str,
+    sso_start_url: &str,
+    sso_region: &str,
+) -> Result<(), DbError> {
+    // Account ID and Role Name are optional here: writing the session-form
+    // profile block is what sanitizes a malformed `[profile X]` (e.g. a
+    // stray `sso_region` line that AWS SDK rejects). We want that
+    // sanitation to happen as soon as the user has picked an `sso-session`
+    // ref, even before they've filled in account/role — otherwise the SDK
+    // can't load the config to call `list_sso_accounts` and populate the
+    // dropdowns in the first place.
+    if profile_name.trim().is_empty()
+        || session_name.trim().is_empty()
+        || sso_start_url.trim().is_empty()
+    {
+        return Ok(());
+    }
+
+    let config_path = aws_config_path();
+    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
+
+    let profile_header = format!("[profile {}]", profile_name);
+    let profile_block = build_sso_session_profile_block(
+        profile_name,
+        session_name,
+        region,
+        sso_account_id,
+        sso_role_name,
+    );
+    let after_profile = replace_or_append_profile_block(&existing, &profile_header, &profile_block);
+
+    let session_header = format!("[sso-session {}]", session_name);
+    let session_block = build_sso_session_block(session_name, sso_start_url, sso_region);
+    let updated = replace_or_append_profile_block(&after_profile, &session_header, &session_block);
+
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            DbError::ValueResolutionFailed(format!(
+                "Could not create AWS config directory: {}",
+                err
+            ))
+        })?;
+    }
+
+    std::fs::write(&config_path, updated).map_err(|err| {
+        DbError::ValueResolutionFailed(format!("Could not write ~/.aws/config: {}", err))
+    })
+}
+
 fn aws_config_path() -> std::path::PathBuf {
     // AWS_CONFIG_FILE env var overrides the default location.
     if let Ok(path) = std::env::var("AWS_CONFIG_FILE") {
@@ -111,6 +169,63 @@ fn build_sso_profile_block(config: &SsoProfileConfig) -> String {
 
     lines.push("output = json".to_string());
     lines.push(String::new()); // trailing newline after block
+
+    lines.join("\n")
+}
+
+/// Builds a session-form `[profile X]` block that references an
+/// `[sso-session NAME]` block via `sso_session = NAME`. Used when the
+/// DBFlux profile declares an `sso_session_ref` so the written block
+/// matches the AWS SDK's expected indirection form and does not duplicate
+/// SSO config keys that must live under the session.
+fn build_sso_session_profile_block(
+    profile_name: &str,
+    session_name: &str,
+    region: &str,
+    sso_account_id: &str,
+    sso_role_name: &str,
+) -> String {
+    let mut lines = vec![
+        format!("[profile {}]", profile_name),
+        format!("sso_session = {}", session_name),
+    ];
+
+    // Account ID and Role Name are optional in the on-disk block: the AWS
+    // SDK accepts profiles with only `sso_session = X` (no credentials can
+    // be generated, but the profile parses cleanly and the SSO token cache
+    // works, so `list_sso_accounts` / `list_sso_account_roles` can be
+    // called to populate the DBFlux dropdowns).
+    if !sso_account_id.trim().is_empty() {
+        lines.push(format!("sso_account_id = {}", sso_account_id));
+    }
+    if !sso_role_name.trim().is_empty() {
+        lines.push(format!("sso_role_name = {}", sso_role_name));
+    }
+
+    if !region.is_empty() {
+        lines.push(format!("region = {}", region));
+    }
+
+    lines.push("output = json".to_string());
+    lines.push(String::new());
+
+    lines.join("\n")
+}
+
+/// Builds an `[sso-session NAME]` block.
+fn build_sso_session_block(session_name: &str, sso_start_url: &str, sso_region: &str) -> String {
+    let mut lines = vec![
+        format!("[sso-session {}]", session_name),
+        format!("sso_start_url = {}", sso_start_url),
+    ];
+
+    if !sso_region.is_empty() {
+        lines.push(format!("sso_region = {}", sso_region));
+    }
+
+    // Default scopes — AWS CLI requires this for the session form.
+    lines.push("sso_registration_scopes = sso:account:access".to_string());
+    lines.push(String::new());
 
     lines.join("\n")
 }
@@ -192,7 +307,6 @@ pub struct SsoLoginHandle {
 /// After getting the handle, the caller must separately wait for the
 /// SSO session to appear in the token cache via `wait_for_sso_session_blocking`.
 pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, DbError> {
-    use std::io::BufRead;
     use std::process::{Command, Stdio};
 
     log::debug!(
@@ -244,81 +358,120 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
         }
     });
 
-    // Scan stdout for the device-verification URL, then hand the reader to a
-    // drain thread that keeps the pipe open until the process exits.
+    // Scan stdout for the device-verification URL. We need to handle two
+    // distinct AWS CLI output flows:
     //
-    // `--no-browser` makes the AWS CLI print something like:
+    // 1. **Device-code flow** (older / `--use-device-code`):
     //
-    //   Please visit the following URL:
-    //   https://example.awsapps.com/start/#/device
+    //        Please visit the following URL:
+    //        https://example.awsapps.com/start/#/device
     //
-    //   Then enter the code: XXXX-YYYY
+    //        Then enter the code: XXXX-YYYY
     //
-    //   Alternatively, you may visit the following URL which will autofill the code:
-    //   https://example.awsapps.com/start/#/device?user_code=XXXX-YYYY
+    //        Alternatively, you may visit the following URL which will autofill the code:
+    //        https://example.awsapps.com/start/#/device?user_code=XXXX-YYYY
     //
-    // We prefer the autofill URL (contains `user_code=`) because it is a
-    // single click for the user. Fall back to any https:// URL if that line
-    // is not found.
+    //    Here the autofill URL (with `user_code=`) is the one to surface.
     //
-    // IMPORTANT: we must NOT drop stdout before the process exits. Closing the
-    // read end of the pipe sends SIGPIPE to the aws CLI process, killing it
-    // before the user can complete the browser flow. We hand the BufReader to
-    // a drain thread once the URL is found so the pipe stays open.
+    // 2. **PKCE / loopback flow** (modern default for AWS CLI v2):
+    //
+    //        Browser will not be automatically opened.
+    //        Please visit the following URL:
+    //
+    //        https://oidc.<region>.amazonaws.com/authorize?...&redirect_uri=http://127.0.0.1:PORT/oauth/callback...
+    //
+    //    The CLI then sits on a local HTTP listener and prints nothing more
+    //    until the user completes the browser flow. There is no `user_code=`
+    //    URL to wait for, so blocking on `read_line` for one would hang
+    //    forever.
+    //
+    // Strategy: stream lines from a reader thread into a channel and use a
+    // recv-with-deadline scheme. Once we see the first `https://` URL, wait
+    // a short grace period for a `user_code=` variant; if none arrives,
+    // accept the first URL and return.
+    //
+    // IMPORTANT: we must NOT drop stdout before the process exits. Closing
+    // the read end of the pipe sends SIGPIPE to the aws CLI process, killing
+    // it before the user can complete the browser flow. The reader thread
+    // keeps the pipe open until the process exits naturally, until the abort
+    // flag fires, or until the URL-scanning side decides we have what we
+    // need.
     let verification_url = {
-        let mut reader = std::io::BufReader::new(stdout);
-        let mut found_url: Option<String> = None;
-        let mut fallback_url: Option<String> = None;
+        let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
 
-        loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => break, // EOF — process exited before printing a URL
-                Ok(_) => {}
-                Err(_) => break,
-            }
+        let abort_flag_for_reader = Arc::clone(&abort_flag_for_drain);
+        let child_for_reader = Arc::clone(&child_for_drain);
 
-            let trimmed = line.trim().to_string();
-            log::debug!("[aws sso login stdout] {}", trimmed);
-
-            if trimmed.starts_with("https://") {
-                if trimmed.contains("user_code=") {
-                    found_url = Some(trimmed);
-                    break; // Best URL found — drain the rest in a thread
-                } else if fallback_url.is_none() {
-                    fallback_url = Some(trimmed);
-                    // Keep scanning — the autofill URL may be on a later line
-                }
-            }
-        }
-
-        // Hand the reader to a drain thread that keeps the pipe open until
-        // the aws CLI process exits naturally, or until the abort flag fires.
-        //
-        // Dropping stdout here would close the read-end of the pipe and send
-        // SIGPIPE to the CLI process, killing it before the user can approve.
         std::thread::spawn(move || {
-            use std::io::BufRead;
-            let mut line = String::new();
-            loop {
-                // Check for abort signal before each read.
-                if abort_flag_for_drain.load(std::sync::atomic::Ordering::Acquire) {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                if abort_flag_for_reader.load(std::sync::atomic::Ordering::Acquire) {
                     log::debug!("[aws sso login drain] abort signalled, killing process");
-                    if let Ok(mut guard) = child_for_drain.lock()
+                    if let Ok(mut guard) = child_for_reader.lock()
                         && let Some(mut child) = guard.take()
                     {
                         let _ = child.kill();
                     }
                     return;
                 }
+                log::debug!("[aws sso login stdout] {}", line);
+                if line_tx.send(line).is_err() {
+                    // Receiver dropped — drain remaining output silently.
+                    break;
+                }
+            }
+            // Process ended; if the URL-scanning side is still waiting it
+            // will observe `Disconnected` and fall back to whatever it had.
+        });
 
-                match reader.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        log::debug!("[aws sso login stdout drain] {}", line.trim());
-                        line.clear();
+        // Initial wait for the first URL — give the CLI up to 30s to print
+        // its first https:// line. After that we accept whatever we have.
+        const INITIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        // Once a URL is found, wait briefly for a `user_code=` variant that
+        // would be a better fit (device-code flow).
+        const AUTOFILL_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+        let mut found_url: Option<String> = None;
+        let mut fallback_url: Option<String> = None;
+        let deadline = std::time::Instant::now() + INITIAL_TIMEOUT;
+
+        while found_url.is_none() {
+            let now = std::time::Instant::now();
+            let timeout = if let Some(start) = fallback_url.as_ref().map(|_| now) {
+                let _ = start;
+                AUTOFILL_GRACE
+            } else if now >= deadline {
+                break;
+            } else {
+                deadline - now
+            };
+
+            match line_rx.recv_timeout(timeout) {
+                Ok(line) => {
+                    let trimmed = line.trim().to_string();
+                    if trimmed.starts_with("https://") {
+                        if trimmed.contains("user_code=") {
+                            found_url = Some(trimmed);
+                            break;
+                        } else if fallback_url.is_none() {
+                            fallback_url = Some(trimmed);
+                            // Continue waiting briefly for the autofill variant.
+                        }
                     }
                 }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        // Drain remaining lines in a background thread so the pipe stays
+        // open until the CLI exits. Without this drain the OS pipe buffer
+        // fills and the CLI blocks on its writes.
+        std::thread::spawn(move || {
+            for _line in line_rx {
+                // Drop lines silently — they were already logged by the
+                // reader thread above.
             }
         });
 
@@ -410,6 +563,30 @@ impl Default for AwsSsoAuthProvider {
     }
 }
 
+/// Auth provider that models an `[sso-session <name>]` block in
+/// `~/.aws/config`. It is a data container — it does not own a login flow
+/// on its own; other `aws-sso` profiles reference it via the
+/// `sso_session_ref` field on their form, and the auth profile expansion
+/// step merges the session's `sso_start_url` / `sso_region` into the
+/// consumer profile before login.
+pub struct AwsSsoSessionAuthProvider {
+    config_cache: Mutex<CachedAwsConfig>,
+}
+
+impl AwsSsoSessionAuthProvider {
+    pub fn new() -> Self {
+        Self {
+            config_cache: Mutex::new(CachedAwsConfig::new()),
+        }
+    }
+}
+
+impl Default for AwsSsoSessionAuthProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct AwsSharedCredentialsAuthProvider;
 
 impl AwsSharedCredentialsAuthProvider {
@@ -448,6 +625,7 @@ fn required_text_field(id: &str, label: &str, placeholder: &str) -> FormFieldDef
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
+        disabled_when_field_set: None,
         help: None,
     }
 }
@@ -462,6 +640,7 @@ fn password_field(id: &str, label: &str, placeholder: &str, required: bool) -> F
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
+        disabled_when_field_set: None,
         help: None,
     }
 }
@@ -475,17 +654,44 @@ fn build_aws_sso_form() -> AuthFormDef {
                 title: "AWS SSO".to_string(),
                 fields: vec![
                     required_text_field("profile_name", "AWS Profile Name", "dev"),
-                    required_text_field(
-                        "sso_start_url",
-                        "SSO Start URL",
-                        "https://my-org.awsapps.com/start",
-                    ),
+                    FormFieldDef {
+                        id: "sso_session_ref".to_string(),
+                        label: "SSO Session".to_string(),
+                        kind: FormFieldKind::AuthProfileRef {
+                            provider_id: "aws-sso-session".to_string(),
+                        },
+                        placeholder: String::new(),
+                        required: false,
+                        default_value: String::new(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                        disabled_when_field_set: None,
+                        help: Some(
+                            "Optional. When set, SSO Start URL and SSO Region come from the referenced session and the fields below can be left empty.".to_string(),
+                        ),
+                    },
+                    FormFieldDef {
+                        id: "sso_start_url".to_string(),
+                        label: "SSO Start URL".to_string(),
+                        kind: FormFieldKind::Text,
+                        placeholder: "https://my-org.awsapps.com/start/".to_string(),
+                        required: false,
+                        default_value: String::new(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                        disabled_when_field_set: Some("sso_session_ref".to_string()),
+                        help: None,
+                    },
                     required_text_field("region", "Region", "us-east-1"),
                     FormFieldDef {
                         id: "sso_account_id".to_string(),
                         label: "Account ID".to_string(),
                         kind: FormFieldKind::DynamicSelect {
-                            depends_on: vec!["region".to_string(), "sso_start_url".to_string()],
+                            depends_on: vec![
+                                "region".to_string(),
+                                "sso_start_url".to_string(),
+                                "sso_session_ref".to_string(),
+                            ],
                             refresh: RefreshTrigger::OnLoginComplete,
                             requires_session: true,
                             allow_freeform: false,
@@ -495,6 +701,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         default_value: String::new(),
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
+                        disabled_when_field_set: None,
                         help: None,
                     },
                     FormFieldDef {
@@ -511,6 +718,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         default_value: String::new(),
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
+                        disabled_when_field_set: None,
                         help: None,
                     },
                 ],
@@ -529,6 +737,41 @@ fn build_aws_shared_credentials_form() -> AuthFormDef {
                 fields: vec![
                     required_text_field("profile_name", "AWS Profile Name", "default"),
                     required_text_field("region", "Region", "us-east-1"),
+                ],
+            }],
+        }],
+    }
+}
+
+fn build_aws_sso_session_form() -> AuthFormDef {
+    AuthFormDef {
+        tabs: vec![FormTab {
+            id: "main".to_string(),
+            label: "Main".to_string(),
+            sections: vec![FormSection {
+                title: "AWS SSO Session".to_string(),
+                fields: vec![
+                    required_text_field(
+                        "sso_start_url",
+                        "SSO Start URL",
+                        "https://my-org.awsapps.com/start/",
+                    ),
+                    required_text_field("sso_region", "SSO Region", "us-east-1"),
+                    FormFieldDef {
+                        id: "sso_registration_scopes".to_string(),
+                        label: "Registration Scopes".to_string(),
+                        kind: FormFieldKind::Text,
+                        placeholder: "sso:account:access".to_string(),
+                        required: false,
+                        default_value: "sso:account:access".to_string(),
+                        enabled_when_checked: None,
+                        enabled_when_unchecked: None,
+                        disabled_when_field_set: None,
+                        help: Some(
+                            "Comma-separated OAuth scopes. Default works for most setups."
+                                .to_string(),
+                        ),
+                    },
                 ],
             }],
         }],
@@ -625,6 +868,64 @@ fn sso_profile_config_from_auth_profile(profile: &AuthProfile) -> Option<SsoProf
 }
 
 fn ensure_sso_profile_configured_from_auth_profile(profile: &AuthProfile) {
+    // When the DBFlux profile references an `aws-sso-session` (expanded via
+    // `expand_auth_profile_refs`, which stashes the session name under
+    // `sso_session_ref_name`), write the session-form block. This sanitizes
+    // any stray `sso_region` lines inside the user's existing flat profile
+    // block, which AWS SDK rejects when `sso_session = X` is also present.
+    let profile_name = effective_aws_profile_name(profile).map(ToOwned::to_owned);
+    let session_name = profile
+        .fields
+        .get("sso_session_ref_name")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let (Some(profile_name), Some(session_name)) = (profile_name.as_ref(), session_name.as_ref())
+    {
+        let region = profile
+            .fields
+            .get("region")
+            .map(String::as_str)
+            .unwrap_or("");
+        let sso_account_id = profile
+            .fields
+            .get("sso_account_id")
+            .map(String::as_str)
+            .unwrap_or("");
+        let sso_role_name = profile
+            .fields
+            .get("sso_role_name")
+            .map(String::as_str)
+            .unwrap_or("");
+        let sso_start_url = profile
+            .fields
+            .get("sso_start_url")
+            .map(String::as_str)
+            .unwrap_or("");
+        let sso_region = profile
+            .fields
+            .get("sso_region")
+            .map(String::as_str)
+            .unwrap_or(region);
+
+        if let Err(err) = ensure_aws_profile_configured_with_session(
+            profile_name,
+            session_name,
+            region,
+            sso_account_id,
+            sso_role_name,
+            sso_start_url,
+            sso_region,
+        ) {
+            log::warn!(
+                "Failed to sync AWS SSO session-form profile '{}' into ~/.aws/config: {}",
+                profile_name,
+                err
+            );
+        }
+        return;
+    }
+
     let Some(config) = sso_profile_config_from_auth_profile(profile) else {
         return;
     };
@@ -817,11 +1118,18 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             .map(ToOwned::to_owned)
             .unwrap_or_default();
         let region = profile.fields.get("region").cloned().unwrap_or_default();
-        let sso_start_url = profile
+        let raw_sso_start_url = profile
             .fields
             .get("sso_start_url")
-            .cloned()
-            .unwrap_or_default();
+            .map(String::as_str)
+            .unwrap_or("");
+        let sso_start_url = resolve_sso_start_url(&profile_name, raw_sso_start_url)
+            .ok_or_else(|| {
+                DbError::InvalidProfile(format!(
+                    "AWS SSO profile '{}' has no sso_start_url (not set in DBFlux profile, not in ~/.aws/config directly or via sso_session)",
+                    profile_name
+                ))
+            })?;
         let sso_account_id = profile
             .fields
             .get("sso_account_id")
@@ -833,15 +1141,46 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             .cloned()
             .unwrap_or_default();
 
-        let sso_config = SsoProfileConfig {
-            profile_name: profile_name.clone(),
-            region,
-            sso_start_url: sso_start_url.clone(),
-            sso_account_id,
-            sso_role_name,
-        };
-        if let Err(err) = ensure_aws_profile_configured(&sso_config) {
-            log::warn!("Could not write AWS profile config: {}", err);
+        // If the DBFlux profile references an `aws-sso-session` profile,
+        // write the session-form profile block (`sso_session = NAME`)
+        // alongside the `[sso-session NAME]` block. Otherwise write the
+        // flat profile block as before. The expansion step stored the
+        // referenced session's name under `sso_session_ref_name`.
+        let session_name = profile
+            .fields
+            .get("sso_session_ref_name")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        if let Some(session_name) = session_name.as_ref() {
+            let sso_region = profile
+                .fields
+                .get("sso_region")
+                .cloned()
+                .unwrap_or_else(|| region.clone());
+
+            if let Err(err) = ensure_aws_profile_configured_with_session(
+                &profile_name,
+                session_name,
+                &region,
+                &sso_account_id,
+                &sso_role_name,
+                &sso_start_url,
+                &sso_region,
+            ) {
+                log::warn!("Could not write AWS session-form profile config: {}", err);
+            }
+        } else {
+            let sso_config = SsoProfileConfig {
+                profile_name: profile_name.clone(),
+                region: region.clone(),
+                sso_start_url: sso_start_url.clone(),
+                sso_account_id: sso_account_id.clone(),
+                sso_role_name: sso_role_name.clone(),
+            };
+            if let Err(err) = ensure_aws_profile_configured(&sso_config) {
+                log::warn!("Could not write AWS profile config: {}", err);
+            }
         }
 
         sso_login_with_url(profile, &profile_name, &sso_start_url, url_callback).await
@@ -868,13 +1207,17 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         Ok(())
     }
 
+    fn abort_login(&self, profile: &AuthProfile) -> bool {
+        abort_sso_login(profile.id)
+    }
+
     fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
         let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
 
         cache
             .profiles()
             .iter()
-            .filter(|profile| profile.is_sso)
+            .filter(|profile| profile.is_sso && !profile.is_sso_session)
             .map(|profile| {
                 let mut fields = HashMap::new();
                 fields.insert("profile_name".to_string(), profile.name.clone());
@@ -885,6 +1228,21 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
 
                 if let Some(sso_start_url) = profile.sso_start_url.clone() {
                     fields.insert("sso_start_url".to_string(), sso_start_url);
+                }
+
+                if let Some(sso_account_id) = profile.sso_account_id.clone() {
+                    fields.insert("sso_account_id".to_string(), sso_account_id);
+                }
+
+                if let Some(sso_role_name) = profile.sso_role_name.clone() {
+                    fields.insert("sso_role_name".to_string(), sso_role_name);
+                }
+
+                // Preserve the `sso_session = X` indirection so the import
+                // flow can wire `sso_session_ref` to the matching DBFlux
+                // `aws-sso-session` profile after both are imported.
+                if let Some(sso_session) = profile.sso_session.clone() {
+                    fields.insert("sso_session".to_string(), sso_session);
                 }
 
                 ImportableProfile {
@@ -921,6 +1279,8 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             sso_region: Some(region.clone()),
             sso_account_id: Some(sso_account_id.clone()),
             sso_role_name: Some(sso_role_name.clone()),
+            sso_session: None,
+            is_sso_session: false,
         };
 
         if let Err(err) = crate::config::write_profile_to_aws_config(&profile_info) {
@@ -942,6 +1302,12 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         profile: &AuthProfile,
         request: FetchOptionsRequest,
     ) -> Result<FetchOptionsResponse, FetchOptionsError> {
+        // Sync `~/.aws/config` with the current profile state before any AWS
+        // SDK call. Without this, a stale or malformed `[profile X]` block
+        // (e.g. one with a stray `sso_region` line that the SDK rejects)
+        // makes every dynamic-options fetch fail.
+        ensure_sso_profile_configured_from_auth_profile(profile);
+
         let profile_name = effective_aws_profile_name(profile)
             .unwrap_or("")
             .to_string();
@@ -1150,6 +1516,8 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
             sso_region: None,
             sso_account_id: None,
             sso_role_name: None,
+            sso_session: None,
+            is_sso_session: false,
         };
 
         if let Err(err) = crate::config::write_profile_to_aws_config(&profile_info) {
@@ -1226,6 +1594,88 @@ impl dbflux_core::auth::DynAuthProvider for AwsStaticCredentialsAuthProvider {
     }
 }
 
+#[async_trait::async_trait]
+impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
+    fn provider_id(&self) -> &'static str {
+        "aws-sso-session"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "AWS SSO Session"
+    }
+
+    fn form_def(&self) -> &'static AuthFormDef {
+        static FORM: OnceLock<AuthFormDef> = OnceLock::new();
+        FORM.get_or_init(build_aws_sso_session_form)
+    }
+
+    fn capabilities(&self) -> &AuthProviderCapabilities {
+        // SSO session profiles are reference targets, not login targets.
+        // Login happens via the `aws-sso` profile that points at the session.
+        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+            login: AuthProviderLoginCapabilities {
+                supported: false,
+                verification_url_progress: false,
+            },
+        };
+
+        &CAPABILITIES
+    }
+
+    async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
+        // A session record is always considered "valid" as a data container.
+        // Token validity for the referenced URL is checked by the consumer
+        // `aws-sso` profile during its own validate_session.
+        Ok(AuthSessionState::Valid { expires_at: None })
+    }
+
+    async fn login(
+        &self,
+        profile: &AuthProfile,
+        url_callback: UrlCallback,
+    ) -> Result<AuthSession, DbError> {
+        Ok(non_expiring_login(
+            profile,
+            self.provider_id(),
+            url_callback,
+        ))
+    }
+
+    async fn resolve_credentials(
+        &self,
+        _profile: &AuthProfile,
+    ) -> Result<ResolvedCredentials, DbError> {
+        Ok(ResolvedCredentials::default())
+    }
+
+    fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
+        let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+
+        cache
+            .profiles()
+            .iter()
+            .filter(|entry| entry.is_sso_session)
+            .map(|entry| {
+                let mut fields = HashMap::new();
+
+                if let Some(sso_start_url) = entry.sso_start_url.clone() {
+                    fields.insert("sso_start_url".to_string(), sso_start_url);
+                }
+
+                if let Some(sso_region) = entry.sso_region.clone() {
+                    fields.insert("sso_region".to_string(), sso_region);
+                }
+
+                ImportableProfile {
+                    display_name: entry.name.clone(),
+                    provider_id: "aws-sso-session".to_string(),
+                    fields,
+                }
+            })
+            .collect()
+    }
+}
+
 /// Resolves the effective SSO start URL for a profile.
 ///
 /// If `sso_start_url` is non-empty it is used as-is (normalized). Otherwise
@@ -1238,15 +1688,35 @@ fn resolve_sso_start_url(profile_name: &str, sso_start_url: &str) -> Option<Stri
         return Some(url.to_string());
     }
 
-    // Fall back to ~/.aws/config
+    // Fall back to ~/.aws/config, following `sso_session` indirection when the
+    // profile delegates its SSO config to an `[sso-session <name>]` section.
     let config_path = aws_config_path();
     let contents = std::fs::read_to_string(&config_path).ok()?;
     let profiles = crate::config::parse_aws_config_str(&contents);
 
+    let profile = profiles
+        .iter()
+        .find(|p| !p.is_sso_session && p.name.eq_ignore_ascii_case(profile_name))?;
+
+    let direct = profile
+        .sso_start_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty());
+
+    if let Some(url) = direct {
+        return Some(url.to_string());
+    }
+
+    let session_name = profile.sso_session.as_deref().map(str::trim)?;
+    if session_name.is_empty() {
+        return None;
+    }
+
     profiles
-        .into_iter()
-        .find(|p| p.name.eq_ignore_ascii_case(profile_name))
-        .and_then(|p| p.sso_start_url)
+        .iter()
+        .find(|p| p.is_sso_session && p.name.eq_ignore_ascii_case(session_name))
+        .and_then(|p| p.sso_start_url.clone())
         .map(|u| u.trim().to_string())
         .filter(|u| !u.is_empty())
 }
@@ -1549,6 +2019,34 @@ fn find_sso_cache_contents(normalized_url: &str) -> Option<String> {
 /// with short sleeps so that GPUI can still process other events (including
 /// delivering the updated `WaitingForLogin { url: Some(...) }` state to the
 /// login modal) while the user completes the SSO flow in their browser.
+/// Registry of in-flight SSO login abort senders keyed by `AuthProfile.id`.
+/// Allows the UI to cancel a running login (kills the `aws sso login` process
+/// and unblocks the cache-polling loop).
+static ABORT_REGISTRY: OnceLock<Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncSender<()>>>> =
+    OnceLock::new();
+
+fn abort_registry() -> &'static Mutex<HashMap<uuid::Uuid, std::sync::mpsc::SyncSender<()>>> {
+    ABORT_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Signals the in-flight `aws sso login` for `profile_id` to abort.
+///
+/// Returns `true` if an abort was signalled (a login was in flight),
+/// `false` if no login for this profile was tracked.
+pub fn abort_sso_login(profile_id: uuid::Uuid) -> bool {
+    let sender = {
+        let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(&profile_id)
+    };
+    match sender {
+        Some(tx) => {
+            let _ = tx.try_send(());
+            true
+        }
+        None => false,
+    }
+}
+
 async fn sso_login_with_url(
     profile: &AuthProfile,
     profile_name: &str,
@@ -1575,6 +2073,12 @@ async fn sso_login_with_url(
             }
         };
 
+        // Register the abort sender so the UI can cancel this login mid-flight.
+        {
+            let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+            map.insert(profile_id, handle.abort_tx.clone());
+        }
+
         // Fire the callback now — the URL is known, the user may still be
         // completing the browser flow.
         url_callback(handle.verification_url);
@@ -1582,6 +2086,13 @@ async fn sso_login_with_url(
         // Poll the token cache until the session appears, times out, or is aborted.
         let session =
             wait_for_sso_session_blocking(profile_id, "aws-sso", &start_url, &handle.abort_flag);
+
+        // Deregister on exit regardless of outcome.
+        {
+            let mut map = abort_registry().lock().unwrap_or_else(|e| e.into_inner());
+            map.remove(&profile_id);
+        }
+
         let _ = result_tx.send(session);
     });
 

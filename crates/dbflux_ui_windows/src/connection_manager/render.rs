@@ -797,8 +797,11 @@ impl ConnectionManagerWindow {
                 }
             }
 
-            // DynamicSelect is not used in driver connection forms; rendered by auth-provider settings.
-            FormFieldKind::DynamicSelect { .. } => div().into_any_element(),
+            // DynamicSelect and AuthProfileRef are not used in driver connection forms;
+            // they are rendered by the auth-provider settings UI.
+            FormFieldKind::DynamicSelect { .. } | FormFieldKind::AuthProfileRef { .. } => {
+                div().into_any_element()
+            }
         }
     }
 

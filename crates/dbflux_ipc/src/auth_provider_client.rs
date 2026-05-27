@@ -776,6 +776,7 @@ mod tests {
                             default_value: String::new(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         },
                         FormFieldDef {
@@ -787,6 +788,7 @@ mod tests {
                             default_value: String::new(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         },
                         FormFieldDef {
@@ -803,6 +805,7 @@ mod tests {
                             default_value: String::new(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         },
                     ],
@@ -874,6 +877,7 @@ mod tests {
                             default_value: String::new(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         },
                         // A second password field NOT referenced by environment.depends_on.
@@ -886,6 +890,7 @@ mod tests {
                             default_value: String::new(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         },
                         FormFieldDef {
@@ -897,6 +902,7 @@ mod tests {
                             default_value: String::new(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         },
                         FormFieldDef {
@@ -914,6 +920,7 @@ mod tests {
                             default_value: String::new(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         },
                     ],

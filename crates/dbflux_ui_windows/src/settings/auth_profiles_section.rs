@@ -69,6 +69,9 @@ pub(super) struct AuthProfilesSection {
     ///
     /// Fields: `(provider_name, profile_name, url)`.
     pending_sso_url: Option<(String, String, Option<String>)>,
+    /// Active login verification URL displayed inline under the Login button.
+    /// Cleared when the login completes or the user cancels.
+    active_login_url: Option<String>,
     /// When true, the next render cycle will re-fetch options for all
     /// `OnLoginComplete` DynamicSelect fields.
     pending_login_complete_refresh: bool,
@@ -317,6 +320,7 @@ impl AuthProfilesSection {
             field_login_hint: HashMap::new(),
             pending_login_complete_refresh: false,
             pending_sso_url: None,
+            active_login_url: None,
 
             auth_focus: AuthFocus::ProfileList,
             auth_form_field: AuthFormField::Name,
@@ -424,20 +428,24 @@ impl AuthProfilesSection {
 
         for (field_id, placeholder, kind) in field_defs {
             match kind {
-                FormFieldKind::DynamicSelect { .. } => {
-                    // For DynamicSelect fields: keep an InputState as the value
-                    // store so save_profile can read it uniformly. The InputState
-                    // is hidden from the UI; the Dropdown entity is rendered instead.
+                FormFieldKind::DynamicSelect { .. } | FormFieldKind::AuthProfileRef { .. } => {
+                    // Both dropdown-style fields share the same shell: an
+                    // InputState holds the canonical value (so save_profile
+                    // can read it uniformly) and a Dropdown entity is the
+                    // visible widget. The two kinds differ only in how
+                    // options are populated (see render_*_row functions).
                     if !self.form_inputs.contains_key(&field_id) {
                         let input = cx.new(|cx| InputState::new(window, cx));
                         self.form_inputs.insert(field_id.clone(), input);
                     }
 
-                    // Create or reuse the dropdown entity.
                     if !self.dynamic_dropdowns.contains_key(&field_id) {
                         let dropdown_id = format!("auth-dynamic-{}", field_id);
                         let placeholder_str = if placeholder.is_empty() {
-                            "Select...".to_string()
+                            match &kind {
+                                FormFieldKind::AuthProfileRef { .. } => "— None —".to_string(),
+                                _ => "Select...".to_string(),
+                            }
                         } else {
                             placeholder
                         };
@@ -448,7 +456,6 @@ impl AuthProfilesSection {
                         self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
                     }
 
-                    // Subscribe to dropdown selection to write back into form_inputs.
                     let dropdown = self.dynamic_dropdowns[&field_id].clone();
                     let input = self.form_inputs[&field_id].clone();
                     let sub = cx.subscribe_in(
@@ -588,7 +595,13 @@ impl AuthProfilesSection {
             // on the first render (cache miss) and then require an explicit
             // user gesture (cache invalidation) to refetch.
             RefreshTrigger::Manual => !self.options_cache.contains_key(&cache_key),
-            RefreshTrigger::OnLoginComplete => login_just_completed,
+            // OnLoginComplete fields refresh right after a successful login
+            // OR on the first render when a session is available (cache miss).
+            // Without the cache-miss branch the user would have to re-click
+            // Login every time they reopen the editor to see options.
+            RefreshTrigger::OnLoginComplete => {
+                login_just_completed || !self.options_cache.contains_key(&cache_key)
+            }
             RefreshTrigger::OnDependencyChange | RefreshTrigger::OnFocus => {
                 match self.options_cache.get(&cache_key) {
                     None => true,
@@ -620,13 +633,30 @@ impl AuthProfilesSection {
             .map(|(key, input)| (key.clone(), input.read(cx).value().to_string()))
             .collect();
 
-        let profile_snapshot = AuthProfile {
+        let raw_snapshot = AuthProfile {
             id: profile_id_snap,
             name: self.input_name.read(cx).value().to_string(),
             provider_id: provider_id_snap,
             fields: fields_snap,
             enabled: self.profile_enabled,
         };
+
+        // Expand AuthProfileRef fields so the provider sees the same flat
+        // field map it would see at connect time (e.g. an `aws-sso` profile
+        // with an `sso_session_ref` gets `sso_start_url`/`sso_region` merged
+        // in from the referenced session profile).
+        let profile_registry_snapshot: Vec<AuthProfile> =
+            self.app_state.read(cx).auth_profiles().to_vec();
+        let profile_snapshot = dbflux_core::auth::expand_auth_profile_refs(
+            &raw_snapshot,
+            provider.form_def(),
+            &|target_id| {
+                profile_registry_snapshot
+                    .iter()
+                    .find(|p| p.id == *target_id)
+                    .cloned()
+            },
+        );
 
         let request = FetchOptionsRequest {
             field_id: field_id.clone(),
@@ -786,6 +816,74 @@ impl AuthProfilesSection {
             .child(dropdown)
             .when_some(login_hint, |container, hint| {
                 container.child(Text::caption(hint).warning())
+            })
+    }
+
+    /// Render an `AuthProfileRef` field as a dropdown of existing auth
+    /// profiles whose `provider_id` matches the field's filter. The selected
+    /// value is the referenced profile's UUID (or empty for "none").
+    fn render_auth_profile_ref_row(
+        &mut self,
+        field: &dbflux_core::FormFieldDef,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let field_id = field.id.clone();
+        let label = field.label.clone();
+        let help = field.help.clone();
+
+        let FormFieldKind::AuthProfileRef {
+            provider_id: ref_provider_id,
+        } = &field.kind
+        else {
+            return div();
+        };
+
+        if !self.dynamic_dropdowns.contains_key(&field_id) {
+            let dropdown_id = format!("auth-dynamic-{}", field_id);
+            let dropdown = cx.new(|_cx| {
+                Dropdown::new(SharedString::from(dropdown_id)).placeholder("— None —".to_string())
+            });
+            self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
+        }
+
+        let dropdown = self.dynamic_dropdowns[&field_id].clone();
+
+        let mut items: Vec<DropdownItem> = vec![DropdownItem::with_value(
+            "— None —".to_string(),
+            String::new(),
+        )];
+        let referenced_profiles: Vec<(String, String)> = self
+            .app_state
+            .read(cx)
+            .auth_profiles()
+            .iter()
+            .filter(|profile| profile.provider_id == *ref_provider_id && profile.enabled)
+            .map(|profile| (profile.id.to_string(), profile.name.clone()))
+            .collect();
+        for (id, name) in referenced_profiles {
+            items.push(DropdownItem::with_value(name, id));
+        }
+
+        let current_value = self
+            .form_inputs
+            .get(&field_id)
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        let selected_index = items.iter().position(|item| item.value == current_value);
+
+        dropdown.update(cx, |d, cx| {
+            d.set_items(items, cx);
+            d.set_selected_index(selected_index, cx);
+        });
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(dbflux_components::primitives::Label::new(label))
+            .child(dropdown)
+            .when_some(help, |container, hint_text| {
+                container.child(Text::caption(hint_text))
             })
     }
 
@@ -1098,7 +1196,7 @@ impl AuthProfilesSection {
             return;
         }
 
-        let Some(profile) = self.current_form_profile(cx) else {
+        let Some(raw_profile) = self.current_form_profile(cx) else {
             self.provider_login_status = Some((
                 "Provide a profile name and provider fields before login.".to_string(),
                 false,
@@ -1106,6 +1204,21 @@ impl AuthProfilesSection {
             cx.notify();
             return;
         };
+
+        // Expand AuthProfileRef fields so the provider's login() sees a flat
+        // field map (e.g. `sso_start_url` filled from the referenced session).
+        let profile_registry_snapshot: Vec<AuthProfile> =
+            self.app_state.read(cx).auth_profiles().to_vec();
+        let profile = dbflux_core::auth::expand_auth_profile_refs(
+            &raw_profile,
+            provider.form_def(),
+            &|target_id| {
+                profile_registry_snapshot
+                    .iter()
+                    .find(|p| p.id == *target_id)
+                    .cloned()
+            },
+        );
 
         self.provider_login_loading = true;
         self.provider_login_status = Some((
@@ -1121,29 +1234,57 @@ impl AuthProfilesSection {
         let provider_name_for_url = provider.display_name().to_string();
         let profile_name_for_url = profile.name.clone();
 
-        // Capture the login URL for the modal. The UrlCallback fires once during
-        // login (before completion) with the verification URL, or None if the
-        // provider does not surface one. We store it in a shared slot and pick
-        // it up in the spawn closure to drive the pending-URL pattern.
-        let url_slot: Arc<std::sync::Mutex<Option<Option<String>>>> =
-            Arc::new(std::sync::Mutex::new(None));
-        let url_slot_for_callback = url_slot.clone();
-
+        // The verification URL arrives via `UrlCallback` from a background
+        // thread *before* `provider.login()` completes (the AWS provider
+        // blocks waiting for the user to finish in the browser). We forward
+        // the URL through a channel so the modal can open immediately —
+        // independently of when the login future resolves.
+        let (url_tx, url_rx) = std::sync::mpsc::sync_channel::<Option<String>>(1);
         let url_callback: dbflux_core::auth::UrlCallback = Box::new(move |url| {
-            if let Ok(mut guard) = url_slot_for_callback.lock() {
-                *guard = Some(url);
-            }
+            let _ = url_tx.try_send(url);
         });
 
+        // URL-forwarding task: poll the channel and push the verification URL
+        // into the modal as soon as the provider surfaces it.
+        let this_for_url = this.clone();
+        cx.spawn(async move |_, cx| {
+            loop {
+                match url_rx.try_recv() {
+                    Ok(Some(url)) => {
+                        let _ = cx.update(|cx| {
+                            this_for_url.update(cx, |this, cx| {
+                                this.active_login_url = Some(url.clone());
+                                this.pending_sso_url =
+                                    Some((provider_name_for_url, profile_name_for_url, Some(url)));
+                                cx.notify();
+                            });
+                        });
+                        break;
+                    }
+                    Ok(None) => break, // provider explicitly has no URL
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(150))
+                            .await;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+        })
+        .detach();
+
+        // Main task: drive the login future to completion, then update final
+        // status. The URL itself is already routed by the task above.
         cx.spawn(async move |_this, cx| {
             let result = provider.login(&profile, url_callback).await;
-
-            // Retrieve the URL that the callback may have received during login.
-            let captured_url = url_slot.lock().ok().and_then(|guard| guard.clone());
 
             if let Err(err) = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.provider_login_loading = false;
+                    // Login finished — clear the inline URL display regardless
+                    // of outcome (success means token cached, failure means
+                    // the URL is no longer actionable).
+                    this.active_login_url = None;
                     this.provider_login_status = Some(match &result {
                         Ok(_) => (
                             format!(
@@ -1161,22 +1302,12 @@ impl AuthProfilesSection {
                         ),
                     });
 
-                    // Route the login URL to the modal via pending pattern.
-                    // The URL is consumed in render() and emitted as an event.
-                    if let Some(url) = captured_url {
-                        this.pending_sso_url =
-                            Some((provider_name_for_url, profile_name_for_url, url));
-                    }
-
-                    // When login completed successfully, schedule a re-fetch of
-                    // all DynamicSelect fields with OnLoginComplete trigger.
                     if this
                         .provider_login_status
                         .as_ref()
                         .is_some_and(|status| status.1)
                     {
                         this.options_cache.clear();
-                        // Login succeeded: re-login hints are no longer relevant.
                         this.field_login_hint.clear();
                         this.pending_login_complete_refresh = true;
                     }
@@ -1320,10 +1451,18 @@ impl AuthProfilesSection {
     }
 
     fn import_detected_profiles(&mut self, cx: &mut Context<Self>) {
-        let detected = self.detected_unimported_profiles(cx);
+        let mut detected = self.detected_unimported_profiles(cx);
         if detected.is_empty() {
             return;
         }
+
+        // Order: import providers that other profiles can reference first
+        // (e.g. `aws-sso-session` before `aws-sso`) so the post-import
+        // wire-up pass can resolve `sso_session_ref` to a known UUID.
+        detected.sort_by_key(|profile| match profile.provider_id.as_str() {
+            "aws-sso-session" => 0_u8,
+            _ => 1,
+        });
 
         let imported_count = self.app_state.update(cx, |state, cx| {
             let mut existing = Self::imported_profile_keys(state.auth_profiles());
@@ -1350,6 +1489,46 @@ impl AuthProfilesSection {
 
                 existing.insert(key);
                 imported_count += 1;
+            }
+
+            // Wire `sso_session_ref` on `aws-sso` profiles whose `fields`
+            // carry the transient `sso_session` name (from `~/.aws/config`'s
+            // `[profile X] sso_session = NAME`). Match by AuthProfile.name
+            // against existing `aws-sso-session` profiles. The session map
+            // is rebuilt from the registry to include sessions imported in
+            // this same pass.
+            let session_id_by_name: HashMap<String, Uuid> = state
+                .auth_profiles()
+                .iter()
+                .filter(|p| p.provider_id == "aws-sso-session" && p.enabled)
+                .map(|p| (p.name.clone(), p.id))
+                .collect();
+
+            let sso_updates: Vec<AuthProfile> = state
+                .auth_profiles()
+                .iter()
+                .filter(|p| p.provider_id == "aws-sso")
+                .filter_map(|p| {
+                    let session_name = p
+                        .fields
+                        .get("sso_session")
+                        .map(String::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())?;
+
+                    let session_id = session_id_by_name.get(session_name).copied()?;
+
+                    let mut updated = p.clone();
+                    updated.fields.remove("sso_session");
+                    updated
+                        .fields
+                        .insert("sso_session_ref".to_string(), session_id.to_string());
+                    Some(updated)
+                })
+                .collect();
+
+            for profile in sso_updates {
+                state.update_auth_profile(profile);
             }
 
             if imported_count > 0 {
@@ -1433,31 +1612,168 @@ impl AuthProfilesSection {
         is_focused: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        self.render_input_row_disabled(label, input, field, is_focused, false, None, None, cx)
+    }
+
+    /// Renders the inline login-URL panel: shows the verification URL with
+    /// Open Browser, Copy URL, and Cancel buttons. Used while an interactive
+    /// SSO login is in flight from the Settings window.
+    fn render_login_url_panel(&self, url: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let url_for_open = url.clone();
+        let url_for_copy = url.clone();
+
+        div()
+            .mt_2()
+            .p(Spacing::SM)
+            .rounded(Radii::SM)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.secondary)
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(Text::caption(
+                "Open this URL in your browser to finish the login. DBFlux will continue automatically once you complete authentication.",
+            ))
+            .child(
+                div()
+                    .p(Spacing::SM)
+                    .rounded(Radii::SM)
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.background)
+                    .child(Text::body(url.clone())),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("auth-login-open-url", "Open Browser")
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(move |_this, _, _, cx| {
+                                cx.open_url(&url_for_open);
+                            })),
+                    )
+                    .child(
+                        Button::new("auth-login-copy-url", "Copy URL")
+                            .small()
+                            .on_click(cx.listener(move |_this, _, _, cx| {
+                                cx.write_to_clipboard(
+                                    gpui::ClipboardItem::new_string(url_for_copy.clone()),
+                                );
+                            })),
+                    )
+                    .child(
+                        Button::new("auth-login-cancel", "Cancel")
+                            .small()
+                            .danger()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                // Ask the active provider to abort whatever
+                                // in-flight login it has for the profile
+                                // being edited. The provider's login future
+                                // will then return an error and the spawned
+                                // login task will clean up final status.
+                                if let Some(profile) = this.current_form_profile(cx)
+                                    && let Some(provider) = this.selected_provider(cx)
+                                {
+                                    let _ = provider.abort_login(&profile);
+                                }
+                                this.active_login_url = None;
+                                this.provider_login_status = Some((
+                                    "Login cancelled by user.".to_string(),
+                                    false,
+                                ));
+                                cx.notify();
+                            })),
+                    ),
+            )
+    }
+
+    /// Returns the AuthProfile referenced by `trigger_value` (expected to
+    /// be a UUID string), used to populate "inherited from" hints and to
+    /// surface the referenced field's value in disabled inputs.
+    fn resolve_ref_profile(&self, trigger_value: &str, cx: &App) -> Option<AuthProfile> {
+        let target_id = Uuid::parse_str(trigger_value.trim()).ok()?;
+        self.app_state
+            .read(cx)
+            .auth_profiles()
+            .iter()
+            .find(|profile| profile.id == target_id)
+            .cloned()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_input_row_disabled(
+        &self,
+        label: &str,
+        input: &Entity<InputState>,
+        field: AuthFormField,
+        is_focused: bool,
+        disabled: bool,
+        disabled_hint: Option<String>,
+        inherited_value: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let primary = cx.theme().primary;
+        let theme = cx.theme();
+
+        let row = if disabled {
+            // Render a static, non-interactive text view. gpui_component's
+            // Input keeps its key_down handler bound even when `disabled` is
+            // true, so an "Input::disabled(true)" widget would still accept
+            // keystrokes. A read-only text node makes the field truly inert.
+            let value = inherited_value
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| input.read(cx).value().to_string());
+            let display = if value.trim().is_empty() {
+                "—".to_string()
+            } else {
+                value
+            };
+
+            layout::compact_input_shell(
+                div()
+                    .flex()
+                    .items_center()
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .bg(theme.muted)
+                    .text_color(theme.muted_foreground)
+                    .child(Text::body(display)),
+            )
+        } else {
+            focus_frame(
+                is_focused,
+                Some(primary),
+                layout::compact_input_shell(Input::new(input).small()),
+                cx,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.switching_input = true;
+                    this.auth_focus = AuthFocus::Form;
+                    this.auth_form_field = field;
+                    this.focus_current_field(window, cx);
+                    cx.notify();
+                }),
+            )
+        };
 
         div()
             .flex()
             .flex_col()
             .gap_1()
             .child(Label::new(label.to_string()))
-            .child(
-                focus_frame(
-                    is_focused,
-                    Some(primary),
-                    layout::compact_input_shell(Input::new(input).small()),
-                    cx,
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, window, cx| {
-                        this.switching_input = true;
-                        this.auth_focus = AuthFocus::Form;
-                        this.auth_form_field = field;
-                        this.focus_current_field(window, cx);
-                        cx.notify();
-                    }),
-                ),
-            )
+            .child(row)
+            .when_some(disabled_hint, |container, hint| {
+                container.child(Text::caption(hint))
+            })
     }
 
     fn render_provider_selector(
@@ -1615,12 +1931,25 @@ impl AuthProfilesSection {
             })
             .unwrap_or_default();
 
+        // Provide a synthetic session marker so `requires_session` fields
+        // unblock once the user has either completed login in this editor
+        // pass or has a valid status from a previous login. We never
+        // serialize real session data into the form snapshot — the auth
+        // provider re-establishes its session from its own cache (e.g. the
+        // SSO token cache on disk). When no valid session exists the
+        // provider returns `NeedsLogin` / `SessionExpired`, which
+        // `apply_fetch_error` surfaces as a re-login hint below the field.
+        // We pass the marker unconditionally so users with a valid session
+        // from a prior `aws sso login` or DBFlux run see options without
+        // having to click Login again.
+        let session_marker = Some(serde_json::Value::Null);
+
         for field in &field_defs_for_fetch {
             if matches!(field.kind, FormFieldKind::DynamicSelect { .. }) {
                 self.fetch_dynamic_options_if_needed(
                     provider_id_for_fetch.clone(),
                     field,
-                    None, // session data — future: pass from AuthSession
+                    session_marker.clone(),
                     login_just_completed,
                     cx,
                 );
@@ -1638,13 +1967,54 @@ impl AuthProfilesSection {
                 if matches!(field.kind, FormFieldKind::DynamicSelect { .. }) {
                     self.render_dynamic_dropdown_row(field, cx)
                         .into_any_element()
+                } else if matches!(field.kind, FormFieldKind::AuthProfileRef { .. }) {
+                    self.render_auth_profile_ref_row(field, cx)
+                        .into_any_element()
                 } else if let Some(input) = self.form_inputs.get(&field.id) {
                     let form_field = AuthFormField::DynamicField(idx);
                     let is_focused = self.auth_form_field == form_field
                         && self.auth_focus == AuthFocus::Form
                         && self.content_focused;
-                    self.render_input_row(&field.label, input, form_field, is_focused, cx)
-                        .into_any_element()
+
+                    let (disabled, disabled_hint, inherited_value) = field
+                        .disabled_when_field_set
+                        .as_deref()
+                        .and_then(|trigger_id| {
+                            let trigger_value = self
+                                .form_inputs
+                                .get(trigger_id)?
+                                .read(cx)
+                                .value()
+                                .to_string();
+                            if trigger_value.trim().is_empty() {
+                                return None;
+                            }
+
+                            let referenced = self.resolve_ref_profile(&trigger_value, cx);
+                            let label = referenced.as_ref().map(|p| p.name.clone());
+                            let inherited = referenced
+                                .as_ref()
+                                .and_then(|p| p.fields.get(&field.id).cloned())
+                                .filter(|v| !v.trim().is_empty());
+
+                            let hint = label
+                                .map(|name| format!("Inherited from {} '{}'.", trigger_id, name))
+                                .unwrap_or_else(|| format!("Inherited from {}.", trigger_id));
+                            Some((true, Some(hint), inherited))
+                        })
+                        .unwrap_or((false, None, None));
+
+                    self.render_input_row_disabled(
+                        &field.label,
+                        input,
+                        form_field,
+                        is_focused,
+                        disabled,
+                        disabled_hint,
+                        inherited_value,
+                        cx,
+                    )
+                    .into_any_element()
                 } else {
                     div().into_any_element()
                 }
@@ -1720,6 +2090,9 @@ impl AuthProfilesSection {
                             } else {
                                 Text::caption(status.0.clone()).warning()
                             })
+                        })
+                        .when_some(self.active_login_url.clone(), |content, url| {
+                            content.child(self.render_login_url_panel(url, cx))
                         })
                 })
                 .child(
