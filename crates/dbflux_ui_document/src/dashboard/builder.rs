@@ -242,16 +242,12 @@ pub(super) fn dashboard_toolbar(
         this.request_add_panel(cx);
     });
 
-    let add_btn = div().flex_shrink_0().ml_auto().child(
-        ToolbarButton::new("dash-add-panel-toolbar")
-            .label("+ Add Panel")
-            .variant(ToolbarButtonVariant::Primary)
-            .on_click(move |event, window, app| on_add_panel(event, window, app)),
-    );
+    let add_btn = ToolbarButton::new("dash-add-panel-toolbar")
+        .label("+ Add Panel")
+        .variant(ToolbarButtonVariant::Primary)
+        .on_click(move |event, window, app| on_add_panel(event, window, app));
 
     // Edit/View toggle. Pencil icon = "enter edit"; Eye icon = "back to view".
-    // The button sits to the right of "+ Add Panel" so the primary action stays
-    // visually anchored to the right edge.
     use dbflux_components::icons::AppIcon;
     let in_edit_mode = dashboard.is_edit_mode();
     let on_toggle_mode = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
@@ -262,14 +258,23 @@ pub(super) fn dashboard_toolbar(
     } else {
         (AppIcon::Pencil, "Edit dashboard")
     };
-    let mode_btn = div().flex_shrink_0().child(
-        ToolbarButton::new("dash-mode-toggle")
-            .icon(mode_icon)
-            .variant(ToolbarButtonVariant::Default)
-            .focused(in_edit_mode)
-            .tooltip(mode_tooltip)
-            .on_click(move |event, window, app| on_toggle_mode(event, window, app)),
-    );
+    let mode_btn = ToolbarButton::new("dash-mode-toggle")
+        .icon(mode_icon)
+        .variant(ToolbarButtonVariant::Default)
+        .focused(in_edit_mode)
+        .tooltip(mode_tooltip)
+        .on_click(move |event, window, app| on_toggle_mode(event, window, app));
+
+    // Group both right-anchored controls in one wrapper with its own gap so
+    // they don't visually collide with each other or the toolbar edge.
+    let right_group = div()
+        .flex_shrink_0()
+        .ml_auto()
+        .flex()
+        .items_center()
+        .gap(Spacing::SM)
+        .child(add_btn)
+        .child(mode_btn);
 
     // Items pushed in order. When Custom is selected, the picker slots are
     // inserted between the preset dropdown and the refresh control, mirroring
@@ -282,8 +287,7 @@ pub(super) fn dashboard_toolbar(
     }
 
     items.push(refresh_control.into_any_element());
-    items.push(add_btn.into_any_element());
-    items.push(mode_btn.into_any_element());
+    items.push(right_group.into_any_element());
 
     let _ = TimeRangePanel::preset_items; // touch import to keep linter happy
     compact_top_bar(&theme, items)
