@@ -1016,6 +1016,17 @@ pub trait Connection: Send + Sync {
         None
     }
 
+    /// Return a reference to this connection's dashboard sync source, if supported.
+    ///
+    /// Drivers that implement `DashboardSource` override this and return `Some(&self.source)`.
+    /// Drivers without dashboard sync support inherit this default and return `None`.
+    /// These drivers MUST NOT advertise `DriverCapabilities::DASHBOARD_SYNC`.
+    fn dashboard_source(
+        &self,
+    ) -> Option<&dyn crate::connection::dashboard_source::DashboardSource> {
+        None
+    }
+
     /// Explain a query execution plan for a table or custom query.
     ///
     /// If `request.query` is `None`, explains a `SELECT * FROM table LIMIT 100`.
@@ -1535,6 +1546,16 @@ mod tests {
         assert!(
             conn.dashboard_importer().is_none(),
             "default dashboard_importer() must return None"
+        );
+    }
+
+    #[test]
+    fn test_connection_default_dashboard_source_is_none() {
+        // The default `Connection::dashboard_source()` must return None.
+        let conn = StubConnection;
+        assert!(
+            conn.dashboard_source().is_none(),
+            "default dashboard_source() must return None"
         );
     }
 }

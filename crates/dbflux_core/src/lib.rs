@@ -72,6 +72,16 @@ pub use connection::dashboard_import::{
     WidgetLayout,
 };
 
+pub use connection::dashboard_hash::{
+    HASH_PREFIX_V1, canonicalize as dashboard_canonicalize, content_hash as dashboard_content_hash,
+    widget_hash as dashboard_widget_hash,
+};
+
+pub use connection::dashboard_source::{
+    DashboardDiff, DashboardRef, DashboardSource, LocalPanelSnapshot, MergeInput, MergePlan,
+    ModifiedEntry, MovedEntry, RemoteDashboard, UpstreamWidgetSnapshot, plan_merge, reconcile,
+};
+
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
     ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,

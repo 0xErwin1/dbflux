@@ -533,6 +533,15 @@ bitflags! {
         /// `Connection::dashboard_importer()` to parse the JSON. The check is purely
         /// capability-driven — no `driver_id` comparison is needed.
         const DASHBOARD_IMPORT = 1 << 51;
+
+        /// Driver implements the `DashboardSource` trait and supports refreshing
+        /// previously-imported dashboards from upstream.
+        ///
+        /// When set, the UI exposes the sync status pill, drift indicator, and
+        /// refresh-preview modal for dashboards whose `source_kind` is not `'local'`.
+        /// Gating flows exclusively through this capability — no `driver_id`
+        /// comparisons are allowed.
+        const DASHBOARD_SYNC = 1 << 52;
     }
 }
 
@@ -2791,5 +2800,47 @@ mod tests {
                 "DASHBOARD_IMPORT bit (1 << 51) collides with existing flag '{name}'"
             );
         }
+    }
+
+    #[test]
+    fn test_dashboard_sync_bit_value() {
+        assert_eq!(
+            DriverCapabilities::DASHBOARD_SYNC.bits(),
+            1u64 << 52,
+            "DASHBOARD_SYNC must equal 1 << 52"
+        );
+    }
+
+    #[test]
+    fn test_dashboard_sync_no_collision() {
+        let bits = DriverCapabilities::DASHBOARD_SYNC.bits();
+
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "DASHBOARD_SYNC must be a power of two"
+        );
+
+        for (name, cap) in DriverCapabilities::all().iter_names() {
+            if name == "DASHBOARD_SYNC" {
+                continue;
+            }
+            assert_eq!(
+                cap.bits() & bits,
+                0,
+                "DASHBOARD_SYNC bit (1 << 52) collides with existing flag '{name}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dashboard_sync_composes_with_dashboard_import() {
+        let combined = DriverCapabilities::DASHBOARD_IMPORT | DriverCapabilities::DASHBOARD_SYNC;
+        assert!(combined.contains(DriverCapabilities::DASHBOARD_IMPORT));
+        assert!(combined.contains(DriverCapabilities::DASHBOARD_SYNC));
+        // Both bits must round-trip through Debug.
+        let dbg = format!("{combined:?}");
+        assert!(dbg.contains("DASHBOARD_IMPORT"));
+        assert!(dbg.contains("DASHBOARD_SYNC"));
     }
 }
