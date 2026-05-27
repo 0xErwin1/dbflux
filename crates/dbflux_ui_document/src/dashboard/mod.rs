@@ -208,6 +208,13 @@ pub struct DashboardDocument {
     /// Per-panel context menu, open when the user right-clicks a panel header.
     pub(crate) panel_context_menu: Option<PanelContextMenu>,
 
+    /// Action chosen from `panel_context_menu` that still needs a `Window` to
+    /// execute. Drained at the top of the next `render` pass — see
+    /// `apply_pending_panel_menu_action`. This bridges the App-only menu click
+    /// callback into actions that require a `Window` handle (e.g.
+    /// `start_panel_title_edit`).
+    pub(crate) pending_panel_menu_action: Option<usize>,
+
     /// Set to `true` when `AppStateChanged` fires; the next render frame
     /// reconciles `panel_slots` against the manager's authoritative panel list
     /// so that panels added via the Add-Panel modal appear without requiring
@@ -394,6 +401,7 @@ impl DashboardDocument {
             drag_reorder: None,
             drag_resize: None,
             panel_context_menu: None,
+            pending_panel_menu_action: None,
             pending_panels_sync: false,
             refresh_dropdown,
             pending_configure_panel_index: None,

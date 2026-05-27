@@ -1,34 +1,19 @@
-pub use dbflux_components::composites::MenuItem;
+//! UI-layer wrapper around the shared menu-popup helpers.
+//!
+//! The actual implementation lives in `dbflux_components::composites::menu_popup`
+//! so that document and sidebar crates (which cannot depend on `dbflux_ui`) can
+//! render the same chrome. This module preserves the historical `dbflux_ui`
+//! call sites by re-exporting under the original names.
 
-use dbflux_components::composites::{
-    render_menu_container as render_components_menu_container,
-    render_menu_item as render_components_menu_item,
-    render_separator as render_components_separator,
-};
+pub use dbflux_components::composites::MenuItem;
+use dbflux_components::composites::render_menu_items;
+pub use dbflux_components::composites::render_menu_overlay;
 use gpui::*;
 
-/// Full-screen transparent overlay that dismisses the menu on any click outside.
-pub fn render_menu_overlay(
-    id: impl Into<ElementId>,
-    on_dismiss: impl Fn(&MouseDownEvent, &mut App) + 'static,
-) -> Stateful<Div> {
-    let on_dismiss = std::rc::Rc::new(on_dismiss);
-    let on_dismiss_right = on_dismiss.clone();
-
-    div()
-        .id(id)
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
-            on_dismiss(event, cx);
-        })
-        .on_mouse_down(MouseButton::Right, move |event, _, cx| {
-            on_dismiss_right(event, cx);
-        })
-}
-
+/// Render the floating menu container for a slice of [`MenuItem`]s.
+///
+/// Thin alias kept for historical call sites. New code should call
+/// `dbflux_components::composites::render_menu_items` directly.
 pub fn render_menu_container(
     panel_id: &str,
     items: &[MenuItem],
@@ -37,39 +22,10 @@ pub fn render_menu_container(
     on_hover: impl Fn(usize, &mut App) + 'static,
     cx: &mut App,
 ) -> Div {
-    let on_click = std::rc::Rc::new(on_click);
-    let on_hover = std::rc::Rc::new(on_hover);
-
-    let children: Vec<AnyElement> = items
-        .iter()
-        .enumerate()
-        .map(|(idx, item)| {
-            if item.is_separator {
-                let separator_selector = format!("{}-separator-{}", panel_id, idx);
-
-                return render_components_separator(cx)
-                    .debug_selector(move || separator_selector.clone())
-                    .into_any_element();
-            }
-
-            let on_click = on_click.clone();
-            let on_hover = on_hover.clone();
-
-            render_components_menu_item(
-                panel_id,
-                item,
-                idx,
-                selected_index == Some(idx),
-                move |_, _, cx| on_click(idx, cx),
-                move |cx| on_hover(idx, cx),
-                cx,
-            )
-            .into_any_element()
-        })
-        .collect();
-
-    render_components_menu_container(children, cx)
-        .debug_selector(move || format!("{panel_id}-panel"))
+    render_menu_items(panel_id, items, selected_index, on_click, on_hover, cx).debug_selector({
+        let panel_id = panel_id.to_string();
+        move || format!("{panel_id}-panel")
+    })
 }
 
 #[cfg(test)]

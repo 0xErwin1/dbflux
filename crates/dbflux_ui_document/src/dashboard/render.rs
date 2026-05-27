@@ -22,16 +22,19 @@
 //!   `panel_context_menu.is_some()`.
 //! - A drop-indicator overlay is shown at the current `drag_reorder.drop_slot`
 //!   when a drag is active.
-//! - When `editing_dashboard_name` is true, the toolbar title area renders an
-//!   inline `Input` instead of a static string (tab title rename, Q.2).
+//! - The dashboard name is no longer rendered in the toolbar; it lives in the
+//!   tab title alone. `editing_dashboard_name` state remains so renaming via
+//!   the tab title still works through `start_dashboard_name_edit`.
 
 use super::builder::{self, PanelMenuAction};
 use super::configure_popover;
 use super::{DashboardDocument, DashboardPanelSlot};
+use dbflux_components::composites::{MenuItem, render_menu_items, render_menu_overlay};
 use dbflux_components::controls::Button;
+use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::surface_card;
 use gpui::prelude::*;
-use gpui::{Context, IntoElement, MouseButton, Window, deferred, div, px};
+use gpui::{Context, IntoElement, Window, deferred, div, px};
 
 /// Minimum height for any dashboard panel (pixels).
 pub(crate) const MIN_PANEL_HEIGHT_PX: f32 = 240.0;
@@ -47,6 +50,12 @@ impl Render for DashboardDocument {
         // without forcing the user to close and re-open the dashboard.
         if std::mem::take(&mut self.pending_panels_sync) {
             let _ = self.reconcile_panels_from_manager(window, cx);
+        }
+
+        // Drain pending menu action — must run inside `render` because the
+        // click callback only has access to `App`, not `Window`.
+        if let Some(action_idx) = self.pending_panel_menu_action.take() {
+            self.execute_panel_context_menu_item(action_idx, window, cx);
         }
 
         let grid_columns = self.grid_columns;
@@ -247,55 +256,98 @@ impl Render for DashboardDocument {
             }
         }
 
-        // Per-panel context menu overlay.
+        // Per-panel context menu overlay — uses the same shared chrome the
+        // sidebar and tab-bar use (`render_menu_overlay` + `render_menu_items`
+        // from `dbflux_components::composites`). The menu anchors at the
+        // exact click position captured from the kebab `⋯` button.
         let context_menu_overlay = if let Some(ref menu) = self.panel_context_menu {
             let menu_pos = menu.position;
             let items = menu.items.clone();
 
-            let menu_children: Vec<gpui::AnyElement> = items
+            // Map domain `PanelMenuAction`s to the shared visual `MenuItem`
+            // type. Keeps the dashboard chrome identical to the sidebar
+            // (icons, separator, danger color for destructive actions).
+            let menu_items: Vec<MenuItem> = items
                 .iter()
                 .enumerate()
-                .map(|(i, action)| {
-                    let label = match action {
-                        PanelMenuAction::Configure => "Configure…",
-                        PanelMenuAction::EditTitle => "Edit title…",
-                        PanelMenuAction::RemovePanel => "Remove panel",
+                .flat_map(|(i, action)| {
+                    let mut entries: Vec<MenuItem> = Vec::new();
+                    // Separator before the destructive `Remove panel` action.
+                    if matches!(action, PanelMenuAction::RemovePanel) && i > 0 {
+                        entries.push(MenuItem::separator());
+                    }
+                    let item = match action {
+                        PanelMenuAction::Configure => {
+                            MenuItem::new("Configure…").icon(AppIcon::Settings)
+                        }
+                        PanelMenuAction::EditTitle => {
+                            MenuItem::new("Edit title…").icon(AppIcon::Pencil)
+                        }
+                        PanelMenuAction::RemovePanel => {
+                            MenuItem::new("Remove panel").icon(AppIcon::Delete).danger()
+                        }
                     };
-                    let on_click = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                        this.execute_panel_context_menu_item(i, window, cx);
-                    });
-                    Button::new(("ctx-item", i as u32), label)
-                        .on_click(on_click)
-                        .into_any_element()
+                    entries.push(item);
+                    entries
                 })
                 .collect();
 
-            // Backdrop: clicking outside closes the menu.
-            let on_backdrop_click = cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
-                this.close_panel_context_menu(cx);
+            // Recover the action index after the separator-injection above so
+            // the click handler still resolves to the correct domain action.
+            // `menu_items` may contain separator entries that must be skipped.
+            let selectable_indices: Vec<usize> = menu_items
+                .iter()
+                .enumerate()
+                .filter_map(|(i, mi)| (!mi.is_separator).then_some(i))
+                .collect();
+
+            // Overlay: dismiss the menu on any outside click.
+            let weak_dismiss = cx.weak_entity();
+            let overlay = render_menu_overlay("panel-ctx-menu-overlay", move |_event, cx| {
+                if let Some(doc) = weak_dismiss.upgrade() {
+                    doc.update(cx, |this, cx| this.close_panel_context_menu(cx));
+                }
             });
 
-            let _ = menu_pos;
+            // Click handler: stash the chosen action in a pending field. The
+            // next `render` pass executes it with a real `Window` handle (the
+            // standard `pending_*` pattern documented in CLAUDE.md). This is
+            // necessary because `start_panel_title_edit` requires a `Window`
+            // which is not available inside an `App`-only click callback.
+            let selectable_for_click = selectable_indices.clone();
+            let weak_click = cx.weak_entity();
+            let on_click = move |visual_idx: usize, cx: &mut gpui::App| {
+                let Some(action_idx) = selectable_for_click.iter().position(|i| *i == visual_idx)
+                else {
+                    return;
+                };
+                if let Some(doc) = weak_click.upgrade() {
+                    doc.update(cx, |this, cx| {
+                        this.pending_panel_menu_action = Some(action_idx);
+                        cx.notify();
+                    });
+                }
+            };
+            let on_hover = |_: usize, _: &mut gpui::App| {};
 
             deferred(
                 div()
-                    .id("panel-ctx-menu-backdrop")
+                    .id("panel-ctx-menu-layer")
                     .absolute()
                     .top_0()
                     .left_0()
                     .size_full()
-                    .on_mouse_down(MouseButton::Left, on_backdrop_click)
-                    .child(
-                        div()
-                            .id("panel-ctx-menu")
-                            .absolute()
-                            .top(px(f32::from(menu_pos.y)))
-                            .left(px(f32::from(menu_pos.x)))
-                            .flex()
-                            .flex_col()
-                            .p(px(4.0)) // guardrail-allow: context menu padding
-                            .children(menu_children),
-                    ),
+                    .child(overlay)
+                    .child(div().absolute().top(menu_pos.y).left(menu_pos.x).child(
+                        render_menu_items(
+                            "panel-ctx-menu",
+                            &menu_items,
+                            None,
+                            on_click,
+                            on_hover,
+                            cx,
+                        ),
+                    )),
             )
             .into_any_element()
         } else {

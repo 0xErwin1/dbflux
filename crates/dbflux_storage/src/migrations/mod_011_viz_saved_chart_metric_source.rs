@@ -311,7 +311,10 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM viz_saved_charts", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 1, "the seeded row must survive the migration rebuild");
+        assert_eq!(
+            count, 1,
+            "the seeded row must survive the migration rebuild"
+        );
 
         let namespace: Option<String> = conn
             .query_row(

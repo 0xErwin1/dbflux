@@ -2,6 +2,7 @@ mod collapsible_section;
 mod control_shell;
 mod field_row;
 mod menu_item;
+mod menu_popup;
 mod modal_frame;
 mod panel_header;
 mod refresh_split_button;
@@ -18,6 +19,7 @@ pub use field_row::{
     field_row_with_label_width,
 };
 pub use menu_item::{MenuItem, render_menu_container, render_menu_item, render_separator};
+pub use menu_popup::{render_menu_items, render_menu_overlay};
 pub use modal_frame::{
     ModalFrame, ModalFrameInspection, ModalFrameVariant, inspect_modal_frame, modal_frame,
     modal_frame_with_header_extra,

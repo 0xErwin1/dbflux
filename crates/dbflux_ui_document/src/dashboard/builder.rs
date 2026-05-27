@@ -17,11 +17,13 @@
 //!   document; the `Input` entity is lazily created when editing starts.
 //! - The toolbar always renders (even when there are zero panels).
 
+use crate::chrome::compact_top_bar;
 use dbflux_components::controls::{Button, Dropdown, InputState};
 use dbflux_components::saved_chart::TimeRangePreset;
+use dbflux_components::tokens::{Radii, Spacing};
 use gpui::prelude::*;
-use gpui::{Context, CursorStyle, Entity, IntoElement, MouseButton, Pixels, Window, div, px};
-use gpui_component::InteractiveElementExt;
+use gpui::{App, Context, CursorStyle, Entity, IntoElement, MouseButton, Pixels, Window, div, px};
+use gpui_component::ActiveTheme;
 
 use super::DashboardDocument;
 
@@ -154,47 +156,23 @@ pub(super) fn preset_label(preset: TimeRangePreset) -> &'static str {
 /// Returns the dashboard toolbar element.
 ///
 /// Renders (left to right):
-/// - Dashboard name: static label (double-click to start inline rename) or an
-///   inline `Input` when `editing_dashboard_name` is true (Q.2).
-/// - `TimeRangePanel` view (preset dropdown + Custom picker) — the canonical
+/// - `TimeRangePanel` preset dropdown (content-sized) — the canonical
 ///   time-range chrome shared with `ChartDocument` and `AuditDocument`.
-/// - Refresh-policy `Dropdown` (Off / 10s / 30s / 1m / 5m).
+/// - Refresh-policy `Dropdown` (content-sized).
 /// - "+ Add Panel" primary button anchored to the right edge.
+///
+/// The dashboard name is intentionally omitted; the tab title already shows it
+/// and `start_dashboard_name_edit` is still reachable through other affordances.
+/// Layout matches `AuditDocument` via `compact_top_bar` so the dashboard
+/// inherits the same flex-wrap + shrink rules and the dropdowns size to their
+/// content instead of stretching across the row.
 pub(super) fn dashboard_toolbar(
     dashboard: &DashboardDocument,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
-    let editing_name = dashboard.editing_dashboard_name;
-    let name_input = dashboard.dashboard_name_input.as_ref().cloned();
-    let dashboard_title = dashboard.title().to_string();
+    let theme = cx.theme().clone();
     let time_range_panel = dashboard.shared_time_range().clone();
     let refresh_dropdown = dashboard.refresh_dropdown.clone();
-
-    // Q.2: Dashboard name area — inline input when editing, double-click label otherwise.
-    let name_area: gpui::AnyElement = if editing_name {
-        debug_assert!(
-            name_input.is_some(),
-            "dashboard_name_input must be Some when editing_dashboard_name is true"
-        );
-        let input_state = name_input.expect("InputState must be present when editing");
-        div()
-            .id("dashboard-name-edit")
-            .flex_shrink_0()
-            .child(dbflux_components::controls::Input::new(&input_state).small())
-            .into_any_element()
-    } else {
-        let on_double_click = cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-            this.start_dashboard_name_edit(window, cx);
-        });
-        div()
-            .id("dashboard-name-label")
-            .flex_shrink_0()
-            .text_sm()
-            .cursor(CursorStyle::PointingHand)
-            .child(dashboard_title)
-            .on_double_click(on_double_click)
-            .into_any_element()
-    };
 
     // Pull the preset dropdown out of the TimeRangePanel so the toolbar can
     // host it inline rather than embedding the full panel (whose default
@@ -202,28 +180,41 @@ pub(super) fn dashboard_toolbar(
     // below the toolbar when the user picks "Custom…".
     let preset_dropdown: Entity<Dropdown> = time_range_panel.read(cx).dropdown_time_range.clone();
 
+    // Content-sized wrappers around the dropdowns. Direct flex children stretch
+    // because `Dropdown::render` applies `w_full()` to its container; the
+    // wrapper acts as a flex item with intrinsic width so the control collapses
+    // to its content.
+    let time_control = div()
+        .flex_shrink_0()
+        .rounded(Radii::SM)
+        .child(preset_dropdown);
+
+    let refresh_control = div()
+        .flex_shrink_0()
+        .rounded(Radii::SM)
+        .child(refresh_dropdown);
+
     // "+ Add Panel" toolbar button (anchored right).
     let on_add_panel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
         this.request_add_panel(cx);
     });
 
-    div()
-        .id("dashboard-toolbar")
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0)) // guardrail-allow: toolbar item spacing
-        .p(px(8.0)) // guardrail-allow: toolbar padding
-        .w_full()
-        .child(name_area)
-        .child(preset_dropdown)
-        .child(refresh_dropdown)
-        .child(div().flex_1())
-        .child(
-            Button::new("dash-add-panel-toolbar", "+ Add Panel")
-                .primary()
-                .on_click(on_add_panel),
-        )
+    let add_btn = div().flex_shrink_0().ml_auto().child(
+        Button::new("dash-add-panel-toolbar", "+ Add Panel")
+            .primary()
+            .on_click(on_add_panel),
+    );
+
+    compact_top_bar(
+        &theme,
+        [
+            time_control.into_any_element(),
+            refresh_control.into_any_element(),
+            add_btn.into_any_element(),
+        ],
+    )
+    .id("dashboard-toolbar")
+    .gap(Spacing::SM)
 }
 
 /// Returns the panel-header element for a single panel slot.
@@ -280,11 +271,21 @@ pub(super) fn panel_header(
     };
 
     // Kebab menu button — opens the same context menu as right-click, but
-    // gives keyboard/mouse users a discoverable affordance. Replaces the
-    // previous standalone "×" close button.
+    // gives keyboard/mouse users a discoverable affordance.
+    //
+    // Position-on-click strategy: capture the actual click position on
+    // mouse-down (the menu is opened from `on_click`, but the position we want
+    // is where the kebab glyph sits). `ClickEvent::up.position` is the cursor
+    // position at release, which is effectively the kebab button's screen
+    // coordinates — that's what the floating menu anchors to.
     let on_kebab_click = cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
         this.open_panel_context_menu(panel_index, event.position(), cx);
     });
+    // Prevent the header's left-mouse-down handler (which starts a panel drag)
+    // from also firing when the user presses the kebab button.
+    let on_kebab_mouse_down = |_: &gpui::MouseDownEvent, _: &mut Window, cx: &mut App| {
+        cx.stop_propagation();
+    };
 
     let mut header = div()
         .id(("panel-header", panel_index))
@@ -335,11 +336,23 @@ pub(super) fn panel_header(
                 .into_any_element()
         };
 
-        // Kebab menu trigger — replaces the previous standalone "×" close
-        // button. Opens the same context menu as right-click on the header,
-        // so destructive actions (Remove panel) sit behind one extra click.
-        let kebab_btn = Button::new(("panel-kebab", panel_index), "⋯")
-            .ghost()
+        // Kebab menu trigger — matches the sidebar pattern: a borderless
+        // square div with content-only sizing and a background-only hover
+        // effect. Adding a border on hover would reflow the header (the user
+        // reported this as a layout shift); leaving the box dimensions static
+        // and only changing `bg` avoids any reflow.
+        let theme = cx.theme();
+        let hover_bg = theme.secondary;
+        let kebab_btn = div()
+            .id(("panel-kebab", panel_index))
+            .flex_shrink_0()
+            .px_1()
+            .rounded(Radii::SM)
+            .cursor_pointer()
+            .hover(move |d| d.bg(hover_bg))
+            .text_sm()
+            .child("\u{22EF}") // ⋯
+            .on_mouse_down(MouseButton::Left, on_kebab_mouse_down)
             .on_click(on_kebab_click);
 
         header = header.child(title_elem).child(kebab_btn);
