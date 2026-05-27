@@ -301,22 +301,34 @@ impl McpConnectionFactory {
             );
         }
 
-        let auth_provider = if let Some(auth_profile) = auth_profile.as_ref() {
+        let (auth_profile, auth_provider) = if let Some(profile) = auth_profile {
             let provider = self
                 .state
                 .auth_provider_registry
-                .get(&auth_profile.provider_id)
+                .get(&profile.provider_id)
                 .cloned()
                 .ok_or_else(|| {
-                    format!(
-                        "Auth provider '{}' is not available",
-                        auth_profile.provider_id
-                    )
+                    format!("Auth provider '{}' is not available", profile.provider_id)
                 })?;
 
-            Some(SharedDynAuthProvider::boxed(provider))
+            let profile_registry_snapshot: Vec<dbflux_core::auth::AuthProfile> = {
+                let manager = self.state.auth_profile_manager.read().await;
+                manager.items.clone()
+            };
+            let expanded = dbflux_core::auth::expand_auth_profile_refs(
+                &profile,
+                provider.form_def(),
+                &|target_id| {
+                    profile_registry_snapshot
+                        .iter()
+                        .find(|p| p.id == *target_id)
+                        .cloned()
+                },
+            );
+
+            (Some(expanded), Some(SharedDynAuthProvider::boxed(provider)))
         } else {
-            None
+            (None, None)
         };
 
         let resolver = CompositeValueResolver::new(Arc::new(ValueCache::new(

@@ -128,76 +128,37 @@ impl Workspace {
     }
 
     pub(super) fn open_settings(&self, cx: &mut Context<Self>) {
-        let app_state = self.app_state.clone();
-
-        // Check if settings window is already open - if so, focus it
-        if let Some(handle) = app_state.read(cx).settings_window {
-            if let Err(e) = handle.update(cx, |_root, window, _cx| {
-                window.activate_window();
-            }) {
-                log::warn!("Failed to activate existing settings window: {:?}", e);
-            }
-            return;
-        }
-
         let workspace = cx.entity().clone();
-        let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
-
-        let mut options = WindowOptions {
-            app_id: Some("dbflux".into()),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Settings".into()),
-                ..Default::default()
-            }),
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            focus: true,
-            ..Default::default()
-        };
-        platform::apply_window_options(&mut options, 800.0, 600.0);
-
-        if let Ok(handle) = cx.open_window(options, |window, cx| {
-            let settings = cx.new(|cx| SettingsWindow::new(app_state.clone(), window, cx));
-
-            cx.subscribe(
-                &settings,
-                move |_settings, event: &crate::ui::windows::settings::SettingsEvent, cx| {
-                    workspace.update(cx, |this, cx| match event {
-                        crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
-                            this.open_script_from_path(path.clone(), cx);
-                        }
-                        crate::ui::windows::settings::SettingsEvent::OpenLoginModal {
-                            provider_name,
-                            profile_name,
-                            url,
-                        } => {
-                            // Find a window context to open the modal with.
-                            // The login modal lives in the workspace window; we
-                            // need to call open_manual which requires `window`.
-                            // Store the pending args and consume in next render.
-                            this.pending_login_modal_open =
-                                Some((provider_name.clone(), profile_name.clone(), url.clone()));
-                            cx.notify();
-                        }
-                    });
-                },
-            )
-            .detach();
-
-            cx.new(|cx| Root::new(settings, window, cx))
-        }) {
-            // Store the handle in AppStateEntity so we can reuse/focus it later
-            app_state.update(cx, |state, _| {
-                state.settings_window = Some(handle);
-            });
-
-            // Explicitly activate the window and force initial render (X11 fix)
-            if let Err(e) = handle.update(cx, |_root, window, cx| {
-                window.activate_window();
-                cx.notify();
-            }) {
-                log::warn!("Failed to activate settings window: {:?}", e);
-            }
-        }
+        crate::ui::windows::settings::open_or_focus_settings(
+            self.app_state.clone(),
+            None,
+            cx,
+            move |settings, cx| {
+                cx.subscribe(
+                    settings,
+                    move |_settings, event: &crate::ui::windows::settings::SettingsEvent, cx| {
+                        workspace.update(cx, |this, cx| match event {
+                            crate::ui::windows::settings::SettingsEvent::OpenScript { path } => {
+                                this.open_script_from_path(path.clone(), cx);
+                            }
+                            crate::ui::windows::settings::SettingsEvent::OpenLoginModal {
+                                provider_name,
+                                profile_name,
+                                url,
+                            } => {
+                                this.pending_login_modal_open = Some((
+                                    provider_name.clone(),
+                                    profile_name.clone(),
+                                    url.clone(),
+                                ));
+                                cx.notify();
+                            }
+                        });
+                    },
+                )
+                .detach();
+            },
+        );
     }
 
     pub(super) fn open_login_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -214,33 +175,12 @@ impl Workspace {
     }
 
     pub(super) fn open_auth_profiles_settings(&self, cx: &mut Context<Self>) {
-        let app_state = self.app_state.clone();
-        let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
-
-        let mut options = WindowOptions {
-            app_id: Some("dbflux".into()),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Settings".into()),
-                ..Default::default()
-            }),
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            focus: true,
-            ..Default::default()
-        };
-        platform::apply_window_options(&mut options, 800.0, 600.0);
-
-        let _ = cx.open_window(options, |window, cx| {
-            let settings = cx.new(|cx| {
-                SettingsWindow::new_with_section(
-                    app_state.clone(),
-                    crate::ui::windows::settings::SettingsSectionId::AuthProfiles,
-                    window,
-                    cx,
-                )
-            });
-
-            cx.new(|cx| Root::new(settings, window, cx))
-        });
+        crate::ui::windows::settings::open_or_focus_settings(
+            self.app_state.clone(),
+            Some(crate::ui::windows::settings::SettingsSectionId::AuthProfiles),
+            cx,
+            |_settings, _cx| {},
+        );
     }
 
     pub(super) fn open_sso_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -149,6 +149,9 @@ pub enum DataGridEvent {
         title: SharedString,
         content: AnyView,
     },
+    /// Request to hide the workspace inspector rail without losing the
+    /// panel's cached inspector state (e.g. when switching to another tab).
+    CloseInspector,
     /// User requested "Chart this query" from the context menu.
     ChartThisQuery {
         query: String,
@@ -395,6 +398,14 @@ pub struct DataGridPanel {
 
     // Row inspector content entity (workspace owns the chrome/lifecycle).
     row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
+
+    /// Last `(row, col)` opened in the row inspector. `Some` means the inspector
+    /// is logically "on" for this panel — it should reappear when the panel's
+    /// tab is re-activated, follow the user's cursor on `SelectionChanged`, and
+    /// re-snapshot itself after a refresh. Cleared when the user dismisses the
+    /// rail explicitly (via [`DataGridPanel::clear_inspector_state`]) or when
+    /// the stored row falls outside the new result.
+    inspector_row: Option<(usize, usize)>,
 
     export_menu_open: bool,
 
@@ -828,6 +839,7 @@ impl DataGridPanel {
             document_preview_modal,
             pending_document_preview: None,
             row_inspector_content: None,
+            inspector_row: None,
             export_menu_open: false,
             toolbar_in_chrome_row: false,
             chart_shell: None,
@@ -1228,8 +1240,29 @@ impl DataGridPanel {
             && self.chart_source_time_range_panel.is_some()
     }
 
-    pub fn set_active_tab(&mut self, active: bool) {
+    pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
         self.is_active_tab = active;
+
+        if active {
+            // Re-mount the inspector rail with a fresh snapshot of the
+            // remembered row so it follows the active tab without rendering
+            // stale data from a previous result set.
+            if let Some((row, col)) = self.inspector_row {
+                self.open_row_inspector(row, col, cx);
+            }
+        } else if self.inspector_row.is_some() {
+            // Hide the rail (without dropping our cached state) so the next
+            // active tab can take it over.
+            cx.emit(DataGridEvent::CloseInspector);
+        }
+    }
+
+    /// Called by the workspace when the user dismisses the inspector rail
+    /// explicitly (× button or ESC fallback). Drops the cached coordinates so
+    /// the rail does not re-open on tab activation or refresh.
+    pub fn clear_inspector_state(&mut self, _cx: &mut Context<Self>) {
+        self.inspector_row = None;
+        self.row_inspector_content = None;
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -1364,6 +1397,13 @@ impl DataGridPanel {
         self.result = result;
         self.rebuild_table(None, cx);
         self.state = GridState::Ready;
+
+        // Re-snapshot the row inspector against the fresh data so the rail
+        // keeps following the same row position across refreshes.
+        if let Some((row, col)) = self.inspector_row {
+            self.open_row_inspector(row, col, cx);
+        }
+
         cx.notify();
     }
 
@@ -1514,7 +1554,16 @@ impl DataGridPanel {
                     DataTableEvent::Focused => {
                         cx.emit(DataGridEvent::Focused);
                     }
-                    DataTableEvent::SelectionChanged(_) => {}
+                    DataTableEvent::SelectionChanged(selection) => {
+                        // When the row inspector is active, follow the user's
+                        // cursor so click / arrow-key navigation updates the
+                        // rail in place.
+                        if this.inspector_row.is_some()
+                            && let Some(active) = selection.active
+                        {
+                            this.open_row_inspector(active.row, active.col, cx);
+                        }
+                    }
                     DataTableEvent::SaveRowRequested(row_idx) => {
                         this.handle_save_row(*row_idx, cx);
                     }

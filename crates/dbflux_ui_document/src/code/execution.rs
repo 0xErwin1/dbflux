@@ -252,7 +252,20 @@ impl CodeDocument {
             return;
         }
 
-        if let Some(kind) = detect_dangerous_query(&query) {
+        let dangerous_kind = self.connection_id.and_then(|conn_id| {
+            self.app_state
+                .read(cx)
+                .connections()
+                .get(&conn_id)
+                .and_then(|connected| {
+                    connected
+                        .connection
+                        .language_service()
+                        .detect_dangerous(&query)
+                })
+        });
+
+        if let Some(kind) = dangerous_kind {
             let is_suppressed = self
                 .app_state
                 .read(cx)
@@ -1274,6 +1287,9 @@ impl CodeDocument {
                         title: title.clone(),
                         content: content.clone(),
                     });
+                }
+                DataGridEvent::CloseInspector => {
+                    cx.emit(DocumentEvent::CloseInspector);
                 }
                 DataGridEvent::ChartThisQuery { .. } => {
                     // CodeDocument result tabs use QueryResult sources created without an

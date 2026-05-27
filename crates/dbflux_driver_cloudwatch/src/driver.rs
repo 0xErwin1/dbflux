@@ -10,15 +10,15 @@ use aws_sdk_cloudwatchlogs::Client;
 use aws_sdk_cloudwatchlogs::config::Builder as CloudWatchConfigBuilder;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    CLOUDWATCH_FORM, CollectionBrowseRequest, CollectionChildInfo, CollectionChildrenPage,
+    CollectionBrowseRequest, CollectionChildInfo, CollectionChildrenPage,
     CollectionChildrenRequest, CollectionCountRequest, CollectionInfo, CollectionPresentation,
     ColumnKind, ColumnMeta, Connection, ConnectionProfile, DatabaseCategory, DatabaseInfo,
     DbConfig, DbDriver, DbError, DbKind, DeploymentClass, DocumentSchema, DriverCapabilities,
     DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery,
     EventRecord, EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext,
-    FormValues, Icon, MetricCatalog, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
-    SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
-    ValidationResult, Value,
+    FormFieldKind, FormSection, FormTab, FormValues, Icon, MetricCatalog, QueryLanguage,
+    QueryRequest, QueryResult, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot,
+    SourceContextSpec, SourceQueryMode, TableInfo, ValidationResult, Value, field, field_required,
 };
 
 use crate::dashboard_import::CloudWatchDashboardImporter;
@@ -47,6 +47,31 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
     ssl_modes: None,
     ssl_cert_fields: None,
     classification_override: None,
+});
+
+pub static CLOUDWATCH_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![FormSection {
+            title: "AWS".into(),
+            fields: vec![
+                field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
+                field(
+                    "profile",
+                    "Profile",
+                    FormFieldKind::Text,
+                    "optional AWS profile",
+                ),
+                field(
+                    "endpoint",
+                    "Endpoint Override",
+                    FormFieldKind::Text,
+                    "http://localhost:4566",
+                ),
+            ],
+        }],
+    }],
 });
 
 const CLOUDWATCH_DEFAULT_DATABASE: &str = "logs";
@@ -1537,13 +1562,28 @@ fn fetch_log_stream_page(
 #[cfg(test)]
 mod tests {
     use super::{
-        CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
+        CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
         metric_data_output_to_query_result,
     };
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
     use aws_sdk_cloudwatch::types::MetricDataResult;
     use dbflux_core::{ColumnKind, DbConfig, DbDriver, DriverCapabilities, Value};
+
+    #[test]
+    fn cloudwatch_form_exposes_aws_region_profile_and_endpoint_fields() {
+        let main_tab = CLOUDWATCH_FORM.main_tab().expect("main tab");
+
+        assert!(
+            main_tab
+                .sections
+                .iter()
+                .flat_map(|section| section.fields.iter())
+                .any(|field| field.id == "region" && field.required)
+        );
+        assert!(CLOUDWATCH_FORM.field("profile").is_some());
+        assert!(CLOUDWATCH_FORM.field("endpoint").is_some());
+    }
 
     #[test]
     fn cloudwatch_driver_uses_builtin_form_and_key() {

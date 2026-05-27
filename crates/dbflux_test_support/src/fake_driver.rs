@@ -1,14 +1,21 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
-    CLOUDWATCH_FORM, Connection, ConnectionProfile, DYNAMODB_FORM, DatabaseCategory, DbConfig,
-    DbDriver, DbError, DbKind, DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits,
-    DriverMetadata, FormValues, INFLUXDB_FORM, Icon, MONGODB_FORM, MYSQL_FORM,
-    MutationCapabilities, POSTGRES_FORM, QueryCapabilities, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, REDIS_FORM, SQLITE_FORM, SchemaLoadingStrategy, SchemaSnapshot,
-    SqlDialect, SqlLanguageService, SyntaxInfo, TransactionCapabilities,
+    Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
+    DdlCapabilities, DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, FormValues,
+    Icon, MutationCapabilities, QueryCapabilities, QueryHandle, QueryLanguage, QueryRequest,
+    QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, SqlLanguageService, SyntaxInfo,
+    TransactionCapabilities,
 };
 use dbflux_core::{DatabaseInfo, DefaultSqlDialect};
-use dbflux_driver_redis::RedisLanguageService;
+use dbflux_driver_cloudwatch::CLOUDWATCH_FORM;
+use dbflux_driver_dynamodb::DYNAMODB_FORM;
+use dbflux_driver_influxdb::INFLUXDB_FORM;
+use dbflux_driver_mongodb::MONGODB_FORM;
+use dbflux_driver_mssql::SQLSERVER_FORM;
+use dbflux_driver_mysql::MYSQL_FORM;
+use dbflux_driver_postgres::POSTGRES_FORM;
+use dbflux_driver_redis::{REDIS_FORM, RedisLanguageService};
+use dbflux_driver_sqlite::SQLITE_FORM;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -580,7 +587,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::DynamoDB => &DYNAMODB_FORM,
         DbKind::CloudWatchLogs => &CLOUDWATCH_FORM,
         DbKind::InfluxDB => &INFLUXDB_FORM,
-        DbKind::SqlServer => &dbflux_core::SQLSERVER_FORM,
+        DbKind::SqlServer => &SQLSERVER_FORM,
     }
 }
 

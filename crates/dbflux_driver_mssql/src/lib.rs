@@ -10,5 +10,7 @@
 )]
 
 pub mod driver;
+pub mod language_service;
 
-pub use driver::{METADATA, MssqlDriver};
+pub use driver::{METADATA, MssqlDriver, SQLSERVER_FORM};
+pub use language_service::TSqlLanguageService;

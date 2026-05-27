@@ -1,3 +1,4 @@
+mod refs;
 mod types;
 
 use std::collections::HashMap;
@@ -10,6 +11,7 @@ use crate::DbError;
 use crate::driver::form::DriverFormDef;
 use crate::values::CompositeValueResolver;
 
+pub use refs::{AuthProfileLookup, expand_auth_profile_refs};
 pub use types::*;
 
 /// Request to fetch the available options for a `DynamicSelect` field.
@@ -157,6 +159,14 @@ pub trait DynAuthProvider: Send + Sync {
     /// The default is a no-op.
     fn after_profile_saved(&self, _profile: &AuthProfile) {}
 
+    /// Abort any in-flight login for `profile` if the provider tracks one.
+    ///
+    /// Returns `true` if an in-flight login was found and signalled to stop.
+    /// The default returns `false` (no abort capability).
+    fn abort_login(&self, _profile: &AuthProfile) -> bool {
+        false
+    }
+
     /// Fetch the available options for a `DynamicSelect` field declared in this
     /// provider's `form_def()`.
     ///
@@ -290,6 +300,10 @@ impl DynAuthProvider for SharedDynAuthProvider {
         self.provider.after_profile_saved(profile);
     }
 
+    fn abort_login(&self, profile: &AuthProfile) -> bool {
+        self.provider.abort_login(profile)
+    }
+
     async fn fetch_dynamic_options(
         &self,
         profile: &AuthProfile,
@@ -352,6 +366,10 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
 
     fn after_profile_saved(&self, profile: &AuthProfile) {
         self.as_ref().after_profile_saved(profile);
+    }
+
+    fn abort_login(&self, profile: &AuthProfile) -> bool {
+        self.as_ref().abort_login(profile)
     }
 
     async fn fetch_dynamic_options(

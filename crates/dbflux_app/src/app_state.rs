@@ -231,6 +231,7 @@ impl AppState {
         let mut auth_provider_registry = AuthProviderRegistry::new();
         #[cfg(feature = "aws")]
         {
+            auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoSessionAuthProvider::new()));
             auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoAuthProvider::new()));
             auth_provider_registry
                 .register(Arc::new(dbflux_aws::AwsSharedCredentialsAuthProvider::new()));
@@ -2295,10 +2296,23 @@ impl AppState {
             .map(|task| task.id)
             .collect();
 
-        connect_task_ids
+        let cancelled = connect_task_ids
             .into_iter()
             .filter(|task_id| self.facade.tasks.cancel(*task_id))
-            .count()
+            .count();
+
+        // Clear the profile-level pending-operation entry so the sidebar can
+        // reflect the cancelled state and the user can retry without waiting
+        // for the (potentially long-running) async connect task to unwind.
+        // `finish_pending_operation` is a HashSet remove, so the eventual
+        // duplicate call from the async task's own cancellation path is a no-op.
+        if cancelled > 0 {
+            self.facade
+                .connections
+                .finish_pending_operation(profile_id, None);
+        }
+
+        cancelled
     }
 
     pub fn connections_mut(&mut self) -> &mut HashMap<Uuid, ConnectedProfile> {
@@ -2902,22 +2916,37 @@ impl AppState {
             );
         }
 
-        let auth_provider: Option<Box<dyn dbflux_core::auth::DynAuthProvider>> =
-            if let Some(auth_profile) = auth_profile.as_ref() {
-                let provider = self
-                    .auth_provider_registry
-                    .get(&auth_profile.provider_id)
-                    .ok_or_else(|| {
-                        format!(
-                            "Auth provider '{}' is not available",
-                            auth_profile.provider_id
-                        )
-                    })?;
+        let (auth_profile, auth_provider): (
+            Option<dbflux_core::auth::AuthProfile>,
+            Option<Box<dyn dbflux_core::auth::DynAuthProvider>>,
+        ) = if let Some(profile) = auth_profile {
+            let provider = self
+                .auth_provider_registry
+                .get(&profile.provider_id)
+                .ok_or_else(|| {
+                    format!("Auth provider '{}' is not available", profile.provider_id)
+                })?;
 
-                Some(RegistryAuthProviderWrapper::boxed(provider))
-            } else {
-                None
-            };
+            let profile_registry_snapshot: Vec<dbflux_core::auth::AuthProfile> =
+                self.facade.auth_profiles.items.clone();
+            let expanded = dbflux_core::auth::expand_auth_profile_refs(
+                &profile,
+                provider.form_def(),
+                &|target_id| {
+                    profile_registry_snapshot
+                        .iter()
+                        .find(|p| p.id == *target_id)
+                        .cloned()
+                },
+            );
+
+            (
+                Some(expanded),
+                Some(RegistryAuthProviderWrapper::boxed(provider)),
+            )
+        } else {
+            (None, None)
+        };
 
         let cache = Arc::new(dbflux_core::values::ValueCache::new(
             std::time::Duration::from_secs(300),

@@ -159,6 +159,19 @@ impl Tab {
         }
     }
 
+    /// Tells the document that the workspace inspector rail was dismissed,
+    /// so it can drop any cached inspector state. No-op for documents that do
+    /// not own an inspector.
+    pub fn mark_inspector_closed(&self, cx: &mut App) {
+        match self {
+            Tab::Pane(p) => {
+                if let Some(f) = p.mark_inspector_closed.as_ref() {
+                    f(cx);
+                }
+            }
+        }
+    }
+
     /// Returns a session snapshot for this tab if it is a code document with
     /// a persistent backing (file-backed or scratch). Returns `None` for all
     /// other document types and for ephemeral tabs with no backing path.
@@ -227,6 +240,9 @@ impl TabManager {
                         title: title.clone(),
                         content: content.clone(),
                     });
+                }
+                DocumentEvent::CloseInspector => {
+                    cx.emit(TabManagerEvent::CloseInspector);
                 }
                 DocumentEvent::ChartThisQuery {
                     query,
@@ -605,6 +621,9 @@ pub enum TabManagerEvent {
         title: gpui::SharedString,
         content: gpui::AnyView,
     },
+    /// Request to hide the workspace inspector rail without forgetting the
+    /// document's cached inspector state.
+    CloseInspector,
     /// User requested "Chart this query" from a data document's context menu.
     ChartThisQuery {
         query: String,

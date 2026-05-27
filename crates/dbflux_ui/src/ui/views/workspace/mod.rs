@@ -45,7 +45,6 @@ use crate::ui::views::sidebar::{Sidebar, SidebarEvent, SidebarTab};
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::TasksPanel;
 use crate::ui::windows::connection_manager::ConnectionManagerWindow;
-use crate::ui::windows::settings::SettingsWindow;
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
 use dbflux_core::{ExecutionContext, QueryLanguage};
@@ -1086,6 +1085,17 @@ impl Workspace {
                     this.persist_inspector_width(*px_width, cx);
                 }
                 inspector::WorkspaceInspectorEvent::Closed => {
+                    // Propagate explicit user dismissal to the active document
+                    // so it forgets its inspector state and does not re-open
+                    // the rail on the next tab activation or refresh.
+                    let active_id = this.tab_manager.read(cx).active_id();
+                    if let Some(id) = active_id {
+                        this.tab_manager.update(cx, |mgr, cx| {
+                            if let Some(tab) = mgr.document(id) {
+                                tab.mark_inspector_closed(cx);
+                            }
+                        });
+                    }
                     cx.notify();
                 }
             },
@@ -1111,6 +1121,11 @@ impl Workspace {
                     TabManagerEvent::OpenInspector { title, content } => {
                         this.workspace_inspector.update(cx, |insp, cx| {
                             insp.open_with(content.clone(), title.clone(), cx);
+                        });
+                    }
+                    TabManagerEvent::CloseInspector => {
+                        this.workspace_inspector.update(cx, |insp, cx| {
+                            insp.hide(cx);
                         });
                     }
                     TabManagerEvent::Activated(new_id) => {

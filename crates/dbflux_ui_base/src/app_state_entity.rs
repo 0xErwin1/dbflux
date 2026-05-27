@@ -63,6 +63,17 @@ pub struct AppStateEntity {
     /// Dashboard manager — loaded from SQLite on startup; mutated via `upsert_dashboard`
     /// and `replace_panels`.
     pub dashboards: DashboardManager,
+
+    /// Set by the Connection Manager after editing a profile that is currently
+    /// connected. The sidebar consumes this on the next `AppStateChanged` to
+    /// surface a "Reconnect now / Later" prompt — the edit itself is already
+    /// persisted regardless of the user's choice.
+    pub pending_edit_reconnect_prompt: Option<Uuid>,
+
+    /// Set by the reconnect prompt action when the user chooses to reconnect.
+    /// Picked up by the sidebar on `AppStateChanged` to drive
+    /// disconnect + connect for that profile.
+    pub pending_reconnect_request: Option<Uuid>,
 }
 
 impl AppStateEntity {
@@ -85,6 +96,8 @@ impl AppStateEntity {
             settings_window: None,
             saved_charts,
             dashboards,
+            pending_edit_reconnect_prompt: None,
+            pending_reconnect_request: None,
         }
     }
 
@@ -107,6 +120,8 @@ impl AppStateEntity {
             settings_window: None,
             saved_charts,
             dashboards,
+            pending_edit_reconnect_prompt: None,
+            pending_reconnect_request: None,
         }
     }
 }

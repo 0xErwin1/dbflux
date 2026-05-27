@@ -23,7 +23,7 @@ impl DataDocument {
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut handle = PaneHandle::new_chart(
             id,
             DocumentKind::Data,
             // render
@@ -138,6 +138,15 @@ impl DataDocument {
                     cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
                 })
             },
-        )
+        );
+
+        handle.mark_inspector_closed = Some({
+            let e = entity.clone();
+            Box::new(move |cx| {
+                e.update(cx, |d, cx| d.mark_inspector_closed(cx));
+            })
+        });
+
+        handle
     }
 }

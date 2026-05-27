@@ -21,6 +21,10 @@ pub enum DocumentEvent {
         title: gpui::SharedString,
         content: gpui::AnyView,
     },
+    /// Request to hide the workspace inspector rail without losing the
+    /// document's cached inspector state (e.g. when switching away from a
+    /// tab whose inspector should reappear on return).
+    CloseInspector,
     /// User requested "Chart this query" from a data document's context menu.
     ChartThisQuery {
         query: String,

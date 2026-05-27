@@ -3,7 +3,10 @@
 //! `WorkspaceInspector` is a persistent right-edge panel that renders arbitrary
 //! `AnyView` content supplied by the event chain originating from
 //! `DataGridPanel::open_row_inspector`.  The workspace owns this entity for
-//! its entire lifetime; the inspector stays open across tab switches.
+//! its entire lifetime; per-tab visibility is driven by `OpenInspector` /
+//! `CloseInspector` events the active document emits on `set_active_tab`,
+//! so the rail follows the active tab instead of bleeding stale content
+//! across tab switches.
 //!
 //! # Resize
 //!
@@ -104,6 +107,23 @@ impl WorkspaceInspector {
         self.content = Some(content);
         self.title = title;
         self.is_open = true;
+        cx.notify();
+    }
+
+    /// Hide the rail without forgetting its content or emitting `Closed`.
+    ///
+    /// Used by per-tab visibility: when the user switches to a tab that has
+    /// no inspector, the rail collapses but the previously-active tab's
+    /// `inspector_row` state is left intact so the rail reappears on
+    /// switch-back. Explicit user dismissal goes through `close` instead.
+    pub fn hide(&mut self, cx: &mut Context<Self>) {
+        if !self.is_open {
+            return;
+        }
+        self.is_open = false;
+        self.is_resizing = false;
+        self.resize_start_x = None;
+        self.resize_start_width = None;
         cx.notify();
     }
 

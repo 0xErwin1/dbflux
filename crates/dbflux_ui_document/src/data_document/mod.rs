@@ -143,6 +143,9 @@ impl DataDocument {
                     content: content.clone(),
                 });
             }
+            DataGridEvent::CloseInspector => {
+                cx.emit(DocumentEvent::CloseInspector);
+            }
             DataGridEvent::ChartThisQuery {
                 query,
                 connection_id,
@@ -201,7 +204,15 @@ impl DataDocument {
 
     pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
         self.data_grid
-            .update(cx, |grid, _cx| grid.set_active_tab(active));
+            .update(cx, |grid, cx| grid.set_active_tab(active, cx));
+    }
+
+    /// Drop the cached row-inspector state in response to the user dismissing
+    /// the workspace inspector rail. Called from the `PaneHandle` closure
+    /// installed in `into_pane`.
+    pub fn mark_inspector_closed(&mut self, cx: &mut Context<Self>) {
+        self.data_grid
+            .update(cx, |grid, cx| grid.clear_inspector_state(cx));
     }
 
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {

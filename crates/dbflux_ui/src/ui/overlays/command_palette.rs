@@ -332,6 +332,18 @@ impl PaletteSection {
             PaletteItem::Script { .. } => Self::Scripts,
         }
     }
+
+    /// Visual ordering key. Must mirror `section_order` in `render` so that
+    /// keyboard navigation walks the list in the same order the user sees it.
+    fn sort_order(self) -> u8 {
+        match self {
+            Self::Connections => 0,
+            Self::Commands => 1,
+            Self::Charts => 2,
+            Self::Tables => 3,
+            Self::Scripts => 4,
+        }
+    }
 }
 
 /// Render row produced by section grouping.
@@ -570,6 +582,7 @@ impl CommandPalette {
                 .enumerate()
                 .map(|(index, _)| FilteredItem { index, score: 0 })
                 .collect();
+            self.sort_filtered_by_section();
         }
 
         cx.notify();
@@ -595,7 +608,7 @@ impl CommandPalette {
                 .map(|(index, _)| FilteredItem { index, score: 0 })
                 .collect();
         } else {
-            let mut scored: Vec<FilteredItem> = self
+            self.filtered = self
                 .items
                 .iter()
                 .enumerate()
@@ -606,21 +619,31 @@ impl CommandPalette {
                         .map(|score| FilteredItem { index, score })
                 })
                 .collect();
-
-            scored.sort_by(|a, b| {
-                b.score.cmp(&a.score).then_with(|| {
-                    self.items[a.index]
-                        .type_priority()
-                        .cmp(&self.items[b.index].type_priority())
-                })
-            });
-
-            self.filtered = scored;
         }
+
+        self.sort_filtered_by_section();
 
         self.selected_index = 0;
         self.scroll_offset = 0;
         cx.notify();
+    }
+
+    /// Sort `self.filtered` so its index order matches the visual section
+    /// order produced by the renderer. Within a section, items are ordered by
+    /// fuzzy-match score (desc) and then by `type_priority` as a tiebreaker.
+    /// Keeping these in sync ensures up/down keyboard navigation walks the
+    /// list in the order the user sees it instead of jumping across sections.
+    fn sort_filtered_by_section(&mut self) {
+        self.filtered.sort_by(|a, b| {
+            let item_a = &self.items[a.index];
+            let item_b = &self.items[b.index];
+            let sec_a = PaletteSection::for_item(item_a).sort_order();
+            let sec_b = PaletteSection::for_item(item_b).sort_order();
+            sec_a
+                .cmp(&sec_b)
+                .then_with(|| b.score.cmp(&a.score))
+                .then_with(|| item_a.type_priority().cmp(&item_b.type_priority()))
+        });
     }
 
     pub fn select_next(&mut self, cx: &mut Context<Self>) {

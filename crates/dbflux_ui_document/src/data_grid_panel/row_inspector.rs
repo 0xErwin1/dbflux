@@ -111,14 +111,17 @@ fn render_row_entry(
         .py(Spacing::XS)
         .border_b_1()
         .border_color(theme.border.opacity(0.5))
-        // Column name (left)
+        // Column name (left). flex_1 + flex_basis(140) makes the name column
+        // share extra horizontal space with the value column as the inspector
+        // rail is resized, instead of staying frozen at a fixed 120px.
         .child(
             div()
                 .flex()
-                .flex_shrink_0()
                 .items_center()
                 .gap_1()
-                .w(px(120.0))
+                .flex_1()
+                .flex_basis(px(140.0))
+                .min_w(px(80.0))
                 .overflow_hidden()
                 .when(cell.is_primary_key, |d| {
                     d.child(
@@ -136,16 +139,22 @@ fn render_row_entry(
                 })
                 .child(
                     div()
+                        .min_w_0()
                         .overflow_hidden()
+                        .whitespace_nowrap()
                         .text_ellipsis()
                         .child(Text::caption(cell.name.clone()).color(theme.muted_foreground)),
                 ),
         )
-        // Value (right)
+        // Value (right). Slightly larger flex_basis so the value gets more
+        // initial room than the name, but both grow together on rail resize.
         .child(
             div()
                 .flex_1()
+                .flex_basis(px(220.0))
+                .min_w(px(60.0))
                 .overflow_hidden()
+                .whitespace_nowrap()
                 .text_ellipsis()
                 .when(is_null, |d| d.italic())
                 .child(Text::caption(value_text).color(if is_null {
@@ -355,9 +364,22 @@ fn render_meta_row(
         .flex()
         .items_center()
         .justify_between()
-        .gap(Spacing::XS)
-        .child(Text::caption(label.to_string()).color(theme.muted_foreground))
-        .child(Text::caption(value.to_string()).color(theme.foreground))
+        .gap(Spacing::SM)
+        .child(
+            div()
+                .flex_shrink_0()
+                .child(Text::caption(label.to_string()).color(theme.muted_foreground)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_right()
+                .child(Text::caption(value.to_string()).color(theme.foreground)),
+        )
 }
 
 // ---------------------------------------------------------------------------

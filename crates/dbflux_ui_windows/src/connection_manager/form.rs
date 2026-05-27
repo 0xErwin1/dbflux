@@ -554,6 +554,15 @@ impl ConnectionManagerWindow {
 
             if is_edit {
                 state.update_profile(profile);
+
+                // If the edited profile is currently connected, surface a
+                // reconnect prompt — the sidebar consumes this flag on the
+                // next AppStateChanged and shows a toast with the choice.
+                // The profile change itself is already persisted; only the
+                // live session needs the explicit reconnect to pick it up.
+                if state.connections().contains_key(&saved_profile_id) {
+                    state.pending_edit_reconnect_prompt = Some(saved_profile_id);
+                }
             } else {
                 state.add_profile_in_folder(profile, self.target_folder_id);
             }
