@@ -63,6 +63,18 @@ pub enum FormFieldKind {
         #[serde(default)]
         allow_freeform: bool,
     },
+    /// A dropdown that references another `AuthProfile`. The UI populates
+    /// options by listing AuthProfiles whose `provider_id` equals
+    /// `provider_id`. The stored value is the referenced profile's UUID.
+    ///
+    /// When `expand_auth_profile_refs` runs, it follows this reference and
+    /// merges the referenced profile's fields into the consumer profile so
+    /// downstream code (login, validation, dynamic options) sees a single
+    /// flat field map.
+    AuthProfileRef {
+        /// Filter: only AuthProfiles with this `provider_id` are shown.
+        provider_id: String,
+    },
 }
 
 /// Definition of a single form field.
@@ -81,6 +93,12 @@ pub struct FormFieldDef {
     pub enabled_when_checked: Option<String>,
     /// Field is enabled only when this checkbox field is unchecked.
     pub enabled_when_unchecked: Option<String>,
+    /// Field is disabled whenever the named field has a non-empty value.
+    /// Used for fields whose value is supplied by an `AuthProfileRef`
+    /// expansion (e.g. `sso_start_url` disabled when `sso_session_ref` is
+    /// set), so the user sees the inherited value cannot be edited inline.
+    #[serde(default)]
+    pub disabled_when_field_set: Option<String>,
     /// Optional hint displayed below the input (FontSizes::XS, muted_foreground).
     #[serde(default)]
     pub help: Option<String>,
@@ -124,6 +142,7 @@ pub fn field(id: &str, label: &str, kind: FormFieldKind, placeholder: &str) -> F
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
+        disabled_when_field_set: None,
         help: None,
     }
 }

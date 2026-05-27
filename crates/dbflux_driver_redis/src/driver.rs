@@ -401,6 +401,7 @@ impl DbDriver for RedisDriver {
                                 default_value: "100".into(),
                                 enabled_when_checked: None,
                                 enabled_when_unchecked: None,
+                                disabled_when_field_set: None,
                                 help: None,
                             },
                             FormFieldDef {
@@ -412,6 +413,7 @@ impl DbDriver for RedisDriver {
                                 default_value: "50".into(),
                                 enabled_when_checked: None,
                                 enabled_when_unchecked: None,
+                                disabled_when_field_set: None,
                                 help: None,
                             },
                         ],
@@ -427,6 +429,7 @@ impl DbDriver for RedisDriver {
                             default_value: "false".into(),
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
                             help: None,
                         }],
                     },

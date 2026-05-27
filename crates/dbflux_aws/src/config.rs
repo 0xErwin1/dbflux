@@ -20,6 +20,21 @@ pub struct AwsProfileInfo {
     pub sso_region: Option<String>,
     pub sso_account_id: Option<String>,
     pub sso_role_name: Option<String>,
+    /// Name of the `[sso-session <name>]` section this profile references, if
+    /// the profile uses the indirection form (`sso_session = <name>`) instead
+    /// of inline `sso_start_url` keys. Empty for sso-session sections.
+    pub sso_session: Option<String>,
+    /// `true` when this entry represents an `[sso-session <name>]` section
+    /// rather than a `[profile <name>]` section. SSO session entries are
+    /// emitted by the parser so that `sso_session = <name>` references can be
+    /// resolved to the actual `sso_start_url`.
+    pub is_sso_session: bool,
+}
+
+#[derive(Debug, Clone)]
+enum SectionKind {
+    Profile(String),
+    SsoSession(String),
 }
 
 #[derive(Debug, Default)]
@@ -83,7 +98,7 @@ pub fn config_file_path() -> PathBuf {
 /// Malformed sections are skipped with a warning.
 pub fn parse_aws_config_str(contents: &str) -> Vec<AwsProfileInfo> {
     let mut profiles = Vec::new();
-    let mut current_section: Option<String> = None;
+    let mut current_section: Option<SectionKind> = None;
     let mut current_keys: HashMap<String, String> = HashMap::new();
 
     for line in contents.lines() {
@@ -97,7 +112,7 @@ pub fn parse_aws_config_str(contents: &str) -> Vec<AwsProfileInfo> {
             flush_section(&current_section, &current_keys, &mut profiles);
 
             let header = &trimmed[1..trimmed.len() - 1].trim();
-            current_section = parse_section_name(header);
+            current_section = parse_section_kind(header);
             current_keys.clear();
             continue;
         }
@@ -112,9 +127,9 @@ pub fn parse_aws_config_str(contents: &str) -> Vec<AwsProfileInfo> {
     profiles
 }
 
-fn parse_section_name(header: &str) -> Option<String> {
+fn parse_section_kind(header: &str) -> Option<SectionKind> {
     if header.eq_ignore_ascii_case("default") {
-        return Some("default".to_string());
+        return Some(SectionKind::Profile("default".to_string()));
     }
 
     if let Some(name) = header.strip_prefix("profile") {
@@ -123,10 +138,18 @@ fn parse_section_name(header: &str) -> Option<String> {
             log::warn!("Skipping AWS config section with empty profile name");
             return None;
         }
-        return Some(name.to_string());
+        return Some(SectionKind::Profile(name.to_string()));
     }
 
-    // Skip non-profile sections like [sso-session ...]
+    if let Some(name) = header.strip_prefix("sso-session") {
+        let name = name.trim();
+        if name.is_empty() {
+            log::warn!("Skipping AWS config section with empty sso-session name");
+            return None;
+        }
+        return Some(SectionKind::SsoSession(name.to_string()));
+    }
+
     None
 }
 
@@ -144,29 +167,38 @@ fn parse_key_value(line: &str) -> Option<(String, String)> {
 }
 
 fn flush_section(
-    section_name: &Option<String>,
+    section: &Option<SectionKind>,
     keys: &HashMap<String, String>,
     profiles: &mut Vec<AwsProfileInfo>,
 ) {
-    let Some(name) = section_name else {
+    let Some(section) = section else {
         return;
     };
 
-    let is_sso = keys.contains_key("sso_start_url") || keys.contains_key("sso_session");
+    let (name, is_sso_session) = match section {
+        SectionKind::Profile(name) => (name.clone(), false),
+        SectionKind::SsoSession(name) => (name.clone(), true),
+    };
+
+    let is_sso =
+        is_sso_session || keys.contains_key("sso_start_url") || keys.contains_key("sso_session");
     let sso_start_url = keys.get("sso_start_url").cloned();
     let sso_region = keys.get("sso_region").cloned();
     let sso_account_id = keys.get("sso_account_id").cloned();
     let sso_role_name = keys.get("sso_role_name").cloned();
+    let sso_session = keys.get("sso_session").cloned();
     let region = keys.get("region").cloned();
 
     profiles.push(AwsProfileInfo {
-        name: name.clone(),
+        name,
         region,
         is_sso,
         sso_start_url,
         sso_region,
         sso_account_id,
         sso_role_name,
+        sso_session,
+        is_sso_session,
     });
 }
 
@@ -597,7 +629,7 @@ region = ap-southeast-1
 [profile ]
 region = us-east-1
 
-[sso-session my-session]
+[sso-session ]
 sso_start_url = https://example.com
 
 [profile valid]
@@ -606,6 +638,40 @@ region = eu-west-1
         let profiles = parse_aws_config_str(config);
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, "valid");
+    }
+
+    #[test]
+    fn sso_session_section_is_emitted() {
+        let config = r#"
+[sso-session my-session]
+sso_start_url = https://example.awsapps.com/start/
+sso_region = us-east-1
+sso_registration_scopes = sso:account:access
+
+[profile prod]
+sso_session = my-session
+sso_account_id = 111122223333
+sso_role_name = AdminAccess
+region = us-east-1
+"#;
+        let profiles = parse_aws_config_str(config);
+        assert_eq!(profiles.len(), 2);
+
+        let session = profiles.iter().find(|p| p.is_sso_session).unwrap();
+        assert_eq!(session.name, "my-session");
+        assert_eq!(
+            session.sso_start_url.as_deref(),
+            Some("https://example.awsapps.com/start/")
+        );
+
+        let profile = profiles
+            .iter()
+            .find(|p| !p.is_sso_session && p.name == "prod")
+            .unwrap();
+        assert!(profile.is_sso);
+        assert!(profile.sso_start_url.is_none());
+        assert_eq!(profile.sso_session.as_deref(), Some("my-session"));
+        assert_eq!(profile.sso_account_id.as_deref(), Some("111122223333"));
     }
 
     #[test]
