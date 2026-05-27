@@ -32,7 +32,7 @@ use super::configure_popover;
 use super::{DASHBOARD_GRID_COLUMNS, DASHBOARD_ROW_PX, DashboardDocument, DashboardPanelSlot};
 use dbflux_components::composites::render_menu_overlay;
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::surface_card;
+use dbflux_components::primitives::{Text, surface_card};
 use gpui::prelude::*;
 use gpui::{Bounds, Context, IntoElement, KeyDownEvent, Pixels, Window, deferred, div, px};
 use gpui_component::ActiveTheme;
@@ -115,14 +115,22 @@ impl Render for DashboardDocument {
                     .into_any_element(),
             );
         } else {
+            // Per-frame collapse view: indices to skip + row shifts so panels
+            // below collapsed sections close the gap.
+            let (hidden_slots, row_shifts) = self.collapse_view();
+
             for (slot_idx, slot) in self.panel_slots.iter().enumerate() {
+                if hidden_slots.contains(&slot_idx) {
+                    continue;
+                }
                 let panel_index = slot_idx as u32;
+                let row_shift = row_shifts.get(slot_idx).copied().unwrap_or(0);
                 let grid_pos = slot.grid_pos();
 
                 // Effective rectangle: while a drag-resize or drag-to-move is in
                 // progress on this panel, render the working ghost dimensions
                 // and the working column/row.
-                let (eff_col, eff_row, eff_w, eff_h) = if let Some(rs) = self
+                let (eff_col, base_row, eff_w, eff_h) = if let Some(rs) = self
                     .drag_resize
                     .as_ref()
                     .filter(|rs| rs.panel_index == panel_index)
@@ -145,6 +153,7 @@ impl Render for DashboardDocument {
                         grid_pos.grid_height,
                     )
                 };
+                let eff_row = base_row.saturating_sub(row_shift);
 
                 // Build the title string for this panel.
                 let panel_title = match slot {
@@ -261,15 +270,23 @@ impl Render for DashboardDocument {
                     .into_any_element(),
                     DashboardPanelSlot::Divider { markdown, .. } => {
                         let label = divider_label(markdown);
+                        let is_collapsed = self.is_divider_collapsed(panel_index);
+                        let on_toggle =
+                            cx.listener(move |this, _: &gpui::ClickEvent, _window, cx| {
+                                this.toggle_divider_collapse(panel_index, cx);
+                            });
+                        let chevron = if is_collapsed { "▸" } else { "▾" };
                         div()
                             .id(("dashboard-divider", panel_index))
                             .size_full()
                             .flex()
                             .items_center()
+                            .gap_2()
                             .px_3()
-                            .text_lg()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(label)
+                            .cursor_pointer()
+                            .on_click(on_toggle)
+                            .child(Text::heading(chevron))
+                            .child(Text::heading(label))
                             .into_any_element()
                     }
                 };
@@ -413,15 +430,23 @@ impl Render for DashboardDocument {
             )
         });
 
-        // Grid container height: cover every panel's (row + height), plus a
+        // Grid container height: cover every visible panel's effective
+        // (row + height) after applying the collapse-reflow shift, plus a
         // little headroom while dragging so a moved ghost extending past the
-        // bottom still fits inside the container.
+        // bottom still fits inside the container. Hidden panels do not
+        // contribute so the scroll area shrinks when sections are folded.
+        let (collapse_hidden, collapse_shifts) = self.collapse_view();
         let max_row_end = self
             .panel_slots
             .iter()
-            .map(|s| {
+            .enumerate()
+            .filter(|(i, _)| !collapse_hidden.contains(i))
+            .map(|(i, s)| {
                 let p = s.grid_pos();
-                p.grid_row.saturating_add(p.grid_height)
+                let shift = collapse_shifts.get(i).copied().unwrap_or(0);
+                p.grid_row
+                    .saturating_sub(shift)
+                    .saturating_add(p.grid_height)
             })
             .max()
             .unwrap_or(0);
@@ -544,7 +569,12 @@ impl Render for DashboardDocument {
                     .id("dashboard-scroll-region")
                     .flex_1()
                     .overflow_y_scrollbar()
-                    .child(grid_container),
+                    // Bottom slack so the last row of panels clears the
+                    // resizable Tasks-panel splitter that lives just below
+                    // the workspace document area. Without this, scrolling
+                    // to the end leaves the final row's bottom edge flush
+                    // with — and partially hidden behind — the Tasks bar.
+                    .child(div().child(grid_container).pb(px(24.0))), // guardrail-allow: bespoke bottom slack to clear the Tasks-panel splitter
             )
             .when(drag_active_global, |el| {
                 el.on_mouse_move(on_global_mouse_move)

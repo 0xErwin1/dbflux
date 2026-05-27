@@ -2063,6 +2063,7 @@ impl Workspace {
 
                     let chart_kind = match view {
                         dbflux_core::MetricView::SingleValue => ChartKind::Number,
+                        dbflux_core::MetricView::StackedArea => ChartKind::Area,
                         dbflux_core::MetricView::TimeSeries => ChartKind::Line,
                     };
 
@@ -2076,7 +2077,10 @@ impl Workspace {
                         },
                         series: Vec::new(),
                         legend_visible: false,
-                        decimation_threshold: 10_000,
+                        // Dashboard panels are small (~240 px wide); 500
+                        // LTTB points already saturate the pixel grid and
+                        // keep paint cheap when many panels are visible.
+                        decimation_threshold: 500,
                         binding: BindingSpec::default(),
                         track_source_indices: false,
                         y_scale: YScale::Linear,

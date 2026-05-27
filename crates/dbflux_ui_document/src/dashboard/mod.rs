@@ -27,7 +27,7 @@ use gpui::prelude::*;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Pixels, Point, Subscription, Task, Window,
 };
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -325,6 +325,13 @@ pub struct DashboardDocument {
     /// `None` means no popover is shown.
     pub(crate) pending_configure_panel_index: Option<usize>,
 
+    /// Indices of `Divider` panel slots the user has folded shut. Chart panels
+    /// positioned between a collapsed divider's `grid_row` and the next
+    /// divider's `grid_row` (or the end of the dashboard) are skipped at render
+    /// time. In-memory only — not persisted on the dashboard row, so toggling
+    /// is local to the open tab.
+    pub(crate) collapsed_divider_indices: HashSet<u32>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -501,6 +508,7 @@ impl DashboardDocument {
             _refresh_timer: None,
             refresh_dropdown,
             pending_configure_panel_index: None,
+            collapsed_divider_indices: HashSet::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -687,6 +695,81 @@ impl DashboardDocument {
     /// Returns `true` when the dashboard is in edit mode.
     pub fn is_edit_mode(&self) -> bool {
         matches!(self.mode, DashboardMode::Edit)
+    }
+
+    /// Toggle whether a divider section is folded shut. Panels positioned
+    /// between this divider's `grid_row` and the next divider's `grid_row`
+    /// (or the bottom of the dashboard) are skipped while collapsed.
+    pub fn toggle_divider_collapse(&mut self, divider_index: u32, cx: &mut Context<Self>) {
+        if !self.collapsed_divider_indices.remove(&divider_index) {
+            self.collapsed_divider_indices.insert(divider_index);
+        }
+        cx.notify();
+    }
+
+    /// Compute the per-frame collapse view: which slots are hidden, and how
+    /// many rows each remaining slot must shift up to close the gap left by
+    /// collapsed sections above it. Returns `(hidden, row_shift_by_slot)`.
+    ///
+    /// A section spans rows `[divider.grid_row .. next_divider.grid_row)`,
+    /// where the next divider is the one with the smallest `grid_row` strictly
+    /// greater than the current divider's row (or `u32::MAX` when none). When
+    /// the section is collapsed:
+    /// - Chart/orphan panels inside it are added to `hidden`.
+    /// - Panels at rows `>= next_divider.grid_row` shift up by the section's
+    ///   payload height (`next_row - current_row - divider_grid_height`) so
+    ///   the dashboard reflows without leaving empty bands.
+    ///
+    /// Row shifts compose across multiple collapsed sections.
+    pub(crate) fn collapse_view(&self) -> (HashSet<usize>, Vec<u32>) {
+        let mut shifts = vec![0u32; self.panel_slots.len()];
+
+        if self.collapsed_divider_indices.is_empty() {
+            return (HashSet::new(), shifts);
+        }
+
+        let mut dividers: Vec<(usize, u32, u32)> = self
+            .panel_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, slot)| match slot {
+                DashboardPanelSlot::Divider { grid_pos, .. } => {
+                    Some((idx, grid_pos.grid_row, grid_pos.grid_height))
+                }
+                _ => None,
+            })
+            .collect();
+        dividers.sort_by_key(|(_, row, _)| *row);
+
+        let mut hidden = HashSet::new();
+        for (i, (slot_idx, row_start, divider_height)) in dividers.iter().enumerate() {
+            if !self.collapsed_divider_indices.contains(&(*slot_idx as u32)) {
+                continue;
+            }
+            let row_end = dividers
+                .get(i + 1)
+                .map(|(_, r, _)| *r)
+                .unwrap_or(u32::MAX);
+            let payload_height = row_end.saturating_sub(*row_start + *divider_height);
+
+            for (other_idx, slot) in self.panel_slots.iter().enumerate() {
+                let pos = slot.grid_pos();
+                let is_divider = matches!(slot, DashboardPanelSlot::Divider { .. });
+
+                if !is_divider && pos.grid_row >= *row_start && pos.grid_row < row_end {
+                    hidden.insert(other_idx);
+                } else if pos.grid_row >= row_end {
+                    shifts[other_idx] = shifts[other_idx].saturating_add(payload_height);
+                }
+            }
+        }
+
+        (hidden, shifts)
+    }
+
+    /// Returns whether the divider at `slot_index` is currently collapsed.
+    pub(crate) fn is_divider_collapsed(&self, slot_index: u32) -> bool {
+        self.collapsed_divider_indices.contains(&slot_index)
     }
 
     /// Toggle the edit/view mode and notify.

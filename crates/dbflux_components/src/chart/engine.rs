@@ -72,7 +72,12 @@ fn theme_chart_color(theme: &gpui_component::theme::Theme, slot: u8) -> Hsla {
 /// Pre-computed, immutable chart data stored after `build`. Render only reads this.
 pub(crate) struct RenderModel {
     /// Decimated (x, y) pairs per series — in data space (f64, f64).
-    pub decimated: Vec<Vec<(f64, f64)>>,
+    ///
+    /// Wrapped in `Rc` so the render path can hand the data to multiple paint
+    /// closures (canvas paint + canvas prepaint) per frame with O(1) clones
+    /// instead of cloning a `Vec<Vec<(f64, f64)>>` for every panel on every
+    /// dashboard repaint.
+    pub decimated: Rc<Vec<Vec<(f64, f64)>>>,
     /// Raw color-slot indices per series (theme-resolved at render time).
     pub palette_slots: Vec<u8>,
     /// X-axis tick labels rendered below the plot area.
@@ -364,7 +369,7 @@ impl ChartView {
             .collect();
 
         let render_model = RenderModel {
-            decimated,
+            decimated: Rc::new(decimated),
             palette_slots,
             x_ticks,
             y_ticks,

@@ -137,10 +137,18 @@ fn parse_metric_widget(
         .unwrap_or("Average")
         .to_string();
 
-    // CloudWatch's `properties.view` selects the rendering style. Anything
-    // other than the two documented values falls back to TimeSeries.
+    // CloudWatch's `properties.view` selects the rendering style. The
+    // companion `properties.stacked` flag turns a `timeSeries` widget into a
+    // filled stacked area; without it the widget renders as plain line
+    // series. Anything other than the two documented values falls back to
+    // TimeSeries.
+    let stacked = props
+        .get("stacked")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let view = match props.get("view").and_then(|v| v.as_str()) {
         Some("singleValue") => MetricView::SingleValue,
+        _ if stacked => MetricView::StackedArea,
         _ => MetricView::TimeSeries,
     };
 

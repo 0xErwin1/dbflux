@@ -46,12 +46,15 @@ pub enum WidgetImportKind {
 
 /// Rendering preference for a metric widget.
 ///
-/// `TimeSeries` produces a line chart; `SingleValue` produces a Number/single
-/// stat chart. CloudWatch's `properties.view` field maps directly:
-/// `"timeSeries"` (default) → `TimeSeries`, `"singleValue"` → `SingleValue`.
+/// Maps from CloudWatch's `properties.view` (and the companion
+/// `properties.stacked` flag for time-series widgets):
+/// - `"timeSeries"` + `stacked: false` (default) → `TimeSeries` (line chart)
+/// - `"timeSeries"` + `stacked: true`             → `StackedArea` (filled area)
+/// - `"singleValue"`                              → `SingleValue` (number tile)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricView {
     TimeSeries,
+    StackedArea,
     SingleValue,
 }
 

@@ -607,10 +607,38 @@ impl Sidebar {
                         chart_id: c.id,
                     }
                     .to_string(),
-                    c.name.clone(),
+                    Self::saved_chart_display_label(&c),
                 )
             })
             .collect()
+    }
+
+    /// Resolve a non-empty label for a saved chart even when its `name` is
+    /// blank — protects the sidebar from rendering invisible rows for charts
+    /// imported before the title-fallback fix or for any future code path
+    /// that persists an empty name.
+    ///
+    /// Order: persisted name -> joined distinct metric names (for Metric
+    /// sources) -> "Untitled chart".
+    fn saved_chart_display_label(chart: &dbflux_components::SavedChart) -> String {
+        if !chart.name.trim().is_empty() {
+            return chart.name.clone();
+        }
+
+        if let dbflux_components::SavedChartSource::Metric { series } = &chart.source
+            && !series.is_empty()
+        {
+            let mut names: Vec<&str> =
+                series.iter().map(|s| s.metric_name.as_str()).collect();
+            names.sort_unstable();
+            names.dedup();
+            let joined = names.join(", ");
+            if !joined.is_empty() {
+                return joined;
+            }
+        }
+
+        "Untitled chart".to_string()
     }
 
     pub(super) fn count_visible_entries(items: &[TreeItem]) -> usize {
