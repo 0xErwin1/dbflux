@@ -1827,12 +1827,23 @@ impl Workspace {
         };
 
         // Build panel slots from persisted panels.
-        let panels: Vec<dbflux_ui_base::DashboardPanel> = self
-            .app_state
-            .read(cx)
-            .dashboards
-            .panels_for_dashboard(dashboard_id)
-            .to_vec();
+        // Dedup panels by saved_chart_id when reading the persisted set.
+        // Past bugs could persist two rows pointing to the same saved chart
+        // (creating visible duplicates with identical data); this guard
+        // keeps an already-affected dashboard usable without forcing the
+        // user to delete and re-create panels manually.
+        let panels: Vec<dbflux_ui_base::DashboardPanel> = {
+            let raw = self
+                .app_state
+                .read(cx)
+                .dashboards
+                .panels_for_dashboard(dashboard_id)
+                .to_vec();
+            let mut seen: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
+            raw.into_iter()
+                .filter(|p| seen.insert(p.saved_chart_id))
+                .collect()
+        };
 
         let app_state = self.app_state.clone();
         let doc = cx.new(|cx| {
@@ -2823,8 +2834,55 @@ impl Workspace {
         use dbflux_components::chart::{
             AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
         };
-        use dbflux_components::saved_chart::SavedChart;
+        use dbflux_components::saved_chart::{SavedChart, SavedChartSource};
         use dbflux_ui_base::DashboardPanelDraft;
+
+        // Reject the request if this dashboard already has a panel pointing
+        // to a chart with the same metric identity. Each on_create call mints
+        // a fresh saved_chart UUID, so without this guard a second "Create
+        // panel" for the same metric produces a visually duplicate panel
+        // (same namespace + metric + dimensions + period + statistic =
+        // identical data, different UUID).
+        let already_present = {
+            let app_state = self.app_state.read(cx);
+            let existing_panel_charts: Vec<uuid::Uuid> = app_state
+                .dashboards
+                .panels_for_dashboard(dashboard_id)
+                .iter()
+                .map(|p| p.saved_chart_id)
+                .collect();
+            app_state.saved_charts.all_charts().iter().any(|chart| {
+                if !existing_panel_charts.contains(&chart.id) {
+                    return false;
+                }
+                match &chart.source {
+                    SavedChartSource::Metric {
+                        namespace: ns,
+                        metric_name: mn,
+                        dimensions: dims,
+                        period_seconds: per,
+                        statistic: stat,
+                        ..
+                    } => {
+                        ns == &namespace
+                            && mn == &metric_name
+                            && dims == &dimensions
+                            && *per == period_seconds
+                            && stat == &statistic
+                    }
+                    _ => false,
+                }
+            })
+        };
+
+        if already_present {
+            Toast::error(format!(
+                "A panel for {namespace}/{metric_name} is already in this dashboard"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
+            return;
+        }
 
         let placeholder_spec = ChartSpec {
             kind: ChartKind::Line,

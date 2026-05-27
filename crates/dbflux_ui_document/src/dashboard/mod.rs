@@ -1380,7 +1380,7 @@ impl DashboardDocument {
         // Loaded panels may report `None` if the chart was never saved (a
         // safety net — Loaded slots in a dashboard always come from saved
         // charts, but the type permits None).
-        let existing_chart_ids: std::collections::HashSet<Uuid> = self
+        let mut existing_chart_ids: std::collections::HashSet<Uuid> = self
             .panel_slots
             .iter()
             .filter_map(|slot| match slot {
@@ -1391,7 +1391,12 @@ impl DashboardDocument {
 
         let mut appended = 0usize;
         for panel in persisted_panels.iter() {
-            if existing_chart_ids.contains(&panel.saved_chart_id) {
+            // Skip both existing slots and any persisted-panel duplicates we
+            // already pushed in this loop. The latter guard is what prevents
+            // a stale "two rows for the same saved_chart_id" persisted state
+            // from materialising as two visible panels — that bug surfaced
+            // when the user reported "Se estan duplicando los panels".
+            if !existing_chart_ids.insert(panel.saved_chart_id) {
                 continue;
             }
 
