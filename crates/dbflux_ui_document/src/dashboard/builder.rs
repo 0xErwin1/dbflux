@@ -279,11 +279,9 @@ pub(super) fn dashboard_toolbar(
                 return;
             }
             if let Some(doc) = weak.upgrade() {
-                doc.update(app, |this, cx| {
-                    match this.drift_status() {
-                        super::sync_pill::DriftCheckOutcome::Drifted => this.open_drift_diff(cx),
-                        _ => this.trigger_drift_check(cx),
-                    }
+                doc.update(app, |this, cx| match this.drift_status() {
+                    super::sync_pill::DriftCheckOutcome::Drifted => this.open_drift_diff(cx),
+                    _ => this.trigger_drift_check(cx),
                 });
             }
         };

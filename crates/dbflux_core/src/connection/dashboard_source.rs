@@ -214,10 +214,7 @@ pub fn reconcile(
     diff
 }
 
-fn structurally_compatible(
-    panel: &LocalPanelSnapshot,
-    widget: &UpstreamWidgetSnapshot,
-) -> bool {
+fn structurally_compatible(panel: &LocalPanelSnapshot, widget: &UpstreamWidgetSnapshot) -> bool {
     let panel_is_divider = panel.panel_kind == "divider";
     let widget_is_text = widget.widget_kind == "text";
 
@@ -507,7 +504,10 @@ mod tests {
 
         let body_v1 = serde_json::to_string(&upstream_v1).unwrap();
         let hash_v1 = content_hash(&body_v1).expect("hash v1");
-        assert!(hash_v1.starts_with("v1:"), "content hash must carry v1 prefix");
+        assert!(
+            hash_v1.starts_with("v1:"),
+            "content hash must carry v1 prefix"
+        );
 
         let widgets_v1 = upstream_v1["widgets"].as_array().unwrap();
         let w0_hash = widget_hash(&widgets_v1[0]);

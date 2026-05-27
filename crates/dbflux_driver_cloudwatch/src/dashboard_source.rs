@@ -82,8 +82,7 @@ impl CloudWatchApi for RealCloudWatchDashboardApi {
                     let Some(name) = entry.dashboard_name else {
                         continue;
                     };
-                    let last_modified =
-                        entry.last_modified.map(|dt| dt.to_string());
+                    let last_modified = entry.last_modified.map(|dt| dt.to_string());
                     out.push(DashboardListEntry {
                         name,
                         last_modified,
@@ -213,14 +212,18 @@ mod tests {
         async fn get_dashboard_body(&self, name: &str) -> Result<String, DbError> {
             *self.last_name.lock().unwrap() = Some(name.to_string());
             if self.fail_get {
-                return Err(DbError::QueryFailed("simulated GetDashboard failure".into()));
+                return Err(DbError::QueryFailed(
+                    "simulated GetDashboard failure".into(),
+                ));
             }
             Ok(self.body.clone())
         }
 
         async fn list_dashboards(&self) -> Result<Vec<DashboardListEntry>, DbError> {
             if self.fail_list {
-                return Err(DbError::QueryFailed("simulated ListDashboards failure".into()));
+                return Err(DbError::QueryFailed(
+                    "simulated ListDashboards failure".into(),
+                ));
             }
             Ok(self.list.clone())
         }
@@ -245,11 +248,8 @@ mod tests {
     #[tokio::test]
     async fn fetch_dashboard_returns_remote_with_v1_hash() {
         let api = Box::new(StubApi::fixed(body()));
-        let src = CloudWatchDashboardSource::new(
-            api,
-            Some("123456789012".into()),
-            "us-east-1".into(),
-        );
+        let src =
+            CloudWatchDashboardSource::new(api, Some("123456789012".into()), "us-east-1".into());
 
         let remote = src.fetch_dashboard("prod-overview").await.expect("ok");
         assert_eq!(remote.name, "prod-overview");
@@ -303,16 +303,16 @@ mod tests {
                 last_modified: None,
             },
         ];
-        let src = CloudWatchDashboardSource::new(
-            Box::new(api),
-            Some("123".into()),
-            "us-east-1".into(),
-        );
+        let src =
+            CloudWatchDashboardSource::new(Box::new(api), Some("123".into()), "us-east-1".into());
 
         let refs = src.list_dashboards().await.unwrap();
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].name, "a");
-        assert_eq!(refs[0].last_modified.as_deref(), Some("2026-05-01T00:00:00Z"));
+        assert_eq!(
+            refs[0].last_modified.as_deref(),
+            Some("2026-05-01T00:00:00Z")
+        );
         assert_eq!(refs[1].name, "b");
         assert!(refs[1].last_modified.is_none());
     }

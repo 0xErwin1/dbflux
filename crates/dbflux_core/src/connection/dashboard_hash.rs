@@ -115,8 +115,7 @@ fn is_default_legend(value: &Value) -> bool {
             if map.is_empty() {
                 return true;
             }
-            map.len() == 1
-                && map.get("position").map(|v| v.as_str()) == Some(Some("bottom"))
+            map.len() == 1 && map.get("position").map(|v| v.as_str()) == Some(Some("bottom"))
         }
         Value::Null => true,
         _ => false,
@@ -164,36 +163,50 @@ mod tests {
     fn empty_annotations_dropped() {
         let with_empty = r#"{"widgets":[{"properties":{"annotations":{}}}]}"#;
         let without = r#"{"widgets":[{"properties":{}}]}"#;
-        assert_eq!(content_hash(with_empty).unwrap(), content_hash(without).unwrap());
+        assert_eq!(
+            content_hash(with_empty).unwrap(),
+            content_hash(without).unwrap()
+        );
     }
 
     #[test]
     fn empty_annotations_array_dropped() {
         let with_empty = r#"{"properties":{"annotations":[]}}"#;
         let without = r#"{"properties":{}}"#;
-        assert_eq!(content_hash(with_empty).unwrap(), content_hash(without).unwrap());
+        assert_eq!(
+            content_hash(with_empty).unwrap(),
+            content_hash(without).unwrap()
+        );
     }
 
     #[test]
     fn default_legend_dropped() {
         let with_default = r#"{"properties":{"legend":{"position":"bottom"}}}"#;
         let without = r#"{"properties":{}}"#;
-        assert_eq!(content_hash(with_default).unwrap(), content_hash(without).unwrap());
+        assert_eq!(
+            content_hash(with_default).unwrap(),
+            content_hash(without).unwrap()
+        );
     }
 
     #[test]
     fn non_default_legend_kept() {
         let custom = r#"{"properties":{"legend":{"position":"right"}}}"#;
         let without = r#"{"properties":{}}"#;
-        assert_ne!(content_hash(custom).unwrap(), content_hash(without).unwrap());
+        assert_ne!(
+            content_hash(custom).unwrap(),
+            content_hash(without).unwrap()
+        );
     }
 
     #[test]
     fn nonempty_annotations_kept() {
-        let with_data =
-            r#"{"properties":{"annotations":{"horizontal":[{"value":42}]}}}"#;
+        let with_data = r#"{"properties":{"annotations":{"horizontal":[{"value":42}]}}}"#;
         let without = r#"{"properties":{}}"#;
-        assert_ne!(content_hash(with_data).unwrap(), content_hash(without).unwrap());
+        assert_ne!(
+            content_hash(with_data).unwrap(),
+            content_hash(without).unwrap()
+        );
     }
 
     #[test]

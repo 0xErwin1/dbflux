@@ -17,9 +17,9 @@ use dbflux_core::{
     DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery,
     EventRecord, EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext,
     FormFieldKind, FormSection, FormTab, FormValues, Icon, MetricCatalog, MetricQuerySeries,
-    QueryLanguage,
-    QueryRequest, QueryResult, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot,
-    SourceContextSpec, SourceQueryMode, TableInfo, ValidationResult, Value, field, field_required,
+    QueryLanguage, QueryRequest, QueryResult, SchemaFeatures, SchemaLoadingStrategy,
+    SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo, ValidationResult, Value, field,
+    field_required,
 };
 
 use crate::dashboard_import::CloudWatchDashboardImporter;
@@ -1246,7 +1246,8 @@ fn metric_data_output_to_multi_series_result(
     // Build per-series timestamp_s -> value maps, indexed by the response id
     // (e.g. "m0", "m1"). Series that returned no data still produce an empty
     // column so the output column count matches `series.len()` exactly.
-    let mut series_maps: Vec<HashMap<i64, f64>> = (0..series.len()).map(|_| HashMap::new()).collect();
+    let mut series_maps: Vec<HashMap<i64, f64>> =
+        (0..series.len()).map(|_| HashMap::new()).collect();
 
     for result in results {
         let id = result.id().unwrap_or("");
@@ -1266,10 +1267,7 @@ fn metric_data_output_to_multi_series_result(
         }
     }
 
-    let mut all_timestamps: Vec<i64> = series_maps
-        .iter()
-        .flat_map(|m| m.keys().copied())
-        .collect();
+    let mut all_timestamps: Vec<i64> = series_maps.iter().flat_map(|m| m.keys().copied()).collect();
     all_timestamps.sort_unstable();
     all_timestamps.dedup();
 
@@ -1582,7 +1580,9 @@ mod tests {
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
     use aws_sdk_cloudwatch::types::MetricDataResult;
-    use dbflux_core::{ColumnKind, DbConfig, DbDriver, DriverCapabilities, MetricQuerySeries, Value};
+    use dbflux_core::{
+        ColumnKind, DbConfig, DbDriver, DriverCapabilities, MetricQuerySeries, Value,
+    };
 
     fn series(namespace: &str, metric_name: &str) -> MetricQuerySeries {
         MetricQuerySeries {
@@ -1753,15 +1753,9 @@ mod tests {
     #[test]
     fn multi_series_disambiguates_by_dimension() {
         let mut s_primary = series("AWS/RDS", "CPUUtilization");
-        s_primary.dimensions = vec![(
-            "DBInstanceIdentifier".to_string(),
-            "primary-db".to_string(),
-        )];
+        s_primary.dimensions = vec![("DBInstanceIdentifier".to_string(), "primary-db".to_string())];
         let mut s_replica = series("AWS/RDS", "CPUUtilization");
-        s_replica.dimensions = vec![(
-            "DBInstanceIdentifier".to_string(),
-            "replica-db".to_string(),
-        )];
+        s_replica.dimensions = vec![("DBInstanceIdentifier".to_string(), "replica-db".to_string())];
 
         let output = GetMetricDataOutput::builder().build();
         let qr = metric_data_output_to_multi_series_result(&output, &[s_primary, s_replica]);

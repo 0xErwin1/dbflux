@@ -2074,17 +2074,15 @@ impl Workspace {
             name.clone()
         };
 
-        let existing_dashboard_id: Option<uuid::Uuid> = match (
-            source_account_id.as_deref(),
-            source_home_region.as_deref(),
-        ) {
-            (Some(account_id), Some(_)) => self
-                .app_state
-                .read(cx)
-                .dashboards
-                .cloudwatch_dashboard_id(account_id, &dashboard_name),
-            _ => None,
-        };
+        let existing_dashboard_id: Option<uuid::Uuid> =
+            match (source_account_id.as_deref(), source_home_region.as_deref()) {
+                (Some(account_id), Some(_)) => self
+                    .app_state
+                    .read(cx)
+                    .dashboards
+                    .cloudwatch_dashboard_id(account_id, &dashboard_name),
+                _ => None,
+            };
 
         let is_cloudwatch_link = source_home_region.is_some();
         let sync_identity = DashboardSyncIdentity {

@@ -798,7 +798,10 @@ mod tests {
         let conn = Arc::new(Mutex::new(conn));
         let repo = DashboardsRepository::new(Arc::clone(&conn));
         let rows = repo.list().expect("list");
-        let row = rows.iter().find(|r| r.name == "Legacy").expect("legacy row");
+        let row = rows
+            .iter()
+            .find(|r| r.name == "Legacy")
+            .expect("legacy row");
         assert_eq!(row.source_kind, "local");
         assert!(row.source_account_id.is_none());
         assert!(row.source_content_hash.is_none());

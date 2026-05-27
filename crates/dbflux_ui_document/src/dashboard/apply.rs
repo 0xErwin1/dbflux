@@ -145,4 +145,3 @@ pub fn snapshot_id(dashboard_id: uuid::Uuid, panel_index: u32) -> String {
 // Unit tests live in `tests/dashboard_sync.rs` (integration test crate) so
 // the lib-test crate's macro-expansion recursion budget is not inflated; see
 // lib.rs `recursion_limit` note for context.
-

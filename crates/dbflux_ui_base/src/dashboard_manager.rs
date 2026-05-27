@@ -321,11 +321,9 @@ fn panel_to_dto(panel: &DashboardPanel) -> DashboardPanelDto {
         DashboardPanelKind::Chart { saved_chart_id } => {
             ("chart".to_string(), saved_chart_id.to_string(), None)
         }
-        DashboardPanelKind::Divider { markdown } => (
-            "divider".to_string(),
-            String::new(),
-            Some(markdown.clone()),
-        ),
+        DashboardPanelKind::Divider { markdown } => {
+            ("divider".to_string(), String::new(), Some(markdown.clone()))
+        }
     };
 
     DashboardPanelDto {
@@ -563,11 +561,7 @@ impl DashboardManager {
     /// `account_id` and upstream `dashboard_name`. Used by the import path to
     /// decide whether to replace an existing row in place (R1.5 idempotent
     /// re-import) or insert a new one.
-    pub fn cloudwatch_dashboard_id(
-        &self,
-        account_id: &str,
-        dashboard_name: &str,
-    ) -> Option<Uuid> {
+    pub fn cloudwatch_dashboard_id(&self, account_id: &str, dashboard_name: &str) -> Option<Uuid> {
         self.dashboards
             .iter()
             .find(|d| {
@@ -1529,11 +1523,11 @@ mod tests {
         let stored = mgr.dashboard_by_id(id).expect("present in cache");
         assert_eq!(stored.sync.source_kind, DashboardSourceKind::Cloudwatch);
         assert_eq!(stored.sync.source_account_id.as_deref(), Some("999"));
-        assert_eq!(stored.sync.source_dashboard_name.as_deref(), Some("my-dash"));
         assert_eq!(
-            stored.sync.source_content_hash.as_deref(),
-            Some("v1:abcd")
+            stored.sync.source_dashboard_name.as_deref(),
+            Some("my-dash")
         );
+        assert_eq!(stored.sync.source_content_hash.as_deref(), Some("v1:abcd"));
     }
 
     /// `cloudwatch_dashboard_id` returns the in-memory match by upstream

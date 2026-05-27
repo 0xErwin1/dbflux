@@ -688,7 +688,10 @@ impl DashboardDocument {
         let task = cx.background_executor().spawn(async move {
             let source = connection.dashboard_source()?;
             let remote = source.fetch_dashboard(&dashboard_name).await.ok()?;
-            Some(drift::classify_drift(stored_hash.as_deref(), &remote.content_hash))
+            Some(drift::classify_drift(
+                stored_hash.as_deref(),
+                &remote.content_hash,
+            ))
         });
 
         cx.spawn(async move |this, cx| {
@@ -747,14 +750,21 @@ impl DashboardDocument {
                 panel_id: apply::snapshot_id(p.dashboard_id, p.panel_index),
                 source_widget_index: p.source_widget_index.map(|i| i as usize),
                 source_widget_hash: p.source_widget_hash.clone(),
-                panel_kind: if p.kind.is_divider() { "divider" } else { "chart" }.into(),
+                panel_kind: if p.kind.is_divider() {
+                    "divider"
+                } else {
+                    "chart"
+                }
+                .into(),
                 has_title_override: p.title_override.is_some(),
                 structural_key: None,
             })
             .collect();
 
         let fetch = cx.background_executor().spawn(async move {
-            let source = connection.dashboard_source().ok_or("driver has no DashboardSource")?;
+            let source = connection
+                .dashboard_source()
+                .ok_or("driver has no DashboardSource")?;
             let remote = source
                 .fetch_dashboard(&dashboard_name)
                 .await
@@ -847,9 +857,10 @@ impl DashboardDocument {
         // — see deviations note in apply-progress).
         let mut structural_updates = std::collections::HashMap::new();
         for m in &diff.modified {
-            if let Some(p) = panels.iter().find(|p| {
-                apply::snapshot_id(p.dashboard_id, p.panel_index) == m.local_panel_id
-            }) {
+            if let Some(p) = panels
+                .iter()
+                .find(|p| apply::snapshot_id(p.dashboard_id, p.panel_index) == m.local_panel_id)
+            {
                 structural_updates.insert(
                     m.local_panel_id.clone(),
                     apply::StructuralUpdate {
@@ -864,9 +875,10 @@ impl DashboardDocument {
             }
         }
         for m in &diff.moved {
-            if let Some(p) = panels.iter().find(|p| {
-                apply::snapshot_id(p.dashboard_id, p.panel_index) == m.local_panel_id
-            }) {
+            if let Some(p) = panels
+                .iter()
+                .find(|p| apply::snapshot_id(p.dashboard_id, p.panel_index) == m.local_panel_id)
+            {
                 structural_updates.insert(
                     m.local_panel_id.clone(),
                     apply::StructuralUpdate {
@@ -1143,10 +1155,7 @@ impl DashboardDocument {
             if !self.collapsed_divider_indices.contains(&(*slot_idx as u32)) {
                 continue;
             }
-            let row_end = dividers
-                .get(i + 1)
-                .map(|(_, r, _)| *r)
-                .unwrap_or(u32::MAX);
+            let row_end = dividers.get(i + 1).map(|(_, r, _)| *r).unwrap_or(u32::MAX);
             let payload_height = row_end.saturating_sub(*row_start + *divider_height);
 
             for (other_idx, slot) in self.panel_slots.iter().enumerate() {

@@ -107,8 +107,11 @@ fn build_body(diff: &DashboardDiff, cx: &mut Context<DashboardDiffModal>) -> Any
             .map(|w| {
                 div()
                     .child(
-                        Text::body(format!("+ Upstream widget #{} ({})", w.index, w.widget_kind))
-                            .into_any_element(),
+                        Text::body(format!(
+                            "+ Upstream widget #{} ({})",
+                            w.index, w.widget_kind
+                        ))
+                        .into_any_element(),
                     )
                     .into_any_element()
             })
@@ -250,7 +253,5 @@ impl Render for DashboardDiffModal {
     }
 }
 
-
 // Unit tests live in `tests/dashboard_sync.rs`; see lib.rs `recursion_limit`
 // note for context.
-

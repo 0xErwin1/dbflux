@@ -94,13 +94,8 @@ fn format_numeric(v: f64) -> String {
     }
 
     if abs >= 1e3 {
-        const SUFFIXES: &[(f64, &str)] = &[
-            (1e15, "P"),
-            (1e12, "T"),
-            (1e9, "G"),
-            (1e6, "M"),
-            (1e3, "K"),
-        ];
+        const SUFFIXES: &[(f64, &str)] =
+            &[(1e15, "P"), (1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "K")];
 
         for &(threshold, suffix) in SUFFIXES {
             if abs >= threshold {

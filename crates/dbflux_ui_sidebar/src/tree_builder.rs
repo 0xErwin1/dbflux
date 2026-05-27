@@ -628,8 +628,7 @@ impl Sidebar {
         if let dbflux_components::SavedChartSource::Metric { series } = &chart.source
             && !series.is_empty()
         {
-            let mut names: Vec<&str> =
-                series.iter().map(|s| s.metric_name.as_str()).collect();
+            let mut names: Vec<&str> = series.iter().map(|s| s.metric_name.as_str()).collect();
             names.sort_unstable();
             names.dedup();
             let joined = names.join(", ");
