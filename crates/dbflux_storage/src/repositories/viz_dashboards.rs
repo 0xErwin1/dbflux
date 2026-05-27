@@ -26,6 +26,21 @@ pub struct DashboardDto {
     pub grid_columns: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Origin discriminator: `"local"` (default) or `"cloudwatch"` (imported).
+    pub source_kind: String,
+    /// AWS account id when imported from CloudWatch; `None` for local or
+    /// detached dashboards whose STS lookup failed.
+    pub source_account_id: Option<String>,
+    /// Home region recorded at import time.
+    pub source_home_region: Option<String>,
+    /// Dashboard name in the upstream system (may differ from `name`).
+    pub source_dashboard_name: Option<String>,
+    /// Canonicalized SHA256 of the upstream JSON body with the `"v1:"` prefix.
+    pub source_content_hash: Option<String>,
+    /// ISO8601 `lastModified` returned by upstream `ListDashboards`.
+    pub source_last_modified: Option<String>,
+    /// ISO8601 timestamp of the last successful drift check or apply.
+    pub source_last_synced_at: Option<String>,
 }
 
 /// Repository for `viz_dashboards`.
@@ -55,7 +70,10 @@ impl DashboardsRepository {
                         shared_time_range_preset,
                         shared_refresh_policy_kind,
                         shared_refresh_policy_interval_secs,
-                        grid_columns, created_at, updated_at
+                        grid_columns, created_at, updated_at,
+                        source_kind, source_account_id, source_home_region,
+                        source_dashboard_name, source_content_hash,
+                        source_last_modified, source_last_synced_at
                  FROM viz_dashboards
                  WHERE profile_id = ?1
                  ORDER BY updated_at DESC",
@@ -87,7 +105,10 @@ impl DashboardsRepository {
                         shared_time_range_preset,
                         shared_refresh_policy_kind,
                         shared_refresh_policy_interval_secs,
-                        grid_columns, created_at, updated_at
+                        grid_columns, created_at, updated_at,
+                        source_kind, source_account_id, source_home_region,
+                        source_dashboard_name, source_content_hash,
+                        source_last_modified, source_last_synced_at
                  FROM viz_dashboards
                  WHERE id = ?1",
             )
@@ -120,8 +141,12 @@ impl DashboardsRepository {
                   shared_time_range_preset,
                   shared_refresh_policy_kind,
                   shared_refresh_policy_interval_secs,
-                  grid_columns, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                  grid_columns, created_at, updated_at,
+                  source_kind, source_account_id, source_home_region,
+                  source_dashboard_name, source_content_hash,
+                  source_last_modified, source_last_synced_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                     ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             rusqlite::params![
                 dashboard.id,
                 dashboard.name,
@@ -133,6 +158,13 @@ impl DashboardsRepository {
                 dashboard.grid_columns,
                 dashboard.created_at,
                 now_ms,
+                dashboard.source_kind,
+                dashboard.source_account_id,
+                dashboard.source_home_region,
+                dashboard.source_dashboard_name,
+                dashboard.source_content_hash,
+                dashboard.source_last_modified,
+                dashboard.source_last_synced_at,
             ],
         )
         .map_err(|source| StorageError::Sqlite {
@@ -203,6 +235,89 @@ impl DashboardsRepository {
         Ok(ids)
     }
 
+    /// Looks up a CloudWatch-imported dashboard by `(account_id, dashboard_name)`.
+    ///
+    /// Returns `None` when no `source_kind = 'cloudwatch'` row matches. Used
+    /// during import to decide whether to update an existing row in place or
+    /// insert a new one (R1.5 idempotent re-import).
+    pub fn find_by_cw_identity(
+        &self,
+        account_id: &str,
+        dashboard_name: &str,
+    ) -> Result<Option<DashboardDto>, StorageError> {
+        let conn = self.conn.lock().map_err(lock_err)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, description, profile_id,
+                        shared_time_range_preset,
+                        shared_refresh_policy_kind,
+                        shared_refresh_policy_interval_secs,
+                        grid_columns, created_at, updated_at,
+                        source_kind, source_account_id, source_home_region,
+                        source_dashboard_name, source_content_hash,
+                        source_last_modified, source_last_synced_at
+                 FROM viz_dashboards
+                 WHERE source_kind = 'cloudwatch'
+                   AND source_account_id = ?1
+                   AND source_dashboard_name = ?2
+                 LIMIT 1",
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
+
+        let mut rows: Vec<DashboardDto> = stmt
+            .query_map([account_id, dashboard_name], map_row)
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(rows.pop())
+    }
+
+    /// Updates the sync-state columns on `viz_dashboards` for a single dashboard.
+    ///
+    /// Touches only `source_content_hash`, `source_last_modified`,
+    /// `source_last_synced_at`, and bumps `updated_at`. All other identity
+    /// columns are preserved.
+    pub fn update_sync_state(
+        &self,
+        dashboard_id: Uuid,
+        content_hash: &str,
+        last_modified: Option<&str>,
+        last_synced_at: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.conn.lock().map_err(lock_err)?;
+        let now_ms = now_millis();
+
+        conn.execute(
+            "UPDATE viz_dashboards
+                SET source_content_hash   = ?1,
+                    source_last_modified  = ?2,
+                    source_last_synced_at = ?3,
+                    updated_at            = ?4
+              WHERE id = ?5",
+            rusqlite::params![
+                content_hash,
+                last_modified,
+                last_synced_at,
+                now_ms,
+                dashboard_id.to_string(),
+            ],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: DB_PATH.into(),
+            source,
+        })?;
+
+        Ok(())
+    }
+
     // Internal helper: runs a full SELECT with a caller-supplied ORDER BY clause.
     fn query_rows<P: rusqlite::Params>(
         conn: &Connection,
@@ -214,7 +329,10 @@ impl DashboardsRepository {
                     shared_time_range_preset,
                     shared_refresh_policy_kind,
                     shared_refresh_policy_interval_secs,
-                    grid_columns, created_at, updated_at
+                    grid_columns, created_at, updated_at,
+                    source_kind, source_account_id, source_home_region,
+                    source_dashboard_name, source_content_hash,
+                    source_last_modified, source_last_synced_at
              FROM viz_dashboards
              {order}"
         );
@@ -249,6 +367,13 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DashboardDto> {
         grid_columns: row.get(7)?,
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
+        source_kind: row.get(10)?,
+        source_account_id: row.get(11)?,
+        source_home_region: row.get(12)?,
+        source_dashboard_name: row.get(13)?,
+        source_content_hash: row.get(14)?,
+        source_last_modified: row.get(15)?,
+        source_last_synced_at: row.get(16)?,
     })
 }
 
@@ -326,6 +451,13 @@ mod tests {
             grid_columns: 2,
             created_at: 1_000_000,
             updated_at: 1_000_000,
+            source_kind: "local".to_string(),
+            source_account_id: None,
+            source_home_region: None,
+            source_dashboard_name: None,
+            source_content_hash: None,
+            source_last_modified: None,
+            source_last_synced_at: None,
         }
     }
 
@@ -394,6 +526,8 @@ mod tests {
                     grid_column: 0,
                     grid_width: 1,
                     grid_height: 1,
+                    source_widget_index: None,
+                    source_widget_hash: None,
                 }],
             )
             .expect("insert panel");
@@ -512,6 +646,8 @@ mod tests {
                     grid_column: 0,
                     grid_width: 1,
                     grid_height: 1,
+                    source_widget_index: None,
+                    source_widget_hash: None,
                 }],
             )
             .expect("insert panel");
@@ -580,6 +716,8 @@ mod tests {
                         grid_column: 0,
                         grid_width: 1,
                         grid_height: 1,
+                        source_widget_index: None,
+                        source_widget_hash: None,
                     },
                     DashboardPanelDto {
                         dashboard_id: dashboard_b.to_string(),
@@ -592,6 +730,8 @@ mod tests {
                         grid_column: 1,
                         grid_width: 1,
                         grid_height: 1,
+                        source_widget_index: None,
+                        source_widget_hash: None,
                     },
                 ],
             )
@@ -633,5 +773,156 @@ mod tests {
             3,
             "should return all three referencing dashboards"
         );
+    }
+
+    // --- Sync identity tests (B2) ---
+
+    #[test]
+    fn legacy_row_reads_back_as_local_with_nulls() {
+        let path = temp_db("sync_legacy");
+        let conn = open_database(&path).expect("open");
+        MigrationRegistry::new().run_all(&conn).expect("migrate");
+
+        let profile_id = insert_profile(&conn);
+
+        // Insert a row WITHOUT the new identity columns -- defaults kick in.
+        conn.execute(
+            "INSERT INTO viz_dashboards
+                 (id, name, profile_id, shared_refresh_policy_kind, grid_columns,
+                  created_at, updated_at)
+             VALUES (?1, 'Legacy', ?2, 'off', 12, 0, 0)",
+            rusqlite::params![Uuid::new_v4().to_string(), profile_id.to_string()],
+        )
+        .unwrap();
+
+        let conn = Arc::new(Mutex::new(conn));
+        let repo = DashboardsRepository::new(Arc::clone(&conn));
+        let rows = repo.list().expect("list");
+        let row = rows.iter().find(|r| r.name == "Legacy").expect("legacy row");
+        assert_eq!(row.source_kind, "local");
+        assert!(row.source_account_id.is_none());
+        assert!(row.source_content_hash.is_none());
+        assert!(row.source_last_synced_at.is_none());
+    }
+
+    #[test]
+    fn upsert_round_trip_with_full_identity_tuple() {
+        let path = temp_db("sync_roundtrip");
+        let conn = open_database(&path).expect("open");
+        MigrationRegistry::new().run_all(&conn).expect("migrate");
+
+        let profile_id = insert_profile(&conn);
+        let conn = Arc::new(Mutex::new(conn));
+        let repo = DashboardsRepository::new(Arc::clone(&conn));
+
+        let id = Uuid::new_v4();
+        let dto = DashboardDto {
+            source_kind: "cloudwatch".into(),
+            source_account_id: Some("123456789012".into()),
+            source_home_region: Some("us-east-1".into()),
+            source_dashboard_name: Some("prod-overview".into()),
+            source_content_hash: Some("v1:abc123".into()),
+            source_last_modified: Some("2026-05-27T10:00:00Z".into()),
+            source_last_synced_at: Some("2026-05-27T10:05:00Z".into()),
+            ..make_dashboard(id, Some(profile_id))
+        };
+
+        repo.upsert(&dto).expect("upsert");
+        let loaded = repo.get_by_id(id).expect("get").expect("exists");
+        assert_eq!(loaded.source_kind, "cloudwatch");
+        assert_eq!(loaded.source_account_id.as_deref(), Some("123456789012"));
+        assert_eq!(loaded.source_home_region.as_deref(), Some("us-east-1"));
+        assert_eq!(
+            loaded.source_dashboard_name.as_deref(),
+            Some("prod-overview")
+        );
+        assert_eq!(loaded.source_content_hash.as_deref(), Some("v1:abc123"));
+        assert_eq!(
+            loaded.source_last_modified.as_deref(),
+            Some("2026-05-27T10:00:00Z")
+        );
+        assert_eq!(
+            loaded.source_last_synced_at.as_deref(),
+            Some("2026-05-27T10:05:00Z")
+        );
+    }
+
+    #[test]
+    fn find_by_cw_identity_returns_existing_row() {
+        let path = temp_db("sync_find_identity");
+        let conn = open_database(&path).expect("open");
+        MigrationRegistry::new().run_all(&conn).expect("migrate");
+
+        let profile_id = insert_profile(&conn);
+        let conn = Arc::new(Mutex::new(conn));
+        let repo = DashboardsRepository::new(Arc::clone(&conn));
+
+        let id = Uuid::new_v4();
+        let dto = DashboardDto {
+            source_kind: "cloudwatch".into(),
+            source_account_id: Some("999".into()),
+            source_dashboard_name: Some("my-dash".into()),
+            ..make_dashboard(id, Some(profile_id))
+        };
+        repo.upsert(&dto).expect("upsert");
+
+        let found = repo
+            .find_by_cw_identity("999", "my-dash")
+            .expect("query")
+            .expect("must find");
+        assert_eq!(found.id, id.to_string());
+
+        let none = repo
+            .find_by_cw_identity("999", "other-dash")
+            .expect("query");
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn update_sync_state_touches_only_sync_columns() {
+        let path = temp_db("sync_update");
+        let conn = open_database(&path).expect("open");
+        MigrationRegistry::new().run_all(&conn).expect("migrate");
+
+        let profile_id = insert_profile(&conn);
+        let conn = Arc::new(Mutex::new(conn));
+        let repo = DashboardsRepository::new(Arc::clone(&conn));
+
+        let id = Uuid::new_v4();
+        let dto = DashboardDto {
+            source_kind: "cloudwatch".into(),
+            source_account_id: Some("a1".into()),
+            source_home_region: Some("us-east-1".into()),
+            source_dashboard_name: Some("d1".into()),
+            source_content_hash: Some("v1:old".into()),
+            source_last_modified: Some("2026-01-01T00:00:00Z".into()),
+            source_last_synced_at: Some("2026-01-01T00:00:00Z".into()),
+            ..make_dashboard(id, Some(profile_id))
+        };
+        repo.upsert(&dto).expect("upsert");
+
+        repo.update_sync_state(
+            id,
+            "v1:new",
+            Some("2026-05-01T00:00:00Z"),
+            "2026-05-27T12:00:00Z",
+        )
+        .expect("update");
+
+        let loaded = repo.get_by_id(id).expect("get").expect("exists");
+        assert_eq!(loaded.source_content_hash.as_deref(), Some("v1:new"));
+        assert_eq!(
+            loaded.source_last_modified.as_deref(),
+            Some("2026-05-01T00:00:00Z")
+        );
+        assert_eq!(
+            loaded.source_last_synced_at.as_deref(),
+            Some("2026-05-27T12:00:00Z")
+        );
+        // Other identity columns must be unchanged.
+        assert_eq!(loaded.source_account_id.as_deref(), Some("a1"));
+        assert_eq!(loaded.source_home_region.as_deref(), Some("us-east-1"));
+        assert_eq!(loaded.source_dashboard_name.as_deref(), Some("d1"));
+        assert_eq!(loaded.source_kind, "cloudwatch");
     }
 }

@@ -1181,6 +1181,8 @@ mod tests {
                     grid_column: 0,
                     grid_width: 1,
                     grid_height: 1,
+                    source_widget_index: None,
+                    source_widget_hash: None,
                 }],
             )
             .expect("insert panel");

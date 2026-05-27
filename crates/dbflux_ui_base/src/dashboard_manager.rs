@@ -172,6 +172,17 @@ fn dashboard_to_dto(dashboard: &Dashboard) -> DashboardDto {
         grid_columns: dashboard.grid_columns as i64,
         created_at: dashboard.created_at.timestamp_millis(),
         updated_at: dashboard.updated_at.timestamp_millis(),
+        // Sync identity is owned by the import / refresh path. Generic
+        // dashboard-to-dto conversion preserves the local default so a
+        // round-trip through this helper does not silently mark a row as
+        // `cloudwatch`-backed.
+        source_kind: "local".to_string(),
+        source_account_id: None,
+        source_home_region: None,
+        source_dashboard_name: None,
+        source_content_hash: None,
+        source_last_modified: None,
+        source_last_synced_at: None,
     }
 }
 
@@ -238,6 +249,11 @@ fn panel_to_dto(panel: &DashboardPanel) -> DashboardPanelDto {
         grid_column: panel.grid_column as i64,
         grid_width: panel.grid_width as i64,
         grid_height: panel.grid_height as i64,
+        // Sync identity is populated by the import / refresh path, not by
+        // generic panel-to-dto conversion. Defaulting to None here keeps
+        // user-added panels in their natural local-only state.
+        source_widget_index: None,
+        source_widget_hash: None,
     }
 }
 
