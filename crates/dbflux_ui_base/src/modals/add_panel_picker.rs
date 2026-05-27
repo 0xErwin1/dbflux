@@ -329,6 +329,19 @@ impl ModalAddPanelPicker {
         cx.notify();
     }
 
+    /// Replace the cached metric namespaces and clear the loading flag.
+    ///
+    /// Called by the host after the background `list_namespaces()` task
+    /// completes (success or failure). Pass an empty vec on failure to keep
+    /// the picker out of the "loading" state.
+    pub fn set_metric_namespaces(&mut self, namespaces: Vec<String>, cx: &mut Context<Self>) {
+        if let Some(req) = self.request.as_mut() {
+            req.metric_namespaces = namespaces;
+            req.metric_namespaces_loading = false;
+            cx.notify();
+        }
+    }
+
     /// Returns the submit button label based on the active tab and state.
     pub fn submit_label(&self) -> String {
         submit_label_for(self.active_tab, self.selected_ids.len())
@@ -684,6 +697,24 @@ impl ModalAddPanelPicker {
             return div().into_any_element();
         };
         let theme = cx.theme();
+
+        // While the host is still fetching the namespace list show a clear
+        // in-modal loading state. Users opened the modal expecting feedback;
+        // an empty list with no signal was previously indistinguishable from
+        // "this connection has no metrics".
+        if request.metric_namespaces_loading {
+            return div()
+                .border_1()
+                .border_color(theme.border)
+                .rounded(Radii::SM)
+                .h(px(260.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(Text::caption("Loading namespaces…"))
+                .into_any_element();
+        }
+
         let filter = self
             .metric_namespace_filter_input
             .read(cx)

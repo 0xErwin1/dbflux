@@ -23,8 +23,11 @@ use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity, DashboardPanel, DashboardPanelDraft};
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Pixels, Point, Subscription, Window};
+use gpui::{
+    App, Context, Entity, EventEmitter, FocusHandle, Pixels, Point, Subscription, Task, Window,
+};
 use std::collections::VecDeque;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Refresh-policy options exposed in the dashboard toolbar `Dropdown`.
@@ -221,6 +224,17 @@ pub struct DashboardDocument {
     /// the user to close and re-open the dashboard.
     pub(crate) pending_panels_sync: bool,
 
+    /// Set in `new` and cleared on the first `render` pass; ensures the
+    /// auto-refresh timer is installed exactly once from the GPUI runtime
+    /// (the constructor can't spawn a task because `cx` is mid-construction).
+    pub(crate) pending_refresh_timer_init: bool,
+
+    /// Background timer that fires every `shared_refresh_policy.duration()` to
+    /// re-execute every loaded panel. Recreated whenever
+    /// `set_shared_refresh_policy` is called with a new interval; dropped
+    /// when the policy is `Off` / `OnOpen`.
+    _refresh_timer: Option<Task<()>>,
+
     /// Refresh-policy `Dropdown` entity rendered in the toolbar. Wired through
     /// `set_shared_refresh_policy` on `DropdownSelectionChanged`.
     pub(crate) refresh_dropdown: Entity<Dropdown>,
@@ -403,6 +417,8 @@ impl DashboardDocument {
             panel_context_menu: None,
             pending_panel_menu_action: None,
             pending_panels_sync: false,
+            pending_refresh_timer_init: true,
+            _refresh_timer: None,
             refresh_dropdown,
             pending_configure_panel_index: None,
             _subscriptions: subscriptions,
@@ -852,13 +868,20 @@ impl DashboardDocument {
 
     /// Update the shared refresh policy.
     ///
-    /// Persists via `DashboardManager::update_shared_refresh_policy` and
-    /// updates the in-memory `shared_refresh_policy` field.
+    /// Persists via `DashboardManager::update_shared_refresh_policy`, updates
+    /// the in-memory `shared_refresh_policy` field, and (re)installs the
+    /// auto-refresh timer so any new interval takes effect immediately.
     pub fn set_shared_refresh_policy(
         &mut self,
         policy: SavedChartRefreshPolicy,
         cx: &mut Context<Self>,
     ) {
+        if self.shared_refresh_policy == policy {
+            // Still ensure the timer is in sync — a no-op when intervals match.
+            self.update_refresh_timer(cx);
+            return;
+        }
+
         let dashboard_id = self.dashboard_id;
         let result = self.app_state.update(cx, |state, _cx| {
             state
@@ -868,8 +891,60 @@ impl DashboardDocument {
 
         if result.is_ok() {
             self.shared_refresh_policy = policy;
+            self.update_refresh_timer(cx);
             cx.notify();
         }
+    }
+
+    /// Returns the auto-refresh interval as a `Duration`, or `None` when the
+    /// policy is `Off`/`OnOpen`.
+    fn refresh_interval(&self) -> Option<Duration> {
+        match self.shared_refresh_policy {
+            SavedChartRefreshPolicy::Interval { every_secs } if every_secs > 0 => {
+                Some(Duration::from_secs(every_secs as u64))
+            }
+            _ => None,
+        }
+    }
+
+    /// Drop any existing auto-refresh task and spawn a new one if the current
+    /// policy has a non-zero interval.
+    ///
+    /// The task wakes on the background executor, re-enters the foreground
+    /// via `cx.update`, and skips a tick when the dashboard is backgrounded
+    /// (re-execution is queued through `pending_refresh_on_focus`).
+    pub(crate) fn update_refresh_timer(&mut self, cx: &mut Context<Self>) {
+        self._refresh_timer = None;
+
+        let Some(duration) = self.refresh_interval() else {
+            return;
+        };
+
+        self._refresh_timer = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(duration).await;
+
+                let still_alive = cx
+                    .update(|cx| {
+                        let Some(entity) = this.upgrade() else {
+                            return false;
+                        };
+                        entity.update(cx, |doc, cx| {
+                            if doc.refresh_interval().is_none() {
+                                return;
+                            }
+                            doc.refresh_all_loaded_panels(cx);
+                        });
+                        true
+                    })
+                    .ok()
+                    .unwrap_or(false);
+
+                if !still_alive {
+                    break;
+                }
+            }
+        }));
     }
 
     /// Returns the shared refresh policy mapped to the canonical

@@ -51,6 +51,13 @@ impl Render for DashboardDocument {
             let _ = self.reconcile_panels_from_manager(window, cx);
         }
 
+        // First render after construction: install the auto-refresh timer
+        // for the persisted policy. The constructor can't spawn a task while
+        // `Self` is still being built.
+        if std::mem::take(&mut self.pending_refresh_timer_init) {
+            self.update_refresh_timer(cx);
+        }
+
         // Drain pending menu action — must run inside `render` because the
         // click callback only has access to `App`, not `Window`.
         if let Some(action_idx) = self.pending_panel_menu_action.take() {

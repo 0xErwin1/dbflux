@@ -2573,40 +2573,31 @@ impl Workspace {
                 Vec::new()
             };
 
-        // Pre-load metric namespaces and detect capability for the active
-        // connection backing this dashboard's profile (driver-agnostic via
-        // DriverCapabilities::METRIC_CATALOG + the metric_catalog() seam).
-        let (profile_id, has_metric_catalog, metric_namespaces) = if let Some(pid) = profile_id_opt
-        {
-            let app_state = self.app_state.read(cx);
-            if let Some(connected) = app_state.connections().get(&pid) {
-                let has = connected
-                    .connection
-                    .metadata()
-                    .capabilities
-                    .contains(DriverCapabilities::METRIC_CATALOG);
-                let namespaces = if has {
-                    match connected.connection.metric_catalog() {
-                        Some(catalog) => match catalog.list_namespaces() {
-                            Ok(list) => list,
-                            Err(e) => {
-                                log::warn!("Failed to load metric namespaces: {e}");
-                                Vec::new()
-                            }
-                        },
-                        None => Vec::new(),
-                    }
+        // Detect the metric-catalog capability synchronously (cheap — reads
+        // the driver metadata bitset). The actual namespace list is fetched
+        // off the foreground thread below so the modal opens immediately.
+        let (profile_id, has_metric_catalog, connection_for_catalog) =
+            if let Some(pid) = profile_id_opt {
+                let app_state = self.app_state.read(cx);
+                if let Some(connected) = app_state.connections().get(&pid) {
+                    let has = connected
+                        .connection
+                        .metadata()
+                        .capabilities
+                        .contains(DriverCapabilities::METRIC_CATALOG);
+                    let connection = has.then(|| connected.connection.clone());
+                    (pid, has, connection)
                 } else {
-                    Vec::new()
-                };
-                (pid, has, namespaces)
+                    (pid, false, None)
+                }
             } else {
-                (pid, false, Vec::new())
-            }
-        } else {
-            (uuid::Uuid::nil(), false, Vec::new())
-        };
+                (uuid::Uuid::nil(), false, None)
+            };
 
+        // Open the picker right away with an empty namespace list and the
+        // loading flag set so the user sees feedback the moment they click
+        // Add. Previously the modal blocked on `list_namespaces()` for a few
+        // seconds with no indication that anything was happening.
         self.modal_add_panel.update(cx, |modal, cx| {
             modal.open(
                 AddPanelRequest {
@@ -2614,44 +2605,128 @@ impl Workspace {
                     profile_id,
                     candidates,
                     has_metric_catalog,
-                    metric_namespaces,
-                    metric_namespaces_loading: false,
+                    metric_namespaces: Vec::new(),
+                    metric_namespaces_loading: has_metric_catalog,
                 },
                 window,
                 cx,
             );
         });
+
+        // Kick off the background namespace fetch and register a Tasks-panel
+        // entry so the user can see the work happening. The Arc<dyn
+        // Connection> is `Send + Sync`, so we can move it into the
+        // background_executor closure and call `metric_catalog()` from there.
+        if let Some(connection) = connection_for_catalog {
+            let (task_id, _cancel) = self.app_state.update(cx, |state, _| {
+                state.start_task_for_profile(
+                    dbflux_core::TaskKind::LoadSchema,
+                    "Loading metric namespaces",
+                    Some(profile_id),
+                )
+            });
+            let modal = self.modal_add_panel.clone();
+            let app_state = self.app_state.clone();
+
+            cx.spawn(async move |_this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        match connection.metric_catalog() {
+                            Some(catalog) => catalog.list_namespaces(),
+                            None => Ok(Vec::new()),
+                        }
+                    })
+                    .await;
+
+                let _ = cx.update(|cx| match result {
+                    Ok(namespaces) => {
+                        app_state.update(cx, |state, _| state.complete_task(task_id));
+                        modal.update(cx, |m, cx| m.set_metric_namespaces(namespaces, cx));
+                    }
+                    Err(err) => {
+                        let msg = err.to_string();
+                        app_state.update(cx, |state, _| state.fail_task(task_id, msg.clone()));
+                        Toast::error(format!("Failed to load metric namespaces: {msg}"))
+                            .meta_right(now_hms())
+                            .push(cx);
+                        modal.update(cx, |m, cx| m.set_metric_namespaces(Vec::new(), cx));
+                    }
+                });
+            })
+            .detach();
+        }
     }
 
     /// Fetch metrics for a namespace and push them back into the modal.
+    ///
+    /// Runs on the background executor with a Tasks-panel entry so the user
+    /// sees the request progressing. Previously this call was synchronous on
+    /// the foreground thread and blocked the UI for several seconds.
     pub(super) fn on_request_metrics_for_namespace(
         &mut self,
         modal: gpui::Entity<dbflux_ui_base::modals::ModalAddPanelPicker>,
         ev: dbflux_ui_base::modals::RequestMetricsForNamespace,
         cx: &mut Context<Self>,
     ) {
-        let metrics = {
-            let app_state = self.app_state.read(cx);
-            match app_state.connections().get(&ev.profile_id) {
-                Some(connected) => match connected.connection.metric_catalog() {
-                    Some(catalog) => match catalog.list_metrics(&ev.namespace, None) {
-                        Ok(page) => page.metrics,
-                        Err(e) => {
-                            Toast::error(format!("Failed to load metrics: {e}"))
-                                .meta_right(now_hms())
-                                .push(cx);
-                            Vec::new()
-                        }
-                    },
-                    None => Vec::new(),
-                },
-                None => Vec::new(),
-            }
+        let connection = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&ev.profile_id)
+            .map(|c| c.connection.clone());
+
+        let Some(connection) = connection else {
+            modal.update(cx, |m, cx| {
+                m.set_metrics_for_namespace(ev.namespace.clone(), Vec::new(), cx);
+            });
+            return;
         };
 
-        modal.update(cx, |m, cx| {
-            m.set_metrics_for_namespace(ev.namespace, metrics, cx);
+        let (task_id, _cancel) = self.app_state.update(cx, |state, _| {
+            state.start_task_for_profile(
+                dbflux_core::TaskKind::LoadSchema,
+                format!("Loading metrics for {}", ev.namespace),
+                Some(ev.profile_id),
+            )
         });
+        let app_state = self.app_state.clone();
+        let namespace = ev.namespace.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let namespace_for_bg = namespace.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    match connection.metric_catalog() {
+                        Some(catalog) => catalog
+                            .list_metrics(&namespace_for_bg, None)
+                            .map(|page| page.metrics),
+                        None => Ok(Vec::new()),
+                    }
+                })
+                .await;
+
+            let _ = cx.update(|cx| match result {
+                Ok(metrics) => {
+                    app_state.update(cx, |state, _| state.complete_task(task_id));
+                    modal.update(cx, |m, cx| {
+                        m.set_metrics_for_namespace(namespace, metrics, cx);
+                    });
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    app_state.update(cx, |state, _| state.fail_task(task_id, msg.clone()));
+                    Toast::error(format!("Failed to load metrics: {msg}"))
+                        .meta_right(now_hms())
+                        .push(cx);
+                    modal.update(cx, |m, cx| {
+                        m.set_metrics_for_namespace(namespace, Vec::new(), cx);
+                    });
+                }
+            });
+        })
+        .detach();
     }
 
     /// Build a new SavedChart from a user-typed query, persist it, and append
