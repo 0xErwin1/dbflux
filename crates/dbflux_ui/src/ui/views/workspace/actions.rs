@@ -1969,10 +1969,28 @@ impl Workspace {
             AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
         };
         use dbflux_components::saved_chart::{MetricSeries, SavedChart, SavedChartRefreshPolicy};
-        use dbflux_ui_base::{Dashboard, DashboardPanel, DashboardPanelKind};
+        use dbflux_ui_base::{
+            Dashboard, DashboardPanel, DashboardPanelKind, DashboardSourceKind,
+            DashboardSyncIdentity,
+        };
 
         // Borrow app_state in a scoped block so the borrow ends before the update below.
-        let import_result: Result<(uuid::Uuid, Vec<dbflux_core::WidgetImportSpec>), String> = {
+        //
+        // The dashboard-source seam is capability-gated through the same
+        // optional accessor pattern as `dashboard_importer()`. When a driver
+        // exposes a `DashboardSource` we capture the upstream identity
+        // (account id + home region) so the imported dashboard can be tracked
+        // for drift. When the seam is absent (non-CW drivers) the import
+        // still works but the resulting dashboard stays detached.
+        let import_result: Result<
+            (
+                uuid::Uuid,
+                Vec<dbflux_core::WidgetImportSpec>,
+                Option<String>,
+                Option<String>,
+            ),
+            String,
+        > = {
             let app_state = self.app_state.read(cx);
 
             let Some(active) = app_state.active_connection() else {
@@ -1996,13 +2014,21 @@ impl Workspace {
                 }
             };
 
+            let (account_id, home_region) = match active.connection.dashboard_source() {
+                Some(src) => (
+                    src.account_id().map(|s| s.to_string()),
+                    Some(src.home_region().to_string()),
+                ),
+                None => (None, None),
+            };
+
             match importer.import(&json) {
-                Ok(specs) => Ok((profile_id, specs)),
+                Ok(specs) => Ok((profile_id, specs, account_id, home_region)),
                 Err(e) => Err(format!("Dashboard import failed: {e}")),
             }
         };
 
-        let (profile_id, specs) = match import_result {
+        let (profile_id, specs, source_account_id, source_home_region) = match import_result {
             Ok(v) => v,
             Err(e) => {
                 Toast::error(e).meta_right(now_hms()).push(cx);
@@ -2010,16 +2036,83 @@ impl Workspace {
             }
         };
 
-        // Build the dashboard domain object.
+        // Compute dashboard- and widget-level hashes. Widget order matters at
+        // the dashboard level (see design §A); per-widget hashes ignore array
+        // position so the reconcile algorithm can detect "moved but unchanged"
+        // entries.
+        let content_hash = match dbflux_core::dashboard_content_hash(&json) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                log::warn!("dashboard import: skipping content hash: {e}");
+                None
+            }
+        };
+
+        let widget_hashes: Vec<Option<String>> =
+            match serde_json::from_str::<serde_json::Value>(&json) {
+                Ok(v) => v
+                    .get("widgets")
+                    .and_then(|w| w.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|w| Some(dbflux_core::dashboard_widget_hash(w)))
+                            .collect()
+                    })
+                    .unwrap_or_else(|| vec![None; specs.len()]),
+                Err(e) => {
+                    log::warn!("dashboard import: skipping widget hashes: {e}");
+                    vec![None; specs.len()]
+                }
+            };
+
+        // Resolve the dashboard id: re-importing an existing CloudWatch
+        // dashboard updates the existing row instead of creating a new one
+        // (R1.5 idempotent re-import).
+        let dashboard_name = if name.trim().is_empty() {
+            "Imported Dashboard".to_string()
+        } else {
+            name.clone()
+        };
+
+        let existing_dashboard_id: Option<uuid::Uuid> = match (
+            source_account_id.as_deref(),
+            source_home_region.as_deref(),
+        ) {
+            (Some(account_id), Some(_)) => self
+                .app_state
+                .read(cx)
+                .dashboards
+                .cloudwatch_dashboard_id(account_id, &dashboard_name),
+            _ => None,
+        };
+
+        let is_cloudwatch_link = source_home_region.is_some();
+        let sync_identity = DashboardSyncIdentity {
+            source_kind: if is_cloudwatch_link {
+                DashboardSourceKind::Cloudwatch
+            } else {
+                DashboardSourceKind::Local
+            },
+            source_account_id: source_account_id.clone(),
+            source_home_region: source_home_region.clone(),
+            source_dashboard_name: if is_cloudwatch_link {
+                Some(dashboard_name.clone())
+            } else {
+                None
+            },
+            source_content_hash: content_hash.clone(),
+            source_last_modified: None,
+            source_last_synced_at: Some(chrono::Utc::now().to_rfc3339()),
+        };
+
+        // Build the dashboard domain object. Re-importing an existing
+        // CloudWatch dashboard reuses the row's id so panels are replaced in
+        // place; new imports allocate a fresh id.
         let now = chrono::Utc::now();
-        let dashboard_id = uuid::Uuid::new_v4();
+        let dashboard_id = existing_dashboard_id.unwrap_or_else(uuid::Uuid::new_v4);
         let dashboard = Dashboard {
             id: dashboard_id,
-            name: if name.trim().is_empty() {
-                "Imported Dashboard".to_string()
-            } else {
-                name
-            },
+            name: dashboard_name.clone(),
             description: None,
             profile_id: Some(profile_id),
             shared_time_range_preset: None,
@@ -2027,6 +2120,7 @@ impl Workspace {
             grid_columns: 12,
             created_at: now,
             updated_at: now,
+            sync: sync_identity,
         };
 
         // Convert each WidgetImportSpec to a SavedChart + DashboardPanel
@@ -2120,6 +2214,12 @@ impl Workspace {
                         grid_column: scaled_col,
                         grid_width: scaled_width,
                         grid_height: scaled_height,
+                        source_widget_index: is_cloudwatch_link.then_some(widget_index as u32),
+                        source_widget_hash: if is_cloudwatch_link {
+                            widget_hashes.get(widget_index).cloned().flatten()
+                        } else {
+                            None
+                        },
                     };
 
                     charts.push(chart);
@@ -2137,6 +2237,12 @@ impl Workspace {
                         grid_column: scaled_col,
                         grid_width: scaled_width,
                         grid_height: scaled_height,
+                        source_widget_index: is_cloudwatch_link.then_some(widget_index as u32),
+                        source_widget_hash: if is_cloudwatch_link {
+                            widget_hashes.get(widget_index).cloned().flatten()
+                        } else {
+                            None
+                        },
                     });
                 }
             }
