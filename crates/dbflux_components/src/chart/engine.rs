@@ -175,25 +175,33 @@ impl ChartView {
 
         let x_is_time = spec.x_axis.kind == AxisKind::Time;
 
+        // Per-row extraction: a row is retained whenever at least ONE series
+        // produced a finite value at that X. Missing per-series values become
+        // `NaN` so downstream filters (`is_finite`) automatically skip them on
+        // each series's render pass — that lets a sparse or fully-empty series
+        // (e.g. a CloudWatch metric that returned no datapoints in the
+        // selected window) coexist with populated siblings instead of forcing
+        // the whole chart to fail with `NoUsableData`.
         for row in &result.rows {
             let x_val = extract_f64(&row[x_col], x_is_time);
             let Some(x) = x_val else { continue };
 
-            let mut all_valid = true;
             let mut y_vals: Vec<f64> = Vec::with_capacity(spec.series.len());
+            let mut any_valid = false;
 
             for s in &spec.series {
                 let col_kind = result.columns[s.column_index].kind;
                 let y_val = extract_f64(&row[s.column_index], col_kind == ColumnKind::Timestamp);
-                if let Some(y) = y_val {
-                    y_vals.push(y);
-                } else {
-                    all_valid = false;
-                    break;
+                match y_val {
+                    Some(y) => {
+                        y_vals.push(y);
+                        any_valid = true;
+                    }
+                    None => y_vals.push(f64::NAN),
                 }
             }
 
-            if all_valid {
+            if any_valid {
                 raw_x.push(x);
                 for (i, y) in y_vals.into_iter().enumerate() {
                     raw_series[i].push(y);
@@ -1046,10 +1054,20 @@ fn effective_x_label_padding(
 }
 
 impl Render for ChartView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    #[allow(refining_impl_trait_reachable)]
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         use crate::chart::spec::ChartKind;
 
         let kind = self.spec.kind;
+
+        // Number charts have no axes/gridlines/series geometry — short-circuit
+        // and render each visible series' latest value as a large stat tile.
+        // Re-using the full chart frame for a single-value display would force
+        // every match arm in this 3k-line function to handle a degenerate
+        // ChartKind that doesn't share its plot/hit-test contract.
+        if matches!(kind, ChartKind::Number) {
+            return render_number_chart(self, cx).into_any_element();
+        }
 
         // Line, Bar, and Scatter all share the same plot frame (axes, gridlines,
         // ticks) and differ only in how each series is painted further below.
@@ -1535,6 +1553,10 @@ impl Render for ChartView {
                                             plot_h,
                                         );
                                     }
+                                    // Unreachable: ChartKind::Number is handled by the
+                                    // early-return branch at the top of `render` and
+                                    // never enters the canvas paint closure.
+                                    ChartKind::Number => {}
                                 }
 
                                 // --- Crosshair and hover dots ---
@@ -1726,12 +1748,115 @@ impl Render for ChartView {
             )
             // Legend row (below canvas)
             .when_some(legend, |d, leg| d.child(leg))
+            .into_any_element()
     }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Render a `ChartKind::Number` view: a single-stat / multi-stat tile grid
+/// where each visible series shows its label and the most recent finite Y
+/// value as large text. No axes, no gridlines, no decimation.
+fn render_number_chart(view: &ChartView, cx: &mut Context<ChartView>) -> impl IntoElement {
+    let chart_colors = ChartColors::for_current(cx);
+
+    let palette: Vec<Hsla> = {
+        let theme = cx.theme();
+        view.render_model
+            .palette_slots
+            .iter()
+            .map(|&slot| theme_chart_color(theme, slot))
+            .collect()
+    };
+
+    let mut tiles: Vec<AnyElement> = Vec::with_capacity(view.spec.series.len());
+
+    for (series_idx, series_spec) in view.spec.series.iter().enumerate() {
+        if view.hidden.contains(&series_idx) {
+            continue;
+        }
+
+        let latest_value = view
+            .render_model
+            .decimated
+            .get(series_idx)
+            .and_then(|pts| pts.iter().rev().find(|(_, y)| y.is_finite()).map(|(_, y)| *y));
+
+        let value_text = match latest_value {
+            Some(v) => format_number_value(v),
+            None => "—".to_string(),
+        };
+
+        let accent = palette.get(series_idx).copied().unwrap_or(chart_colors.value_fg);
+
+        tiles.push(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .flex_1()
+                .p_3()
+                .child(
+                    div()
+                        .text_size(gpui::px(14.0))
+                        .text_color(chart_colors.label_fg)
+                        .child(SharedString::from(series_spec.label.clone())),
+                )
+                .child(
+                    div()
+                        .text_size(gpui::px(40.0))
+                        .text_color(accent)
+                        .child(SharedString::from(value_text)),
+                )
+                .into_any_element(),
+        );
+    }
+
+    if tiles.is_empty() {
+        return div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(chart_colors.label_fg)
+            .child("No data");
+    }
+
+    div()
+        .size_full()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .justify_around()
+        .children(tiles)
+}
+
+/// Format a floating-point value for the Number chart: use up to 4 significant
+/// digits, fall back to scientific notation when the magnitude makes a fixed
+/// representation unreadable.
+fn format_number_value(v: f64) -> String {
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    let abs = v.abs();
+    if !(1e-3..1e9).contains(&abs) {
+        return format!("{:.3e}", v);
+    }
+    if abs >= 100.0 {
+        format!("{:.0}", v)
+    } else if abs >= 10.0 {
+        format!("{:.1}", v)
+    } else if abs >= 1.0 {
+        format!("{:.2}", v)
+    } else {
+        format!("{:.3}", v)
+    }
+}
 
 /// Paint grouped vertical bars for every visible series.
 ///
@@ -2485,12 +2610,52 @@ pub fn format_x_value(x: f64, is_time: bool) -> String {
     }
 }
 
+/// Format a Y readout value for tooltips and hover overlays.
+///
+/// Magnitudes `>= 1e3` collapse to SI suffixes (`K`, `M`, `G`, `T`, `P`) so
+/// the readout matches the axis-tick formatter and dashboards like CloudWatch
+/// (`2.5G`, not `2.500e9`). Very small non-zero magnitudes (`< 1e-3`) keep
+/// scientific notation — SI sub-unit suffixes would clash with axis glyphs.
 pub fn format_y_value(y: f64) -> String {
-    if y.abs() >= 1000.0 || (y != 0.0 && y.abs() < 0.001) {
-        format!("{:.3e}", y)
-    } else {
-        format!("{:.3}", y)
+    if y == 0.0 {
+        return "0.000".to_string();
     }
+    let abs = y.abs();
+
+    if abs < 1e-3 {
+        return format!("{:.3e}", y);
+    }
+
+    if abs >= 1e3 {
+        const SUFFIXES: &[(f64, &str)] = &[
+            (1e15, "P"),
+            (1e12, "T"),
+            (1e9, "G"),
+            (1e6, "M"),
+            (1e3, "K"),
+        ];
+
+        for &(threshold, suffix) in SUFFIXES {
+            if abs >= threshold {
+                let scaled = y / threshold;
+                let abs_scaled = scaled.abs();
+                let formatted = if abs_scaled >= 100.0 {
+                    format!("{:.0}", scaled)
+                } else if abs_scaled >= 10.0 {
+                    format!("{:.1}", scaled)
+                } else {
+                    format!("{:.2}", scaled)
+                };
+                let trimmed = formatted
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string();
+                return format!("{trimmed}{suffix}");
+            }
+        }
+    }
+
+    format!("{:.3}", y)
 }
 
 /// Build the absolute-positioned overlay div that shows the multi-series readout.
@@ -2645,9 +2810,17 @@ mod tests {
     }
 
     #[test]
-    fn format_y_value_uses_scientific_for_large_magnitudes() {
-        assert!(format_y_value(1234.0).contains('e'));
+    fn format_y_value_uses_si_suffix_for_large_magnitudes() {
+        // SI suffixes for values >= 1e3
+        assert_eq!(format_y_value(1234.0), "1.23K");
+        assert_eq!(format_y_value(2_500_000_000.0), "2.5G");
+        assert_eq!(format_y_value(98_790_000_000.0), "98.8G");
+        assert_eq!(format_y_value(4.936e10), "49.4G");
+
+        // Scientific notation kept only for very small magnitudes.
         assert!(format_y_value(0.0001).contains('e'));
+
+        // Pass-through formatting for the readable range.
         assert_eq!(format_y_value(0.0), "0.000");
         assert_eq!(format_y_value(1.5), "1.500");
     }

@@ -8,6 +8,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricDimensionDto {
     pub chart_id: String,
+    pub series_index: i64,
     pub dim_index: i64,
     pub dim_key: String,
     pub dim_value: String,

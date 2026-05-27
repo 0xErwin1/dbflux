@@ -290,20 +290,9 @@ impl ChartDocument {
 
             // Metric sources bypass the query path and construct a MetricSource
             // directly, matching the same path used by `open_metric_chart_from_sidebar`.
-            SavedChartSource::Metric {
-                namespace,
-                metric_name,
-                dimensions,
-                period_seconds,
-                statistic,
-                ..
-            } => {
+            SavedChartSource::Metric { series } => {
                 let source = MetricSource {
-                    namespace: namespace.clone(),
-                    metric_name: metric_name.clone(),
-                    dimensions: dimensions.clone(),
-                    period_s: *period_seconds,
-                    statistic: statistic.clone(),
+                    series: series.clone(),
                 };
 
                 let mut doc = Self::new_with_source(
@@ -415,7 +404,12 @@ impl ChartDocument {
         let initial_metric_identity = data_source
             .as_any()
             .and_then(|a| a.downcast_ref::<dbflux_components::chart::MetricSource>())
-            .map(|src| (src.namespace.clone(), src.metric_name.clone()));
+            .map(|src| {
+                (
+                    src.primary_namespace().to_string(),
+                    src.primary_metric_name().to_string(),
+                )
+            });
 
         Self {
             id: DocumentId::new(),
@@ -965,7 +959,7 @@ impl ChartDocument {
         saved.id = id;
 
         let persist_result = self.app_state.update(cx, |state, _cx| {
-            state.saved_charts.upsert(saved).map_err(|e| {
+            state.saved_charts.upsert(saved).inspect_err(|e| {
                 state.record_storage_failure(
                     dbflux_core::observability::actions::CONFIG_UPDATE,
                     "saved_chart",
@@ -973,7 +967,6 @@ impl ChartDocument {
                     format!("Failed to save chart '{name}'"),
                     e.to_string(),
                 );
-                e
             })
         });
 
@@ -1633,13 +1626,13 @@ mod tests {
         use crate::chart::shell::ChartShellEvent;
         use dbflux_components::chart::{ChartDataSource, MetricSource};
 
-        let source = MetricSource {
-            namespace: "AWS/EC2".to_string(),
-            metric_name: "CPUUtilization".to_string(),
-            dimensions: vec![],
-            period_s: 300,
-            statistic: "Average".to_string(),
-        };
+        let source = MetricSource::single(
+            "AWS/EC2".to_string(),
+            "CPUUtilization".to_string(),
+            vec![],
+            300,
+            "Average".to_string(),
+        );
         let event = ChartShellEvent::MetricPickerApplied(Box::new(source));
 
         // Mirror the closure body in `cx.subscribe(&chart_shell, ...)`.
@@ -1656,8 +1649,8 @@ mod tests {
             .and_then(|s| s.as_any())
             .and_then(|a| a.downcast_ref::<MetricSource>())
             .expect("pending_data_source must downcast back to MetricSource");
-        assert_eq!(captured.namespace, "AWS/EC2");
-        assert_eq!(captured.metric_name, "CPUUtilization");
+        assert_eq!(captured.primary_namespace(), "AWS/EC2");
+        assert_eq!(captured.primary_metric_name(), "CPUUtilization");
     }
 
     /// `matches_metric_source` must compare against the initial identity
@@ -1764,13 +1757,13 @@ mod tests {
     fn set_data_source_updates_title_from_source_description() {
         use dbflux_components::chart::MetricSource;
 
-        let source = MetricSource {
-            namespace: "AWS/Lambda".to_string(),
-            metric_name: "Invocations".to_string(),
-            dimensions: vec![],
-            period_s: 300,
-            statistic: "Average".to_string(),
-        };
+        let source = MetricSource::single(
+            "AWS/Lambda".to_string(),
+            "Invocations".to_string(),
+            vec![],
+            300,
+            "Average".to_string(),
+        );
 
         let description = source.describe();
         let title_update = description.display_title();

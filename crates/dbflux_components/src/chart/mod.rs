@@ -31,6 +31,7 @@ pub use data_source::{
 };
 pub use detect::{ChartDetection, detect_chart_columns};
 pub use engine::{ChartBuildError, ChartView, format_x_value, format_y_value};
+pub use legend::legend_element;
 pub use point_inspector::{DataPointRef, SourceRowRef, point_inspector_element};
 pub use spec::{
     AggKind, AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, ManualChartSelection,

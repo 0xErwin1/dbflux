@@ -237,7 +237,9 @@ impl Sidebar {
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
             let is_document_db = schema.is_document();
             let is_time_series_db = schema.is_time_series();
-            let conn_capabilities = connected.connection.metadata().capabilities;
+            let conn_metadata = connected.connection.metadata();
+            let conn_capabilities = conn_metadata.capabilities;
+            let conn_category = conn_metadata.category;
             let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
             let metric_cache = state.metric_catalog_cache().clone();
 
@@ -314,6 +316,7 @@ impl Sidebar {
                                     &connected.table_details,
                                     &connected.collection_children,
                                     conn_capabilities,
+                                    conn_category,
                                     Some(&metric_cache),
                                     metric_fetch_errors,
                                 )
@@ -404,6 +407,7 @@ impl Sidebar {
                                 &connected.table_details,
                                 &connected.collection_children,
                                 conn_capabilities,
+                                conn_category,
                                 Some(&metric_cache),
                                 metric_fetch_errors,
                             )
@@ -721,6 +725,7 @@ impl Sidebar {
         table_details: &HashMap<(String, String), TableInfo>,
         collection_children_cache: &HashMap<(String, String), dbflux_core::CollectionChildrenCache>,
         capabilities: DriverCapabilities,
+        category: dbflux_core::DatabaseCategory,
         metric_catalog_cache: Option<&dbflux_app::MetricCatalogCache>,
         metric_fetch_errors: &HashMap<String, String>,
     ) -> Vec<TreeItem> {
@@ -748,9 +753,9 @@ impl Sidebar {
                         database: database_name.to_string(),
                     }
                     .to_string(),
-                    format!("Collections ({})", db_schema.tables.len()),
+                    format!("{} ({})", category.container_name(), db_schema.tables.len()),
                 )
-                .expanded(true)
+                .expanded(category.default_expand_container())
                 .children(collection_children),
             );
         }
@@ -2076,6 +2081,7 @@ mod tests {
             &Default::default(),
             &Default::default(),
             capabilities,
+            dbflux_core::DatabaseCategory::Document,
             None,
             &Default::default(),
         );
@@ -2116,6 +2122,7 @@ mod tests {
             &Default::default(),
             &Default::default(),
             capabilities,
+            dbflux_core::DatabaseCategory::Document,
             None,
             &Default::default(),
         );

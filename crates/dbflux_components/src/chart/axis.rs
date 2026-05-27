@@ -78,21 +78,54 @@ fn nice_step(raw: f64) -> f64 {
 
 /// Format a numeric value with up to 4 significant figures.
 ///
-/// Uses scientific notation for very large (`>= 1e6`) or very small
-/// (`< 1e-3` and non-zero) magnitudes.
+/// Uses SI suffixes (`K`, `M`, `G`, `T`, `P`) for magnitudes `>= 1e3` so axis
+/// labels read `2.5G` instead of `2.500e9` — matches the conventions of
+/// observability dashboards (CloudWatch, Grafana). Very small non-zero
+/// magnitudes (`< 1e-3`) keep scientific notation since SI sub-unit suffixes
+/// (`m`, `µ`, `n`) collide with axis-label glyphs.
 fn format_numeric(v: f64) -> String {
     if v == 0.0 {
         return "0".to_string();
     }
     let abs = v.abs();
-    if abs >= 1e6 || (abs <= 1e-3 && abs > 0.0) {
-        format!("{:.3e}", v)
-    } else {
-        // Up to 4 significant figures, then strip trailing zeros.
-        let s = format!("{:.4}", v);
-        let s = s.trim_end_matches('0').trim_end_matches('.');
-        s.to_string()
+
+    if abs <= 1e-3 {
+        return format!("{:.3e}", v);
     }
+
+    if abs >= 1e3 {
+        const SUFFIXES: &[(f64, &str)] = &[
+            (1e15, "P"),
+            (1e12, "T"),
+            (1e9, "G"),
+            (1e6, "M"),
+            (1e3, "K"),
+        ];
+
+        for &(threshold, suffix) in SUFFIXES {
+            if abs >= threshold {
+                let scaled = v / threshold;
+                let abs_scaled = scaled.abs();
+                let formatted = if abs_scaled >= 100.0 {
+                    format!("{:.0}", scaled)
+                } else if abs_scaled >= 10.0 {
+                    format!("{:.1}", scaled)
+                } else {
+                    format!("{:.2}", scaled)
+                };
+                let trimmed = formatted
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string();
+                return format!("{trimmed}{suffix}");
+            }
+        }
+    }
+
+    // Up to 4 significant figures, then strip trailing zeros.
+    let s = format!("{:.4}", v);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    s.to_string()
 }
 
 // ---------------------------------------------------------------------------

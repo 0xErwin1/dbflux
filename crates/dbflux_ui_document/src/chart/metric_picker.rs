@@ -272,13 +272,13 @@ impl MetricPickerState {
             _ => vec![],
         };
 
-        MetricSource {
-            namespace: self.selected_namespace.clone(),
-            metric_name: self.selected_metric_name.clone(),
+        MetricSource::single(
+            self.selected_namespace.clone(),
+            self.selected_metric_name.clone(),
             dimensions,
-            period_s: self.period_s,
-            statistic: self.statistic.clone(),
-        }
+            self.period_s,
+            self.statistic.clone(),
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -687,14 +687,14 @@ mod tests {
 
         let source = picker.build_metric_source();
 
-        assert_eq!(source.namespace, "AWS/EC2");
-        assert_eq!(source.metric_name, "CPUUtilization");
+        assert_eq!(source.series[0].namespace, "AWS/EC2");
+        assert_eq!(source.series[0].metric_name, "CPUUtilization");
         assert!(
-            source.dimensions.is_empty(),
+            source.series[0].dimensions.is_empty(),
             "AggregateAll must map to empty dimensions"
         );
-        assert_eq!(source.period_s, 300);
-        assert_eq!(source.statistic, "Average");
+        assert_eq!(source.series[0].period_seconds, 300);
+        assert_eq!(source.series[0].statistic, "Average");
     }
 
     // ---- T-MP-04: build_metric_source with FilterTo ----
@@ -716,7 +716,7 @@ mod tests {
         let source = picker.build_metric_source();
 
         assert_eq!(
-            source.dimensions, dims,
+            source.series[0].dimensions, dims,
             "FilterTo dimensions must be passed through verbatim"
         );
     }
@@ -746,7 +746,7 @@ mod tests {
 
         let source = picker.build_metric_source();
         assert_eq!(
-            source.period_s, 120,
+            source.series[0].period_seconds, 120,
             "Apply must use the typed Custom… value, not the prior preset"
         );
     }
@@ -784,7 +784,7 @@ mod tests {
 
         let source = picker.build_metric_source();
         assert_eq!(
-            source.statistic, "p99.5",
+            source.series[0].statistic, "p99.5",
             "Apply must use the typed Custom… statistic value, not the prior preset"
         );
     }
@@ -797,8 +797,8 @@ mod tests {
     fn build_metric_source_always_succeeds_in_prepopulated_picker() {
         let picker = make_headless_picker("AWS/EC2", "CPUUtilization");
         let source = picker.build_metric_source();
-        assert_eq!(source.namespace, "AWS/EC2");
-        assert_eq!(source.metric_name, "CPUUtilization");
+        assert_eq!(source.series[0].namespace, "AWS/EC2");
+        assert_eq!(source.series[0].metric_name, "CPUUtilization");
     }
 
     // ---- helpers ----
@@ -821,13 +821,13 @@ mod tests {
                 DimensionFilter::FilterTo(dims) => dims.clone(),
                 _ => vec![],
             };
-            MetricSource {
-                namespace: self.selected_namespace.clone(),
-                metric_name: self.selected_metric_name.clone(),
+            MetricSource::single(
+                self.selected_namespace.clone(),
+                self.selected_metric_name.clone(),
                 dimensions,
-                period_s: self.period_s,
-                statistic: self.statistic.clone(),
-            }
+                self.period_s,
+                self.statistic.clone(),
+            )
         }
     }
 

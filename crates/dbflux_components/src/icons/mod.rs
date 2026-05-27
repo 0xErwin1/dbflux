@@ -261,6 +261,7 @@ impl AppIcon {
             ChartKind::Area => Self::ChartArea,
             ChartKind::StackedBar => Self::ChartColumnBig,
             ChartKind::Pie => Self::ChartPie,
+            ChartKind::Number => Self::Sigma,
         }
     }
 

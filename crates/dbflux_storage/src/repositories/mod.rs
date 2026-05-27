@@ -49,4 +49,5 @@ pub mod viz_dashboards;
 pub mod viz_saved_chart_binding_y;
 pub mod viz_saved_chart_series;
 pub mod viz_saved_chart_source_metric_dimensions;
+pub mod viz_saved_chart_source_metric_series;
 pub mod viz_saved_charts;

@@ -268,13 +268,13 @@ impl Workspace {
             return;
         }
 
-        let source = MetricSource {
-            namespace: namespace.clone(),
-            metric_name: metric_name.clone(),
-            dimensions: vec![],
-            period_s: 300,
-            statistic: "Average".to_string(),
-        };
+        let source = MetricSource::single(
+            namespace.clone(),
+            metric_name.clone(),
+            vec![],
+            300,
+            "Average".to_string(),
+        );
 
         let title = format!("{} / {}", namespace, metric_name);
         let ns_clone = namespace.clone();
@@ -1780,8 +1780,14 @@ impl Workspace {
                 .panels_for_dashboard(dashboard_id)
                 .to_vec();
             let mut seen: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
+            // Dividers don't dedup against saved_chart_id (they have none); pass
+            // them through unconditionally. Chart panels dedup on saved_chart_id
+            // so stale "two rows for the same chart" never materialises twice.
             raw.into_iter()
-                .filter(|p| seen.insert(p.saved_chart_id))
+                .filter(|p| match p.saved_chart_id() {
+                    Some(id) => seen.insert(id),
+                    None => true,
+                })
                 .collect()
         };
 
@@ -1852,12 +1858,24 @@ impl Workspace {
                             grid_height: panel.grid_height,
                         };
 
+                        // Divider panels render directly without resolving a chart.
+                        if let dbflux_ui_base::DashboardPanelKind::Divider { markdown } =
+                            &panel.kind
+                        {
+                            return DashboardPanelSlot::Divider {
+                                markdown: markdown.clone(),
+                                grid_pos,
+                            };
+                        }
+
+                        let saved_chart_id = panel.saved_chart_id().unwrap_or_else(uuid::Uuid::nil);
+
                         let chart = app_state
                             .read(cx)
                             .saved_charts
                             .all_charts()
                             .iter()
-                            .find(|c| c.id == panel.saved_chart_id)
+                            .find(|c| c.id == saved_chart_id)
                             .cloned();
 
                         match chart {
@@ -1893,7 +1911,7 @@ impl Workspace {
                                 }
                             }
                             _ => DashboardPanelSlot::Orphan {
-                                saved_chart_id: panel.saved_chart_id,
+                                saved_chart_id,
                                 grid_pos,
                             },
                         }
@@ -1935,10 +1953,11 @@ impl Workspace {
 
     /// Runs the dashboard import flow after the user confirms JSON input.
     ///
-    /// Calls `conn.dashboard_importer()?.import(&json)` to get `PanelImportSpec`
-    /// records, creates a `SavedChart` per panel using `SavedChartSource::Metric`
-    /// with native typed fields, upserts a new `Dashboard` and its panel set, then
-    /// opens the dashboard in a new tab. This method does not inspect `driver_id`.
+    /// Calls `conn.dashboard_importer()?.import(&json)` to get `WidgetImportSpec`
+    /// records, creates one `SavedChart` per metric widget (multi-series), one
+    /// `DashboardPanel { kind: Divider }` per text widget, upserts a new
+    /// `Dashboard` and its panel set, then opens the dashboard in a new tab.
+    /// This method does not inspect `driver_id`.
     pub(super) fn run_dashboard_import(
         &mut self,
         json: String,
@@ -1949,11 +1968,11 @@ impl Workspace {
         use dbflux_components::chart::{
             AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
         };
-        use dbflux_components::saved_chart::{SavedChart, SavedChartRefreshPolicy};
-        use dbflux_ui_base::{Dashboard, DashboardPanel};
+        use dbflux_components::saved_chart::{MetricSeries, SavedChart, SavedChartRefreshPolicy};
+        use dbflux_ui_base::{Dashboard, DashboardPanel, DashboardPanelKind};
 
         // Borrow app_state in a scoped block so the borrow ends before the update below.
-        let import_result: Result<(uuid::Uuid, Vec<dbflux_core::PanelImportSpec>), String> = {
+        let import_result: Result<(uuid::Uuid, Vec<dbflux_core::WidgetImportSpec>), String> = {
             let app_state = self.app_state.read(cx);
 
             let Some(active) = app_state.active_connection() else {
@@ -2010,56 +2029,113 @@ impl Workspace {
             updated_at: now,
         };
 
-        // Convert each PanelImportSpec to a SavedChart + DashboardPanel.
-        // Metric parameters are stored in SavedChartSource::Metric with native
-        // typed fields. On open, from_saved reconstructs a MetricSource directly
-        // so panels can execute immediately without going through the query path.
-        let mut charts: Vec<SavedChart> = Vec::with_capacity(specs.len());
+        // Convert each WidgetImportSpec to a SavedChart + DashboardPanel
+        // (metric widgets) or a divider-only DashboardPanel (text widgets).
+        //
+        // CloudWatch widgets natively live on a 24-column grid; DBFlux dashboards
+        // use 12 columns, so widget `x`/`width` are halved (clamped to ≥1 col).
+        // Each widget becomes ONE panel — multi-series widgets persist all
+        // series inside a single SavedChart instead of subdividing the grid.
+        let mut charts: Vec<SavedChart> = Vec::new();
         let mut panels: Vec<DashboardPanel> = Vec::with_capacity(specs.len());
 
-        for (idx, spec) in specs.iter().enumerate() {
-            let placeholder_spec = ChartSpec {
-                kind: ChartKind::Line,
-                x_axis: AxisSpec {
-                    column_index: 0,
-                    label: String::new(),
-                    kind: AxisKind::Time,
-                    unit: None,
-                },
-                series: Vec::new(),
-                legend_visible: false,
-                decimation_threshold: 10_000,
-                binding: BindingSpec::default(),
-                track_source_indices: false,
-                y_scale: YScale::Linear,
-            };
+        for (widget_index, spec) in specs.iter().enumerate() {
+            let layout = spec.layout;
+            let scaled_col = layout.x / 2;
+            let scaled_width = (layout.width / 2).max(1);
+            let scaled_row = layout.y;
+            let scaled_height = layout.height.max(1);
 
-            let chart = SavedChart::new_metric(
-                spec.title.clone(),
-                profile_id,
-                spec.namespace.clone(),
-                spec.metric_name.clone(),
-                spec.dimensions.clone(),
-                spec.period_seconds,
-                spec.statistic.clone(),
-                spec.region.clone(),
-                placeholder_spec,
-                BindingSpec::default(),
-            );
+            match &spec.kind {
+                dbflux_core::WidgetImportKind::Metric { view, series } => {
+                    let metric_series: Vec<MetricSeries> = series
+                        .iter()
+                        .map(|s| MetricSeries {
+                            namespace: s.namespace.clone(),
+                            metric_name: s.metric_name.clone(),
+                            dimensions: s.dimensions.clone(),
+                            period_seconds: s.period_seconds,
+                            statistic: s.statistic.clone(),
+                            region: s.region.clone(),
+                            label: s.label.clone(),
+                        })
+                        .collect();
 
-            let panel = DashboardPanel {
-                dashboard_id,
-                panel_index: idx as u32,
-                saved_chart_id: chart.id,
-                title_override: None,
-                grid_row: (idx as u32 / 2) * 4,
-                grid_column: (idx as u32 % 2) * 6,
-                grid_width: 6,
-                grid_height: 4,
-            };
+                    let chart_kind = match view {
+                        dbflux_core::MetricView::SingleValue => ChartKind::Number,
+                        dbflux_core::MetricView::TimeSeries => ChartKind::Line,
+                    };
 
-            charts.push(chart);
-            panels.push(panel);
+                    let placeholder_spec = ChartSpec {
+                        kind: chart_kind,
+                        x_axis: AxisSpec {
+                            column_index: 0,
+                            label: String::new(),
+                            kind: AxisKind::Time,
+                            unit: None,
+                        },
+                        series: Vec::new(),
+                        legend_visible: false,
+                        decimation_threshold: 10_000,
+                        binding: BindingSpec::default(),
+                        track_source_indices: false,
+                        y_scale: YScale::Linear,
+                    };
+
+                    // CloudWatch widgets often omit `properties.title`. Fall
+                    // back to the first series' metric_name (joined when many
+                    // distinct metric_names share the panel) so the dashboard
+                    // header is never blank — the panel must always be
+                    // identifiable at a glance.
+                    let chart_name = if spec.title.trim().is_empty() {
+                        let mut names: Vec<&str> =
+                            series.iter().map(|s| s.metric_name.as_str()).collect();
+                        names.sort_unstable();
+                        names.dedup();
+                        names.join(", ")
+                    } else {
+                        spec.title.clone()
+                    };
+
+                    let chart = SavedChart::new_metric(
+                        chart_name,
+                        profile_id,
+                        metric_series,
+                        placeholder_spec,
+                        BindingSpec::default(),
+                    );
+
+                    let panel = DashboardPanel {
+                        dashboard_id,
+                        panel_index: widget_index as u32,
+                        kind: DashboardPanelKind::Chart {
+                            saved_chart_id: chart.id,
+                        },
+                        title_override: None,
+                        grid_row: scaled_row,
+                        grid_column: scaled_col,
+                        grid_width: scaled_width,
+                        grid_height: scaled_height,
+                    };
+
+                    charts.push(chart);
+                    panels.push(panel);
+                }
+                dbflux_core::WidgetImportKind::TextDivider { markdown } => {
+                    panels.push(DashboardPanel {
+                        dashboard_id,
+                        panel_index: widget_index as u32,
+                        kind: DashboardPanelKind::Divider {
+                            markdown: markdown.clone(),
+                        },
+                        title_override: None,
+                        grid_row: scaled_row,
+                        grid_column: scaled_col,
+                        grid_width: scaled_width,
+                        grid_height: scaled_height,
+                    });
+                }
+            }
         }
 
         // Persist charts, dashboard, and panels. Collect the first storage
@@ -2833,26 +2909,25 @@ impl Workspace {
                 .dashboards
                 .panels_for_dashboard(dashboard_id)
                 .iter()
-                .map(|p| p.saved_chart_id)
+                .filter_map(|p| p.saved_chart_id())
                 .collect();
             app_state.saved_charts.all_charts().iter().any(|chart| {
                 if !existing_panel_charts.contains(&chart.id) {
                     return false;
                 }
+                // A single-series metric chart created via this action collides
+                // with another single-series chart whose first series carries
+                // the same (namespace, metric_name, dimensions, period, stat).
+                // Multi-series charts (only ever produced via dashboard import)
+                // never collide with a single-metric create.
                 match &chart.source {
-                    SavedChartSource::Metric {
-                        namespace: ns,
-                        metric_name: mn,
-                        dimensions: dims,
-                        period_seconds: per,
-                        statistic: stat,
-                        ..
-                    } => {
-                        ns == &namespace
-                            && mn == &metric_name
-                            && dims == &dimensions
-                            && *per == period_seconds
-                            && stat == &statistic
+                    SavedChartSource::Metric { series } if series.len() == 1 => {
+                        let s = &series[0];
+                        s.namespace == namespace
+                            && s.metric_name == metric_name
+                            && s.dimensions == dimensions
+                            && s.period_seconds == period_seconds
+                            && s.statistic == statistic
                     }
                     _ => false,
                 }
@@ -2887,12 +2962,15 @@ impl Workspace {
         let chart = SavedChart::new_metric(
             name.clone(),
             profile_id,
-            namespace,
-            metric_name,
-            dimensions,
-            period_seconds,
-            statistic,
-            None,
+            vec![dbflux_components::saved_chart::MetricSeries {
+                namespace,
+                metric_name,
+                dimensions,
+                period_seconds,
+                statistic,
+                region: None,
+                label: None,
+            }],
             placeholder_spec,
             BindingSpec::default(),
         );
@@ -4071,28 +4149,24 @@ mod tests {
     fn sidebar_metric_source_defaults_match_spec() {
         use dbflux_components::chart::MetricSource;
 
-        let source = MetricSource {
-            namespace: "AWS/EC2".to_string(),
-            metric_name: "CPUUtilization".to_string(),
-            dimensions: vec![],
-            period_s: 300,
-            statistic: "Average".to_string(),
-        };
-
-        assert_eq!(source.namespace, "AWS/EC2");
-        assert_eq!(source.metric_name, "CPUUtilization");
-        assert!(
-            source.dimensions.is_empty(),
-            "defaults must have no dimensions"
+        let source = MetricSource::single(
+            "AWS/EC2".to_string(),
+            "CPUUtilization".to_string(),
+            vec![],
+            300,
+            "Average".to_string(),
         );
+
+        assert_eq!(source.series.len(), 1);
+        let s = &source.series[0];
+        assert_eq!(s.namespace, "AWS/EC2");
+        assert_eq!(s.metric_name, "CPUUtilization");
+        assert!(s.dimensions.is_empty(), "defaults must have no dimensions");
         assert_eq!(
-            source.period_s, 300,
+            s.period_seconds, 300,
             "default period must be 300 seconds (5 min)"
         );
-        assert_eq!(
-            source.statistic, "Average",
-            "default statistic must be Average"
-        );
+        assert_eq!(s.statistic, "Average", "default statistic must be Average");
     }
 
     /// G.2 — `test_import_affordance_hidden_without_capability`:

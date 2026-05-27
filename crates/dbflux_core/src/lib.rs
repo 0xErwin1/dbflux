@@ -45,7 +45,7 @@ pub use connection::{
     ConnectionResolutionError, ConnectionTree, ConnectionTreeManager, ConnectionTreeNode,
     ConnectionTreeNodeKind, ConnectionTreeStore, DatabaseConnection, DbConfig, DbKind,
     DetachedProcessHandle, DetachedProcessReceiver, DetachedProcessSender, ExecutionContext,
-    ExecutionSourceContext, FetchCollectionChildrenParams, FetchCollectionChildrenResult,
+    ExecutionSourceContext, FetchCollectionChildrenParams, FetchCollectionChildrenResult, MetricQuerySeries,
     FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
     FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
     FetchSchemaRoutinesParams, FetchSchemaRoutinesResult, FetchSchemaTypesParams,
@@ -67,7 +67,10 @@ pub use connection::{
     DimensionFilter, MetricCatalog, MetricCatalogPage, MetricDescriptor, MetricNamespace,
 };
 
-pub use connection::dashboard_import::{DashboardImporter, PanelImportSpec};
+pub use connection::dashboard_import::{
+    DashboardImporter, ImportedMetricSeries, MetricView, WidgetImportKind, WidgetImportSpec,
+    WidgetLayout,
+};
 
 pub use core::{
     CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,

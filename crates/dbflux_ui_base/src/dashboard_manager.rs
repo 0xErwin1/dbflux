@@ -46,17 +46,62 @@ pub struct DashboardPanelDraft {
     pub saved_chart_id: Uuid,
 }
 
+/// What a `DashboardPanel` displays.
+///
+/// Dashboards mix two kinds of slots: chart slots that reference a stored
+/// `SavedChart`, and divider slots that render a markdown header strip with
+/// no chart, no toolbar, no resize affordance. Storage carries the
+/// discriminator in `panel_kind` plus optional `divider_markdown`; this enum
+/// is the in-memory equivalent.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DashboardPanelKind {
+    /// References a SavedChart via `saved_chart_id`.
+    Chart { saved_chart_id: Uuid },
+    /// Inline markdown divider rendered as a header strip.
+    Divider { markdown: String },
+}
+
+impl DashboardPanelKind {
+    /// Returns the saved-chart id when this panel is a chart slot; `None`
+    /// for dividers. Callers that iterate dashboards looking for chart
+    /// references should use this instead of pattern-matching.
+    pub fn saved_chart_id(&self) -> Option<Uuid> {
+        match self {
+            Self::Chart { saved_chart_id } => Some(*saved_chart_id),
+            Self::Divider { .. } => None,
+        }
+    }
+
+    /// `true` when this panel is a divider; helps render code dispatch with
+    /// `matches!` instead of full pattern-matching when only the variant
+    /// matters.
+    pub fn is_divider(&self) -> bool {
+        matches!(self, Self::Divider { .. })
+    }
+}
+
 /// In-memory domain record for one panel slot in a dashboard.
 #[derive(Debug, Clone)]
 pub struct DashboardPanel {
     pub dashboard_id: Uuid,
     pub panel_index: u32,
-    pub saved_chart_id: Uuid,
+    /// Discriminator: chart slot vs markdown divider. Replaces the previous
+    /// always-a-chart contract.
+    pub kind: DashboardPanelKind,
     pub title_override: Option<String>,
     pub grid_row: u32,
     pub grid_column: u32,
     pub grid_width: u32,
     pub grid_height: u32,
+}
+
+impl DashboardPanel {
+    /// Returns the saved-chart id for chart panels; `None` for dividers.
+    /// Convenience shim that keeps call sites that only want the id one line
+    /// short.
+    pub fn saved_chart_id(&self) -> Option<Uuid> {
+        self.kind.saved_chart_id()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -138,17 +183,30 @@ fn dto_to_panel(dto: DashboardPanelDto) -> Result<DashboardPanel, StorageError> 
         ))
     })?;
 
-    let saved_chart_id = Uuid::parse_str(&dto.saved_chart_id).map_err(|e| {
-        StorageError::Data(format!(
-            "invalid panel saved_chart_id '{}': {e}",
-            dto.saved_chart_id
-        ))
-    })?;
+    let kind = match dto.panel_kind.as_str() {
+        "chart" => {
+            let saved_chart_id = Uuid::parse_str(&dto.saved_chart_id).map_err(|e| {
+                StorageError::Data(format!(
+                    "invalid panel saved_chart_id '{}': {e}",
+                    dto.saved_chart_id
+                ))
+            })?;
+            DashboardPanelKind::Chart { saved_chart_id }
+        }
+        "divider" => DashboardPanelKind::Divider {
+            markdown: dto.divider_markdown.unwrap_or_default(),
+        },
+        other => {
+            return Err(StorageError::Data(format!(
+                "unknown dashboard panel_kind: '{other}'"
+            )));
+        }
+    };
 
     Ok(DashboardPanel {
         dashboard_id,
         panel_index: dto.panel_index as u32,
-        saved_chart_id,
+        kind,
         title_override: dto.title_override,
         grid_row: dto.grid_row as u32,
         grid_column: dto.grid_column as u32,
@@ -158,10 +216,23 @@ fn dto_to_panel(dto: DashboardPanelDto) -> Result<DashboardPanel, StorageError> 
 }
 
 fn panel_to_dto(panel: &DashboardPanel) -> DashboardPanelDto {
+    let (panel_kind, saved_chart_id, divider_markdown) = match &panel.kind {
+        DashboardPanelKind::Chart { saved_chart_id } => {
+            ("chart".to_string(), saved_chart_id.to_string(), None)
+        }
+        DashboardPanelKind::Divider { markdown } => (
+            "divider".to_string(),
+            String::new(),
+            Some(markdown.clone()),
+        ),
+    };
+
     DashboardPanelDto {
         dashboard_id: panel.dashboard_id.to_string(),
         panel_index: panel.panel_index as i64,
-        saved_chart_id: panel.saved_chart_id.to_string(),
+        panel_kind,
+        saved_chart_id,
+        divider_markdown,
         title_override: panel.title_override.clone(),
         grid_row: panel.grid_row as i64,
         grid_column: panel.grid_column as i64,
@@ -503,7 +574,7 @@ impl DashboardManager {
             .map(|(i, p)| DashboardPanel {
                 dashboard_id: new_id,
                 panel_index: i as u32,
-                saved_chart_id: p.saved_chart_id,
+                kind: p.kind.clone(),
                 title_override: p.title_override.clone(),
                 grid_row: p.grid_row,
                 grid_column: p.grid_column,
@@ -604,7 +675,9 @@ impl DashboardManager {
             new_panels.push(DashboardPanel {
                 dashboard_id,
                 panel_index,
-                saved_chart_id: draft.saved_chart_id,
+                kind: DashboardPanelKind::Chart {
+                    saved_chart_id: draft.saved_chart_id,
+                },
                 title_override: None,
                 grid_row: next_row,
                 grid_column: 0,
@@ -874,7 +947,7 @@ mod tests {
         DashboardPanel {
             dashboard_id,
             panel_index: index,
-            saved_chart_id,
+            kind: DashboardPanelKind::Chart { saved_chart_id },
             title_override: None,
             grid_row: 0,
             grid_column: index * 4,
@@ -1091,9 +1164,9 @@ mod tests {
         let panels = mgr.panels_for_dashboard(dash_id);
         assert_eq!(panels.len(), 2);
         assert_eq!(panels[0].panel_index, 0);
-        assert_eq!(panels[0].saved_chart_id, chart_a);
+        assert_eq!(panels[0].saved_chart_id(), Some(chart_a));
         assert_eq!(panels[1].panel_index, 1);
-        assert_eq!(panels[1].saved_chart_id, chart_c);
+        assert_eq!(panels[1].saved_chart_id(), Some(chart_c));
     }
 
     #[test]
@@ -1133,9 +1206,9 @@ mod tests {
         mgr.reorder_panels(dash_id, 0, 2).unwrap();
 
         let panels = mgr.panels_for_dashboard(dash_id);
-        assert_eq!(panels[0].saved_chart_id, chart_b);
-        assert_eq!(panels[1].saved_chart_id, chart_c);
-        assert_eq!(panels[2].saved_chart_id, chart_a);
+        assert_eq!(panels[0].saved_chart_id(), Some(chart_b));
+        assert_eq!(panels[1].saved_chart_id(), Some(chart_c));
+        assert_eq!(panels[2].saved_chart_id(), Some(chart_a));
     }
 
     #[test]
@@ -1337,7 +1410,9 @@ mod tests {
         let bad_panel = DashboardPanel {
             dashboard_id,
             panel_index: 0,
-            saved_chart_id: Uuid::new_v4(),
+            kind: DashboardPanelKind::Chart {
+                saved_chart_id: Uuid::new_v4(),
+            },
             title_override: None,
             grid_row: 0,
             grid_column: 0,

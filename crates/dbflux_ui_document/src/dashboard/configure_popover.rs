@@ -41,7 +41,7 @@ pub(super) fn render_configure_popover(
     let slot = dashboard.panel_slots().get(panel_index)?;
     let panel_entity = match slot {
         DashboardPanelSlot::Loaded { panel, .. } => panel.clone(),
-        DashboardPanelSlot::Orphan { .. } => return None,
+        DashboardPanelSlot::Orphan { .. } | DashboardPanelSlot::Divider { .. } => return None,
     };
 
     let panel_title = panel_entity.read(cx).title();

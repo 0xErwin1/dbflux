@@ -36,6 +36,7 @@ use dbflux_components::primitives::surface_card;
 use gpui::prelude::*;
 use gpui::{Bounds, Context, IntoElement, KeyDownEvent, Pixels, Window, deferred, div, px};
 use gpui_component::ActiveTheme;
+use gpui_component::scroll::ScrollableElement;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -121,7 +122,7 @@ impl Render for DashboardDocument {
                 // Effective rectangle: while a drag-resize or drag-to-move is in
                 // progress on this panel, render the working ghost dimensions
                 // and the working column/row.
-                let (eff_col, eff_row, eff_w, eff_h) = if let Some(ref rs) = self
+                let (eff_col, eff_row, eff_w, eff_h) = if let Some(rs) = self
                     .drag_resize
                     .as_ref()
                     .filter(|rs| rs.panel_index == panel_index)
@@ -157,6 +158,7 @@ impl Render for DashboardDocument {
                         .cloned()
                         .unwrap_or_else(|| panel.read(cx).title()),
                     DashboardPanelSlot::Orphan { .. } => "Chart not found".to_string(),
+                    DashboardPanelSlot::Divider { .. } => String::new(),
                 };
 
                 // Check whether this panel is in inline-edit mode.
@@ -257,6 +259,19 @@ impl Render for DashboardDocument {
                             .when_some(resize_corner, |el, r| el.child(r)),
                     )
                     .into_any_element(),
+                    DashboardPanelSlot::Divider { markdown, .. } => {
+                        let label = divider_label(markdown);
+                        div()
+                            .id(("dashboard-divider", panel_index))
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .px_3()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(label)
+                            .into_any_element()
+                    }
                 };
 
                 // Position the panel absolutely on the 12-column grid.
@@ -524,13 +539,36 @@ impl Render for DashboardDocument {
             .track_focus(&focus_handle)
             .on_key_down(on_key_down)
             .child(toolbar)
-            .child(grid_container)
+            .child(
+                div()
+                    .id("dashboard-scroll-region")
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .child(grid_container),
+            )
             .when(drag_active_global, |el| {
                 el.on_mouse_move(on_global_mouse_move)
                     .on_mouse_up(gpui::MouseButton::Left, on_global_mouse_up)
             })
             .child(context_menu_overlay)
             .child(configure_overlay)
+    }
+}
+
+/// Strip the leading markdown header marker (`#`, `##`, …) from a divider
+/// markdown string, returning the trimmed display text.
+///
+/// CloudWatch text widgets typically carry a single `# Header` line; the
+/// dashboard renders dividers as a plain header strip with no axes/toolbar,
+/// so the rendered text is the markdown stripped of its leading `#` runs.
+fn divider_label(markdown: &str) -> String {
+    let first_line = markdown.lines().next().unwrap_or("");
+    let trimmed = first_line.trim_start();
+    let stripped = trimmed.trim_start_matches('#').trim_start();
+    if stripped.is_empty() {
+        first_line.to_string()
+    } else {
+        stripped.to_string()
     }
 }
 

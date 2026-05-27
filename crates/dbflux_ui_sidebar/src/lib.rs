@@ -1534,9 +1534,9 @@ mod tests {
                         database: "logs".into(),
                     }
                     .to_string(),
-                    "Collections (2)".to_string(),
+                    "Log Groups (2)".to_string(),
                 )
-                .expanded(true)
+                .expanded(false)
                 .children(vec![
                     event_stream_collection_item(profile_id, "/aws/lambda/app"),
                     event_stream_collection_item(profile_id, "/aws/ecs/api"),
@@ -1920,7 +1920,7 @@ mod tests {
 
         assert_eq!(profile.label.as_ref(), "cloudwatch");
         assert_eq!(database.label.as_ref(), "logs");
-        assert_eq!(collections.label.as_ref(), "Collections (2)");
+        assert_eq!(collections.label.as_ref(), "Log Groups (2)");
         assert_eq!(collections.children.len(), 1);
         assert_eq!(collections.children[0].label.as_ref(), "/aws/lambda/app");
     }

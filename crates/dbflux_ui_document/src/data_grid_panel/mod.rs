@@ -957,7 +957,7 @@ impl DataGridPanel {
 
         let chart_id = chart.id;
         let persist_result = self.app_state.update(cx, |app, _cx| {
-            app.saved_charts.upsert(chart).map_err(|e| {
+            app.saved_charts.upsert(chart).inspect_err(|e| {
                 app.record_storage_failure(
                     dbflux_core::observability::actions::CONFIG_CREATE,
                     "saved_chart",
@@ -965,7 +965,6 @@ impl DataGridPanel {
                     format!("Failed to save chart '{name}'"),
                     e.to_string(),
                 );
-                e
             })
         });
 

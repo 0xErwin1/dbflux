@@ -14,11 +14,18 @@ use crate::error::StorageError;
 const DB_PATH: &str = "dbflux.db";
 
 /// Data transfer object mirroring one row of `viz_dashboard_panels`.
+///
+/// `panel_kind = "chart"` rows reference a `SavedChart` via `saved_chart_id`
+/// and ignore `divider_markdown`. `panel_kind = "divider"` rows ignore
+/// `saved_chart_id` (typically the empty string) and carry the divider's
+/// markdown body in `divider_markdown`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DashboardPanelDto {
     pub dashboard_id: String,
     pub panel_index: i64,
+    pub panel_kind: String,
     pub saved_chart_id: String,
+    pub divider_markdown: Option<String>,
     pub title_override: Option<String>,
     pub grid_row: i64,
     pub grid_column: i64,
@@ -47,7 +54,8 @@ impl DashboardPanelsRepository {
 
         let mut stmt = conn
             .prepare(
-                "SELECT dashboard_id, panel_index, saved_chart_id, title_override,
+                "SELECT dashboard_id, panel_index, panel_kind, saved_chart_id,
+                        divider_markdown, title_override,
                         grid_row, grid_column, grid_width, grid_height
                  FROM viz_dashboard_panels
                  WHERE dashboard_id = ?1
@@ -63,12 +71,14 @@ impl DashboardPanelsRepository {
                 Ok(DashboardPanelDto {
                     dashboard_id: row.get(0)?,
                     panel_index: row.get(1)?,
-                    saved_chart_id: row.get(2)?,
-                    title_override: row.get(3)?,
-                    grid_row: row.get(4)?,
-                    grid_column: row.get(5)?,
-                    grid_width: row.get(6)?,
-                    grid_height: row.get(7)?,
+                    panel_kind: row.get(2)?,
+                    saved_chart_id: row.get(3)?,
+                    divider_markdown: row.get(4)?,
+                    title_override: row.get(5)?,
+                    grid_row: row.get(6)?,
+                    grid_column: row.get(7)?,
+                    grid_width: row.get(8)?,
+                    grid_height: row.get(9)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -90,7 +100,8 @@ impl DashboardPanelsRepository {
 
         let mut stmt = conn
             .prepare(
-                "SELECT dashboard_id, panel_index, saved_chart_id, title_override,
+                "SELECT dashboard_id, panel_index, panel_kind, saved_chart_id,
+                        divider_markdown, title_override,
                         grid_row, grid_column, grid_width, grid_height
                  FROM viz_dashboard_panels
                  WHERE saved_chart_id = ?1
@@ -106,12 +117,14 @@ impl DashboardPanelsRepository {
                 Ok(DashboardPanelDto {
                     dashboard_id: row.get(0)?,
                     panel_index: row.get(1)?,
-                    saved_chart_id: row.get(2)?,
-                    title_override: row.get(3)?,
-                    grid_row: row.get(4)?,
-                    grid_column: row.get(5)?,
-                    grid_width: row.get(6)?,
-                    grid_height: row.get(7)?,
+                    panel_kind: row.get(2)?,
+                    saved_chart_id: row.get(3)?,
+                    divider_markdown: row.get(4)?,
+                    title_override: row.get(5)?,
+                    grid_row: row.get(6)?,
+                    grid_column: row.get(7)?,
+                    grid_width: row.get(8)?,
+                    grid_height: row.get(9)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -155,13 +168,16 @@ impl DashboardPanelsRepository {
         for panel in panels {
             tx.execute(
                 "INSERT INTO viz_dashboard_panels
-                     (dashboard_id, panel_index, saved_chart_id, title_override,
+                     (dashboard_id, panel_index, panel_kind, saved_chart_id,
+                      divider_markdown, title_override,
                       grid_row, grid_column, grid_width, grid_height)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     panel.dashboard_id,
                     panel.panel_index,
+                    panel.panel_kind,
                     panel.saved_chart_id,
+                    panel.divider_markdown,
                     panel.title_override,
                     panel.grid_row,
                     panel.grid_column,
@@ -276,7 +292,9 @@ mod tests {
         DashboardPanelDto {
             dashboard_id: dashboard_id.to_string(),
             panel_index,
+            panel_kind: "chart".to_string(),
             saved_chart_id: chart_id.to_string(),
+            divider_markdown: None,
             title_override: None,
             grid_row: 0,
             grid_column: 0,
@@ -337,7 +355,9 @@ mod tests {
         let bad = vec![DashboardPanelDto {
             dashboard_id: dashboard_id.to_string(),
             panel_index: 0,
+            panel_kind: "chart".to_string(),
             saved_chart_id: chart_id.to_string(),
+            divider_markdown: None,
             title_override: None,
             grid_row: 0,
             grid_column: 0,

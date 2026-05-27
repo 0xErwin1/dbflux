@@ -22,11 +22,13 @@ use dbflux_components::{
     saved_chart::SavedChartSource,
 };
 use dbflux_core::{CollectionRef, QueryLanguage, ResolvedWindow};
+use dbflux_components::saved_chart::MetricSeries;
 use dbflux_storage::{
     error::StorageError,
     repositories::viz_saved_chart_binding_y::BindingYDto,
     repositories::viz_saved_chart_series::SeriesDto,
     repositories::viz_saved_chart_source_metric_dimensions::MetricDimensionDto,
+    repositories::viz_saved_chart_source_metric_series::MetricSeriesDto,
     repositories::viz_saved_charts::{SavedChartDto, SavedChartsRepository},
 };
 use uuid::Uuid;
@@ -129,34 +131,39 @@ fn dto_to_chart(dto: SavedChartDto) -> Result<SavedChart, StorageError> {
             }
         }
         "metric" => {
-            let namespace = dto
-                .source_metric_namespace
-                .ok_or_else(|| StorageError::Data("metric source missing namespace".to_string()))?;
-            let metric_name = dto.source_metric_name.ok_or_else(|| {
-                StorageError::Data("metric source missing metric_name".to_string())
-            })?;
-            let period_seconds = dto.source_metric_period_seconds.ok_or_else(|| {
-                StorageError::Data("metric source missing period_seconds".to_string())
-            })? as u32;
-            let statistic = dto
-                .source_metric_statistic
-                .ok_or_else(|| StorageError::Data("metric source missing statistic".to_string()))?;
-            let region = dto.source_metric_region;
+            if dto.metric_series.is_empty() {
+                return Err(StorageError::Data(
+                    "metric source must carry at least one series row".to_string(),
+                ));
+            }
 
-            let dimensions: Vec<(String, String)> = dto
-                .metric_dimensions
-                .into_iter()
-                .map(|d| (d.dim_key, d.dim_value))
+            // Group dimensions by series_index for stable per-series ordering.
+            let mut dims_by_series: std::collections::HashMap<i64, Vec<(String, String)>> =
+                std::collections::HashMap::new();
+            for d in &dto.metric_dimensions {
+                dims_by_series
+                    .entry(d.series_index)
+                    .or_default()
+                    .push((d.dim_key.clone(), d.dim_value.clone()));
+            }
+
+            let series: Vec<MetricSeries> = dto
+                .metric_series
+                .iter()
+                .map(|s| MetricSeries {
+                    namespace: s.namespace.clone(),
+                    metric_name: s.metric_name.clone(),
+                    dimensions: dims_by_series
+                        .remove(&s.series_index)
+                        .unwrap_or_default(),
+                    period_seconds: s.period_seconds as u32,
+                    statistic: s.statistic.clone(),
+                    region: s.region.clone(),
+                    label: s.label.clone(),
+                })
                 .collect();
 
-            SavedChartSource::Metric {
-                namespace,
-                metric_name,
-                dimensions,
-                period_seconds,
-                statistic,
-                region,
-            }
+            SavedChartSource::Metric { series }
         }
         other => {
             return Err(StorageError::Data(format!(
@@ -194,7 +201,8 @@ fn chart_to_dto(
     series: Vec<SeriesDto>,
     binding_y: Vec<BindingYDto>,
 ) -> SavedChartDto {
-    // Decompose source variant into flat columns + child rows.
+    // Decompose source variant into flat columns + series/dimension child rows.
+    let mut metric_series: Vec<MetricSeriesDto> = Vec::new();
     let mut metric_dimensions: Vec<MetricDimensionDto> = Vec::new();
 
     let (
@@ -205,20 +213,10 @@ fn chart_to_dto(
         source_time_window_start_ms,
         source_time_window_end_ms,
         source_time_window_language,
-        source_metric_namespace,
-        source_metric_name,
-        source_metric_period_seconds,
-        source_metric_statistic,
-        source_metric_region,
     ) = match &chart.source {
         SavedChartSource::Query { query } => (
             "query".to_string(),
             Some(query.clone()),
-            None,
-            None,
-            None,
-            None,
-            None,
             None,
             None,
             None,
@@ -245,32 +243,30 @@ fn chart_to_dto(
                 start,
                 end,
                 lang,
-                None,
-                None,
-                None,
-                None,
-                None,
             )
         }
-        SavedChartSource::Metric {
-            namespace,
-            metric_name,
-            dimensions,
-            period_seconds,
-            statistic,
-            region,
-        } => {
-            // Build dimension child rows.
-            metric_dimensions = dimensions
-                .iter()
-                .enumerate()
-                .map(|(i, (k, v))| MetricDimensionDto {
+        SavedChartSource::Metric { series: series_list } => {
+            for (s_idx, s) in series_list.iter().enumerate() {
+                metric_series.push(MetricSeriesDto {
                     chart_id: chart.id.to_string(),
-                    dim_index: i as i64,
-                    dim_key: k.clone(),
-                    dim_value: v.clone(),
-                })
-                .collect();
+                    series_index: s_idx as i64,
+                    namespace: s.namespace.clone(),
+                    metric_name: s.metric_name.clone(),
+                    period_seconds: s.period_seconds as i64,
+                    statistic: s.statistic.clone(),
+                    region: s.region.clone(),
+                    label: s.label.clone(),
+                });
+                for (d_idx, (k, v)) in s.dimensions.iter().enumerate() {
+                    metric_dimensions.push(MetricDimensionDto {
+                        chart_id: chart.id.to_string(),
+                        series_index: s_idx as i64,
+                        dim_index: d_idx as i64,
+                        dim_key: k.clone(),
+                        dim_value: v.clone(),
+                    });
+                }
+            }
 
             (
                 "metric".to_string(),
@@ -280,11 +276,6 @@ fn chart_to_dto(
                 None,
                 None,
                 None,
-                Some(namespace.clone()),
-                Some(metric_name.clone()),
-                Some(*period_seconds as i64),
-                Some(statistic.clone()),
-                region.clone(),
             )
         }
     };
@@ -319,11 +310,6 @@ fn chart_to_dto(
         source_time_window_start_ms,
         source_time_window_end_ms,
         source_time_window_language,
-        source_metric_namespace,
-        source_metric_name,
-        source_metric_period_seconds,
-        source_metric_statistic,
-        source_metric_region,
 
         time_range_preset: chart.time_range_preset.map(time_range_preset_to_str),
         refresh_policy_kind: refresh_policy_kind_to_str(chart.refresh_policy),
@@ -334,6 +320,7 @@ fn chart_to_dto(
 
         series,
         binding_y,
+        metric_series,
         metric_dimensions,
     }
 }
@@ -350,6 +337,7 @@ fn parse_chart_kind(s: &str) -> Result<ChartKind, StorageError> {
         "area" => Ok(ChartKind::Area),
         "stacked_bar" => Ok(ChartKind::StackedBar),
         "pie" => Ok(ChartKind::Pie),
+        "number" => Ok(ChartKind::Number),
         other => Err(StorageError::Data(format!("unknown chart_kind: '{other}'"))),
     }
 }
@@ -362,6 +350,7 @@ fn chart_kind_to_str(k: ChartKind) -> String {
         ChartKind::Area => "area",
         ChartKind::StackedBar => "stacked_bar",
         ChartKind::Pie => "pie",
+        ChartKind::Number => "number",
     }
     .to_string()
 }
@@ -870,15 +859,18 @@ mod tests {
             name: name.to_string(),
             profile_id,
             source: SavedChartSource::Metric {
-                namespace: "AWS/EC2".to_string(),
-                metric_name: "CPUUtilization".to_string(),
-                dimensions: vec![
-                    ("InstanceId".to_string(), "i-12345".to_string()),
-                    ("Region".to_string(), "us-east-1".to_string()),
-                ],
-                period_seconds: 300,
-                statistic: "Average".to_string(),
-                region: Some("us-east-1".to_string()),
+                series: vec![MetricSeries {
+                    namespace: "AWS/EC2".to_string(),
+                    metric_name: "CPUUtilization".to_string(),
+                    dimensions: vec![
+                        ("InstanceId".to_string(), "i-12345".to_string()),
+                        ("Region".to_string(), "us-east-1".to_string()),
+                    ],
+                    period_seconds: 300,
+                    statistic: "Average".to_string(),
+                    region: Some("us-east-1".to_string()),
+                    label: None,
+                }],
             },
             chart_spec: ChartSpec {
                 kind: ChartKind::Line,
@@ -1024,29 +1016,23 @@ mod tests {
         assert_eq!(loaded.id, chart_id);
         assert!(loaded.is_metric_source());
 
-        if let SavedChartSource::Metric {
-            namespace,
-            metric_name,
-            dimensions,
-            period_seconds,
-            statistic,
-            region,
-        } = &loaded.source
-        {
-            assert_eq!(namespace, "AWS/EC2");
-            assert_eq!(metric_name, "CPUUtilization");
-            assert_eq!(dimensions.len(), 2);
+        if let SavedChartSource::Metric { series } = &loaded.source {
+            assert_eq!(series.len(), 1);
+            let s = &series[0];
+            assert_eq!(s.namespace, "AWS/EC2");
+            assert_eq!(s.metric_name, "CPUUtilization");
+            assert_eq!(s.dimensions.len(), 2);
             assert_eq!(
-                dimensions[0],
+                s.dimensions[0],
                 ("InstanceId".to_string(), "i-12345".to_string())
             );
             assert_eq!(
-                dimensions[1],
+                s.dimensions[1],
                 ("Region".to_string(), "us-east-1".to_string())
             );
-            assert_eq!(*period_seconds, 300);
-            assert_eq!(statistic, "Average");
-            assert_eq!(region.as_deref(), Some("us-east-1"));
+            assert_eq!(s.period_seconds, 300);
+            assert_eq!(s.statistic, "Average");
+            assert_eq!(s.region.as_deref(), Some("us-east-1"));
         } else {
             panic!("expected Metric variant after reload");
         }

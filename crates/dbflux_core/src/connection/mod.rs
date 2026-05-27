@@ -33,7 +33,7 @@ pub trait TreeStore {
     fn save(&self, tree: &ConnectionTree) -> Result<(), DbError>;
 }
 
-pub use context::{ExecutionContext, ExecutionSourceContext};
+pub use context::{ExecutionContext, ExecutionSourceContext, MetricQuerySeries};
 pub use hook::{
     ConnectionHook, ConnectionHookBindings, ConnectionHooks, DetachedProcessHandle,
     DetachedProcessReceiver, DetachedProcessSender, HookContext, HookExecution, HookExecutionMode,

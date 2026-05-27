@@ -183,13 +183,22 @@ pub enum DashboardPanelSlot {
         saved_chart_id: Uuid,
         grid_pos: PanelGridPos,
     },
+    /// A markdown divider — a non-chart header strip with no toolbar, no
+    /// resize affordance, and no executed query. Imported from CloudWatch
+    /// `text` widgets and created manually by the user.
+    Divider {
+        markdown: String,
+        grid_pos: PanelGridPos,
+    },
 }
 
 impl DashboardPanelSlot {
-    /// Returns the grid position, regardless of whether the slot is loaded or orphaned.
+    /// Returns the grid position, regardless of slot variant.
     pub fn grid_pos(&self) -> PanelGridPos {
         match self {
-            Self::Loaded { grid_pos, .. } | Self::Orphan { grid_pos, .. } => *grid_pos,
+            Self::Loaded { grid_pos, .. }
+            | Self::Orphan { grid_pos, .. }
+            | Self::Divider { grid_pos, .. } => *grid_pos,
         }
     }
 }
@@ -1675,8 +1684,9 @@ impl DashboardDocument {
                         grid_height: rect.height,
                     };
                     match slot {
-                        DashboardPanelSlot::Loaded { grid_pos, .. } => *grid_pos = new_pos,
-                        DashboardPanelSlot::Orphan { grid_pos, .. } => *grid_pos = new_pos,
+                        DashboardPanelSlot::Loaded { grid_pos, .. }
+                        | DashboardPanelSlot::Orphan { grid_pos, .. }
+                        | DashboardPanelSlot::Divider { grid_pos, .. } => *grid_pos = new_pos,
                     }
                 }
                 cx.notify();
@@ -1733,20 +1743,12 @@ impl DashboardDocument {
             .filter_map(|slot| match slot {
                 DashboardPanelSlot::Loaded { panel, .. } => panel.read(cx).saved_chart_id(),
                 DashboardPanelSlot::Orphan { saved_chart_id, .. } => Some(*saved_chart_id),
+                DashboardPanelSlot::Divider { .. } => None,
             })
             .collect();
 
         let mut appended = 0usize;
         for panel in persisted_panels.iter() {
-            // Skip both existing slots and any persisted-panel duplicates we
-            // already pushed in this loop. The latter guard is what prevents
-            // a stale "two rows for the same saved_chart_id" persisted state
-            // from materialising as two visible panels — that bug surfaced
-            // when the user reported "Se estan duplicando los panels".
-            if !existing_chart_ids.insert(panel.saved_chart_id) {
-                continue;
-            }
-
             let grid_pos = PanelGridPos {
                 grid_row: panel.grid_row,
                 grid_column: panel.grid_column,
@@ -1754,13 +1756,36 @@ impl DashboardDocument {
                 grid_height: panel.grid_height,
             };
 
+            // Divider slots have no SavedChart to dedup on; insert as-is.
+            if let dbflux_ui_base::DashboardPanelKind::Divider { markdown } = &panel.kind {
+                self.panel_slots.push(DashboardPanelSlot::Divider {
+                    markdown: markdown.clone(),
+                    grid_pos,
+                });
+                appended += 1;
+                continue;
+            }
+
+            let Some(saved_chart_id) = panel.saved_chart_id() else {
+                continue;
+            };
+
+            // Skip both existing slots and any persisted-panel duplicates we
+            // already pushed in this loop. The latter guard is what prevents
+            // a stale "two rows for the same saved_chart_id" persisted state
+            // from materialising as two visible panels — that bug surfaced
+            // when the user reported "Se estan duplicando los panels".
+            if !existing_chart_ids.insert(saved_chart_id) {
+                continue;
+            }
+
             let saved_chart = self
                 .app_state
                 .read(cx)
                 .saved_charts
                 .all_charts()
                 .iter()
-                .find(|c| c.id == panel.saved_chart_id)
+                .find(|c| c.id == saved_chart_id)
                 .cloned();
 
             let new_slot = match saved_chart {
@@ -1804,7 +1829,7 @@ impl DashboardDocument {
                     }
                 }
                 _ => DashboardPanelSlot::Orphan {
-                    saved_chart_id: panel.saved_chart_id,
+                    saved_chart_id,
                     grid_pos,
                 },
             };
@@ -2070,7 +2095,9 @@ mod tests {
             DashboardPanelSlot::Orphan { saved_chart_id, .. } => {
                 assert_eq!(saved_chart_id, id);
             }
-            DashboardPanelSlot::Loaded { .. } => panic!("expected Orphan variant"),
+            DashboardPanelSlot::Loaded { .. } | DashboardPanelSlot::Divider { .. } => {
+                panic!("expected Orphan variant")
+            }
         }
     }
 
@@ -2268,7 +2295,7 @@ mod tests {
             .iter()
             .filter_map(|s| match s {
                 DashboardPanelSlot::Orphan { saved_chart_id, .. } => Some(*saved_chart_id),
-                DashboardPanelSlot::Loaded { .. } => None,
+                DashboardPanelSlot::Loaded { .. } | DashboardPanelSlot::Divider { .. } => None,
             })
             .collect();
 

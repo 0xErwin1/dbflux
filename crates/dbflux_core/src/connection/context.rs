@@ -11,23 +11,41 @@ pub enum ExecutionSourceContext {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query_mode: Option<String>,
     },
-    /// A CloudWatch GetMetricData request. Carries the full set of metric
-    /// parameters plus the time bounds required by the GetMetricData API.
-    /// `start_ms` and `end_ms` are epoch milliseconds.
+    /// A CloudWatch GetMetricData request. Carries one or more metric series
+    /// batched into a single API call plus the shared time bounds. `start_ms`
+    /// and `end_ms` are epoch milliseconds.
+    ///
+    /// The driver returns one timestamp column plus one numeric column per
+    /// series in the same order as `series`. Series labels default to
+    /// `metric_name` when `label` is `None`.
     MetricQuery {
-        namespace: String,
-        metric_name: String,
-        /// Ordered (name, value) dimension pairs. May be empty for scalar metrics.
-        dimensions: Vec<(String, String)>,
-        /// Aggregation period in seconds. Must be > 0; validated by the driver.
-        period_s: u32,
-        /// AWS statistic name (e.g. "Average", "Sum", "p99"). Free-form string.
-        statistic: String,
+        /// Non-empty list of metric series to fetch in a single GetMetricData.
+        series: Vec<MetricQuerySeries>,
         /// Query window start, epoch milliseconds (UTC).
         start_ms: i64,
         /// Query window end, epoch milliseconds (UTC).
         end_ms: i64,
     },
+}
+
+/// A single series inside a multi-series CloudWatch GetMetricData request.
+///
+/// Lives in `dbflux_core` so the execution-context boundary stays the only
+/// driver/UI seam; `dbflux_components::saved_chart::MetricSeries` is the
+/// persistence/runtime twin and converts into this type at plan-build time.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetricQuerySeries {
+    pub namespace: String,
+    pub metric_name: String,
+    /// Ordered (name, value) dimension pairs. May be empty for scalar metrics.
+    pub dimensions: Vec<(String, String)>,
+    /// Aggregation period in seconds. Must be > 0; validated by the driver.
+    pub period_s: u32,
+    /// AWS statistic name (e.g. "Average", "Sum", "p99"). Free-form string.
+    pub statistic: String,
+    /// Optional display label; falls back to `metric_name` in the result columns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Per-document execution context (connection, database, schema).

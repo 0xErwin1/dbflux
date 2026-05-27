@@ -229,24 +229,15 @@ mod tests {
             .collect()
     }
 
+    /// Migration 011 created scalar `source_metric_*` columns and the
+    /// dimensions table keyed on `(chart_id, dim_index)`. Migration 012 drops
+    /// those columns and re-keys the dimensions table. After running ALL
+    /// migrations the dimensions table still exists; the scalar columns are
+    /// expected to be gone — that assertion lives in mig 012's tests.
     #[test]
-    fn fresh_install_adds_metric_columns_and_dimensions_table() {
+    fn dimensions_table_survives_full_migration_run() {
         let conn = fresh_conn();
         MigrationRegistry::new().run_all(&conn).unwrap();
-
-        let cols = columns(&conn, "viz_saved_charts");
-        for expected in [
-            "source_metric_namespace",
-            "source_metric_name",
-            "source_metric_period_seconds",
-            "source_metric_statistic",
-            "source_metric_region",
-        ] {
-            assert!(
-                cols.contains(expected),
-                "viz_saved_charts must have column '{expected}' after mig 011"
-            );
-        }
 
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
@@ -256,7 +247,7 @@ mod tests {
             .unwrap_or(false);
         assert!(
             exists,
-            "viz_saved_chart_source_metric_dimensions must exist after mig 011"
+            "viz_saved_chart_source_metric_dimensions must exist after the full chain"
         );
     }
 
@@ -329,54 +320,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn metric_source_check_constraints_enforced() {
-        let conn = fresh_conn();
-        MigrationRegistry::new().run_all(&conn).unwrap();
-
-        conn.execute(
-            "INSERT INTO cfg_connection_profiles (id, name, driver_id) \
-             VALUES ('p1', 'P1', 'cloudwatch')",
-            [],
-        )
-        .unwrap();
-
-        // Inserting source_kind='metric' without the required metric_* columns
-        // must fail the CHECK constraint.
-        let res = conn.execute(
-            "INSERT INTO viz_saved_charts (
-                id, name, profile_id, created_at, updated_at,
-                chart_kind, x_axis_column_index, x_axis_label, x_axis_kind,
-                binding_x, source_kind
-            ) VALUES (
-                'bad', 'Bad Metric', 'p1', 0, 0,
-                'line', 0, 't', 'time',
-                0, 'metric'
-            )",
-            [],
-        );
-        assert!(
-            res.is_err(),
-            "inserting a metric row without metric_* columns must violate CHECK"
-        );
-
-        // Valid metric row must succeed.
-        conn.execute(
-            "INSERT INTO viz_saved_charts (
-                id, name, profile_id, created_at, updated_at,
-                chart_kind, x_axis_column_index, x_axis_label, x_axis_kind,
-                binding_x, source_kind,
-                source_metric_namespace, source_metric_name,
-                source_metric_period_seconds, source_metric_statistic
-            ) VALUES (
-                'ok', 'Good Metric', 'p1', 0, 0,
-                'line', 0, 't', 'time',
-                0, 'metric',
-                'AWS/EC2', 'CPUUtilization',
-                60, 'Average'
-            )",
-            [],
-        )
-        .unwrap();
-    }
 }

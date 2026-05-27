@@ -39,6 +39,10 @@ pub enum ChartKind {
     /// Pie chart: no X/Y axes; each visible series becomes one wedge sized by
     /// the sum of that series' Y values. Focus by angle from the pie centre.
     Pie,
+    /// Single-stat / number chart: shows the latest value per visible series
+    /// as large text, with no axes or gridlines. CloudWatch widgets with
+    /// `properties.view = "singleValue"` import as `Number`.
+    Number,
 }
 
 /// Axis classification used to pick the appropriate tick and label format.

@@ -12,8 +12,10 @@
 //! Connection resolution, driver execution, and local-store aggregation all stay
 //! in the host crate (`dbflux_ui`), not here.
 
-use crate::saved_chart::SavedChartSource;
-use dbflux_core::{CollectionRef, ExecutionContext, ExecutionSourceContext, QueryRequest};
+use crate::saved_chart::{MetricSeries, SavedChartSource};
+use dbflux_core::{
+    CollectionRef, ExecutionContext, ExecutionSourceContext, MetricQuerySeries, QueryRequest,
+};
 
 // ---------------------------------------------------------------------------
 // TimeWindow
@@ -339,17 +341,52 @@ impl ChartDataSource for CollectionSource {
 /// `build_plan(None)` returns `Err(ChartSourceError::WindowRequired)`.
 ///
 /// `MetricSource` is constructed directly by the UI entry point (not via
-/// `SavedChartSource`) — same pattern as `AuditSource`.
+/// `SavedChartSource`) — same pattern as `AuditSource`. Carries one or more
+/// `MetricSeries`; the driver issues a single GetMetricData batching every
+/// series and the chart receives one Y column per series.
 #[derive(Clone)]
 pub struct MetricSource {
-    pub namespace: String,
-    pub metric_name: String,
-    /// Ordered (name, value) dimension pairs. Empty for scalar metrics.
-    pub dimensions: Vec<(String, String)>,
-    /// Aggregation period in seconds. Must be > 0; validated by the driver.
-    pub period_s: u32,
-    /// AWS statistic name (e.g. "Average", "Sum", "p99"). Free-form string.
-    pub statistic: String,
+    /// Non-empty list of series. A single-metric chart holds exactly one entry.
+    pub series: Vec<MetricSeries>,
+}
+
+impl MetricSource {
+    /// Convenience constructor for a single-series source — the common case
+    /// when a user clicks a metric leaf in the sidebar.
+    pub fn single(
+        namespace: String,
+        metric_name: String,
+        dimensions: Vec<(String, String)>,
+        period_seconds: u32,
+        statistic: String,
+    ) -> Self {
+        Self {
+            series: vec![MetricSeries {
+                namespace,
+                metric_name,
+                dimensions,
+                period_seconds,
+                statistic,
+                region: None,
+                label: None,
+            }],
+        }
+    }
+
+    /// Returns the namespace of the first series, or `""` when empty.
+    /// Used by sidebar dedup to keep a stable identity even after the picker
+    /// rebuilds the source value.
+    pub fn primary_namespace(&self) -> &str {
+        self.series.first().map(|s| s.namespace.as_str()).unwrap_or("")
+    }
+
+    /// Returns the metric name of the first series, or `""` when empty.
+    pub fn primary_metric_name(&self) -> &str {
+        self.series
+            .first()
+            .map(|s| s.metric_name.as_str())
+            .unwrap_or("")
+    }
 }
 
 impl ChartDataSource for MetricSource {
@@ -358,9 +395,17 @@ impl ChartDataSource for MetricSource {
     }
 
     fn describe(&self) -> ChartSourceDescription {
-        ChartSourceDescription {
-            title: Some(format!("{} / {}", self.namespace, self.metric_name)),
-        }
+        let title = match self.series.as_slice() {
+            [] => String::new(),
+            [single] => format!("{} / {}", single.namespace, single.metric_name),
+            [first, ..] => format!(
+                "{} / {} (+{} more)",
+                first.namespace,
+                first.metric_name,
+                self.series.len() - 1
+            ),
+        };
+        ChartSourceDescription { title: Some(title) }
     }
 
     fn as_any(&self) -> Option<&dyn std::any::Any> {
@@ -375,13 +420,28 @@ impl ChartDataSource for MetricSource {
         // GetMetricData requires explicit StartTime/EndTime — window is mandatory.
         let w = window.ok_or(ChartSourceError::WindowRequired)?;
 
+        if self.series.is_empty() {
+            return Err(ChartSourceError::Source(
+                "MetricSource has no series".to_string(),
+            ));
+        }
+
+        let series = self
+            .series
+            .iter()
+            .map(|s| MetricQuerySeries {
+                namespace: s.namespace.clone(),
+                metric_name: s.metric_name.clone(),
+                dimensions: s.dimensions.clone(),
+                period_s: s.period_seconds,
+                statistic: s.statistic.clone(),
+                label: s.label.clone(),
+            })
+            .collect();
+
         let exec_ctx = ExecutionContext {
             source: Some(ExecutionSourceContext::MetricQuery {
-                namespace: self.namespace.clone(),
-                metric_name: self.metric_name.clone(),
-                dimensions: self.dimensions.clone(),
-                period_s: self.period_s,
-                statistic: self.statistic.clone(),
+                series,
                 start_ms: w.start_ms,
                 end_ms: w.end_ms,
             }),
@@ -464,19 +524,8 @@ pub fn resolve_source(source: &SavedChartSource) -> Box<dyn ChartDataSource> {
         SavedChartSource::Collection { collection_ref, .. } => Box::new(CollectionSource {
             collection_ref: collection_ref.clone(),
         }),
-        SavedChartSource::Metric {
-            namespace,
-            metric_name,
-            dimensions,
-            period_seconds,
-            statistic,
-            ..
-        } => Box::new(MetricSource {
-            namespace: namespace.clone(),
-            metric_name: metric_name.clone(),
-            dimensions: dimensions.clone(),
-            period_s: *period_seconds,
-            statistic: statistic.clone(),
+        SavedChartSource::Metric { series } => Box::new(MetricSource {
+            series: series.clone(),
         }),
     }
 }
@@ -847,13 +896,13 @@ mod tests {
     /// window's start_ms/end_ms.
     #[test]
     fn metric_source_build_plan_with_window() {
-        let src = MetricSource {
-            namespace: "AWS/Lambda".to_string(),
-            metric_name: "Invocations".to_string(),
-            dimensions: vec![],
-            period_s: 60,
-            statistic: "Sum".to_string(),
-        };
+        let src = MetricSource::single(
+            "AWS/Lambda".to_string(),
+            "Invocations".to_string(),
+            vec![],
+            60,
+            "Sum".to_string(),
+        );
 
         let window = TimeWindow {
             start_ms: 1_000_000,
@@ -875,19 +924,17 @@ mod tests {
 
         match ctx.source.as_ref().expect("source must be Some") {
             ExecutionSourceContext::MetricQuery {
-                namespace,
-                metric_name,
-                dimensions,
-                period_s,
-                statistic,
+                series,
                 start_ms,
                 end_ms,
             } => {
-                assert_eq!(namespace, "AWS/Lambda");
-                assert_eq!(metric_name, "Invocations");
-                assert!(dimensions.is_empty());
-                assert_eq!(*period_s, 60);
-                assert_eq!(statistic, "Sum");
+                assert_eq!(series.len(), 1);
+                let s = &series[0];
+                assert_eq!(s.namespace, "AWS/Lambda");
+                assert_eq!(s.metric_name, "Invocations");
+                assert!(s.dimensions.is_empty());
+                assert_eq!(s.period_s, 60);
+                assert_eq!(s.statistic, "Sum");
                 assert_eq!(*start_ms, 1_000_000);
                 assert_eq!(*end_ms, 2_000_000);
             }
@@ -898,13 +945,13 @@ mod tests {
     /// T-2: MetricSource::build_plan without a window must return Err(WindowRequired).
     #[test]
     fn metric_source_build_plan_no_window() {
-        let src = MetricSource {
-            namespace: "AWS/Lambda".to_string(),
-            metric_name: "Invocations".to_string(),
-            dimensions: vec![],
-            period_s: 60,
-            statistic: "Sum".to_string(),
-        };
+        let src = MetricSource::single(
+            "AWS/Lambda".to_string(),
+            "Invocations".to_string(),
+            vec![],
+            60,
+            "Sum".to_string(),
+        );
 
         let result = src.build_plan(None);
 
@@ -945,13 +992,13 @@ mod tests {
     /// T17.1: `MetricSource::is_self_executing` must return `true`.
     #[test]
     fn metric_source_is_self_executing() {
-        let src = MetricSource {
-            namespace: "AWS/EC2".to_string(),
-            metric_name: "CPUUtilization".to_string(),
-            dimensions: vec![],
-            period_s: 300,
-            statistic: "Average".to_string(),
-        };
+        let src = MetricSource::single(
+            "AWS/EC2".to_string(),
+            "CPUUtilization".to_string(),
+            vec![],
+            300,
+            "Average".to_string(),
+        );
         assert!(
             src.is_self_executing(),
             "MetricSource must report is_self_executing() == true"
@@ -961,13 +1008,13 @@ mod tests {
     /// MetricSource::clone_box must produce a box with equal fields.
     #[test]
     fn metric_source_clone_box_produces_equal_source() {
-        let src = MetricSource {
-            namespace: "AWS/EC2".to_string(),
-            metric_name: "CPUUtilization".to_string(),
-            dimensions: vec![("InstanceId".to_string(), "i-abc".to_string())],
-            period_s: 300,
-            statistic: "Average".to_string(),
-        };
+        let src = MetricSource::single(
+            "AWS/EC2".to_string(),
+            "CPUUtilization".to_string(),
+            vec![("InstanceId".to_string(), "i-abc".to_string())],
+            300,
+            "Average".to_string(),
+        );
 
         let cloned = src.clone_box();
 

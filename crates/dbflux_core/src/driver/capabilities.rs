@@ -204,7 +204,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Nodes",
             DatabaseCategory::TimeSeries => "Measurements",
             DatabaseCategory::WideColumn => "Tables",
-            DatabaseCategory::LogStream => "Log groups",
+            DatabaseCategory::LogStream => "Log Groups",
         }
     }
 
@@ -217,7 +217,7 @@ impl DatabaseCategory {
             DatabaseCategory::Graph => "Node",
             DatabaseCategory::TimeSeries => "Measurement",
             DatabaseCategory::WideColumn => "Table",
-            DatabaseCategory::LogStream => "Log group",
+            DatabaseCategory::LogStream => "Log Group",
         }
     }
 
@@ -245,6 +245,18 @@ impl DatabaseCategory {
             DatabaseCategory::WideColumn => "Row",
             DatabaseCategory::LogStream => "Log event",
         }
+    }
+
+    /// Whether the sidebar should expand the primary container folder by
+    /// default when a profile is freshly connected.
+    ///
+    /// LogStream connections (CloudWatch) routinely surface hundreds of log
+    /// groups per account/region; pre-expanding that folder buries the rest
+    /// of the tree (Dashboards, Saved Charts, Metrics) below a long list.
+    /// Other categories typically have a handful of tables/collections where
+    /// auto-expand is the productive default.
+    pub fn default_expand_container(&self) -> bool {
+        !matches!(self, DatabaseCategory::LogStream)
     }
 
     /// Bitmask of capabilities the UI should display for this category.

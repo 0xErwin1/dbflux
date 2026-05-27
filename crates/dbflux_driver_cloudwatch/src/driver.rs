@@ -16,7 +16,8 @@ use dbflux_core::{
     DbConfig, DbDriver, DbError, DbKind, DeploymentClass, DocumentSchema, DriverCapabilities,
     DriverFormDef, DriverMetadata, EventActorType, EventCategory, EventPage, EventQuery,
     EventRecord, EventSeverity, EventSourceId, EventStreamTarget, ExecutionSourceContext,
-    FormFieldKind, FormSection, FormTab, FormValues, Icon, MetricCatalog, QueryLanguage,
+    FormFieldKind, FormSection, FormTab, FormValues, Icon, MetricCatalog, MetricQuerySeries,
+    QueryLanguage,
     QueryRequest, QueryResult, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot,
     SourceContextSpec, SourceQueryMode, TableInfo, ValidationResult, Value, field, field_required,
 };
@@ -266,21 +267,13 @@ impl Connection for CloudWatchConnection {
                 query_mode,
             } => (log_groups, start_ms, end_ms, query_mode),
             ExecutionSourceContext::MetricQuery {
-                namespace,
-                metric_name,
-                dimensions,
-                period_s,
-                statistic,
+                series,
                 start_ms,
                 end_ms,
             } => {
                 return execute_metric_query(
                     &self.metrics_client,
-                    namespace,
-                    metric_name,
-                    dimensions,
-                    *period_s,
-                    statistic,
+                    series,
                     *start_ms,
                     *end_ms,
                     started,
@@ -1124,47 +1117,64 @@ pub(crate) fn check_period_nonzero(period_s: u32) -> Result<(), DbError> {
     Ok(())
 }
 
-/// Execute a CloudWatch GetMetricData call and return a `QueryResult`.
+/// Execute a CloudWatch GetMetricData call batching every requested series
+/// and return a `QueryResult` with one timestamp column plus one numeric
+/// column per series.
 ///
-/// Builds a single-metric `MetricDataQuery` from the provided parameters,
-/// calls GetMetricData via the blocking runtime pattern used elsewhere in
-/// this driver, then maps the output to a `QueryResult` via the pure mapper.
-#[allow(clippy::too_many_arguments)]
+/// All series share the supplied time window. The resulting columns are
+/// labelled (in order): the series' explicit `label`, the series'
+/// `metric_name` when no label is set and metric names are unique, or
+/// `metric_name (dim1=value1, ...)` otherwise. Every column name is made
+/// unique by suffixing `#<index>` when a collision would otherwise occur.
 fn execute_metric_query(
     client: &aws_sdk_cloudwatch::Client,
-    namespace: &str,
-    metric_name: &str,
-    dimensions: &[(String, String)],
-    period_s: u32,
-    statistic: &str,
+    series: &[MetricQuerySeries],
     start_ms: i64,
     end_ms: i64,
     started: Instant,
 ) -> Result<QueryResult, DbError> {
-    check_period_nonzero(period_s)?;
+    if series.is_empty() {
+        return Err(DbError::query_failed(
+            "MetricQuery must carry at least one series",
+        ));
+    }
 
-    let sdk_dimensions = dimensions
-        .iter()
-        .map(|(name, value)| Dimension::builder().name(name).value(value).build())
-        .collect::<Vec<_>>();
+    for s in series {
+        check_period_nonzero(s.period_s)?;
+    }
 
-    let metric = Metric::builder()
-        .namespace(namespace)
-        .metric_name(metric_name)
-        .set_dimensions(Some(sdk_dimensions))
-        .build();
+    // GetMetricData identifies each query by an id matching `^[a-z][a-zA-Z0-9_]*$`
+    // and at most 255 chars. We use sequential `mN` ids that map 1:1 onto the
+    // series order so the response can be re-aligned by id below.
+    let mut queries = Vec::with_capacity(series.len());
 
-    let metric_stat = MetricStat::builder()
-        .metric(metric)
-        .period(period_s as i32)
-        .stat(statistic)
-        .build();
+    for (i, s) in series.iter().enumerate() {
+        let sdk_dimensions = s
+            .dimensions
+            .iter()
+            .map(|(name, value)| Dimension::builder().name(name).value(value).build())
+            .collect::<Vec<_>>();
 
-    let query = MetricDataQuery::builder()
-        .id("m0")
-        .metric_stat(metric_stat)
-        .return_data(true)
-        .build();
+        let metric = Metric::builder()
+            .namespace(&s.namespace)
+            .metric_name(&s.metric_name)
+            .set_dimensions(Some(sdk_dimensions))
+            .build();
+
+        let metric_stat = MetricStat::builder()
+            .metric(metric)
+            .period(s.period_s as i32)
+            .stat(&s.statistic)
+            .build();
+
+        queries.push(
+            MetricDataQuery::builder()
+                .id(format!("m{i}"))
+                .metric_stat(metric_stat)
+                .return_data(true)
+                .build(),
+        );
+    }
 
     let start_time = MetricsDateTime::from_millis(start_ms);
     let end_time = MetricsDateTime::from_millis(end_ms);
@@ -1175,137 +1185,61 @@ fn execute_metric_query(
                 .get_metric_data()
                 .start_time(start_time)
                 .end_time(end_time)
-                .metric_data_queries(query)
+                .set_metric_data_queries(Some(queries))
                 .send(),
         )
         .map_err(|error| {
             DbError::query_failed(format!("CloudWatch GetMetricData failed: {error}"))
         })?;
 
-    let mut result = metric_data_output_to_query_result(&output, "m0");
+    let mut result = metric_data_output_to_multi_series_result(&output, series);
     result.execution_time = started.elapsed();
     Ok(result)
 }
 
-/// Map a `GetMetricDataOutput` to a `QueryResult`.
+/// Build a wide-format `QueryResult` from a multi-series GetMetricData response.
 ///
-/// For a single `MetricDataResult`: two columns (`timestamp`, `<result_id>`)
-/// ordered ascending by timestamp. For multiple results: wide pivot keyed by
-/// timestamp with one Float column per result id; timestamps present in some
-/// but not all results yield `Value::Null` for the missing series.
-///
-/// Timestamps from the SDK are second-precision; this function converts them
-/// to milliseconds (×1000) and stores them as `Value::Int`.
-pub(crate) fn metric_data_output_to_query_result(
+/// One column per series in the same order as the request; the column name is
+/// chosen from `series[i].label` (when set), else the series' `metric_name`,
+/// with disambiguation suffixes appended when two series would otherwise
+/// produce the same column name.
+fn metric_data_output_to_multi_series_result(
     output: &aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput,
-    metric_id: &str,
+    series: &[MetricQuerySeries],
 ) -> QueryResult {
     let results = output.metric_data_results();
 
-    match results {
-        [] => build_empty_metric_result(metric_id),
-        [single] => build_single_metric_result(single, metric_id),
-        multiple => build_wide_metric_result(multiple),
+    // Build per-series timestamp_s -> value maps, indexed by the response id
+    // (e.g. "m0", "m1"). Series that returned no data still produce an empty
+    // column so the output column count matches `series.len()` exactly.
+    let mut series_maps: Vec<HashMap<i64, f64>> = (0..series.len()).map(|_| HashMap::new()).collect();
+
+    for result in results {
+        let id = result.id().unwrap_or("");
+        let Some(idx) = id
+            .strip_prefix('m')
+            .and_then(|n| n.parse::<usize>().ok())
+            .filter(|n| *n < series.len())
+        else {
+            continue;
+        };
+
+        let Some(map) = series_maps.get_mut(idx) else {
+            continue;
+        };
+        for (ts, val) in result.timestamps().iter().zip(result.values().iter()) {
+            map.insert(ts.secs(), *val);
+        }
     }
-}
 
-/// Return an empty `QueryResult` with the standard metric column schema.
-fn build_empty_metric_result(metric_id: &str) -> QueryResult {
-    let columns = vec![
-        ColumnMeta {
-            name: "timestamp".to_string(),
-            type_name: "bigint".to_string(),
-            kind: ColumnKind::Timestamp,
-            nullable: false,
-            is_primary_key: false,
-        },
-        ColumnMeta {
-            name: metric_id.to_string(),
-            type_name: "double".to_string(),
-            kind: ColumnKind::Float,
-            nullable: true,
-            is_primary_key: false,
-        },
-    ];
-
-    QueryResult::table(columns, vec![], None, Duration::ZERO)
-}
-
-/// Build a two-column ascending `QueryResult` from a single `MetricDataResult`.
-fn build_single_metric_result(
-    result: &aws_sdk_cloudwatch::types::MetricDataResult,
-    metric_id: &str,
-) -> QueryResult {
-    let id = result.id().unwrap_or(metric_id);
-
-    let timestamps = result.timestamps();
-    let values = result.values();
-
-    // Pair timestamps and values, then sort ascending by timestamp.
-    let mut pairs: Vec<(i64, f64)> = timestamps
+    let mut all_timestamps: Vec<i64> = series_maps
         .iter()
-        .zip(values.iter())
-        .map(|(ts, val)| (ts.secs() * 1000, *val))
+        .flat_map(|m| m.keys().copied())
         .collect();
-
-    pairs.sort_unstable_by_key(|(ts, _)| *ts);
-
-    let columns = vec![
-        ColumnMeta {
-            name: "timestamp".to_string(),
-            type_name: "bigint".to_string(),
-            kind: ColumnKind::Timestamp,
-            nullable: false,
-            is_primary_key: false,
-        },
-        ColumnMeta {
-            name: id.to_string(),
-            type_name: "double".to_string(),
-            kind: ColumnKind::Float,
-            nullable: true,
-            is_primary_key: false,
-        },
-    ];
-
-    let rows = pairs
-        .into_iter()
-        .map(|(ts, val)| vec![Value::Int(ts), Value::Float(val)])
-        .collect();
-
-    QueryResult::table(columns, rows, None, Duration::ZERO)
-}
-
-/// Build a wide-format `QueryResult` from multiple `MetricDataResult`s.
-///
-/// Pivots on timestamp: one row per unique timestamp, one Float column per
-/// result id. Missing values for a given series at a given timestamp are
-/// represented as `Value::Null`.
-fn build_wide_metric_result(
-    results: &[aws_sdk_cloudwatch::types::MetricDataResult],
-) -> QueryResult {
-    // Collect all unique timestamps (in seconds, sorted ascending).
-    let mut all_timestamps: Vec<i64> = results
-        .iter()
-        .flat_map(|r| r.timestamps().iter().map(|ts| ts.secs()))
-        .collect();
-
     all_timestamps.sort_unstable();
     all_timestamps.dedup();
 
-    // Build an index from timestamp_s → column value for each result.
-    let series: Vec<(String, HashMap<i64, f64>)> = results
-        .iter()
-        .map(|r| {
-            let id = r.id().unwrap_or("").to_string();
-            let map: HashMap<i64, f64> = r
-                .timestamps()
-                .iter()
-                .zip(r.values().iter())
-                .map(|(ts, val)| (ts.secs(), *val))
-                .collect();
-            (id, map)
-        })
-        .collect();
+    let column_names = unique_series_column_names(series);
 
     let mut columns = vec![ColumnMeta {
         name: "timestamp".to_string(),
@@ -1315,9 +1249,9 @@ fn build_wide_metric_result(
         is_primary_key: false,
     }];
 
-    for (id, _) in &series {
+    for name in &column_names {
         columns.push(ColumnMeta {
-            name: id.clone(),
+            name: name.clone(),
             type_name: "double".to_string(),
             kind: ColumnKind::Float,
             nullable: true,
@@ -1329,7 +1263,7 @@ fn build_wide_metric_result(
         .into_iter()
         .map(|ts_s| {
             let mut row = vec![Value::Int(ts_s * 1000)];
-            for (_, map) in &series {
+            for map in &series_maps {
                 let value = map
                     .get(&ts_s)
                     .copied()
@@ -1342,6 +1276,52 @@ fn build_wide_metric_result(
         .collect();
 
     QueryResult::table(columns, rows, None, Duration::ZERO)
+}
+
+/// Pick a unique display label for every series so column names never collide.
+fn unique_series_column_names(series: &[MetricQuerySeries]) -> Vec<String> {
+    let mut base: Vec<String> = series
+        .iter()
+        .map(|s| match s.label.as_ref() {
+            Some(l) if !l.is_empty() => l.clone(),
+            _ => s.metric_name.clone(),
+        })
+        .collect();
+
+    // Detect any group of names that collide and disambiguate every member of
+    // the group by appending its first non-empty dimension value. Doing the
+    // detection over the ORIGINAL names (`originals`) avoids the bug where
+    // mutating an earlier collider leaves later siblings looking unique
+    // against the already-renamed value.
+    let originals = base.clone();
+    for (i, name_slot) in base.iter_mut().enumerate() {
+        let Some(original) = originals.get(i) else {
+            continue;
+        };
+        let collides_in_originals = originals
+            .iter()
+            .enumerate()
+            .any(|(j, name)| j != i && name == original);
+
+        if collides_in_originals
+            && let Some(s) = series.get(i)
+            && let Some((_, dim_val)) = s.dimensions.iter().find(|(_, v)| !v.is_empty())
+        {
+            *name_slot = format!("{original} ({dim_val})");
+        }
+    }
+
+    // Final pass: any remaining duplicate gets a `#N` suffix matching its index.
+    let mut seen = HashMap::<String, usize>::new();
+    for name in base.iter_mut() {
+        let count = *seen.entry(name.clone()).or_insert(0);
+        if count > 0 {
+            *name = format!("{name}#{count}");
+        }
+        *seen.entry(name.clone()).or_insert(0) += 1;
+    }
+
+    base
 }
 
 fn probe_connection(client: &Client, config: &CloudWatchProfileConfig) -> Result<(), DbError> {
@@ -1563,12 +1543,23 @@ fn fetch_log_stream_page(
 mod tests {
     use super::{
         CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
-        metric_data_output_to_query_result,
+        metric_data_output_to_multi_series_result,
     };
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
     use aws_sdk_cloudwatch::types::MetricDataResult;
-    use dbflux_core::{ColumnKind, DbConfig, DbDriver, DriverCapabilities, Value};
+    use dbflux_core::{ColumnKind, DbConfig, DbDriver, DriverCapabilities, MetricQuerySeries, Value};
+
+    fn series(namespace: &str, metric_name: &str) -> MetricQuerySeries {
+        MetricQuerySeries {
+            namespace: namespace.to_string(),
+            metric_name: metric_name.to_string(),
+            dimensions: vec![],
+            period_s: 60,
+            statistic: "Average".to_string(),
+            label: None,
+        }
+    }
 
     #[test]
     fn cloudwatch_form_exposes_aws_region_profile_and_endpoint_fields() {
@@ -1624,9 +1615,9 @@ mod tests {
         ));
     }
 
-    // T-6: single MetricDataResult → two-column ascending QueryResult
-    // Verifies: column names (timestamp / result id), ColumnKind assignments,
-    // row ordering (ascending), and second→ms conversion (×1000).
+    // T-6: single-series GetMetricData → two-column ascending QueryResult.
+    // Verifies: column name (metric_name), ColumnKind assignments,
+    // ascending row ordering, and second→ms conversion (×1000).
     #[test]
     fn get_metric_data_output_single_metric() {
         let t1 = DateTime::from_secs(1000);
@@ -1644,17 +1635,20 @@ mod tests {
             .metric_data_results(result)
             .build();
 
-        let qr = metric_data_output_to_query_result(&output, "m0");
+        let qr = metric_data_output_to_multi_series_result(
+            &output,
+            &[series("AWS/EC2", "CPUUtilization")],
+        );
 
         assert_eq!(qr.columns.len(), 2);
         assert_eq!(qr.columns[0].name, "timestamp");
         assert_eq!(qr.columns[0].kind, ColumnKind::Timestamp);
-        assert_eq!(qr.columns[1].name, "m0");
+        assert_eq!(qr.columns[1].name, "CPUUtilization");
         assert_eq!(qr.columns[1].kind, ColumnKind::Float);
 
         assert_eq!(qr.rows.len(), 3);
 
-        // Row 0 corresponds to t1 (ascending order after sort)
+        // Row 0 corresponds to t1 (ascending order after sort).
         assert_eq!(qr.rows[0][0], Value::Int(1000 * 1000));
         assert_eq!(qr.rows[0][1], Value::Float(1.0));
 
@@ -1665,13 +1659,81 @@ mod tests {
         assert_eq!(qr.rows[2][1], Value::Float(3.0));
     }
 
-    // T-7: empty GetMetricDataOutput → empty rows, no panic
+    // T-7: empty GetMetricData → one-row-per-series zero columns, no panic.
     #[test]
     fn get_metric_data_output_empty() {
         let output = GetMetricDataOutput::builder().build();
-        let qr = metric_data_output_to_query_result(&output, "m0");
+        let qr = metric_data_output_to_multi_series_result(
+            &output,
+            &[series("AWS/EC2", "CPUUtilization")],
+        );
 
+        assert_eq!(qr.columns.len(), 2);
         assert_eq!(qr.rows.len(), 0, "expected zero rows for empty output");
+    }
+
+    /// Multi-series GetMetricData → one column per series in request order,
+    /// values aligned by timestamp, missing samples become Null.
+    #[test]
+    fn get_metric_data_output_multi_series() {
+        let t1 = DateTime::from_secs(1000);
+        let t2 = DateTime::from_secs(2000);
+
+        // m0 returns (t1, 1.0) and (t2, 2.0); m1 returns only (t1, 10.0).
+        let r0 = MetricDataResult::builder()
+            .id("m0")
+            .set_timestamps(Some(vec![t1, t2]))
+            .set_values(Some(vec![1.0_f64, 2.0_f64]))
+            .build();
+        let r1 = MetricDataResult::builder()
+            .id("m1")
+            .set_timestamps(Some(vec![t1]))
+            .set_values(Some(vec![10.0_f64]))
+            .build();
+
+        let output = GetMetricDataOutput::builder()
+            .metric_data_results(r0)
+            .metric_data_results(r1)
+            .build();
+
+        let qr = metric_data_output_to_multi_series_result(
+            &output,
+            &[
+                series("AWS/EC2", "CPUUtilization"),
+                series("AWS/EC2", "NetworkIn"),
+            ],
+        );
+
+        assert_eq!(qr.columns.len(), 3);
+        assert_eq!(qr.columns[1].name, "CPUUtilization");
+        assert_eq!(qr.columns[2].name, "NetworkIn");
+        assert_eq!(qr.rows.len(), 2);
+        assert_eq!(qr.rows[0][1], Value::Float(1.0));
+        assert_eq!(qr.rows[0][2], Value::Float(10.0));
+        assert_eq!(qr.rows[1][1], Value::Float(2.0));
+        assert_eq!(qr.rows[1][2], Value::Null);
+    }
+
+    /// Two series with the same metric name disambiguate by their first
+    /// non-empty dimension value.
+    #[test]
+    fn multi_series_disambiguates_by_dimension() {
+        let mut s_primary = series("AWS/RDS", "CPUUtilization");
+        s_primary.dimensions = vec![(
+            "DBInstanceIdentifier".to_string(),
+            "primary-db".to_string(),
+        )];
+        let mut s_replica = series("AWS/RDS", "CPUUtilization");
+        s_replica.dimensions = vec![(
+            "DBInstanceIdentifier".to_string(),
+            "replica-db".to_string(),
+        )];
+
+        let output = GetMetricDataOutput::builder().build();
+        let qr = metric_data_output_to_multi_series_result(&output, &[s_primary, s_replica]);
+
+        assert_eq!(qr.columns[1].name, "CPUUtilization (primary-db)");
+        assert_eq!(qr.columns[2].name, "CPUUtilization (replica-db)");
     }
 
     // T-8: period_s == 0 must return Err, never panic.
@@ -1721,11 +1783,14 @@ mod tests {
 
         let req = QueryRequest::new(String::new()).with_execution_context(Some(ExecutionContext {
             source: Some(ExecutionSourceContext::MetricQuery {
-                namespace: "AWS/Lambda".to_string(),
-                metric_name: "Invocations".to_string(),
-                dimensions: vec![],
-                period_s: 300,
-                statistic: "Sum".to_string(),
+                series: vec![MetricQuerySeries {
+                    namespace: "AWS/Lambda".to_string(),
+                    metric_name: "Invocations".to_string(),
+                    dimensions: vec![],
+                    period_s: 300,
+                    statistic: "Sum".to_string(),
+                    label: None,
+                }],
                 start_ms: now_ms - 24 * 3600 * 1000,
                 end_ms: now_ms,
             }),

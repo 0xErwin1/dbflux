@@ -32,6 +32,7 @@ use crate::error::StorageError;
 use crate::repositories::viz_saved_chart_binding_y::BindingYDto;
 use crate::repositories::viz_saved_chart_series::SeriesDto;
 use crate::repositories::viz_saved_chart_source_metric_dimensions::MetricDimensionDto;
+use crate::repositories::viz_saved_chart_source_metric_series::MetricSeriesDto;
 
 const DB_PATH: &str = "dbflux.db";
 
@@ -76,13 +77,6 @@ pub struct SavedChartDto {
     pub source_time_window_end_ms: Option<i64>,
     pub source_time_window_language: Option<String>,
 
-    // Metric source fields (NULL for non-metric rows)
-    pub source_metric_namespace: Option<String>,
-    pub source_metric_name: Option<String>,
-    pub source_metric_period_seconds: Option<i64>,
-    pub source_metric_statistic: Option<String>,
-    pub source_metric_region: Option<String>,
-
     // SavedChart metadata
     pub time_range_preset: Option<String>,
     pub refresh_policy_kind: String,
@@ -91,7 +85,9 @@ pub struct SavedChartDto {
     // Assembled child rows (not columns on the parent table).
     pub series: Vec<SeriesDto>,
     pub binding_y: Vec<BindingYDto>,
-    /// Ordered dimension pairs for `SavedChartSource::Metric`. Empty for other kinds.
+    /// Ordered metric series for `SavedChartSource::Metric`. Empty for other kinds.
+    pub metric_series: Vec<MetricSeriesDto>,
+    /// Ordered dimension pairs for every series under `SavedChartSource::Metric`.
     pub metric_dimensions: Vec<MetricDimensionDto>,
 }
 
@@ -133,9 +129,6 @@ impl SavedChartsRepository {
                         source_collection_database, source_collection_name,
                         source_time_window_start_ms, source_time_window_end_ms,
                         source_time_window_language,
-                        source_metric_namespace, source_metric_name,
-                        source_metric_period_seconds, source_metric_statistic,
-                        source_metric_region,
                         time_range_preset, refresh_policy_kind, refresh_policy_interval_secs
                  FROM viz_saved_charts
                  WHERE profile_id = ?1
@@ -176,9 +169,6 @@ impl SavedChartsRepository {
                         source_collection_database, source_collection_name,
                         source_time_window_start_ms, source_time_window_end_ms,
                         source_time_window_language,
-                        source_metric_namespace, source_metric_name,
-                        source_metric_period_seconds, source_metric_statistic,
-                        source_metric_region,
                         time_range_preset, refresh_policy_kind, refresh_policy_interval_secs
                  FROM viz_saved_charts
                  WHERE id = ?1",
@@ -262,9 +252,6 @@ impl SavedChartsRepository {
                         source_collection_database, source_collection_name,
                         source_time_window_start_ms, source_time_window_end_ms,
                         source_time_window_language,
-                        source_metric_namespace, source_metric_name,
-                        source_metric_period_seconds, source_metric_statistic,
-                        source_metric_region,
                         time_range_preset, refresh_policy_kind, refresh_policy_interval_secs
                  FROM viz_saved_charts
                  WHERE id IN ({placeholders})"
@@ -318,9 +305,6 @@ impl SavedChartsRepository {
                   source_collection_database, source_collection_name,
                   source_time_window_start_ms, source_time_window_end_ms,
                   source_time_window_language,
-                  source_metric_namespace, source_metric_name,
-                  source_metric_period_seconds, source_metric_statistic,
-                  source_metric_region,
                   time_range_preset, refresh_policy_kind, refresh_policy_interval_secs)
              VALUES
                  (?1, ?2, ?3, ?4, ?5,
@@ -329,8 +313,7 @@ impl SavedChartsRepository {
                   ?15, ?16, ?17, ?18,
                   ?19, ?20,
                   ?21, ?22, ?23, ?24, ?25,
-                  ?26, ?27, ?28, ?29, ?30,
-                  ?31, ?32, ?33)",
+                  ?26, ?27, ?28)",
             rusqlite::params![
                 chart.id,
                 chart.name,
@@ -357,11 +340,6 @@ impl SavedChartsRepository {
                 chart.source_time_window_start_ms,
                 chart.source_time_window_end_ms,
                 chart.source_time_window_language,
-                chart.source_metric_namespace,
-                chart.source_metric_name,
-                chart.source_metric_period_seconds,
-                chart.source_metric_statistic,
-                chart.source_metric_region,
                 chart.time_range_preset,
                 chart.refresh_policy_kind,
                 chart.refresh_policy_interval_secs,
@@ -424,7 +402,9 @@ impl SavedChartsRepository {
             })?;
         }
 
-        // 4. Atomically replace metric dimension child rows within the same transaction.
+        // 4. Atomically replace metric series + dimension child rows in this transaction.
+        //    The dimension FK references (chart_id, series_index) so dimensions must be
+        //    deleted first to avoid FK violations when the series rows go away.
         tx.execute(
             "DELETE FROM viz_saved_chart_source_metric_dimensions WHERE chart_id = ?1",
             [&chart.id],
@@ -434,12 +414,50 @@ impl SavedChartsRepository {
             source,
         })?;
 
+        tx.execute(
+            "DELETE FROM viz_saved_chart_source_metric_series WHERE chart_id = ?1",
+            [&chart.id],
+        )
+        .map_err(|source| StorageError::Sqlite {
+            path: DB_PATH.into(),
+            source,
+        })?;
+
+        for s in &chart.metric_series {
+            tx.execute(
+                "INSERT INTO viz_saved_chart_source_metric_series
+                     (chart_id, series_index, namespace, metric_name,
+                      period_seconds, statistic, region, label)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    s.chart_id,
+                    s.series_index,
+                    s.namespace,
+                    s.metric_name,
+                    s.period_seconds,
+                    s.statistic,
+                    s.region,
+                    s.label,
+                ],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: DB_PATH.into(),
+                source,
+            })?;
+        }
+
         for d in &chart.metric_dimensions {
             tx.execute(
                 "INSERT INTO viz_saved_chart_source_metric_dimensions
-                     (chart_id, dim_index, dim_key, dim_value)
-                 VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![d.chart_id, d.dim_index, d.dim_key, d.dim_value],
+                     (chart_id, series_index, dim_index, dim_key, dim_value)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    d.chart_id,
+                    d.series_index,
+                    d.dim_index,
+                    d.dim_key,
+                    d.dim_value,
+                ],
             )
             .map_err(|source| StorageError::Sqlite {
                 path: DB_PATH.into(),
@@ -564,12 +582,53 @@ impl SavedChartsRepository {
                 }
             }
 
+            // Fetch metric series (empty for non-metric charts).
+            let series_sql = format!(
+                "SELECT chart_id, series_index, namespace, metric_name,
+                        period_seconds, statistic, region, label
+                 FROM viz_saved_chart_source_metric_series
+                 WHERE chart_id IN ({placeholders})
+                 ORDER BY chart_id, series_index ASC"
+            );
+            let mut stmt = conn
+                .prepare(&series_sql)
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?;
+
+            let metric_series_rows: Vec<MetricSeriesDto> = stmt
+                .query_map(rusqlite::params_from_iter(chart_ids.iter()), |row| {
+                    Ok(MetricSeriesDto {
+                        chart_id: row.get(0)?,
+                        series_index: row.get(1)?,
+                        namespace: row.get(2)?,
+                        metric_name: row.get(3)?,
+                        period_seconds: row.get(4)?,
+                        statistic: row.get(5)?,
+                        region: row.get(6)?,
+                        label: row.get(7)?,
+                    })
+                })
+                .map_err(|source| StorageError::Sqlite {
+                    path: DB_PATH.into(),
+                    source,
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            for s in metric_series_rows {
+                if let Some(&idx) = index_map.get(&s.chart_id) {
+                    charts[idx].metric_series.push(s);
+                }
+            }
+
             // Fetch metric dimensions (empty for non-metric charts).
             let dim_sql = format!(
-                "SELECT chart_id, dim_index, dim_key, dim_value
+                "SELECT chart_id, series_index, dim_index, dim_key, dim_value
                  FROM viz_saved_chart_source_metric_dimensions
                  WHERE chart_id IN ({placeholders})
-                 ORDER BY chart_id, dim_index ASC"
+                 ORDER BY chart_id, series_index, dim_index ASC"
             );
             let mut stmt = conn
                 .prepare(&dim_sql)
@@ -582,9 +641,10 @@ impl SavedChartsRepository {
                 .query_map(rusqlite::params_from_iter(chart_ids.iter()), |row| {
                     Ok(MetricDimensionDto {
                         chart_id: row.get(0)?,
-                        dim_index: row.get(1)?,
-                        dim_key: row.get(2)?,
-                        dim_value: row.get(3)?,
+                        series_index: row.get(1)?,
+                        dim_index: row.get(2)?,
+                        dim_key: row.get(3)?,
+                        dim_value: row.get(4)?,
                     })
                 })
                 .map_err(|source| StorageError::Sqlite {
@@ -620,9 +680,6 @@ fn query_parent_rows<P: rusqlite::Params>(
                 source_collection_database, source_collection_name,
                 source_time_window_start_ms, source_time_window_end_ms,
                 source_time_window_language,
-                source_metric_namespace, source_metric_name,
-                source_metric_period_seconds, source_metric_statistic,
-                source_metric_region,
                 time_range_preset, refresh_policy_kind, refresh_policy_interval_secs
          FROM viz_saved_charts
          {order}"
@@ -672,16 +729,12 @@ fn map_parent_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedChartDto> {
         source_time_window_start_ms: row.get(22)?,
         source_time_window_end_ms: row.get(23)?,
         source_time_window_language: row.get(24)?,
-        source_metric_namespace: row.get(25)?,
-        source_metric_name: row.get(26)?,
-        source_metric_period_seconds: row.get(27)?,
-        source_metric_statistic: row.get(28)?,
-        source_metric_region: row.get(29)?,
-        time_range_preset: row.get(30)?,
-        refresh_policy_kind: row.get(31)?,
-        refresh_policy_interval_secs: row.get(32)?,
+        time_range_preset: row.get(25)?,
+        refresh_policy_kind: row.get(26)?,
+        refresh_policy_interval_secs: row.get(27)?,
         series: vec![],
         binding_y: vec![],
+        metric_series: vec![],
         metric_dimensions: vec![],
     })
 }
@@ -747,16 +800,12 @@ fn make_chart(id: Uuid, profile_id: Uuid, source_kind: &str) -> SavedChartDto {
         source_time_window_start_ms: None,
         source_time_window_end_ms: None,
         source_time_window_language: None,
-        source_metric_namespace: None,
-        source_metric_name: None,
-        source_metric_period_seconds: None,
-        source_metric_statistic: None,
-        source_metric_region: None,
         time_range_preset: None,
         refresh_policy_kind: "off".to_string(),
         refresh_policy_interval_secs: None,
         series: vec![],
         binding_y: vec![],
+        metric_series: vec![],
         metric_dimensions: vec![],
     }
 }
@@ -764,6 +813,7 @@ fn make_chart(id: Uuid, profile_id: Uuid, source_kind: &str) -> SavedChartDto {
 #[cfg(test)]
 fn make_metric_chart(id: Uuid, profile_id: Uuid) -> SavedChartDto {
     use crate::repositories::viz_saved_chart_source_metric_dimensions::MetricDimensionDto;
+    use crate::repositories::viz_saved_chart_source_metric_series::MetricSeriesDto;
 
     SavedChartDto {
         id: id.to_string(),
@@ -791,25 +841,32 @@ fn make_metric_chart(id: Uuid, profile_id: Uuid) -> SavedChartDto {
         source_time_window_start_ms: None,
         source_time_window_end_ms: None,
         source_time_window_language: None,
-        source_metric_namespace: Some("AWS/EC2".to_string()),
-        source_metric_name: Some("CPUUtilization".to_string()),
-        source_metric_period_seconds: Some(300),
-        source_metric_statistic: Some("Average".to_string()),
-        source_metric_region: Some("us-east-1".to_string()),
         time_range_preset: None,
         refresh_policy_kind: "off".to_string(),
         refresh_policy_interval_secs: None,
         series: vec![],
         binding_y: vec![],
+        metric_series: vec![MetricSeriesDto {
+            chart_id: id.to_string(),
+            series_index: 0,
+            namespace: "AWS/EC2".to_string(),
+            metric_name: "CPUUtilization".to_string(),
+            period_seconds: 300,
+            statistic: "Average".to_string(),
+            region: Some("us-east-1".to_string()),
+            label: None,
+        }],
         metric_dimensions: vec![
             MetricDimensionDto {
                 chart_id: id.to_string(),
+                series_index: 0,
                 dim_index: 0,
                 dim_key: "InstanceId".to_string(),
                 dim_value: "i-12345".to_string(),
             },
             MetricDimensionDto {
                 chart_id: id.to_string(),
+                series_index: 0,
                 dim_index: 1,
                 dim_key: "Region".to_string(),
                 dim_value: "us-east-1".to_string(),
@@ -1116,7 +1173,9 @@ mod tests {
                 &[DashboardPanelDto {
                     dashboard_id: dashboard_id.to_string(),
                     panel_index: 0,
+                    panel_kind: "chart".to_string(),
                     saved_chart_id: id.to_string(),
+                    divider_markdown: None,
                     title_override: None,
                     grid_row: 0,
                     grid_column: 0,
@@ -1335,7 +1394,7 @@ mod tests {
         );
     }
 
-    /// Metric source round-trip: all scalar columns + ordered dimensions child table.
+    /// Metric source round-trip: every series row + ordered dimensions per series.
     #[test]
     fn test_saved_chart_metric_source_roundtrip() {
         let (_conn, repo, profile_id) = setup("metric_roundtrip");
@@ -1346,54 +1405,72 @@ mod tests {
 
         let loaded = repo.get_full_chart(id).expect("get").expect("should exist");
         assert_eq!(loaded.source_kind, "metric");
-        assert_eq!(loaded.source_metric_namespace.as_deref(), Some("AWS/EC2"));
-        assert_eq!(loaded.source_metric_name.as_deref(), Some("CPUUtilization"));
-        assert_eq!(loaded.source_metric_period_seconds, Some(300));
-        assert_eq!(loaded.source_metric_statistic.as_deref(), Some("Average"));
-        assert_eq!(loaded.source_metric_region.as_deref(), Some("us-east-1"));
 
-        // Dimensions must be loaded and ordered.
+        assert_eq!(loaded.metric_series.len(), 1);
+        let s = &loaded.metric_series[0];
+        assert_eq!(s.namespace, "AWS/EC2");
+        assert_eq!(s.metric_name, "CPUUtilization");
+        assert_eq!(s.period_seconds, 300);
+        assert_eq!(s.statistic, "Average");
+        assert_eq!(s.region.as_deref(), Some("us-east-1"));
+
+        // Dimensions must be loaded and ordered, all under series_index = 0.
         assert_eq!(loaded.metric_dimensions.len(), 2);
+        assert_eq!(loaded.metric_dimensions[0].series_index, 0);
         assert_eq!(loaded.metric_dimensions[0].dim_index, 0);
         assert_eq!(loaded.metric_dimensions[0].dim_key, "InstanceId");
         assert_eq!(loaded.metric_dimensions[0].dim_value, "i-12345");
         assert_eq!(loaded.metric_dimensions[1].dim_index, 1);
         assert_eq!(loaded.metric_dimensions[1].dim_key, "Region");
-        assert_eq!(loaded.metric_dimensions[1].dim_value, "us-east-1");
 
         // Non-metric columns must be NULL.
         assert!(loaded.source_query.is_none());
         assert!(loaded.source_collection_database.is_none());
     }
 
-    /// CHECK: `source_kind = 'metric'` with NULL `source_metric_namespace` is rejected.
+    /// Multi-series metric chart: two series with their own dimensions.
     #[test]
-    fn test_check_metric_source_kind_without_namespace() {
-        let (conn, _repo, profile_id) = setup("check_metric_null_ns");
-        let locked = conn.lock().unwrap();
-        let result = locked.execute(
-            "INSERT INTO viz_saved_charts
-             (id, name, profile_id, created_at, updated_at,
-              chart_kind, legend_visible, decimation_threshold, track_source_indices,
-              y_scale, x_axis_column_index, x_axis_label, x_axis_kind,
-              binding_x, binding_aggregation,
-              source_kind,
-              source_metric_namespace, source_metric_name,
-              source_metric_period_seconds, source_metric_statistic,
-              refresh_policy_kind)
-             VALUES (?1, 'Test', ?2, 0, 0,
-                     'line', 0, 10000, 0,
-                     'linear', 0, 'X', 'time',
-                     0, 'none',
-                     'metric',
-                     NULL, 'CPUUtilization', 300, 'Average',
-                     'off')",
-            rusqlite::params![Uuid::new_v4().to_string(), profile_id.to_string()],
-        );
-        assert!(
-            result.is_err(),
-            "source_kind='metric' with NULL source_metric_namespace should violate CHECK"
-        );
+    fn test_saved_chart_metric_source_multi_series() {
+        use crate::repositories::viz_saved_chart_source_metric_dimensions::MetricDimensionDto;
+        use crate::repositories::viz_saved_chart_source_metric_series::MetricSeriesDto;
+
+        let (_conn, repo, profile_id) = setup("metric_multi_series");
+        let id = Uuid::new_v4();
+        let mut dto = make_metric_chart(id, profile_id);
+
+        dto.metric_series.push(MetricSeriesDto {
+            chart_id: id.to_string(),
+            series_index: 1,
+            namespace: "AWS/RDS".to_string(),
+            metric_name: "WriteLatency".to_string(),
+            period_seconds: 60,
+            statistic: "Sum".to_string(),
+            region: None,
+            label: Some("Replica".to_string()),
+        });
+        dto.metric_dimensions.push(MetricDimensionDto {
+            chart_id: id.to_string(),
+            series_index: 1,
+            dim_index: 0,
+            dim_key: "DBInstanceIdentifier".to_string(),
+            dim_value: "replica-db".to_string(),
+        });
+
+        repo.upsert(&dto).expect("upsert");
+
+        let loaded = repo.get_full_chart(id).expect("get").expect("exists");
+        assert_eq!(loaded.metric_series.len(), 2);
+        assert_eq!(loaded.metric_series[1].namespace, "AWS/RDS");
+        assert_eq!(loaded.metric_series[1].label.as_deref(), Some("Replica"));
+
+        // The second series' dimension must come back with series_index = 1.
+        let s1_dims: Vec<_> = loaded
+            .metric_dimensions
+            .iter()
+            .filter(|d| d.series_index == 1)
+            .collect();
+        assert_eq!(s1_dims.len(), 1);
+        assert_eq!(s1_dims[0].dim_value, "replica-db");
     }
 
     /// Metric dimensions are deleted with the chart (FK CASCADE).
@@ -1432,6 +1509,7 @@ mod tests {
         dto2.metric_dimensions = vec![
             crate::repositories::viz_saved_chart_source_metric_dimensions::MetricDimensionDto {
                 chart_id: id.to_string(),
+                series_index: 0,
                 dim_index: 0,
                 dim_key: "Z-key".to_string(),
                 dim_value: "z-val".to_string(),
