@@ -265,16 +265,52 @@ pub(super) fn dashboard_toolbar(
         .tooltip(mode_tooltip)
         .on_click(move |event, window, app| on_toggle_mode(event, window, app));
 
+    // Sync pill — appears only when the dashboard row is linked to an
+    // upstream source (e.g. CloudWatch). Visibility branches on capability
+    // + identity, never on `driver_id` (project rule).
+    let sync_pill_segment = if dashboard.sync_pill_visible(cx) {
+        let state = dashboard.sync_pill_state(cx);
+        let tooltip = state.tooltip();
+        let label = state.label();
+        let clickable = state.is_clickable();
+        let weak = cx.weak_entity();
+        let on_pill_click = move |_event: &gpui::ClickEvent, _w: &mut Window, app: &mut App| {
+            if !clickable {
+                return;
+            }
+            if let Some(doc) = weak.upgrade() {
+                doc.update(app, |this, cx| {
+                    match this.drift_status() {
+                        super::sync_pill::DriftCheckOutcome::Drifted => this.open_drift_diff(cx),
+                        _ => this.trigger_drift_check(cx),
+                    }
+                });
+            }
+        };
+
+        let pill_btn = ToolbarButton::new("dashboard-sync-pill")
+            .label(label)
+            .variant(ToolbarButtonVariant::Default)
+            .tooltip(tooltip)
+            .disabled(!clickable)
+            .on_click(on_pill_click);
+        Some(div().flex_shrink_0().child(pill_btn))
+    } else {
+        None
+    };
+
     // Group both right-anchored controls in one wrapper with its own gap so
     // they don't visually collide with each other or the toolbar edge.
-    let right_group = div()
+    let mut right_group = div()
         .flex_shrink_0()
         .ml_auto()
         .flex()
         .items_center()
-        .gap(Spacing::SM)
-        .child(add_btn)
-        .child(mode_btn);
+        .gap(Spacing::SM);
+    if let Some(pill) = sync_pill_segment {
+        right_group = right_group.child(pill);
+    }
+    let right_group = right_group.child(add_btn).child(mode_btn);
 
     // Items pushed in order. When Custom is selected, the picker slots are
     // inserted between the preset dropdown and the refresh control, mirroring

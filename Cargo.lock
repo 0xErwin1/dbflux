@@ -2961,6 +2961,7 @@ name = "dbflux_ui_document"
 version = "0.6.0-dev.9"
 dependencies = [
  "anyhow",
+ "chrono",
  "dbflux_app",
  "dbflux_audit",
  "dbflux_components",

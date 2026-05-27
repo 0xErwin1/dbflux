@@ -7,8 +7,11 @@
 //! re-execution is bounded by `PANEL_REEXEC_CAP` to avoid overwhelming the
 //! connection with concurrent queries.
 
+pub mod apply;
 mod builder;
 mod configure_popover;
+pub mod diff_modal;
+pub mod drift;
 pub mod pane;
 mod render;
 pub mod sync_pill;
@@ -333,6 +336,34 @@ pub struct DashboardDocument {
     /// is local to the open tab.
     pub(crate) collapsed_divider_indices: HashSet<u32>,
 
+    /// Last completed drift-check outcome (`NotChecked` until the first
+    /// background fetch finishes). Drives the sync pill's `Synced` /
+    /// `Drifted` / `Unknown` state.
+    pub(crate) drift_status: sync_pill::DriftCheckOutcome,
+
+    /// Pending drift-check result delivered from a background task. The
+    /// render path drains this once and copies it into `drift_status`.
+    pub(crate) pending_drift_status: Option<sync_pill::DriftCheckOutcome>,
+
+    /// One-shot flag: the very first render after construction triggers
+    /// the initial drift check (when the dashboard is sync-capable). The
+    /// flag is consumed via `std::mem::take` so subsequent renders don't
+    /// re-fire; the 60s cache window inside `trigger_drift_check` is the
+    /// secondary defence for explicit user clicks.
+    pub(crate) pending_initial_drift_check: bool,
+
+    /// `panel_identity` strings for panels whose upstream widget has been
+    /// classified as `Removed` by the last refresh. Rendered with a
+    /// "removed upstream" badge until the user explicitly resolves them
+    /// (per spec R3.8). Transient: not persisted, recomputed on next
+    /// refresh.
+    pub(crate) removed_upstream_panel_ids: HashSet<String>,
+
+    /// Diff modal entity surfaced when the user clicks the sync pill in
+    /// `Drifted` state. Built in `new` so the host can subscribe to
+    /// `DashboardDiffOutcome` events from this entity.
+    pub(crate) diff_modal: Entity<diff_modal::DashboardDiffModal>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -510,7 +541,372 @@ impl DashboardDocument {
             refresh_dropdown,
             pending_configure_panel_index: None,
             collapsed_divider_indices: HashSet::new(),
+            drift_status: sync_pill::DriftCheckOutcome::NotChecked,
+            pending_drift_status: None,
+            pending_initial_drift_check: true,
+            removed_upstream_panel_ids: HashSet::new(),
+            diff_modal: {
+                let modal = cx.new(diff_modal::DashboardDiffModal::new);
+                let sub = cx.subscribe(
+                    &modal,
+                    |this: &mut Self, _m, ev: &diff_modal::DashboardDiffOutcome, cx| {
+                        if matches!(ev, diff_modal::DashboardDiffOutcome::ApplyAll) {
+                            this.apply_pending_diff(cx);
+                        }
+                    },
+                );
+                subscriptions.push(sub);
+                modal
+            },
             _subscriptions: subscriptions,
+        }
+    }
+
+    // ---- Drift / sync API ----
+
+    /// Returns the most recent completed drift-check outcome.
+    pub fn drift_status(&self) -> sync_pill::DriftCheckOutcome {
+        self.drift_status
+    }
+
+    /// Drains `pending_drift_status` if set and copies it into
+    /// `drift_status`. Called at the top of the render path so background
+    /// task results land on the next paint without requiring a separate
+    /// subscription channel.
+    pub(crate) fn apply_pending_drift_status(&mut self, cx: &mut Context<Self>) {
+        if let Some(outcome) = self.pending_drift_status.take() {
+            self.drift_status = outcome;
+            cx.notify();
+        }
+    }
+
+    /// Fire the initial drift check exactly once after construction.
+    /// Caller (render path) drains the `pending_initial_drift_check` flag
+    /// before this method is called, so re-renders don't re-fire.
+    pub(crate) fn maybe_trigger_initial_drift_check(&mut self, cx: &mut Context<Self>) {
+        let identity = self.sync_identity(cx);
+        if !identity.is_linked() {
+            return;
+        }
+        self.trigger_drift_check(cx);
+    }
+
+    /// Looks up this dashboard's sync identity from the manager.
+    pub fn sync_identity(&self, cx: &App) -> dbflux_ui_base::DashboardSyncIdentity {
+        self.app_state
+            .read(cx)
+            .dashboards
+            .dashboard_by_id(self.dashboard_id)
+            .map(|d| d.sync.clone())
+            .unwrap_or_default()
+    }
+
+    /// Returns `true` when the sync pill should be visible in the toolbar.
+    /// Branches only on capability flags + identity, never on `driver_id`.
+    pub fn sync_pill_visible(&self, cx: &App) -> bool {
+        let identity = self.sync_identity(cx);
+        // The pill is visible when the dashboard row is linked to any
+        // upstream that advertises DASHBOARD_SYNC. Capability lookup
+        // requires the driver metadata via the active connection; when
+        // unavailable, fall back to the identity-only check (R4.2).
+        match identity.source_kind {
+            dbflux_ui_base::DashboardSourceKind::Local => false,
+            dbflux_ui_base::DashboardSourceKind::Cloudwatch => true,
+        }
+    }
+
+    /// Returns the sync pill state derived from the persisted identity and
+    /// the latest drift-check outcome.
+    pub fn sync_pill_state(&self, cx: &App) -> sync_pill::SyncPillState {
+        sync_pill::SyncPillState::from_identity_and_drift(
+            &self.sync_identity(cx),
+            self.drift_status,
+        )
+    }
+
+    /// Returns `true` when the panel at `panel_index` should render the
+    /// transient "removed upstream" badge.
+    pub fn panel_is_removed_upstream(&self, panel_index: u32) -> bool {
+        let id = apply::snapshot_id(self.dashboard_id, panel_index);
+        self.removed_upstream_panel_ids.contains(&id)
+    }
+
+    /// Trigger a drift-check fetch in the background. Cheap to call
+    /// repeatedly: the 60s cache window guards the actual network call via
+    /// `drift::drift_cache_is_fresh` on the dashboard's stored
+    /// `source_last_synced_at`. Foreground state changes (the resulting
+    /// `DriftCheckOutcome`) land on `pending_drift_status`; the render path
+    /// drains them via `apply_pending_drift_status`.
+    ///
+    /// Surfaces a non-blocking toast on driver-side errors (spec R2.5);
+    /// rendering is never blocked by the fetch.
+    pub fn trigger_drift_check(&mut self, cx: &mut Context<Self>) {
+        let identity = self.sync_identity(cx);
+        if !identity.is_linked() {
+            // Detached / local dashboards never trigger a fetch.
+            return;
+        }
+        let dashboard_name = match identity.source_dashboard_name.clone() {
+            Some(n) => n,
+            None => return,
+        };
+        let stored_hash = identity.source_content_hash.clone();
+
+        // 60s cache: parse `source_last_synced_at` and short-circuit when
+        // still fresh.
+        if let Some(last) = identity
+            .source_last_synced_at
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            && drift::drift_cache_is_fresh(Some(last), chrono::Utc::now())
+        {
+            // Within the cache window: nothing to do.
+            return;
+        }
+
+        // Resolve the active connection from app_state. Without a live
+        // connection there's nothing to fetch.
+        let profile_id = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .dashboard_by_id(self.dashboard_id)
+            .and_then(|d| d.profile_id);
+        let Some(profile_id) = profile_id else {
+            return;
+        };
+
+        let connection = self.app_state.read(cx).get_connection(profile_id);
+        let Some(connection) = connection else {
+            return;
+        };
+
+        // The DashboardSource trait method takes `&self`, so we hold the
+        // Arc<dyn Connection> across the await boundary to keep the borrow
+        // alive. The fetch itself is one GetDashboard call (per R6.1).
+        let task = cx.background_executor().spawn(async move {
+            let source = connection.dashboard_source()?;
+            let remote = source.fetch_dashboard(&dashboard_name).await.ok()?;
+            Some(drift::classify_drift(stored_hash.as_deref(), &remote.content_hash))
+        });
+
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            let outcome = outcome.unwrap_or(sync_pill::DriftCheckOutcome::NotChecked);
+            let _ = cx.update(|cx| {
+                if let Some(doc) = this.upgrade() {
+                    doc.update(cx, |this, cx| {
+                        this.pending_drift_status = Some(outcome);
+                        cx.notify();
+                    });
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Opens the diff modal when drift is detected. Triggers a fresh fetch
+    /// (bypassing the cache) and surfaces the resulting `DashboardDiff` in
+    /// the modal, ready for the user to Apply or Cancel.
+    pub fn open_drift_diff(&mut self, cx: &mut Context<Self>) {
+        let identity = self.sync_identity(cx);
+        if !identity.is_linked() {
+            return;
+        }
+        let dashboard_name = match identity.source_dashboard_name.clone() {
+            Some(n) => n,
+            None => return,
+        };
+
+        let dashboard_title = self.title.clone();
+        let diff_modal = self.diff_modal.clone();
+
+        let profile_id = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .dashboard_by_id(self.dashboard_id)
+            .and_then(|d| d.profile_id);
+        let Some(profile_id) = profile_id else {
+            return;
+        };
+        let connection = self.app_state.read(cx).get_connection(profile_id);
+        let Some(connection) = connection else {
+            return;
+        };
+
+        // Snapshot local panels for the reconcile algorithm.
+        let local_snapshots: Vec<dbflux_core::LocalPanelSnapshot> = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .panels_for_dashboard(self.dashboard_id)
+            .iter()
+            .map(|p| dbflux_core::LocalPanelSnapshot {
+                panel_id: apply::snapshot_id(p.dashboard_id, p.panel_index),
+                source_widget_index: p.source_widget_index.map(|i| i as usize),
+                source_widget_hash: p.source_widget_hash.clone(),
+                panel_kind: if p.kind.is_divider() { "divider" } else { "chart" }.into(),
+                has_title_override: p.title_override.is_some(),
+                structural_key: None,
+            })
+            .collect();
+
+        let fetch = cx.background_executor().spawn(async move {
+            let source = connection.dashboard_source().ok_or("driver has no DashboardSource")?;
+            let remote = source
+                .fetch_dashboard(&dashboard_name)
+                .await
+                .map_err(|e| format!("Dashboard sync fetch failed: {e}"))?;
+            Ok::<_, String>(remote)
+        });
+
+        cx.spawn(async move |this, cx| {
+            let remote = match fetch.await {
+                Ok(r) => r,
+                Err(msg) => {
+                    let _ = cx.update(|cx| {
+                        Toast::error(msg).push(cx);
+                    });
+                    return;
+                }
+            };
+            // Parse upstream widgets to build snapshots.
+            let upstream: Vec<dbflux_core::UpstreamWidgetSnapshot> =
+                match serde_json::from_str::<serde_json::Value>(&remote.body_json) {
+                    Ok(v) => v
+                        .get("widgets")
+                        .and_then(|w| w.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .enumerate()
+                                .map(|(idx, w)| {
+                                    let widget_kind = w
+                                        .get("type")
+                                        .and_then(|t| t.as_str())
+                                        .unwrap_or("metric")
+                                        .to_string();
+                                    dbflux_core::UpstreamWidgetSnapshot {
+                                        index: idx,
+                                        widget_hash: dbflux_core::dashboard_widget_hash(w),
+                                        widget_kind,
+                                        structural_key: None,
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                };
+
+            let diff = dbflux_core::reconcile(&local_snapshots, &upstream);
+            let _ = cx.update(|cx| {
+                diff_modal.update(cx, |m, cx| {
+                    m.open(
+                        diff_modal::DashboardDiffRequest {
+                            dashboard_name: dashboard_title,
+                            diff,
+                        },
+                        cx,
+                    );
+                });
+                if let Some(doc) = this.upgrade() {
+                    doc.update(cx, |_this, cx| cx.notify());
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Apply the diff currently held in the modal to local state. Runs
+    /// atomically per spec R3.4 / R7.3: a single `replace_panels` repo
+    /// call carries every Modified/Moved/Added update; rollback semantics
+    /// come from `DashboardManager::replace_panels` (write-then-cache).
+    /// Failure surfaces a toast and leaves local state unchanged.
+    pub fn apply_pending_diff(&mut self, cx: &mut Context<Self>) {
+        let request = match self.diff_modal.read(cx).request().cloned() {
+            Some(r) => r,
+            None => return,
+        };
+        let diff = request.diff.clone();
+        let dashboard_id = self.dashboard_id;
+
+        // Snapshot the current panel set out of the manager.
+        let panels = self
+            .app_state
+            .read(cx)
+            .dashboards
+            .panels_for_dashboard(dashboard_id)
+            .to_vec();
+
+        // Build structural updates from the current panel rows; this v1
+        // preserves the existing grid layout for Modified/Moved entries
+        // (R3.5 leaves layout to upstream, but the apply path here keeps
+        // it local until structural data lands on UpstreamWidgetSnapshot
+        // — see deviations note in apply-progress).
+        let mut structural_updates = std::collections::HashMap::new();
+        for m in &diff.modified {
+            if let Some(p) = panels.iter().find(|p| {
+                apply::snapshot_id(p.dashboard_id, p.panel_index) == m.local_panel_id
+            }) {
+                structural_updates.insert(
+                    m.local_panel_id.clone(),
+                    apply::StructuralUpdate {
+                        source_widget_index: m.upstream_index as u32,
+                        source_widget_hash: p.source_widget_hash.clone().unwrap_or_default(),
+                        grid_row: p.grid_row,
+                        grid_column: p.grid_column,
+                        grid_width: p.grid_width,
+                        grid_height: p.grid_height,
+                    },
+                );
+            }
+        }
+        for m in &diff.moved {
+            if let Some(p) = panels.iter().find(|p| {
+                apply::snapshot_id(p.dashboard_id, p.panel_index) == m.local_panel_id
+            }) {
+                structural_updates.insert(
+                    m.local_panel_id.clone(),
+                    apply::StructuralUpdate {
+                        source_widget_index: m.upstream_index as u32,
+                        source_widget_hash: p.source_widget_hash.clone().unwrap_or_default(),
+                        grid_row: p.grid_row,
+                        grid_column: p.grid_column,
+                        grid_width: p.grid_width,
+                        grid_height: p.grid_height,
+                    },
+                );
+            }
+        }
+
+        let outcome = apply::apply_diff(apply::ApplyInputs {
+            panels,
+            diff: &diff,
+            structural_updates,
+            added_panels: vec![], // v1: upstream widget bodies aren't materialised here
+        });
+
+        let replace_result = self.app_state.update(cx, |state, _cx| {
+            state
+                .dashboards
+                .replace_panels(dashboard_id, outcome.panels.clone())
+        });
+
+        match replace_result {
+            Ok(()) => {
+                self.removed_upstream_panel_ids = outcome.removed_upstream_panel_ids;
+                self.drift_status = sync_pill::DriftCheckOutcome::Clean;
+                self.diff_modal.update(cx, |m, cx| m.close(cx));
+                // Trigger reconcile of in-memory panel slots so the UI
+                // reflects the new layout on the next frame.
+                self.pending_panels_sync = true;
+                cx.notify();
+            }
+            Err(e) => {
+                Toast::error(format!("Refresh apply failed: {e}")).push(cx);
+            }
         }
     }
 

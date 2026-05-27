@@ -67,6 +67,19 @@ impl Render for DashboardDocument {
             self.execute_panel_context_menu_item(action_idx, window, cx);
         }
 
+        // Drain pending drift-check result (delivered by background task)
+        // into the foreground `drift_status` field, which feeds the sync
+        // pill's visual state on the next paint.
+        self.apply_pending_drift_status(cx);
+
+        // One-shot initial drift check (per spec R2.x). The flag is
+        // consumed here so subsequent renders don't refire; the
+        // 60-second cache window inside `trigger_drift_check` guards the
+        // network call against bursty manual clicks.
+        if std::mem::take(&mut self.pending_initial_drift_check) {
+            self.maybe_trigger_initial_drift_check(cx);
+        }
+
         // Dashboard toolbar (always visible — even with zero panels).
         // Eagerly convert to AnyElement so the cx borrow is released before
         // the panel-children loop calls cx.listener again.
@@ -582,6 +595,7 @@ impl Render for DashboardDocument {
             })
             .child(context_menu_overlay)
             .child(configure_overlay)
+            .child(self.diff_modal.clone())
     }
 }
 
