@@ -33,7 +33,8 @@ use dbflux_components::composites::render_menu_overlay;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::surface_card;
 use gpui::prelude::*;
-use gpui::{Context, IntoElement, Window, deferred, div, px};
+use gpui::{Context, IntoElement, KeyDownEvent, Window, deferred, div, px};
+use gpui_component::ActiveTheme;
 
 /// Minimum height for any dashboard panel (pixels).
 pub(crate) const MIN_PANEL_HEIGHT_PX: f32 = 240.0;
@@ -173,19 +174,16 @@ impl Render for DashboardDocument {
                 let resize_handle: gpui::AnyElement =
                     builder::panel_resize_handle(panel_index, cx).into_any_element();
 
-                // Mouse-move on the panel wrapper drives both drag-reorder slot
-                // updates and drag-resize dimension updates.
-                let on_mouse_move =
-                    cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
-                        // Drag-reorder: update drop slot.
-                        if this.drag_reorder.as_ref().is_some_and(|d| d.active) {
-                            this.update_drag_drop_slot(panel_index, cx);
-                        }
-                        // Drag-resize: update working dimensions.
-                        if this.drag_resize.as_ref().is_some_and(|d| d.active) {
-                            this.update_panel_resize(event.position, cx);
-                        }
-                    });
+                // Per-panel mouse-move feeds the drag-reorder drop-slot
+                // (each panel reports its own index when the cursor passes
+                // over it). The drag-resize position-update is handled at
+                // the dashboard-root level below so it tracks even when the
+                // cursor leaves the source panel.
+                let on_mouse_move = cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                    if this.drag_reorder.as_ref().is_some_and(|d| d.active) {
+                        this.update_drag_drop_slot(panel_index, cx);
+                    }
+                });
 
                 // Visual drop indicator: top border when this slot is the target.
                 let drop_border = if is_drop_target {
@@ -224,36 +222,63 @@ impl Render for DashboardDocument {
                 // sits inside the width wrapper and fills it completely; the
                 // resize handle is positioned absolutely on the card's
                 // bottom-right corner.
+                //
+                // When this panel is the keyboard-focused one, the card gets
+                // a 2 px ring-coloured border so the user can see which panel
+                // arrow keys will act on. Mouse-down on the card moves focus
+                // here too.
+                let theme = cx.theme();
+                let is_focused = self.focused_panel_index == Some(panel_index);
+                let on_card_mouse_down = cx.listener(move |this, _, _, cx| {
+                    this.focused_panel_index = Some(panel_index);
+                    cx.notify();
+                });
+
+                let card_focus_decoration =
+                    |card: gpui::Stateful<gpui::Div>| -> gpui::Stateful<gpui::Div> {
+                        if is_focused {
+                            card.border_2().border_color(theme.ring)
+                        } else {
+                            card
+                        }
+                    };
+
                 let panel_card = match slot {
-                    DashboardPanelSlot::Loaded { panel, .. } => surface_card(cx)
-                        .id(("panel-card", panel_index))
-                        .size_full()
-                        .overflow_hidden()
-                        .relative()
-                        .flex()
-                        .flex_col()
-                        .child(drop_border)
-                        .child(header)
-                        .child(div().flex_1().overflow_hidden().child(panel.clone()))
-                        .child(resize_handle)
-                        .into_any_element(),
-                    DashboardPanelSlot::Orphan { .. } => surface_card(cx)
-                        .id(("panel-card", panel_index))
-                        .size_full()
-                        .relative()
-                        .flex()
-                        .flex_col()
-                        .child(drop_border)
-                        .child(header)
-                        .child(
-                            div()
-                                .id(("dashboard-orphan-panel", panel_index))
-                                .flex_1()
-                                .text_sm()
-                                .child("Chart not found — saved chart was deleted"),
-                        )
-                        .child(resize_handle)
-                        .into_any_element(),
+                    DashboardPanelSlot::Loaded { panel, .. } => card_focus_decoration(
+                        surface_card(cx)
+                            .id(("panel-card", panel_index))
+                            .size_full()
+                            .overflow_hidden()
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .on_mouse_down(gpui::MouseButton::Left, on_card_mouse_down)
+                            .child(drop_border)
+                            .child(header)
+                            .child(div().flex_1().overflow_hidden().child(panel.clone()))
+                            .child(resize_handle),
+                    )
+                    .into_any_element(),
+                    DashboardPanelSlot::Orphan { .. } => card_focus_decoration(
+                        surface_card(cx)
+                            .id(("panel-card", panel_index))
+                            .size_full()
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .on_mouse_down(gpui::MouseButton::Left, on_card_mouse_down)
+                            .child(drop_border)
+                            .child(header)
+                            .child(
+                                div()
+                                    .id(("dashboard-orphan-panel", panel_index))
+                                    .flex_1()
+                                    .text_sm()
+                                    .child("Chart not found — saved chart was deleted"),
+                            )
+                            .child(resize_handle),
+                    )
+                    .into_any_element(),
                 };
 
                 let panel_element = effective_width_wrapper
@@ -310,10 +335,88 @@ impl Render for DashboardDocument {
                     .into_any_element()
             };
 
+        // While a drag-reorder or drag-resize is active, capture mouse
+        // movements and releases on the dashboard root so the gesture
+        // continues to track even when the cursor leaves the originating
+        // panel (e.g. dragging across the chart area or off-edge).
+        let drag_active_global = self.drag_reorder.as_ref().is_some_and(|d| d.active)
+            || self.drag_resize.as_ref().is_some_and(|r| r.active);
+
+        let on_global_mouse_move = cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+            if this.drag_resize.as_ref().is_some_and(|r| r.active) {
+                this.update_panel_resize(event.position, cx);
+            }
+        });
+
+        let on_global_mouse_up = cx.listener(move |this, _: &gpui::MouseUpEvent, _, cx| {
+            if this.drag_resize.as_ref().is_some_and(|r| r.active) {
+                this.end_panel_resize(cx);
+            }
+            if this.drag_reorder.as_ref().is_some_and(|d| d.active) {
+                this.end_panel_drag(cx);
+            }
+        });
+
+        // Wire keyboard navigation. The dashboard root tracks the document
+        // focus handle so on_key_down fires when the document is the active
+        // pane. Keys handled:
+        //   - Left / Right          : prev / next panel in visual order
+        //   - Up / Down              : move focus by one grid row
+        //   - Enter                 : open Configure popover for focused panel
+        //   - F2                    : start inline title edit on focused panel
+        //   - Delete / Backspace    : remove focused panel
+        //   - Escape                : close any open popover / menu
+        let focus_handle = self.focus_handle.clone();
+        let on_key_down = cx.listener(
+            |this, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+                let key = event.keystroke.key.as_str();
+                let modifiers = event.keystroke.modifiers;
+                // Ignore keys when an inline title edit is in progress; the
+                // input owns the keyboard.
+                if this.editing_title_panel_index.is_some() || this.editing_dashboard_name {
+                    return;
+                }
+                if modifiers.platform || modifiers.alt || modifiers.shift || modifiers.control {
+                    return;
+                }
+                match key {
+                    "left" => this.move_panel_focus(-1, cx),
+                    "right" => this.move_panel_focus(1, cx),
+                    "up" => this.move_panel_focus_rows(-1, cx),
+                    "down" => this.move_panel_focus_rows(1, cx),
+                    "enter" => {
+                        if let Some(idx) = this.focused_panel_index {
+                            this.start_configure_panel(idx as usize, cx);
+                        }
+                    }
+                    "f2" => {
+                        if let Some(idx) = this.focused_panel_index {
+                            this.start_panel_title_edit(idx, window, cx);
+                        }
+                    }
+                    "delete" | "backspace" => {
+                        if let Some(idx) = this.focused_panel_index {
+                            this.remove_panel(idx, cx);
+                        }
+                    }
+                    "escape" => {
+                        if this.panel_context_menu.is_some() {
+                            this.close_panel_context_menu(cx);
+                        } else if this.pending_configure_panel_index.is_some() {
+                            this.close_configure_panel(cx);
+                        }
+                    }
+                    _ => {}
+                }
+            },
+        );
+
         div()
             .flex()
             .flex_col()
             .size_full()
+            .track_focus(&focus_handle)
+            .on_key_down(on_key_down)
             .child(toolbar)
             .child(
                 div()
@@ -323,6 +426,10 @@ impl Render for DashboardDocument {
                     .w_full()
                     .children(panel_children),
             )
+            .when(drag_active_global, |el| {
+                el.on_mouse_move(on_global_mouse_move)
+                    .on_mouse_up(gpui::MouseButton::Left, on_global_mouse_up)
+            })
             .child(context_menu_overlay)
             .child(configure_overlay)
     }

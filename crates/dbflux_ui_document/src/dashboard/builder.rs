@@ -307,15 +307,10 @@ pub(super) fn panel_header(
     let is_editing = editing_input.is_some();
     let title_owned = title.to_string();
 
-    // Start inline title edit on single click (only when not editing).
-    let on_title_click = if !is_editing {
-        let on_click = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-            this.start_panel_title_edit(panel_index, window, cx);
-        });
-        Some(on_click)
-    } else {
-        None
-    };
+    // Inline title edit is reachable only through the kebab menu's
+    // "Edit title…" entry. Single-clicking the title text used to start the
+    // edit, but the user found it noisy (every accidental click became an
+    // edit), so the click handler is intentionally not wired here.
 
     // Context menu on right-click — anchors inline next to this panel's
     // kebab, so no event position is captured.
@@ -356,6 +351,11 @@ pub(super) fn panel_header(
         cx.stop_propagation();
     };
 
+    // Header gets a move-cursor when it can be dragged. The previous
+    // OpenHand cursor also appeared while just hovering the title text,
+    // which the user read as an unwanted "hover effect" on the panel; now
+    // the cursor only changes on the header (drag region) and only when
+    // the panel isn't being edited.
     let mut header = div()
         .id(("panel-header", panel_index))
         .flex()
@@ -364,8 +364,11 @@ pub(super) fn panel_header(
         .w_full()
         .gap(px(4.0)) // guardrail-allow: header item spacing
         .p(px(4.0)) // guardrail-allow: header padding
-        .cursor(CursorStyle::OpenHand)
         .on_mouse_down(MouseButton::Right, on_right_click);
+
+    if !is_editing {
+        header = header.cursor(CursorStyle::OpenHand);
+    }
 
     if let Some(on_start) = on_drag_start {
         header = header.on_mouse_down(MouseButton::Left, on_start);
@@ -387,23 +390,15 @@ pub(super) fn panel_header(
                 .small(),
         );
     } else {
-        let title_elem = if let Some(on_click) = on_title_click {
-            div()
-                .id(("panel-title", panel_index))
-                .flex_1()
-                .text_sm()
-                .cursor(CursorStyle::OpenHand)
-                .child(title_owned)
-                .on_click(on_click)
-                .into_any_element()
-        } else {
-            div()
-                .id(("panel-title", panel_index))
-                .flex_1()
-                .text_sm()
-                .child(title_owned)
-                .into_any_element()
-        };
+        // Title is a static label. Clicking it used to open inline edit,
+        // but that was too easy to trigger by accident; the kebab menu's
+        // "Edit title…" entry is now the only way to start the edit.
+        let title_elem = div()
+            .id(("panel-title", panel_index))
+            .flex_1()
+            .text_sm()
+            .child(title_owned)
+            .into_any_element();
 
         // Kebab menu trigger — matches the sidebar pattern: a borderless
         // square div with content-only sizing and a background-only hover
@@ -516,20 +511,37 @@ pub(super) fn panel_resize_handle(
         this.start_panel_resize(panel_index, event.position, cx);
     });
 
-    let on_resize_end = cx.listener(move |this, _: &gpui::MouseUpEvent, _, cx| {
-        this.end_panel_resize(cx);
-    });
-
+    let theme = cx.theme();
+    // Visible 16 px grip in the panel's bottom-right corner. The previous
+    // 8 px hit-area was invisible against the chart content underneath and
+    // the user couldn't find it. A diagonal stripe colored with the muted
+    // foreground makes it readable without competing with the chart.
+    let grip_color = theme.muted_foreground;
+    let hover_bg = theme.secondary;
     div()
         .id(("panel-resize", panel_index))
-        .w(px(8.0)) // guardrail-allow: resize handle hit area (8px is below normal token range)
-        .h(px(8.0)) // guardrail-allow: resize handle hit area
+        .w(px(16.0)) // guardrail-allow: resize handle hit area
+        .h(px(16.0)) // guardrail-allow: resize handle hit area
         .absolute()
         .bottom(px(0.0))
         .right(px(0.0))
+        .flex()
+        .items_end()
+        .justify_end()
         .cursor(CursorStyle::ResizeUpLeftDownRight)
+        .hover(move |d| d.bg(hover_bg))
         .on_mouse_down(MouseButton::Left, on_resize_start)
-        .on_mouse_up(MouseButton::Left, on_resize_end)
+        .child(
+            // Two short diagonal lines mimicking the standard SE-resize grip.
+            div()
+                .w(px(10.0))
+                .h(px(10.0))
+                .border_b_2()
+                .border_r_2()
+                .border_color(grip_color)
+                .mr(px(2.0))
+                .mb(px(2.0)),
+        )
 }
 
 // ---------------------------------------------------------------------------

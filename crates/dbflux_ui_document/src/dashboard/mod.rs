@@ -172,6 +172,10 @@ pub struct DashboardDocument {
     // Focus
     focus_handle: FocusHandle,
 
+    /// Index of the panel currently highlighted with the keyboard focus ring.
+    /// Arrow keys move this between panels; Enter / Delete / F2 act on it.
+    pub(crate) focused_panel_index: Option<u32>,
+
     // ---- Visual builder state (Phase Q) ----
     /// Currently selected time-range preset (persisted in the dashboard row).
     /// `None` defaults to Last24Hours at render time.
@@ -389,6 +393,8 @@ impl DashboardDocument {
         // the render only supports up to 4 at this time.
         let grid_columns = grid_columns.clamp(1, 4);
 
+        let initial_focused = (!panel_slots.is_empty()).then_some(0u32);
+
         Self {
             id: DocumentId::new(),
             dashboard_id,
@@ -403,6 +409,7 @@ impl DashboardDocument {
             is_backgrounded: false,
             pending_refresh_on_focus: false,
             focus_handle: cx.focus_handle(),
+            focused_panel_index: initial_focused,
             // Visual builder state (Phase Q).
             shared_time_range_preset,
             shared_refresh_policy,
@@ -1054,6 +1061,13 @@ impl DashboardDocument {
             },
         );
 
+        // Focus the input so the user can immediately type. Without this the
+        // input renders but ignores keyboard events ("no se hace el focus
+        // real"). select_all is private on InputState, so we rely on focus
+        // alone — the caret lands at the end of the existing title and the
+        // user can Ctrl/Cmd+A to clear if they want a full rewrite.
+        input.update(cx, |state, cx| state.focus(window, cx));
+
         self.panel_title_input = Some(input);
         self._panel_title_edit_subscription = Some(subscription);
         self.editing_title_panel_index = Some(panel_index);
@@ -1134,6 +1148,53 @@ impl DashboardDocument {
         self.dashboard_name_input = None;
         self._dashboard_name_edit_subscription = None;
         cx.notify();
+    }
+
+    // ---- Keyboard focus / navigation ----
+
+    /// Returns the panel slots sorted by `(grid_row, grid_column)` paired with
+    /// their original `panel_index` (the slot's position in `panel_slots`,
+    /// which is also the index every public API uses).
+    fn focus_navigation_order(&self) -> Vec<u32> {
+        let mut indexed: Vec<(u32, super::dashboard::PanelGridPos)> = self
+            .panel_slots
+            .iter()
+            .enumerate()
+            .map(|(i, slot)| (i as u32, slot.grid_pos()))
+            .collect();
+        indexed.sort_by_key(|(_, pos)| (pos.grid_row, pos.grid_column));
+        indexed.into_iter().map(|(idx, _)| idx).collect()
+    }
+
+    /// Move the keyboard focus ring by `delta` along the visual reading order
+    /// (left→right, top→bottom). `delta = -1` for previous, `+1` for next.
+    pub fn move_panel_focus(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let order = self.focus_navigation_order();
+        if order.is_empty() {
+            self.focused_panel_index = None;
+            return;
+        }
+
+        let current_pos = self
+            .focused_panel_index
+            .and_then(|idx| order.iter().position(|i| *i == idx))
+            .unwrap_or(0) as i32;
+
+        let new_pos = (current_pos + delta).rem_euclid(order.len() as i32) as usize;
+        self.focused_panel_index = Some(order[new_pos]);
+        cx.notify();
+    }
+
+    /// Move focus by `delta` rows in the grid (Arrow Up / Down).
+    pub fn move_panel_focus_rows(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let cols = self.grid_columns.max(1) as i32;
+        self.move_panel_focus(delta * cols, cx);
+    }
+
+    /// Returns the kebab menu items for keyboard activation on the focused
+    /// panel: Enter opens Configure, F2 starts the rename, Delete removes.
+    pub fn focused_panel_index(&self) -> Option<u32> {
+        self.focused_panel_index
     }
 
     // ---- Visual builder: per-panel context menu (Q.3) ----
