@@ -37,8 +37,10 @@ pub struct Dashboard {
 
 /// Minimal payload for appending a new panel to a dashboard.
 ///
-/// The manager assigns `panel_index`, `grid_row`, `grid_column`,
-/// `grid_width = 1`, `grid_height = 1`, and `title_override = None`.
+/// `append_panels` assigns `panel_index`, places the panel on a new row past
+/// every existing panel at `grid_column = 0`, sets `grid_width = 12,
+/// grid_height = 2` (full-width on the canonical 12-column grid), and sets
+/// `title_override = None`.
 #[derive(Debug, Clone)]
 pub struct DashboardPanelDraft {
     pub saved_chart_id: Uuid,
@@ -238,6 +240,28 @@ fn refresh_policy_kind_to_str(p: SavedChartRefreshPolicy) -> String {
 fn panel_index_to_grid(panel_index: u32, grid_columns: u32) -> (u32, u32) {
     let cols = grid_columns.max(1);
     (panel_index / cols, panel_index % cols)
+}
+
+/// Default grid width for a panel appended via `append_panels`.
+///
+/// The dashboard grid is now fixed at 12 columns. New panels land full-width on
+/// a new row, matching Grafana's default add-panel behaviour.
+const DEFAULT_NEW_PANEL_WIDTH: u32 = 12;
+
+/// Default grid height for a panel appended via `append_panels`.
+const DEFAULT_NEW_PANEL_HEIGHT: u32 = 2;
+
+/// Returns the first grid row that lies past every panel in `panels`.
+///
+/// Equivalent to `max(grid_row + grid_height)` over the slice, or `0` when the
+/// slice is empty. Used by `append_panels` to find the row a new full-width
+/// panel should land on.
+fn next_free_row(panels: &[DashboardPanel]) -> u32 {
+    panels
+        .iter()
+        .map(|p| p.grid_row.saturating_add(p.grid_height))
+        .max()
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -547,42 +571,48 @@ impl DashboardManager {
         Ok(())
     }
 
-    /// Appends `drafts.len()` panels at the next contiguous grid slots.
+    /// Appends `drafts.len()` panels to the dashboard.
     ///
-    /// Each new panel starts at `grid_width = 1, grid_height = 1,
-    /// title_override = None`. `panel_index` is assigned dense starting
+    /// Each new panel lands full-width on a new row past every existing panel
+    /// (`grid_column = 0, grid_width = DEFAULT_NEW_PANEL_WIDTH,
+    /// grid_height = DEFAULT_NEW_PANEL_HEIGHT, title_override = None`).
+    /// Subsequent drafts in the same call stack down by their height so they
+    /// do not overlap each other. `panel_index` is assigned dense starting
     /// from the current count.
     pub fn append_panels(
         &mut self,
         dashboard_id: Uuid,
         drafts: Vec<DashboardPanelDraft>,
     ) -> Result<(), StorageError> {
-        let grid_columns = self
-            .dashboards
-            .iter()
-            .find(|d| d.id == dashboard_id)
-            .map(|d| d.grid_columns)
-            .ok_or_else(|| StorageError::Data(format!("dashboard not found: {dashboard_id}")))?;
+        // Verify the dashboard exists. `grid_columns` is intentionally ignored
+        // here — the dashboard grid is always 12 wide at the UI level.
+        if !self.dashboards.iter().any(|d| d.id == dashboard_id) {
+            return Err(StorageError::Data(format!(
+                "dashboard not found: {dashboard_id}"
+            )));
+        }
 
         let current_panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
         let base_index = current_panels.len() as u32;
+        let mut next_row = next_free_row(&current_panels);
 
         let mut new_panels = current_panels.clone();
 
         for (i, draft) in drafts.into_iter().enumerate() {
             let panel_index = base_index + i as u32;
-            let (grid_row, grid_column) = panel_index_to_grid(panel_index, grid_columns);
 
             new_panels.push(DashboardPanel {
                 dashboard_id,
                 panel_index,
                 saved_chart_id: draft.saved_chart_id,
                 title_override: None,
-                grid_row,
-                grid_column,
-                grid_width: 1,
-                grid_height: 1,
+                grid_row: next_row,
+                grid_column: 0,
+                grid_width: DEFAULT_NEW_PANEL_WIDTH,
+                grid_height: DEFAULT_NEW_PANEL_HEIGHT,
             });
+
+            next_row = next_row.saturating_add(DEFAULT_NEW_PANEL_HEIGHT);
         }
 
         let dtos: Vec<DashboardPanelDto> = new_panels.iter().map(panel_to_dto).collect();
@@ -590,6 +620,44 @@ impl DashboardManager {
             .replace_panels_for_dashboard(dashboard_id, &dtos)?;
 
         self.panels.insert(dashboard_id, new_panels);
+        Ok(())
+    }
+
+    /// Replace the grid position and size of a single panel.
+    ///
+    /// Clamps `grid_column` to `[0, 11]`, `grid_width` to `[1, 12]`, and
+    /// `grid_height` to `[1, 12]`. `grid_row` is stored unchanged. Persists
+    /// the entire panel set via `replace_panels_for_dashboard` so the row's
+    /// other fields stay intact.
+    pub fn update_panel_position(
+        &mut self,
+        dashboard_id: Uuid,
+        panel_index: u32,
+        grid_column: u32,
+        grid_row: u32,
+        grid_width: u32,
+        grid_height: u32,
+    ) -> Result<(), StorageError> {
+        let mut panels = self.panels.get(&dashboard_id).cloned().unwrap_or_default();
+        let panel = panels
+            .iter_mut()
+            .find(|p| p.panel_index == panel_index)
+            .ok_or_else(|| {
+                StorageError::Data(format!(
+                    "panel_index {panel_index} not found in dashboard {dashboard_id}"
+                ))
+            })?;
+
+        panel.grid_column = grid_column.min(11);
+        panel.grid_row = grid_row;
+        panel.grid_width = grid_width.clamp(1, 12);
+        panel.grid_height = grid_height.clamp(1, 12);
+
+        let dtos: Vec<DashboardPanelDto> = panels.iter().map(panel_to_dto).collect();
+        self.panels_repo
+            .replace_panels_for_dashboard(dashboard_id, &dtos)?;
+
+        self.panels.insert(dashboard_id, panels);
         Ok(())
     }
 
@@ -1140,6 +1208,78 @@ mod tests {
                 .title_override
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_append_panels_defaults_to_full_width_on_new_row() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        mgr.append_panels(
+            dash_id,
+            vec![
+                DashboardPanelDraft {
+                    saved_chart_id: Uuid::new_v4(),
+                },
+                DashboardPanelDraft {
+                    saved_chart_id: Uuid::new_v4(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let panels = mgr.panels_for_dashboard(dash_id);
+        assert_eq!(panels.len(), 2);
+        // Both panels span the full 12-column row, stacked vertically.
+        assert_eq!(panels[0].grid_column, 0);
+        assert_eq!(panels[0].grid_row, 0);
+        assert_eq!(panels[0].grid_width, 12);
+        assert_eq!(panels[0].grid_height, 2);
+        assert_eq!(panels[1].grid_column, 0);
+        assert_eq!(panels[1].grid_row, 2);
+        assert_eq!(panels[1].grid_width, 12);
+        assert_eq!(panels[1].grid_height, 2);
+    }
+
+    #[test]
+    fn test_update_panel_position_clamps_and_persists() {
+        let (mut mgr, rt) = make_manager_with_rt();
+        let profile_id = insert_profile(&rt);
+        let dash_id = mgr
+            .create_dashboard(
+                "D".to_string(),
+                None,
+                profile_id,
+                None,
+                SavedChartRefreshPolicy::Off,
+            )
+            .unwrap();
+
+        mgr.append_panels(
+            dash_id,
+            vec![DashboardPanelDraft {
+                saved_chart_id: Uuid::new_v4(),
+            }],
+        )
+        .unwrap();
+
+        // Request out-of-range values; expect clamping.
+        mgr.update_panel_position(dash_id, 0, 99, 5, 0, 999)
+            .unwrap();
+        let panel = &mgr.panels_for_dashboard(dash_id)[0];
+        assert_eq!(panel.grid_column, 11);
+        assert_eq!(panel.grid_row, 5);
+        assert_eq!(panel.grid_width, 1);
+        assert_eq!(panel.grid_height, 12);
     }
 
     // ---- panel_index_to_grid ------------------------------------------------

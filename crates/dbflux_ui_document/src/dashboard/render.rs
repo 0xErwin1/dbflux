@@ -1,46 +1,47 @@
 //! `Render` implementation for `DashboardDocument`.
 //!
-//! The render logic iterates `panel_slots` sorted by `(grid_row, grid_column)`,
-//! rendering each loaded panel inline and each orphan slot as a visible
-//! broken-placeholder element. The dashboard toolbar (time-range + refresh
-//! policy + "+ Add Panel") is rendered above the panel grid.
+//! Layout model (Grafana-style 12-column free grid):
+//! - Every dashboard uses a fixed 12-column grid; the persisted
+//!   `viz_dashboards.grid_columns` value is ignored by the UI.
+//! - The grid container is `position: relative`; each panel is absolutely
+//!   positioned with `left = col * (100/12)%`, `width = w * (100/12)%`,
+//!   `top = row * DASHBOARD_ROW_PX`, `height = h * DASHBOARD_ROW_PX`.
+//! - A zero-height width probe sits as the first child so the grid container's
+//!   rendered width can be read back through `on_children_prepainted` and
+//!   used to snap drag deltas to grid cells.
 //!
-//! Layout model:
-//! - The panel grid uses `flex_row` + `flex_wrap` so panels flow left-to-right
-//!   and wrap when a row is full.
-//! - Each panel is wrapped in a `w_1_2()` container (50% of grid width) for
-//!   `grid_columns = 2` (the V1 default). Future `grid_columns` values will
-//!   adjust this accordingly.
-//! - Panel height: `MIN_PANEL_HEIGHT_PX` + (`grid_height - 1`) × `PANEL_HEIGHT_STEP_PX`.
+//! Edit/View modes:
+//! - `View` (the default for new tabs) renders panels read-only: no drag
+//!   cursor, no resize handles, no kebab menu, no focus ring, and the keymap
+//!   is inert.
+//! - `Edit` renders three resize handles per panel (right edge, bottom edge,
+//!   bottom-right corner grip), enables drag-to-move on the header, and shows
+//!   the focus ring on the keyboard-focused panel. The dashboard toolbar
+//!   exposes a Pencil/Eye toggle that flips the mode for the tab.
 //!
-//! Visual builder surfaces (Phase Q):
-//! - `dashboard_toolbar` from `builder.rs` renders the time-range, refresh, and
-//!   add-panel controls above the grid.
-//! - Each panel slot renders a `panel_header` (drag handle + title + close) and
-//!   a `panel_resize_handle` (bottom-right 8×8 px).
-//! - The per-panel context menu is rendered as a floating overlay when
-//!   `panel_context_menu.is_some()`.
-//! - A drop-indicator overlay is shown at the current `drag_reorder.drop_slot`
-//!   when a drag is active.
-//! - The dashboard name is no longer rendered in the toolbar; it lives in the
-//!   tab title alone. `editing_dashboard_name` state remains so renaming via
-//!   the tab title still works through `start_dashboard_name_edit`.
+//! Drag affordances:
+//! - Drag-to-move snaps to grid cells on every mouse-move; the ghost outline
+//!   tracks the working position. Mouse-up commits when the rectangle does
+//!   not overlap any other panel, otherwise it snaps back with a soft toast.
+//! - Drag-resize is axis-restricted via `ResizeAxis` so the three handles can
+//!   share a single `DragResizeState` without mutating dimensions the user
+//!   did not grab.
 
 use super::builder;
 use super::configure_popover;
-use super::{DashboardDocument, DashboardPanelSlot};
+use super::{DASHBOARD_GRID_COLUMNS, DASHBOARD_ROW_PX, DashboardDocument, DashboardPanelSlot};
 use dbflux_components::composites::render_menu_overlay;
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::surface_card;
 use gpui::prelude::*;
-use gpui::{Context, IntoElement, KeyDownEvent, Window, deferred, div, px};
+use gpui::{Bounds, Context, IntoElement, KeyDownEvent, Pixels, Window, deferred, div, px};
 use gpui_component::ActiveTheme;
+use std::cell::Cell;
+use std::rc::Rc;
 
-/// Minimum height for any dashboard panel (pixels).
+/// Minimum height for the empty-state CTA. Live panels size off
+/// `DASHBOARD_ROW_PX` directly, not this constant.
 pub(crate) const MIN_PANEL_HEIGHT_PX: f32 = 240.0;
-
-/// Additional height added per extra `grid_height` unit above 1 (pixels).
-pub(crate) const PANEL_HEIGHT_STEP_PX: f32 = 120.0;
 
 impl Render for DashboardDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -65,26 +66,25 @@ impl Render for DashboardDocument {
             self.execute_panel_context_menu_item(action_idx, window, cx);
         }
 
-        let grid_columns = self.grid_columns;
-
         // Dashboard toolbar (always visible — even with zero panels).
         // Eagerly convert to AnyElement so the cx borrow is released before
         // the panel-children loop calls cx.listener again.
         let toolbar: gpui::AnyElement = builder::dashboard_toolbar(self, cx).into_any_element();
 
-        // Collect panel children in sorted grid order: (grid_row, grid_column).
-        let mut sorted_slots: Vec<DashboardPanelSlot> = self.panel_slots.clone();
-        sorted_slots.sort_by_key(|s| {
-            let pos = s.grid_pos();
-            (pos.grid_row, pos.grid_column)
-        });
+        let edit_mode = self.is_edit_mode();
 
+        // Per-panel children render in original `panel_slots` order; the visual
+        // position is driven entirely by `grid_pos` via absolute positioning.
         let drag_active = self.drag_reorder.as_ref().is_some_and(|d| d.active);
-        let drag_drop_slot = self.drag_reorder.as_ref().map_or(u32::MAX, |d| d.drop_slot); // map_or is fine here; not a boolean simplification
+        let drag_panel_index = self.drag_reorder.as_ref().map(|d| d.from_index);
+        let drag_working = self
+            .drag_reorder
+            .as_ref()
+            .map(|d| (d.working_column, d.working_row));
 
         let mut panel_children: Vec<gpui::AnyElement> = Vec::new();
 
-        if sorted_slots.is_empty() {
+        if self.panel_slots.is_empty() {
             // Empty-state CTA — shown when no panels exist.
             let on_add = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
                 this.request_add_panel(cx);
@@ -114,24 +114,38 @@ impl Render for DashboardDocument {
                     .into_any_element(),
             );
         } else {
-            for (slot_idx, slot) in sorted_slots.iter().enumerate() {
+            for (slot_idx, slot) in self.panel_slots.iter().enumerate() {
                 let panel_index = slot_idx as u32;
                 let grid_pos = slot.grid_pos();
-                let panel_height_px = panel_height(grid_pos.grid_height);
 
-                // Each panel occupies 1/grid_columns of the row width.
-                // V1 supports 1-4 columns; clamp is already applied at construction.
-                let panel_wrapper = match grid_columns {
-                    1 => div().w_full(),
-                    3 => div().w_1_3(),
-                    4 => div().w_1_4(),
-                    // Default: 2 columns.
-                    _ => div().w_1_2(),
+                // Effective rectangle: while a drag-resize or drag-to-move is in
+                // progress on this panel, render the working ghost dimensions
+                // and the working column/row.
+                let (eff_col, eff_row, eff_w, eff_h) = if let Some(ref rs) = self
+                    .drag_resize
+                    .as_ref()
+                    .filter(|rs| rs.panel_index == panel_index)
+                {
+                    (
+                        grid_pos.grid_column,
+                        grid_pos.grid_row,
+                        rs.current_width,
+                        rs.current_height,
+                    )
+                } else if drag_panel_index == Some(panel_index)
+                    && let Some((col, row)) = drag_working
+                {
+                    (col, row, grid_pos.grid_width, grid_pos.grid_height)
+                } else {
+                    (
+                        grid_pos.grid_column,
+                        grid_pos.grid_row,
+                        grid_pos.grid_width,
+                        grid_pos.grid_height,
+                    )
                 };
 
                 // Build the title string for this panel.
-                // Priority: title_override (when Some and non-empty) → chart name.
-                // Orphan slots fall through to "Chart not found" in the match below.
                 let panel_title = match slot {
                     DashboardPanelSlot::Loaded {
                         panel,
@@ -152,10 +166,6 @@ impl Render for DashboardDocument {
                     None
                 };
 
-                // Drop indicator: when a drag is active and this slot is the target,
-                // add a visible top border.
-                let is_drop_target = drag_active && drag_drop_slot == panel_index;
-
                 let menu_open_for_this = self
                     .panel_context_menu
                     .as_ref()
@@ -167,81 +177,47 @@ impl Render for DashboardDocument {
                     editing_input,
                     drag_active,
                     menu_open_for_this,
+                    edit_mode,
                     cx,
                 )
                 .into_any_element();
 
-                let resize_handle: gpui::AnyElement =
-                    builder::panel_resize_handle(panel_index, cx).into_any_element();
-
-                // Per-panel mouse-move feeds the drag-reorder drop-slot
-                // (each panel reports its own index when the cursor passes
-                // over it). The drag-resize position-update is handled at
-                // the dashboard-root level below so it tracks even when the
-                // cursor leaves the source panel.
-                let on_mouse_move = cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
-                    if this.drag_reorder.as_ref().is_some_and(|d| d.active) {
-                        this.update_drag_drop_slot(panel_index, cx);
+                // Focus ring is an edit-mode affordance — in view mode the
+                // dashboard is read-only and no panel is "armed".
+                let ring_color = cx.theme().ring;
+                let is_focused = edit_mode && self.focused_panel_index == Some(panel_index);
+                let on_card_mouse_down = cx.listener(move |this, _, _, cx| {
+                    if this.is_edit_mode() {
+                        this.focused_panel_index = Some(panel_index);
+                        cx.notify();
                     }
                 });
 
-                // Visual drop indicator: top border when this slot is the target.
-                let drop_border = if is_drop_target {
-                    // 2px top border as a visual drop cue.
-                    div()
-                        .id(("drop-indicator", panel_index))
-                        .w_full()
-                        .h(px(2.0))
-                        .into_any_element()
-                } else {
-                    div().id(("drop-spacer", panel_index)).into_any_element()
-                };
-
-                // Wrap resize state: show ghost dimensions during resize.
-                let (effective_height, effective_width_wrapper) =
-                    if let Some(ref rs) = self.drag_resize {
-                        if rs.panel_index == panel_index {
-                            (
-                                panel_height(rs.current_height),
-                                match rs.current_width.min(grid_columns) {
-                                    1 if grid_columns == 1 => div().w_full(),
-                                    3 => div().w_1_3(),
-                                    4 => div().w_1_4(),
-                                    _ => div().w_1_2(),
-                                },
-                            )
-                        } else {
-                            (panel_height_px, panel_wrapper)
-                        }
-                    } else {
-                        (panel_height_px, panel_wrapper)
-                    };
-
-                // Each panel is wrapped in a card surface so it has the
-                // standard background + border + rounded corners. The card
-                // sits inside the width wrapper and fills it completely; the
-                // resize handle is positioned absolutely on the card's
-                // bottom-right corner.
-                //
-                // When this panel is the keyboard-focused one, the card gets
-                // a 2 px ring-coloured border so the user can see which panel
-                // arrow keys will act on. Mouse-down on the card moves focus
-                // here too.
-                let theme = cx.theme();
-                let is_focused = self.focused_panel_index == Some(panel_index);
-                let on_card_mouse_down = cx.listener(move |this, _, _, cx| {
-                    this.focused_panel_index = Some(panel_index);
-                    cx.notify();
-                });
-
                 let card_focus_decoration =
-                    |card: gpui::Stateful<gpui::Div>| -> gpui::Stateful<gpui::Div> {
+                    move |card: gpui::Stateful<gpui::Div>| -> gpui::Stateful<gpui::Div> {
                         if is_focused {
-                            card.border_2().border_color(theme.ring)
+                            card.border_2().border_color(ring_color)
                         } else {
                             card
                         }
                     };
+
+                // Resize handles render only in edit mode.
+                let resize_right = if edit_mode {
+                    Some(builder::panel_resize_right(panel_index, cx).into_any_element())
+                } else {
+                    None
+                };
+                let resize_bottom = if edit_mode {
+                    Some(builder::panel_resize_bottom(panel_index, cx).into_any_element())
+                } else {
+                    None
+                };
+                let resize_corner = if edit_mode {
+                    Some(builder::panel_resize_corner(panel_index, cx).into_any_element())
+                } else {
+                    None
+                };
 
                 let panel_card = match slot {
                     DashboardPanelSlot::Loaded { panel, .. } => card_focus_decoration(
@@ -253,10 +229,11 @@ impl Render for DashboardDocument {
                             .flex()
                             .flex_col()
                             .on_mouse_down(gpui::MouseButton::Left, on_card_mouse_down)
-                            .child(drop_border)
                             .child(header)
                             .child(div().flex_1().overflow_hidden().child(panel.clone()))
-                            .child(resize_handle),
+                            .when_some(resize_right, |el, r| el.child(r))
+                            .when_some(resize_bottom, |el, r| el.child(r))
+                            .when_some(resize_corner, |el, r| el.child(r)),
                     )
                     .into_any_element(),
                     DashboardPanelSlot::Orphan { .. } => card_focus_decoration(
@@ -267,7 +244,6 @@ impl Render for DashboardDocument {
                             .flex()
                             .flex_col()
                             .on_mouse_down(gpui::MouseButton::Left, on_card_mouse_down)
-                            .child(drop_border)
                             .child(header)
                             .child(
                                 div()
@@ -276,16 +252,31 @@ impl Render for DashboardDocument {
                                     .text_sm()
                                     .child("Chart not found — saved chart was deleted"),
                             )
-                            .child(resize_handle),
+                            .when_some(resize_right, |el, r| el.child(r))
+                            .when_some(resize_bottom, |el, r| el.child(r))
+                            .when_some(resize_corner, |el, r| el.child(r)),
                     )
                     .into_any_element(),
                 };
 
-                let panel_element = effective_width_wrapper
+                // Position the panel absolutely on the 12-column grid.
+                // `left` / `width` are percentages of the grid container's
+                // current width; `top` / `height` are fixed pixel multiples of
+                // `DASHBOARD_ROW_PX`. Inset 4 px on every side so neighbouring
+                // panels do not visually touch.
+                let col_percent = (eff_col as f32) * (100.0 / DASHBOARD_GRID_COLUMNS as f32);
+                let width_percent = (eff_w as f32) * (100.0 / DASHBOARD_GRID_COLUMNS as f32);
+                let top_px = (eff_row as f32) * DASHBOARD_ROW_PX;
+                let height_px = (eff_h as f32) * DASHBOARD_ROW_PX;
+
+                let panel_element = div()
                     .id(("panel-slot", panel_index))
-                    .h(px(effective_height))
-                    .p(px(4.0)) // guardrail-allow: gutter around each card so neighbouring cards don't touch
-                    .on_mouse_move(on_mouse_move)
+                    .absolute()
+                    .left(gpui::relative(col_percent / 100.0))
+                    .top(px(top_px))
+                    .w(gpui::relative(width_percent / 100.0))
+                    .h(px(height_px))
+                    .p(px(4.0)) // guardrail-allow: gutter so neighbouring cards do not touch
                     .child(panel_card)
                     .into_any_element();
 
@@ -335,16 +326,33 @@ impl Render for DashboardDocument {
                     .into_any_element()
             };
 
-        // While a drag-reorder or drag-resize is active, capture mouse
+        // While a drag-to-move or drag-resize is active, capture mouse
         // movements and releases on the dashboard root so the gesture
         // continues to track even when the cursor leaves the originating
         // panel (e.g. dragging across the chart area or off-edge).
         let drag_active_global = self.drag_reorder.as_ref().is_some_and(|d| d.active)
             || self.drag_resize.as_ref().is_some_and(|r| r.active);
 
+        // Shared cell that captures the grid container's last painted width.
+        // The container reports its rendered bounds via `on_children_prepainted`;
+        // the global mouse-move handler reads the captured width to convert
+        // pixel deltas into grid columns.
+        let grid_width_px: Rc<Cell<f32>> = Rc::new(Cell::new(0.0));
+        let grid_width_for_capture = Rc::clone(&grid_width_px);
+        let grid_width_for_move = Rc::clone(&grid_width_px);
+
         let on_global_mouse_move = cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+            let width = grid_width_for_move.get();
+            let px_per_col = if width > 0.0 {
+                width / DASHBOARD_GRID_COLUMNS as f32
+            } else {
+                0.0
+            };
             if this.drag_resize.as_ref().is_some_and(|r| r.active) {
-                this.update_panel_resize(event.position, cx);
+                this.update_panel_resize(event.position, px_per_col, cx);
+            }
+            if this.drag_reorder.as_ref().is_some_and(|d| d.active) {
+                this.update_panel_drag(event.position, px_per_col, cx);
             }
         });
 
@@ -356,6 +364,69 @@ impl Render for DashboardDocument {
                 this.end_panel_drag(cx);
             }
         });
+
+        // Drag ghost: a dashed ring at the working column/row during a
+        // drag-to-move so the user can see where the panel will land.
+        let drag_ghost: Option<gpui::AnyElement> = self.drag_reorder.as_ref().and_then(|state| {
+            let panel = self.panel_slots.get(state.from_index as usize)?;
+            let pos = panel.grid_pos();
+            let col_percent =
+                (state.working_column as f32) * (100.0 / DASHBOARD_GRID_COLUMNS as f32);
+            let width_percent = (pos.grid_width as f32) * (100.0 / DASHBOARD_GRID_COLUMNS as f32);
+            let top_px = (state.working_row as f32) * DASHBOARD_ROW_PX;
+            let height_px = (pos.grid_height as f32) * DASHBOARD_ROW_PX;
+
+            let theme = cx.theme();
+            Some(
+                div()
+                    .id("dashboard-drag-ghost")
+                    .absolute()
+                    .left(gpui::relative(col_percent / 100.0))
+                    .top(px(top_px))
+                    .w(gpui::relative(width_percent / 100.0))
+                    .h(px(height_px))
+                    .p(px(4.0)) // guardrail-allow: match the panel gutter so the ghost lines up
+                    .child(
+                        div()
+                            .size_full()
+                            .border_2()
+                            .border_dashed()
+                            .border_color(theme.ring)
+                            .rounded(px(4.0)), // guardrail-allow: subtle hint matches surface_card radius
+                    )
+                    .into_any_element(),
+            )
+        });
+
+        // Grid container height: cover every panel's (row + height), plus a
+        // little headroom while dragging so a moved ghost extending past the
+        // bottom still fits inside the container.
+        let max_row_end = self
+            .panel_slots
+            .iter()
+            .map(|s| {
+                let p = s.grid_pos();
+                p.grid_row.saturating_add(p.grid_height)
+            })
+            .max()
+            .unwrap_or(0);
+        let drag_ghost_extent = self.drag_reorder.as_ref().map_or(0u32, |state| {
+            self.panel_slots
+                .get(state.from_index as usize)
+                .map(|s| state.working_row.saturating_add(s.grid_pos().grid_height))
+                .unwrap_or(0)
+        });
+        let resize_ghost_extent = self.drag_resize.as_ref().map_or(0u32, |state| {
+            self.panel_slots
+                .get(state.panel_index as usize)
+                .map(|s| s.grid_pos().grid_row.saturating_add(state.current_height))
+                .unwrap_or(0)
+        });
+        let grid_rows = max_row_end
+            .max(drag_ghost_extent)
+            .max(resize_ghost_extent)
+            .max(1);
+        let grid_height_px = (grid_rows as f32) * DASHBOARD_ROW_PX;
 
         // Wire keyboard navigation. The dashboard root tracks the document
         // focus handle so on_key_down fires when the document is the active
@@ -411,6 +482,41 @@ impl Render for DashboardDocument {
             },
         );
 
+        let is_empty = self.panel_slots.is_empty();
+
+        let grid_container = if is_empty {
+            // Empty-state CTA lives in a non-absolute flex row so it can
+            // center itself without colliding with `relative()`.
+            div()
+                .id("dashboard-grid")
+                .flex()
+                .flex_row()
+                .w_full()
+                .h(px(MIN_PANEL_HEIGHT_PX))
+                .children(panel_children)
+        } else {
+            // Width probe: a zero-height sibling that fills the container's
+            // width so `on_children_prepainted` can report the rendered
+            // container width to the drag handlers. The probe is the FIRST
+            // child so its bounds are deterministic regardless of panel
+            // count or layout state.
+            let width_probe = div().id("dashboard-grid-width-probe").w_full().h(px(0.0));
+
+            div()
+                .on_children_prepainted(move |bounds_list: Vec<Bounds<Pixels>>, _window, _cx| {
+                    if let Some(probe) = bounds_list.first() {
+                        grid_width_for_capture.set(probe.size.width.into());
+                    }
+                })
+                .id("dashboard-grid")
+                .relative()
+                .w_full()
+                .h(px(grid_height_px))
+                .child(width_probe)
+                .children(panel_children)
+                .when_some(drag_ghost, |el, ghost| el.child(ghost))
+        };
+
         div()
             .flex()
             .flex_col()
@@ -418,14 +524,7 @@ impl Render for DashboardDocument {
             .track_focus(&focus_handle)
             .on_key_down(on_key_down)
             .child(toolbar)
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .w_full()
-                    .children(panel_children),
-            )
+            .child(grid_container)
             .when(drag_active_global, |el| {
                 el.on_mouse_move(on_global_mouse_move)
                     .on_mouse_up(gpui::MouseButton::Left, on_global_mouse_up)
@@ -437,16 +536,18 @@ impl Render for DashboardDocument {
 
 /// Compute the pixel height for a panel given its `grid_height` multiplier.
 ///
-/// Formula: `MIN_PANEL_HEIGHT_PX + (grid_height.saturating_sub(1)) * PANEL_HEIGHT_STEP_PX`.
-/// A `grid_height` of 1 maps to exactly `MIN_PANEL_HEIGHT_PX`.
+/// In the new 12-col absolute-position model this is just
+/// `grid_height * DASHBOARD_ROW_PX`. Kept for legacy test coverage; the
+/// production render path inlines the math directly.
+#[cfg(test)]
 pub(crate) fn panel_height(grid_height: u32) -> f32 {
-    MIN_PANEL_HEIGHT_PX + (grid_height.saturating_sub(1) as f32) * PANEL_HEIGHT_STEP_PX
+    (grid_height as f32) * DASHBOARD_ROW_PX
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{DashboardPanelSlot, PANEL_REEXEC_CAP, PanelGridPos};
-    use super::{MIN_PANEL_HEIGHT_PX, PANEL_HEIGHT_STEP_PX, panel_height};
+    use super::super::{DASHBOARD_ROW_PX, DashboardPanelSlot, PANEL_REEXEC_CAP, PanelGridPos};
+    use super::panel_height;
 
     /// Render-level invariant: `PANEL_REEXEC_CAP` is visible from render.rs
     /// (same crate, `pub(crate)` const). Compile-only assertion.
@@ -455,35 +556,29 @@ mod tests {
         assert!(PANEL_REEXEC_CAP > 0);
     }
 
-    /// Panel with `grid_height = 1` maps to exactly `MIN_PANEL_HEIGHT_PX`.
+    /// `panel_height(1)` is exactly one `DASHBOARD_ROW_PX` row.
     #[test]
-    fn panel_height_grid_height_1_is_minimum() {
+    fn panel_height_one_row_is_eighty_px() {
         let h = panel_height(1);
         assert!(
-            (h - MIN_PANEL_HEIGHT_PX).abs() < f32::EPSILON,
-            "grid_height=1 must equal MIN_PANEL_HEIGHT_PX ({MIN_PANEL_HEIGHT_PX}), got {h}"
+            (h - DASHBOARD_ROW_PX).abs() < f32::EPSILON,
+            "grid_height=1 must equal DASHBOARD_ROW_PX ({DASHBOARD_ROW_PX}), got {h}"
         );
     }
 
-    /// Panel with `grid_height = 2` must add one step above the minimum.
+    /// `panel_height` scales linearly with the row count.
     #[test]
-    fn panel_height_grid_height_2_adds_one_step() {
-        let h = panel_height(2);
-        let expected = MIN_PANEL_HEIGHT_PX + PANEL_HEIGHT_STEP_PX;
-        assert!(
-            (h - expected).abs() < f32::EPSILON,
-            "grid_height=2 must be {expected}, got {h}"
-        );
+    fn panel_height_scales_with_rows() {
+        assert_eq!(panel_height(2), DASHBOARD_ROW_PX * 2.0);
+        assert_eq!(panel_height(3), DASHBOARD_ROW_PX * 3.0);
     }
 
-    /// Panel with `grid_height = 0` must not underflow; clamps to minimum.
+    /// `panel_height(0)` collapses to zero — the empty-state CTA carries its
+    /// own minimum height (`MIN_PANEL_HEIGHT_PX`).
     #[test]
-    fn panel_height_grid_height_0_clamps_to_minimum() {
+    fn panel_height_zero_rows_is_zero() {
         let h = panel_height(0);
-        assert!(
-            h >= MIN_PANEL_HEIGHT_PX,
-            "grid_height=0 must not produce a height below MIN_PANEL_HEIGHT_PX"
-        );
+        assert!((h - 0.0).abs() < f32::EPSILON);
     }
 
     /// `DashboardPanelSlot::grid_pos()` returns the correct position for both
@@ -615,12 +710,15 @@ mod tests {
         }
     }
 
-    /// Q.9: panel resize handle IDs follow the "panel-resize-{index}" pattern.
+    /// Each panel renders three resize handles whose element IDs follow the
+    /// `panel-resize-{edge}-{index}` pattern. The constants below pin those
+    /// IDs so renames cause a test failure rather than a silent regression.
     #[test]
-    fn q9_panel_resize_handle_id_pattern() {
+    fn panel_resize_handle_ids_cover_three_edges() {
         for i in 0u32..4 {
-            let id = format!("panel-resize-{i}");
-            assert!(id.starts_with("panel-resize-"), "ID must follow pattern");
+            assert!(format!("panel-resize-right-{i}").starts_with("panel-resize-right-"));
+            assert!(format!("panel-resize-bottom-{i}").starts_with("panel-resize-bottom-"));
+            assert!(format!("panel-resize-corner-{i}").starts_with("panel-resize-corner-"));
         }
     }
 

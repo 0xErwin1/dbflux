@@ -15,12 +15,13 @@ mod render;
 use super::chart_document::ChartDocument;
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentState};
-use builder::{DragReorderState, DragResizeState, PanelContextMenu};
+use builder::{DragReorderState, DragResizeState, PanelContextMenu, ResizeAxis};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
 use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use dbflux_core::RefreshPolicy;
+use dbflux_ui_base::toast::Toast;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity, DashboardPanel, DashboardPanelDraft};
 use gpui::prelude::*;
 use gpui::{
@@ -58,6 +59,73 @@ pub(crate) fn refresh_policy_from_index(index: usize) -> SavedChartRefreshPolicy
         .get(index)
         .map(|(p, _)| *p)
         .unwrap_or(SavedChartRefreshPolicy::Off)
+}
+
+/// Grid column count for every dashboard. The persisted `grid_columns` field
+/// is preserved for forward compatibility but ignored by the UI.
+pub const DASHBOARD_GRID_COLUMNS: u32 = 12;
+
+/// Pixel height of one grid row. Matches Grafana's default panel row height.
+pub const DASHBOARD_ROW_PX: f32 = 80.0;
+
+/// Edit/view toggle for a single dashboard tab.
+///
+/// `View` is the default for newly opened dashboards. The mode is per-tab and
+/// is not persisted: closing and re-opening a dashboard returns to `View`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardMode {
+    /// Read-only: no drag, no resize, no kebab, no focus ring, keymap inert.
+    View,
+    /// Editable: drag-to-move, resize handles, kebab menu, focus ring, keymap.
+    Edit,
+}
+
+/// Rectangle in grid units.
+///
+/// All values are inclusive of `column..column+width` and `row..row+height`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GridRect {
+    pub column: u32,
+    pub row: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl GridRect {
+    /// Returns `true` when this rectangle overlaps `other` in grid units.
+    pub(crate) fn overlaps(&self, other: &GridRect) -> bool {
+        let self_right = self.column.saturating_add(self.width);
+        let other_right = other.column.saturating_add(other.width);
+        let self_bottom = self.row.saturating_add(self.height);
+        let other_bottom = other.row.saturating_add(other.height);
+
+        self.column < other_right
+            && other.column < self_right
+            && self.row < other_bottom
+            && other.row < self_bottom
+    }
+}
+
+/// Rescale a legacy panel coordinate written against a `K`-column grid onto
+/// the canonical 12-column grid.
+///
+/// Returns the new `(grid_column, grid_width)` pair. `K = 0` is treated as
+/// `K = 1` to avoid division-by-zero.
+pub fn rescale_panel_to_12_cols(
+    grid_column: u32,
+    grid_width: u32,
+    legacy_grid_columns: u32,
+) -> (u32, u32) {
+    let k = legacy_grid_columns.max(1);
+
+    if k >= DASHBOARD_GRID_COLUMNS {
+        return (grid_column.min(11), grid_width.clamp(1, 12));
+    }
+
+    let factor = DASHBOARD_GRID_COLUMNS / k;
+    let new_column = grid_column.saturating_mul(factor).min(11);
+    let new_width = grid_width.saturating_mul(factor).clamp(1, 12);
+    (new_column, new_width)
 }
 
 /// Maximum number of panels that may re-execute concurrently.
@@ -150,8 +218,9 @@ pub struct DashboardDocument {
     // Panels
     panel_slots: Vec<DashboardPanelSlot>,
 
-    // Grid layout configuration (from viz_dashboards.grid_columns; clamped 1-4 for V1).
-    grid_columns: u32,
+    // Edit / View toggle. `View` by default for newly opened dashboards;
+    // not persisted across tab close/open.
+    mode: DashboardMode,
 
     // Shared controls
     shared_time_range: Entity<TimeRangePanel>,
@@ -260,16 +329,15 @@ impl DashboardDocument {
     /// by `shared_time_range` so all panels execute over the same window.
     /// Construct a new `DashboardDocument`.
     ///
-    /// `grid_columns` is read from `viz_dashboards.grid_columns` and clamped
-    /// to the range [1, 4] for V1. The render uses it to set panel widths
-    /// (e.g., 2 columns → each panel is 50% wide via `w_1_2()`).
+    /// The dashboard grid is fixed at 12 columns; the persisted
+    /// `viz_dashboards.grid_columns` field is ignored by the UI (it is kept in
+    /// the schema for forward compatibility only).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         dashboard_id: Uuid,
         title: String,
         panel_slots: Vec<DashboardPanelSlot>,
         shared_time_range: Entity<TimeRangePanel>,
-        grid_columns: u32,
         shared_time_range_preset: Option<TimeRangePreset>,
         shared_refresh_policy: SavedChartRefreshPolicy,
         app_state: Entity<AppStateEntity>,
@@ -389,10 +457,6 @@ impl DashboardDocument {
         );
         subscriptions.push(refresh_dropdown_sub);
 
-        // Clamp grid_columns to [1, 4] for V1. The schema permits 1–12 but
-        // the render only supports up to 4 at this time.
-        let grid_columns = grid_columns.clamp(1, 4);
-
         let initial_focused = (!panel_slots.is_empty()).then_some(0u32);
 
         Self {
@@ -402,7 +466,7 @@ impl DashboardDocument {
             state: DocumentState::Clean,
             app_state,
             panel_slots,
-            grid_columns,
+            mode: DashboardMode::View,
             shared_time_range,
             inflight_reexec_count: 0,
             pending_reexec: VecDeque::new(),
@@ -599,8 +663,47 @@ impl DashboardDocument {
     }
 
     /// Returns the number of grid columns for this dashboard.
+    ///
+    /// Always returns `DASHBOARD_GRID_COLUMNS` (12). The persisted
+    /// `viz_dashboards.grid_columns` field is ignored at this layer.
     pub fn grid_columns(&self) -> u32 {
-        self.grid_columns
+        DASHBOARD_GRID_COLUMNS
+    }
+
+    /// Returns the current edit/view mode.
+    pub fn mode(&self) -> DashboardMode {
+        self.mode
+    }
+
+    /// Returns `true` when the dashboard is in edit mode.
+    pub fn is_edit_mode(&self) -> bool {
+        matches!(self.mode, DashboardMode::Edit)
+    }
+
+    /// Toggle the edit/view mode and notify.
+    ///
+    /// Setting the mode to `View` clears any in-progress drag/resize so the
+    /// user is not left with a stale ghost on the next render.
+    pub fn set_mode(&mut self, mode: DashboardMode, cx: &mut Context<Self>) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        if matches!(mode, DashboardMode::View) {
+            self.drag_reorder = None;
+            self.drag_resize = None;
+            self.panel_context_menu = None;
+        }
+        cx.notify();
+    }
+
+    /// Convenience: flip between Edit and View.
+    pub fn toggle_mode(&mut self, cx: &mut Context<Self>) {
+        let next = match self.mode {
+            DashboardMode::View => DashboardMode::Edit,
+            DashboardMode::Edit => DashboardMode::View,
+        };
+        self.set_mode(next, cx);
     }
 
     pub fn shared_time_range(&self) -> &Entity<TimeRangePanel> {
@@ -1186,9 +1289,59 @@ impl DashboardDocument {
     }
 
     /// Move focus by `delta` rows in the grid (Arrow Up / Down).
+    ///
+    /// Walks the visual order until the focused panel's `grid_row` changes by
+    /// at least `delta` rows. Falls back to a single-step move when no panel
+    /// in the target row exists.
     pub fn move_panel_focus_rows(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let cols = self.grid_columns.max(1) as i32;
-        self.move_panel_focus(delta * cols, cx);
+        let order = self.focus_navigation_order();
+        if order.is_empty() {
+            return;
+        }
+
+        let current_idx = self
+            .focused_panel_index
+            .and_then(|idx| order.iter().position(|i| *i == idx))
+            .unwrap_or(0);
+
+        let current_row = self
+            .panel_slots
+            .get(order[current_idx] as usize)
+            .map(|s| s.grid_pos().grid_row)
+            .unwrap_or(0) as i32;
+
+        let target_row = current_row + delta;
+
+        let same_column = self
+            .panel_slots
+            .get(order[current_idx] as usize)
+            .map(|s| s.grid_pos().grid_column);
+
+        // Prefer a panel on `target_row` whose column matches the current one;
+        // otherwise fall back to the first panel on `target_row`.
+        let mut fallback: Option<u32> = None;
+        for &slot_idx in &order {
+            let pos = self.panel_slots[slot_idx as usize].grid_pos();
+            if pos.grid_row as i32 != target_row {
+                continue;
+            }
+            if fallback.is_none() {
+                fallback = Some(slot_idx);
+            }
+            if Some(pos.grid_column) == same_column {
+                self.focused_panel_index = Some(slot_idx);
+                cx.notify();
+                return;
+            }
+        }
+
+        if let Some(slot_idx) = fallback {
+            self.focused_panel_index = Some(slot_idx);
+            cx.notify();
+        } else {
+            // No panel on the target row — fall back to a single-step move.
+            self.move_panel_focus(delta.signum(), cx);
+        }
     }
 
     /// Returns the kebab menu items for keyboard activation on the focused
@@ -1244,92 +1397,186 @@ impl DashboardDocument {
         }
     }
 
-    // ---- Visual builder: drag-reorder (Q.6) ----
+    // ---- Drag-to-move ----
 
-    /// Begin a panel drag from `from_index`.
-    pub fn start_panel_drag(&mut self, from_index: u32, cx: &mut Context<Self>) {
+    /// Begin a drag-to-move on the panel at slot index `from_index`.
+    ///
+    /// Captures the cursor position at drag start so the global mouse-move
+    /// handler can snap to grid cells. No-op in view mode.
+    pub fn start_panel_drag(
+        &mut self,
+        from_index: u32,
+        start: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_edit_mode() {
+            return;
+        }
+
+        let Some(slot) = self.panel_slots.get(from_index as usize) else {
+            return;
+        };
+        let pos = slot.grid_pos();
+
         self.drag_reorder = Some(DragReorderState {
             from_index,
-            drop_slot: from_index,
+            original_column: pos.grid_column,
+            original_row: pos.grid_row,
+            start_x: start.x,
+            start_y: start.y,
+            working_column: pos.grid_column,
+            working_row: pos.grid_row,
             active: true,
         });
         cx.notify();
     }
 
-    /// Update the current drag-reorder drop target to `drop_slot`.
-    pub fn update_drag_drop_slot(&mut self, drop_slot: u32, cx: &mut Context<Self>) {
-        if let Some(ref mut state) = self.drag_reorder
-            && state.drop_slot != drop_slot
-        {
-            state.drop_slot = drop_slot;
+    /// Update the working drag-to-move target from the current cursor position.
+    ///
+    /// `px_per_col` is the rendered width of one grid column in pixels (the
+    /// grid container's width divided by 12). The deltas are snapped to whole
+    /// grid units and clamped to the 12-column grid.
+    pub fn update_panel_drag(
+        &mut self,
+        current_pos: Point<Pixels>,
+        px_per_col: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ref mut state) = self.drag_reorder else {
+            return;
+        };
+
+        let delta_x: f32 = (current_pos.x - state.start_x).into();
+        let delta_y: f32 = (current_pos.y - state.start_y).into();
+
+        let col_delta = builder::snap_columns(delta_x, px_per_col);
+        let row_delta = builder::snap_rows(delta_y);
+
+        // Look up the dragged panel's width so we can clamp the new column
+        // such that the rectangle stays within the 12-column grid.
+        let width = self
+            .panel_slots
+            .get(state.from_index as usize)
+            .map(|s| s.grid_pos().grid_width)
+            .unwrap_or(1);
+
+        let new_col = builder::apply_column_delta(state.original_column, col_delta, width);
+        let new_row = builder::apply_row_delta(state.original_row, row_delta);
+
+        if state.working_column != new_col || state.working_row != new_row {
+            state.working_column = new_col;
+            state.working_row = new_row;
             cx.notify();
         }
     }
 
-    /// End the panel drag, committing the reorder if `from_index != drop_slot`.
+    /// End the drag-to-move, persisting the new column/row when valid.
+    ///
+    /// If the proposed rectangle overlaps another panel the move is rejected,
+    /// the panel snaps back to its original position, and a soft info toast
+    /// is shown.
     pub fn end_panel_drag(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.drag_reorder.take() else {
             return;
         };
-        if state.from_index != state.drop_slot {
-            self.reorder_panels(state.from_index, state.drop_slot, cx);
-        } else {
+
+        let from = state.from_index as usize;
+        let Some(slot) = self.panel_slots.get(from) else {
             cx.notify();
+            return;
+        };
+        let pos = slot.grid_pos();
+
+        // No move? just clean up the ghost.
+        if state.working_column == state.original_column && state.working_row == state.original_row
+        {
+            cx.notify();
+            return;
         }
+
+        let proposed = GridRect {
+            column: state.working_column,
+            row: state.working_row,
+            width: pos.grid_width,
+            height: pos.grid_height,
+        };
+
+        if self.collides_with_other_panels(from, &proposed) {
+            Toast::info("Position overlaps another panel").push(cx);
+            cx.notify();
+            return;
+        }
+
+        self.commit_panel_position(from, proposed, cx);
     }
 
-    // ---- Visual builder: drag-resize (Q.7) ----
+    // ---- Drag-to-resize ----
 
-    /// Begin a resize drag on panel at `panel_index` from screen position `start`.
+    /// Begin a resize drag on panel at `panel_index` with the given `axis`.
+    ///
+    /// `start` is the window-space position of the cursor on mouse-down. The
+    /// global mouse-move handler in `render.rs` updates the working dimensions
+    /// from the cursor delta and the rendered px-per-column ratio.
     pub fn start_panel_resize(
         &mut self,
         panel_index: u32,
+        axis: ResizeAxis,
         start: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        // Read the current grid dimensions from the panel slot.
-        let mut sorted_slots: Vec<&DashboardPanelSlot> = self.panel_slots.iter().collect();
-        sorted_slots.sort_by_key(|s| {
-            let p = s.grid_pos();
-            (p.grid_row, p.grid_column)
-        });
+        if !self.is_edit_mode() {
+            return;
+        }
 
-        let (orig_w, orig_h) = sorted_slots
-            .get(panel_index as usize)
-            .map(|s| {
-                let p = s.grid_pos();
-                (p.grid_width, p.grid_height)
-            })
-            .unwrap_or((1, 1));
+        let Some(slot) = self.panel_slots.get(panel_index as usize) else {
+            return;
+        };
+        let pos = slot.grid_pos();
 
         self.drag_resize = Some(DragResizeState {
             panel_index,
-            original_width: orig_w,
-            original_height: orig_h,
+            axis,
+            original_width: pos.grid_width,
+            original_height: pos.grid_height,
             start_x: start.x,
             start_y: start.y,
-            current_width: orig_w,
-            current_height: orig_h,
+            current_width: pos.grid_width,
+            current_height: pos.grid_height,
             active: true,
         });
         cx.notify();
     }
 
-    /// Update the working resize dimensions from the current mouse position.
-    pub fn update_panel_resize(&mut self, current_pos: Point<Pixels>, cx: &mut Context<Self>) {
+    /// Update the working resize dimensions from the current cursor position.
+    ///
+    /// `px_per_col` is the rendered width of one grid column in pixels. The
+    /// axis on the drag state restricts which dimension is mutated.
+    pub fn update_panel_resize(
+        &mut self,
+        current_pos: Point<Pixels>,
+        px_per_col: f32,
+        cx: &mut Context<Self>,
+    ) {
         let Some(ref mut state) = self.drag_resize else {
             return;
         };
 
         let delta_x: f32 = (current_pos.x - state.start_x).into();
         let delta_y: f32 = (current_pos.y - state.start_y).into();
-        let (new_w, new_h) = builder::compute_resize_dimensions(
-            state.original_width,
-            state.original_height,
-            delta_x,
-            delta_y,
-            self.grid_columns,
-        );
+
+        let new_w = if matches!(state.axis, ResizeAxis::X | ResizeAxis::Both) {
+            let col_delta = builder::snap_columns(delta_x, px_per_col);
+            builder::apply_width_delta(state.original_width, col_delta)
+        } else {
+            state.original_width
+        };
+
+        let new_h = if matches!(state.axis, ResizeAxis::Y | ResizeAxis::Both) {
+            let row_delta = builder::snap_rows(delta_y);
+            builder::apply_height_delta(state.original_height, row_delta)
+        } else {
+            state.original_height
+        };
 
         if state.current_width != new_w || state.current_height != new_h {
             state.current_width = new_w;
@@ -1338,17 +1585,117 @@ impl DashboardDocument {
         }
     }
 
-    /// End the resize drag, persisting the new dimensions.
+    /// End the resize drag, persisting the new dimensions when valid.
+    ///
+    /// On overlap with another panel the resize is rejected, the panel snaps
+    /// back to its original size, and a soft info toast is shown.
     pub fn end_panel_resize(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.drag_resize.take() else {
             return;
         };
-        self.resize_panel(
-            state.panel_index,
-            state.current_width,
-            state.current_height,
-            cx,
-        );
+
+        let idx = state.panel_index as usize;
+        let Some(slot) = self.panel_slots.get(idx) else {
+            cx.notify();
+            return;
+        };
+        let pos = slot.grid_pos();
+
+        if state.current_width == state.original_width
+            && state.current_height == state.original_height
+        {
+            cx.notify();
+            return;
+        }
+
+        // Clamp column so the resized panel stays within the 12-col grid.
+        let clamped_column = pos
+            .grid_column
+            .min(DASHBOARD_GRID_COLUMNS.saturating_sub(state.current_width.max(1)));
+
+        let proposed = GridRect {
+            column: clamped_column,
+            row: pos.grid_row,
+            width: state.current_width,
+            height: state.current_height,
+        };
+
+        if self.collides_with_other_panels(idx, &proposed) {
+            Toast::info("Position overlaps another panel").push(cx);
+            cx.notify();
+            return;
+        }
+
+        self.commit_panel_position(idx, proposed, cx);
+    }
+
+    /// Returns `true` when `proposed` overlaps any panel other than the one at
+    /// `self_index`.
+    fn collides_with_other_panels(&self, self_index: usize, proposed: &GridRect) -> bool {
+        self.panel_slots
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != self_index)
+            .any(|(_, slot)| {
+                let p = slot.grid_pos();
+                let other = GridRect {
+                    column: p.grid_column,
+                    row: p.grid_row,
+                    width: p.grid_width,
+                    height: p.grid_height,
+                };
+                proposed.overlaps(&other)
+            })
+    }
+
+    /// Persist a panel's new grid position via the manager, update the
+    /// in-memory slot, and trigger a redraw.
+    fn commit_panel_position(&mut self, slot_index: usize, rect: GridRect, cx: &mut Context<Self>) {
+        let dashboard_id = self.dashboard_id;
+        let panel_index = slot_index as u32;
+
+        let result = self.app_state.update(cx, |state, _cx| {
+            state.dashboards.update_panel_position(
+                dashboard_id,
+                panel_index,
+                rect.column,
+                rect.row,
+                rect.width,
+                rect.height,
+            )
+        });
+
+        match result {
+            Ok(()) => {
+                if let Some(slot) = self.panel_slots.get_mut(slot_index) {
+                    let new_pos = PanelGridPos {
+                        grid_row: rect.row,
+                        grid_column: rect.column,
+                        grid_width: rect.width,
+                        grid_height: rect.height,
+                    };
+                    match slot {
+                        DashboardPanelSlot::Loaded { grid_pos, .. } => *grid_pos = new_pos,
+                        DashboardPanelSlot::Orphan { grid_pos, .. } => *grid_pos = new_pos,
+                    }
+                }
+                cx.notify();
+            }
+            Err(err) => {
+                let message = err.to_string();
+                self.app_state.update(cx, |state, _cx| {
+                    state.record_storage_failure(
+                        dbflux_core::observability::actions::CONFIG_UPDATE,
+                        "dashboard_panel",
+                        format!("{dashboard_id}#{panel_index}"),
+                        "Failed to persist panel position".to_string(),
+                        message.clone(),
+                    );
+                });
+                Toast::error(format!("Failed to save panel position: {message}")).push(cx);
+                cx.notify();
+            }
+        }
     }
 
     /// Reconcile `panel_slots` with the manager's authoritative panel list.
@@ -1979,32 +2326,98 @@ mod tests {
         assert_eq!(items, vec!["A", "D", "B", "C"]);
     }
 
-    /// Q.7: resize clamps width to grid_columns and height to 4.
+    /// Resize clamps width and height to the 12-column / 12-row bounds.
     #[test]
     fn resize_clamping_logic() {
-        let grid_columns = 2u32;
         let new_width = 99u32;
         let new_height = 99u32;
 
-        let clamped_width = new_width.clamp(1, grid_columns);
-        let clamped_height = new_height.clamp(1, 4);
+        let clamped_width = new_width.clamp(1, DASHBOARD_GRID_COLUMNS);
+        let clamped_height = new_height.clamp(1, 12);
 
-        assert_eq!(clamped_width, 2);
-        assert_eq!(clamped_height, 4);
+        assert_eq!(clamped_width, 12);
+        assert_eq!(clamped_height, 12);
     }
 
-    /// Q.7: resize cannot go below 1×1.
+    /// Resize cannot go below 1×1.
     #[test]
     fn resize_cannot_go_below_1x1() {
-        let grid_columns = 2u32;
         let new_width = 0u32;
         let new_height = 0u32;
 
-        let clamped_width = new_width.clamp(1, grid_columns);
-        let clamped_height = new_height.clamp(1, 4);
+        let clamped_width = new_width.clamp(1, DASHBOARD_GRID_COLUMNS);
+        let clamped_height = new_height.clamp(1, 12);
 
         assert_eq!(clamped_width, 1);
         assert_eq!(clamped_height, 1);
+    }
+
+    /// `rescale_panel_to_12_cols` widens panels from a 2-col layout to 12-col.
+    #[test]
+    fn rescale_from_two_cols_to_twelve() {
+        // 2-col grid: column 0 of width 1 → column 0 width 6 in 12-col.
+        assert_eq!(rescale_panel_to_12_cols(0, 1, 2), (0, 6));
+        // column 1 of width 1 → column 6 width 6.
+        assert_eq!(rescale_panel_to_12_cols(1, 1, 2), (6, 6));
+        // Full-width 2 → width 12, column 0.
+        assert_eq!(rescale_panel_to_12_cols(0, 2, 2), (0, 12));
+    }
+
+    /// `rescale_panel_to_12_cols` widens panels from a 4-col layout to 12-col.
+    #[test]
+    fn rescale_from_four_cols_to_twelve() {
+        // 4-col grid factor = 3.
+        assert_eq!(rescale_panel_to_12_cols(0, 1, 4), (0, 3));
+        assert_eq!(rescale_panel_to_12_cols(1, 1, 4), (3, 3));
+        assert_eq!(rescale_panel_to_12_cols(2, 2, 4), (6, 6));
+        assert_eq!(rescale_panel_to_12_cols(3, 1, 4), (9, 3));
+    }
+
+    /// `rescale_panel_to_12_cols` is a no-op when the legacy grid already had
+    /// 12 (or more) columns; the values are simply clamped.
+    #[test]
+    fn rescale_from_twelve_is_identity_with_clamp() {
+        assert_eq!(rescale_panel_to_12_cols(5, 4, 12), (5, 4));
+        assert_eq!(rescale_panel_to_12_cols(11, 1, 12), (11, 1));
+        // Out-of-range values clamp to the legal range.
+        assert_eq!(rescale_panel_to_12_cols(20, 99, 12), (11, 12));
+    }
+
+    /// `GridRect::overlaps` is symmetric and only true when both axes overlap.
+    #[test]
+    fn grid_rect_overlaps_basic_cases() {
+        let a = GridRect {
+            column: 0,
+            row: 0,
+            width: 6,
+            height: 2,
+        };
+        let touching_right = GridRect {
+            column: 6,
+            row: 0,
+            width: 6,
+            height: 2,
+        };
+        // Edges touching but not overlapping.
+        assert!(!a.overlaps(&touching_right));
+        assert!(!touching_right.overlaps(&a));
+
+        let overlapping = GridRect {
+            column: 4,
+            row: 1,
+            width: 4,
+            height: 2,
+        };
+        assert!(a.overlaps(&overlapping));
+
+        let below = GridRect {
+            column: 0,
+            row: 2,
+            width: 6,
+            height: 2,
+        };
+        // Touching on the row axis only is not an overlap.
+        assert!(!a.overlaps(&below));
     }
 
     // ---- Panel title priority tests (Q.4 / render fix) ----
@@ -2159,7 +2572,6 @@ mod tests {
                 "Test Dashboard".to_string(),
                 Vec::new(),
                 shared_time_range,
-                2,
                 None,
                 SavedChartRefreshPolicy::Off,
                 app_state,
@@ -2369,7 +2781,6 @@ mod tests {
                     "Orphan Dashboard".to_string(),
                     vec![orphan_slot],
                     shared_time_range,
-                    2,
                     None,
                     SavedChartRefreshPolicy::Off,
                     app_state,

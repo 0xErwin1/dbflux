@@ -1832,7 +1832,7 @@ impl Workspace {
         // (creating visible duplicates with identical data); this guard
         // keeps an already-affected dashboard usable without forcing the
         // user to delete and re-create panels manually.
-        let panels: Vec<dbflux_ui_base::DashboardPanel> = {
+        let mut panels: Vec<dbflux_ui_base::DashboardPanel> = {
             let raw = self
                 .app_state
                 .read(cx)
@@ -1844,6 +1844,51 @@ impl Workspace {
                 .filter(|p| seen.insert(p.saved_chart_id))
                 .collect()
         };
+
+        // One-shot rescale of pre-12-col data. Old dashboards persisted with
+        // `grid_columns < 12` are widened in place so subsequent loads see
+        // canonical 12-col-native coordinates. No SQL migration is required —
+        // the new positions are written back through `update_panel_position`.
+        use crate::ui::document::dashboard::{DASHBOARD_GRID_COLUMNS, rescale_panel_to_12_cols};
+        if dashboard.grid_columns < DASHBOARD_GRID_COLUMNS && !panels.is_empty() {
+            for panel in panels.iter_mut() {
+                let (new_col, new_w) = rescale_panel_to_12_cols(
+                    panel.grid_column,
+                    panel.grid_width,
+                    dashboard.grid_columns,
+                );
+                if new_col != panel.grid_column || new_w != panel.grid_width {
+                    let dashboard_id_local = dashboard_id;
+                    let panel_index = panel.panel_index;
+                    let new_row = panel.grid_row;
+                    let new_h = panel.grid_height;
+                    let result = self.app_state.update(cx, |state, _cx| {
+                        state.dashboards.update_panel_position(
+                            dashboard_id_local,
+                            panel_index,
+                            new_col,
+                            new_row,
+                            new_w,
+                            new_h,
+                        )
+                    });
+                    if let Err(e) = result {
+                        let message = e.to_string();
+                        self.app_state.update(cx, |state, _cx| {
+                            state.record_storage_failure(
+                                dbflux_core::observability::actions::CONFIG_UPDATE,
+                                "dashboard_panel",
+                                format!("{dashboard_id_local}#{panel_index}"),
+                                "Failed to rescale panel to 12-column grid".to_string(),
+                                message,
+                            );
+                        });
+                    }
+                    panel.grid_column = new_col;
+                    panel.grid_width = new_w;
+                }
+            }
+        }
 
         let app_state = self.app_state.clone();
         let doc = cx.new(|cx| {
@@ -1934,7 +1979,6 @@ impl Workspace {
                 dashboard.name.clone(),
                 panel_slots,
                 shared_time_range,
-                dashboard.grid_columns,
                 dashboard.shared_time_range_preset,
                 dashboard.shared_refresh_policy,
                 app_state.clone(),
