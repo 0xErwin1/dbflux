@@ -11,6 +11,7 @@ mod builder;
 mod configure_popover;
 pub mod pane;
 mod render;
+pub mod sync_pill;
 
 use super::chart_document::ChartDocument;
 use super::handle::DocumentEvent;
@@ -2192,7 +2193,7 @@ mod tests {
     fn dashboard_document_default_state_invariants() {
         // Validate that the cap constant is consistent with the concurrency
         // counter initial value (0 < PANEL_REEXEC_CAP).
-        assert!(
+        const _: () = assert!(
             0 < PANEL_REEXEC_CAP,
             "initial inflight_reexec_count (0) must be less than PANEL_REEXEC_CAP"
         );
@@ -2363,7 +2364,7 @@ mod tests {
             grid_width: 1,
             grid_height: 1,
         };
-        let slots = vec![
+        let slots = [
             DashboardPanelSlot::Orphan {
                 saved_chart_id: Uuid::nil(),
                 grid_pos: default_pos,

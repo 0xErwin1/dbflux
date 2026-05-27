@@ -466,6 +466,167 @@ mod tests {
         assert_eq!(diff.modified[0].local_panel_id, "p0");
     }
 
+    /// Round-trip: parse synthetic CloudWatch JSON, compute hashes, mutate
+    /// the upstream body (one widget edited, one new widget appended),
+    /// re-hash, and run `reconcile`. The diff must classify the changes as
+    /// `modified` + `added` while keeping the structurally-identical first
+    /// widget unchanged.
+    ///
+    /// This exercises the full identity pipeline (content hash → widget hash
+    /// → reconcile) that the import path now relies on.
+    #[test]
+    fn round_trip_modify_and_add_reconciles_correctly() {
+        use crate::connection::dashboard_hash::{content_hash, widget_hash};
+        use serde_json::json;
+
+        // Synthetic CW dashboard. Two metric widgets at positions 0, 1.
+        let upstream_v1 = json!({
+            "widgets": [
+                {
+                    "type": "metric",
+                    "x": 0, "y": 0, "width": 12, "height": 6,
+                    "properties": {
+                        "metrics": [["AWS/EC2", "CPUUtilization"]],
+                        "view": "timeSeries",
+                        "stat": "Average",
+                        "period": 60,
+                    },
+                },
+                {
+                    "type": "metric",
+                    "x": 12, "y": 0, "width": 12, "height": 6,
+                    "properties": {
+                        "metrics": [["AWS/RDS", "DatabaseConnections"]],
+                        "view": "timeSeries",
+                        "stat": "Sum",
+                        "period": 300,
+                    },
+                },
+            ],
+        });
+
+        let body_v1 = serde_json::to_string(&upstream_v1).unwrap();
+        let hash_v1 = content_hash(&body_v1).expect("hash v1");
+        assert!(hash_v1.starts_with("v1:"), "content hash must carry v1 prefix");
+
+        let widgets_v1 = upstream_v1["widgets"].as_array().unwrap();
+        let w0_hash = widget_hash(&widgets_v1[0]);
+        let w1_hash = widget_hash(&widgets_v1[1]);
+
+        // Simulate an import: the dashboard has two linked panels carrying the
+        // hashes recorded at import time.
+        let local = vec![
+            LocalPanelSnapshot {
+                panel_id: "p0".into(),
+                source_widget_index: Some(0),
+                source_widget_hash: Some(w0_hash.clone()),
+                panel_kind: "chart".into(),
+                has_title_override: true, // user-customised title, must be preserved
+                structural_key: Some(("AWS/EC2".into(), "CPUUtilization".into())),
+            },
+            LocalPanelSnapshot {
+                panel_id: "p1".into(),
+                source_widget_index: Some(1),
+                source_widget_hash: Some(w1_hash.clone()),
+                panel_kind: "chart".into(),
+                has_title_override: false,
+                structural_key: Some(("AWS/RDS".into(), "DatabaseConnections".into())),
+            },
+        ];
+
+        // Upstream changes: widget at index 1 gets a new statistic (Modified)
+        // and a third widget is appended (Added). Widget at index 0 is
+        // untouched.
+        let upstream_v2 = json!({
+            "widgets": [
+                widgets_v1[0].clone(),
+                {
+                    "type": "metric",
+                    "x": 12, "y": 0, "width": 12, "height": 6,
+                    "properties": {
+                        "metrics": [["AWS/RDS", "DatabaseConnections"]],
+                        "view": "timeSeries",
+                        "stat": "Maximum",  // changed from Sum
+                        "period": 300,
+                    },
+                },
+                {
+                    "type": "metric",
+                    "x": 0, "y": 6, "width": 24, "height": 6,
+                    "properties": {
+                        "metrics": [["AWS/Lambda", "Errors"]],
+                        "view": "timeSeries",
+                        "stat": "Sum",
+                        "period": 60,
+                    },
+                },
+            ],
+        });
+
+        let body_v2 = serde_json::to_string(&upstream_v2).unwrap();
+        let hash_v2 = content_hash(&body_v2).expect("hash v2");
+        assert_ne!(
+            hash_v1, hash_v2,
+            "modified+added widgets must change the dashboard-level content hash"
+        );
+
+        let widgets_v2 = upstream_v2["widgets"].as_array().unwrap();
+        let upstream_snapshots: Vec<UpstreamWidgetSnapshot> = widgets_v2
+            .iter()
+            .enumerate()
+            .map(|(i, w)| UpstreamWidgetSnapshot {
+                index: i,
+                widget_hash: widget_hash(w),
+                widget_kind: "metric".into(),
+                structural_key: Some(match i {
+                    0 => ("AWS/EC2".into(), "CPUUtilization".into()),
+                    1 => ("AWS/RDS".into(), "DatabaseConnections".into()),
+                    _ => ("AWS/Lambda".into(), "Errors".into()),
+                }),
+            })
+            .collect();
+
+        let diff = reconcile(&local, &upstream_snapshots);
+
+        // Widget 0 is byte-identical: must not appear in any diff section.
+        assert!(
+            !diff.modified.iter().any(|m| m.local_panel_id == "p0"),
+            "p0 was unchanged: {diff:?}"
+        );
+        assert!(
+            !diff.moved.iter().any(|m| m.local_panel_id == "p0"),
+            "p0 stayed at index 0: {diff:?}"
+        );
+
+        // Widget 1 was modified at the same index.
+        let p1_modified = diff
+            .modified
+            .iter()
+            .find(|m| m.local_panel_id == "p1")
+            .expect("p1 modified");
+        assert_eq!(p1_modified.upstream_index, 1);
+
+        // Widget 2 is new.
+        assert_eq!(diff.added.len(), 1);
+        assert_eq!(diff.added[0].index, 2);
+
+        // No removals: every local panel found a match.
+        assert!(diff.removed.is_empty(), "no removals: {diff:?}");
+
+        // p0 keeps its title override across the merge.
+        let p0_plan = plan_merge(&MergeInput {
+            panel_kind: "chart",
+            local_divider_markdown: None,
+            previous_source_widget_hash: Some(&w0_hash),
+            upstream_widget_hash: &w0_hash,
+            has_title_override: true,
+        });
+        assert!(
+            p0_plan.preserve_title_override,
+            "title override must survive a no-op merge"
+        );
+    }
+
     #[test]
     fn structural_mismatch_at_same_index_is_removed_and_added() {
         // Different metric => not structurally compatible => removed/added.

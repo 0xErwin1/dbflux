@@ -219,16 +219,6 @@ mod tests {
         Connection::open_in_memory().unwrap()
     }
 
-    fn columns(conn: &Connection, table: &str) -> std::collections::HashSet<String> {
-        let mut stmt = conn
-            .prepare(&format!("PRAGMA table_info({table})"))
-            .unwrap();
-        stmt.query_map([], |row| row.get::<_, String>(1))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
-    }
-
     /// Migration 011 created scalar `source_metric_*` columns and the
     /// dimensions table keyed on `(chart_id, dim_index)`. Migration 012 drops
     /// those columns and re-keys the dimensions table. After running ALL

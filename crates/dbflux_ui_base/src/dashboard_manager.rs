@@ -1619,7 +1619,7 @@ mod tests {
 
         let dashboard = sample_dashboard("test");
         let dashboard_id = dashboard.id;
-        manager.upsert_dashboard(dashboard);
+        manager.upsert_dashboard(dashboard).unwrap();
 
         let chart_id1 = Uuid::new_v4();
         let chart_id2 = Uuid::new_v4();
