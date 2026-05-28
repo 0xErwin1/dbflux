@@ -1,3 +1,4 @@
+mod identity;
 mod refs;
 mod types;
 
@@ -11,6 +12,7 @@ use crate::DbError;
 use crate::driver::form::DriverFormDef;
 use crate::values::CompositeValueResolver;
 
+pub use identity::{AWS_AUTH_NAMESPACE, aws_profile_uuid};
 pub use refs::{AuthProfileLookup, expand_auth_profile_refs};
 pub use types::*;
 
