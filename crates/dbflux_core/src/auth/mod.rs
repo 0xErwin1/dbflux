@@ -1,3 +1,4 @@
+mod edit;
 mod identity;
 mod refs;
 mod types;
@@ -12,6 +13,7 @@ use crate::DbError;
 use crate::driver::form::DriverFormDef;
 use crate::values::CompositeValueResolver;
 
+pub use edit::{AuthSaveOutcome, AwsEditFile, AwsEditSnapshot, AwsSectionHash};
 pub use identity::{AWS_AUTH_NAMESPACE, aws_profile_uuid};
 pub use refs::{AuthProfileLookup, expand_auth_profile_refs};
 pub use types::*;
@@ -192,6 +194,40 @@ pub trait DynAuthProvider: Send + Sync {
         false
     }
 
+    /// Capture a section-hash snapshot at the moment the edit form opens.
+    ///
+    /// The returned `AwsEditSnapshot` is an opaque token: it holds the
+    /// SHA-256 digest(s) of the on-disk section byte slice(s) so the write
+    /// seam can detect external edits before committing (spec R9.3.1).
+    ///
+    /// The default implementation returns an empty snapshot (both hashes
+    /// `None`), which means the provider does not support file-backed editing.
+    /// AWS providers override this to capture real section hashes.
+    fn open_edit_snapshot(&self, _name: &str) -> AwsEditSnapshot {
+        AwsEditSnapshot {
+            config_section: None,
+            credentials_section: None,
+        }
+    }
+
+    /// Persist the user's edited fields to the provider's backing file(s).
+    ///
+    /// Compares the current on-disk section hash(es) against `snapshot` under
+    /// the file lock. Returns `Conflict` or `PartialSaved` when a concurrent
+    /// external change is detected (spec R9.3.4, R9.3.5).
+    ///
+    /// The default implementation returns `AuthSaveOutcome::Saved` without
+    /// writing anything — safe no-op for non-file-backed providers. AWS
+    /// providers override this with a real atomic write-back.
+    fn save_edit(
+        &self,
+        _name: &str,
+        _fields: &HashMap<String, String>,
+        _snapshot: &AwsEditSnapshot,
+    ) -> AuthSaveOutcome {
+        AuthSaveOutcome::Saved
+    }
+
     /// Fetch the available options for a `DynamicSelect` field declared in this
     /// provider's `form_def()`.
     ///
@@ -340,6 +376,19 @@ impl DynAuthProvider for SharedDynAuthProvider {
     ) -> Result<FetchOptionsResponse, FetchOptionsError> {
         self.provider.fetch_dynamic_options(profile, request).await
     }
+
+    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+        self.provider.open_edit_snapshot(name)
+    }
+
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AwsEditSnapshot,
+    ) -> AuthSaveOutcome {
+        self.provider.save_edit(name, fields, snapshot)
+    }
 }
 
 #[async_trait::async_trait]
@@ -411,6 +460,19 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
         request: FetchOptionsRequest,
     ) -> Result<FetchOptionsResponse, FetchOptionsError> {
         self.as_ref().fetch_dynamic_options(profile, request).await
+    }
+
+    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+        self.as_ref().open_edit_snapshot(name)
+    }
+
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AwsEditSnapshot,
+    ) -> AuthSaveOutcome {
+        self.as_ref().save_edit(name, fields, snapshot)
     }
 }
 
