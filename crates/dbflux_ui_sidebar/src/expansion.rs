@@ -611,7 +611,7 @@ impl Sidebar {
                 Some(s) => s,
                 None => return Err("driver does not support dashboard listing".to_string()),
             };
-            source.list_dashboards().await.map_err(|e| e.to_string())
+            source.list_dashboards().map_err(|e| e.to_string())
         });
 
         let task = cx.spawn(async move |_this, cx| {

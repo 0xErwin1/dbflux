@@ -3,24 +3,28 @@
 //! Lists dashboards via `ListDashboards` and fetches a dashboard body via
 //! `GetDashboard`. Dashboards are browsed read-only; nothing is persisted.
 //!
+//! The AWS SDK calls are async, but the [`DashboardSource`] trait is
+//! synchronous, so the real client blocks on the process-wide tokio runtime
+//! (`crate::driver::runtime()`) — mirroring `RealCloudWatchClient`. This lets
+//! callers run the methods on a non-tokio background executor.
+//!
 //! Unit tests stub the AWS client behind the [`CloudWatchApi`] trait so the
 //! mapping logic is exercised without live AWS calls.
 
-use async_trait::async_trait;
 use aws_sdk_cloudwatch::Client as CloudWatchMetricsClient;
 use dbflux_core::{DashboardRef, DashboardSource, DbError, RemoteDashboard};
 
 /// Minimal CloudWatch dashboard API surface used by [`CloudWatchDashboardSource`].
 ///
 /// Exists so unit tests can stub `GetDashboard` / `ListDashboards` without a
-/// live AWS client.
-#[async_trait]
+/// live AWS client. Implementations are synchronous (the real one blocks on the
+/// driver's tokio runtime).
 pub trait CloudWatchApi: Send + Sync {
     /// Fetches the JSON body of a dashboard by name.
-    async fn get_dashboard_body(&self, name: &str) -> Result<String, DbError>;
+    fn get_dashboard_body(&self, name: &str) -> Result<String, DbError>;
 
     /// Lists dashboards visible to the configured credentials.
-    async fn list_dashboards(&self) -> Result<Vec<DashboardListEntry>, DbError>;
+    fn list_dashboards(&self) -> Result<Vec<DashboardListEntry>, DbError>;
 }
 
 /// One entry returned by `list_dashboards`.
@@ -42,15 +46,10 @@ impl RealCloudWatchDashboardApi {
     }
 }
 
-#[async_trait]
 impl CloudWatchApi for RealCloudWatchDashboardApi {
-    async fn get_dashboard_body(&self, name: &str) -> Result<String, DbError> {
-        let output = self
-            .client
-            .get_dashboard()
-            .dashboard_name(name)
-            .send()
-            .await
+    fn get_dashboard_body(&self, name: &str) -> Result<String, DbError> {
+        let output = crate::driver::runtime()
+            .block_on(self.client.get_dashboard().dashboard_name(name).send())
             .map_err(|e| DbError::QueryFailed(format!("GetDashboard failed: {e}").into()))?;
 
         output.dashboard_body.ok_or_else(|| {
@@ -60,7 +59,7 @@ impl CloudWatchApi for RealCloudWatchDashboardApi {
         })
     }
 
-    async fn list_dashboards(&self) -> Result<Vec<DashboardListEntry>, DbError> {
+    fn list_dashboards(&self) -> Result<Vec<DashboardListEntry>, DbError> {
         let mut next_token: Option<String> = None;
         let mut out: Vec<DashboardListEntry> = Vec::new();
 
@@ -70,9 +69,8 @@ impl CloudWatchApi for RealCloudWatchDashboardApi {
                 req = req.next_token(token.clone());
             }
 
-            let resp = req
-                .send()
-                .await
+            let resp = crate::driver::runtime()
+                .block_on(req.send())
                 .map_err(|e| DbError::QueryFailed(format!("ListDashboards failed: {e}").into()))?;
 
             if let Some(entries) = resp.dashboard_entries {
@@ -110,10 +108,9 @@ impl CloudWatchDashboardSource {
     }
 }
 
-#[async_trait]
 impl DashboardSource for CloudWatchDashboardSource {
-    async fn fetch_dashboard(&self, name: &str) -> Result<RemoteDashboard, DbError> {
-        let body_json = self.api.get_dashboard_body(name).await?;
+    fn fetch_dashboard(&self, name: &str) -> Result<RemoteDashboard, DbError> {
+        let body_json = self.api.get_dashboard_body(name)?;
 
         Ok(RemoteDashboard {
             name: name.to_string(),
@@ -122,8 +119,8 @@ impl DashboardSource for CloudWatchDashboardSource {
         })
     }
 
-    async fn list_dashboards(&self) -> Result<Vec<DashboardRef>, DbError> {
-        let entries = self.api.list_dashboards().await?;
+    fn list_dashboards(&self) -> Result<Vec<DashboardRef>, DbError> {
+        let entries = self.api.list_dashboards()?;
         Ok(entries
             .into_iter()
             .map(|e| DashboardRef {
@@ -143,14 +140,12 @@ impl DashboardSource for CloudWatchDashboardSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     struct StubApi {
         body: String,
         list: Vec<DashboardListEntry>,
         fail_get: bool,
         fail_list: bool,
-        last_name: Mutex<Option<String>>,
     }
 
     impl StubApi {
@@ -160,15 +155,12 @@ mod tests {
                 list: vec![],
                 fail_get: false,
                 fail_list: false,
-                last_name: Mutex::new(None),
             }
         }
     }
 
-    #[async_trait]
     impl CloudWatchApi for StubApi {
-        async fn get_dashboard_body(&self, name: &str) -> Result<String, DbError> {
-            *self.last_name.lock().unwrap() = Some(name.to_string());
+        fn get_dashboard_body(&self, _name: &str) -> Result<String, DbError> {
             if self.fail_get {
                 return Err(DbError::QueryFailed(
                     "simulated GetDashboard failure".into(),
@@ -177,7 +169,7 @@ mod tests {
             Ok(self.body.clone())
         }
 
-        async fn list_dashboards(&self) -> Result<Vec<DashboardListEntry>, DbError> {
+        fn list_dashboards(&self) -> Result<Vec<DashboardListEntry>, DbError> {
             if self.fail_list {
                 return Err(DbError::QueryFailed(
                     "simulated ListDashboards failure".into(),
@@ -203,31 +195,31 @@ mod tests {
         }"#
     }
 
-    #[tokio::test]
-    async fn fetch_dashboard_returns_remote_body() {
+    #[test]
+    fn fetch_dashboard_returns_remote_body() {
         let api = Box::new(StubApi::fixed(body()));
         let src = CloudWatchDashboardSource::new(api);
 
-        let remote = src.fetch_dashboard("prod-overview").await.expect("ok");
+        let remote = src.fetch_dashboard("prod-overview").expect("ok");
         assert_eq!(remote.name, "prod-overview");
         assert!(!remote.body_json.is_empty());
     }
 
-    #[tokio::test]
-    async fn fetch_dashboard_propagates_api_error_as_db_error() {
+    #[test]
+    fn fetch_dashboard_propagates_api_error_as_db_error() {
         let mut api = StubApi::fixed(body());
         api.fail_get = true;
         let src = CloudWatchDashboardSource::new(Box::new(api));
 
-        let err = src.fetch_dashboard("d").await.unwrap_err();
+        let err = src.fetch_dashboard("d").unwrap_err();
         assert!(
             matches!(err, DbError::QueryFailed(_)),
             "expected QueryFailed, got {err:?}"
         );
     }
 
-    #[tokio::test]
-    async fn list_dashboards_maps_entries_to_dashboard_refs() {
+    #[test]
+    fn list_dashboards_maps_entries_to_dashboard_refs() {
         let mut api = StubApi::fixed("{}");
         api.list = vec![
             DashboardListEntry {
@@ -241,7 +233,7 @@ mod tests {
         ];
         let src = CloudWatchDashboardSource::new(Box::new(api));
 
-        let refs = src.list_dashboards().await.unwrap();
+        let refs = src.list_dashboards().unwrap();
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].name, "a");
         assert_eq!(
@@ -252,13 +244,13 @@ mod tests {
         assert!(refs[1].last_modified.is_none());
     }
 
-    #[tokio::test]
-    async fn list_dashboards_propagates_api_error() {
+    #[test]
+    fn list_dashboards_propagates_api_error() {
         let mut api = StubApi::fixed("{}");
         api.fail_list = true;
         let src = CloudWatchDashboardSource::new(Box::new(api));
 
-        let err = src.list_dashboards().await.unwrap_err();
+        let err = src.list_dashboards().unwrap_err();
         assert!(matches!(err, DbError::QueryFailed(_)));
     }
 }

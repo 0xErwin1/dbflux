@@ -365,6 +365,8 @@ pub enum ContextMenuAction {
     RenameDashboard,
     DeleteDashboard,
     DuplicateDashboard,
+    /// Re-fetch the upstream dashboard listing for a `RemoteDashboardsFolder`.
+    RefreshRemoteDashboards,
     // Saved chart actions
     NewSavedChart,
     RenameSavedChart,
@@ -446,6 +448,7 @@ impl ContextMenuAction {
             Self::RenameDashboard => Some(AppIcon::Pencil),
             Self::DeleteDashboard => Some(AppIcon::Delete),
             Self::DuplicateDashboard => Some(AppIcon::Copy),
+            Self::RefreshRemoteDashboards => Some(AppIcon::RefreshCcw),
             // Saved chart actions
             Self::NewSavedChart => Some(AppIcon::ChartBar),
             Self::RenameSavedChart => Some(AppIcon::Pencil),

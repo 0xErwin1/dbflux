@@ -693,6 +693,13 @@ impl Sidebar {
                 items
             }
 
+            SchemaNodeKind::RemoteDashboardsFolder => {
+                vec![ContextMenuItem::item(
+                    "Refresh",
+                    ContextMenuAction::RefreshRemoteDashboards,
+                )]
+            }
+
             SchemaNodeKind::SavedChartsFolder => {
                 vec![ContextMenuItem::item(
                     "New Saved Chart...",
@@ -1281,6 +1288,20 @@ impl Sidebar {
                 if let Some(SchemaNodeId::DashboardsFolder { profile_id }) = parse_node_id(&item_id)
                 {
                     cx.emit(SidebarEvent::RequestImportDashboard { profile_id });
+                }
+            }
+            ContextMenuAction::RefreshRemoteDashboards => {
+                if let Some(SchemaNodeId::RemoteDashboardsFolder { profile_id }) =
+                    parse_node_id(&item_id)
+                {
+                    // Drop the cached listing and re-fetch so the next render
+                    // shows the current upstream set.
+                    self.app_state
+                        .read(cx)
+                        .remote_dashboard_cache()
+                        .invalidate(profile_id);
+                    self.spawn_fetch_remote_dashboards(profile_id, cx);
+                    self.rebuild_tree_with_overrides(cx);
                 }
             }
             ContextMenuAction::RenameDashboard => {

@@ -2257,7 +2257,6 @@ impl Workspace {
                 .ok_or_else(|| "The connection does not support dashboard browsing.".to_string())?;
             let remote = source
                 .fetch_dashboard(&name_for_fetch)
-                .await
                 .map_err(|e| e.to_string())?;
 
             let importer = connection

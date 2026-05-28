@@ -9,8 +9,6 @@
 //! and opens one by fetching its body with `fetch_dashboard`, parsing it in
 //! memory. Nothing is persisted locally.
 
-use async_trait::async_trait;
-
 use crate::DbError;
 
 /// A dashboard fetched from upstream (e.g. CloudWatch `GetDashboard`).
@@ -37,13 +35,16 @@ pub struct DashboardRef {
 ///
 /// Drivers register an instance via `Connection::dashboard_source()` and
 /// MUST advertise `DriverCapabilities::DASHBOARD_SYNC` in their metadata.
-#[async_trait]
+///
+/// Methods are synchronous and block internally on the driver's own async
+/// runtime (mirroring `MetricCatalog`). Callers invoke them from a background
+/// executor; they must NOT be called on the UI thread.
 pub trait DashboardSource: Send + Sync {
     /// Fetches the dashboard named `name` and returns its raw body.
-    async fn fetch_dashboard(&self, name: &str) -> Result<RemoteDashboard, DbError>;
+    fn fetch_dashboard(&self, name: &str) -> Result<RemoteDashboard, DbError>;
 
     /// Lists dashboards available in the upstream account / region.
-    async fn list_dashboards(&self) -> Result<Vec<DashboardRef>, DbError>;
+    fn list_dashboards(&self) -> Result<Vec<DashboardRef>, DbError>;
 
     /// Label for the sidebar container that lists these dashboards.
     ///

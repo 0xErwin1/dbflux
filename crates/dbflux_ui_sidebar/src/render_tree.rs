@@ -164,6 +164,7 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::MetricsFolder
                 | SchemaNodeKind::MetricNamespaceFolder
                 | SchemaNodeKind::DashboardsFolder
+                | SchemaNodeKind::RemoteDashboardsFolder
                 | SchemaNodeKind::SavedChartsFolder
         ));
 
@@ -823,6 +824,7 @@ pub(super) fn render_tree_item(
                             | SchemaNodeKind::ScriptsFolder
                             | SchemaNodeKind::ScriptFile
                             | SchemaNodeKind::DashboardsFolder
+                            | SchemaNodeKind::RemoteDashboardsFolder
                             | SchemaNodeKind::SavedChartsFolder
                             | SchemaNodeKind::DashboardItem
                             | SchemaNodeKind::SavedChartItem
@@ -890,6 +892,7 @@ pub(super) fn render_tree_item(
                             | SchemaNodeKind::ScriptsFolder
                             | SchemaNodeKind::ScriptFile
                             | SchemaNodeKind::DashboardsFolder
+                            | SchemaNodeKind::RemoteDashboardsFolder
                             | SchemaNodeKind::SavedChartsFolder
                             | SchemaNodeKind::DashboardItem
                             | SchemaNodeKind::SavedChartItem
@@ -995,6 +998,8 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::MetricLeaf => Some(AppIcon::ChartSpline),
         SchemaNodeKind::DashboardsFolder => Some(AppIcon::ChartColumnBig),
         SchemaNodeKind::DashboardItem => Some(AppIcon::ChartColumnBig),
+        SchemaNodeKind::RemoteDashboardsFolder => Some(AppIcon::ChartColumnBig),
+        SchemaNodeKind::RemoteDashboardItem => Some(AppIcon::ChartColumnBig),
         SchemaNodeKind::SavedChartsFolder => Some(AppIcon::ChartArea),
         SchemaNodeKind::SavedChartItem => Some(AppIcon::ChartArea),
         _ => None,
