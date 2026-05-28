@@ -161,6 +161,15 @@ pub trait DynAuthProvider: Send + Sync {
     /// The default is a no-op.
     fn after_profile_saved(&self, _profile: &AuthProfile) {}
 
+    /// Synthesize virtual `AuthProfile` records by reading external config files
+    /// (e.g., `~/.aws/config` and `~/.aws/credentials`) without storing anything.
+    ///
+    /// Returned profiles carry `read_only = true`. The default returns an empty list;
+    /// AWS providers override this to enumerate their respective profile types.
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        vec![]
+    }
+
     /// Abort any in-flight login for `profile` if the provider tracks one.
     ///
     /// Returns `true` if an in-flight login was found and signalled to stop.

@@ -1871,6 +1871,33 @@ impl AppState {
         }
     }
 
+    /// Returns all auth profiles visible to the application: stored non-AWS profiles
+    /// unioned with AWS profiles reflected live from `~/.aws/config` and
+    /// `~/.aws/credentials`.
+    ///
+    /// This is the single read seam for auth profiles. All callers must use this
+    /// method instead of reading `facade.auth_profiles.items` directly, so that
+    /// reflected AWS profiles are always included.
+    pub fn list_auth_profiles(&self) -> Vec<dbflux_core::AuthProfile> {
+        const AWS_REFLECTED_PROVIDER_IDS: &[&str] =
+            &["aws-sso", "aws-sso-session", "aws-shared-credentials"];
+
+        let mut profiles: Vec<dbflux_core::AuthProfile> = self
+            .facade
+            .auth_profiles
+            .items
+            .iter()
+            .filter(|p| !AWS_REFLECTED_PROVIDER_IDS.contains(&p.provider_id.as_str()))
+            .cloned()
+            .collect();
+
+        for provider in self.auth_provider_registry.providers() {
+            profiles.extend(provider.reflect_profiles());
+        }
+
+        profiles
+    }
+
     pub fn auth_profiles(&self) -> &[dbflux_core::AuthProfile] {
         &self.facade.auth_profiles.items
     }
@@ -2809,12 +2836,9 @@ impl AppState {
             .or(profile.auth_profile_id);
 
         let selected_auth_profile = selected_auth_profile_id.and_then(|auth_id| {
-            self.facade
-                .auth_profiles
-                .items
-                .iter()
+            self.list_auth_profiles()
+                .into_iter()
                 .find(|p| p.id == auth_id && p.enabled)
-                .cloned()
         });
 
         let auth_profile =
@@ -2868,7 +2892,7 @@ impl AppState {
                 })?;
 
             let profile_registry_snapshot: Vec<dbflux_core::auth::AuthProfile> =
-                self.facade.auth_profiles.items.clone();
+                self.list_auth_profiles();
             let expanded = dbflux_core::auth::expand_auth_profile_refs(
                 &profile,
                 provider.form_def(),
@@ -2960,7 +2984,7 @@ impl AppState {
             return None;
         }
 
-        if let Some(profile) = self.facade.auth_profiles.items.iter().find(|auth_profile| {
+        if let Some(profile) = self.list_auth_profiles().into_iter().find(|auth_profile| {
             auth_profile.enabled
                 && auth_profile
                     .fields
@@ -2971,7 +2995,7 @@ impl AppState {
                     .get(&auth_profile.provider_id)
                     .is_some_and(|provider| provider.capabilities().login.supported)
         }) {
-            return Some(profile.clone());
+            return Some(profile);
         }
 
         self.auth_provider_registry
@@ -3569,6 +3593,191 @@ mod tests {
 
     /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain
     /// a driver whose `driver_key()` is `"builtin:influxdb"`.
+    // --- T-3.6: list_auth_profiles() union seam ---
+
+    struct ReflectingTestAuthProvider {
+        provider_id: String,
+        reflected: Vec<AuthProfile>,
+    }
+
+    impl ReflectingTestAuthProvider {
+        fn new(provider_id: impl Into<String>, reflected: Vec<AuthProfile>) -> Self {
+            Self {
+                provider_id: provider_id.into(),
+                reflected,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DynAuthProvider for ReflectingTestAuthProvider {
+        fn provider_id(&self) -> &str {
+            &self.provider_id
+        }
+
+        fn display_name(&self) -> &str {
+            "Reflecting Test Provider"
+        }
+
+        fn form_def(&self) -> &AuthFormDef {
+            static FORM: std::sync::OnceLock<AuthFormDef> = std::sync::OnceLock::new();
+            FORM.get_or_init(|| AuthFormDef { tabs: vec![] })
+        }
+
+        async fn validate_session(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<AuthSessionState, DbError> {
+            Ok(AuthSessionState::LoginRequired)
+        }
+
+        async fn login(
+            &self,
+            profile: &AuthProfile,
+            url_callback: UrlCallback,
+        ) -> Result<AuthSession, DbError> {
+            url_callback(None);
+            Ok(AuthSession {
+                provider_id: self.provider_id.clone(),
+                profile_id: profile.id,
+                expires_at: None,
+                data: None,
+            })
+        }
+
+        async fn resolve_credentials(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<ResolvedCredentials, DbError> {
+            Ok(ResolvedCredentials::default())
+        }
+
+        fn reflect_profiles(&self) -> Vec<AuthProfile> {
+            self.reflected.clone()
+        }
+    }
+
+    fn make_reflected_sso_profile(name: &str) -> AuthProfile {
+        use dbflux_core::auth::aws_profile_uuid;
+        let id = aws_profile_uuid("aws-sso", name);
+        AuthProfile {
+            id,
+            name: name.to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields: HashMap::new(),
+            enabled: true,
+            read_only: true,
+        }
+    }
+
+    #[test]
+    fn list_auth_profiles_returns_reflected_aws_profiles_when_store_is_empty() {
+        let reflected_a = make_reflected_sso_profile("dev");
+        let reflected_b = make_reflected_sso_profile("prod");
+
+        let mut state =
+            test_state_with_profiles_and_auth_profiles(HashMap::new(), Vec::new(), Vec::new());
+
+        state
+            .auth_provider_registry
+            .register(Arc::new(ReflectingTestAuthProvider::new(
+                "aws-sso",
+                vec![reflected_a.clone(), reflected_b.clone()],
+            )));
+
+        let result = state.list_auth_profiles();
+
+        assert_eq!(result.len(), 2, "expected exactly two reflected profiles");
+        assert!(
+            result
+                .iter()
+                .any(|p| p.id == reflected_a.id && p.name == "dev")
+        );
+        assert!(
+            result
+                .iter()
+                .any(|p| p.id == reflected_b.id && p.name == "prod")
+        );
+    }
+
+    #[test]
+    fn list_auth_profiles_includes_stored_non_aws_profile_alongside_reflected() {
+        let stored_non_aws = AuthProfile {
+            id: Uuid::new_v4(),
+            name: "OIDC Provider".to_string(),
+            provider_id: "custom-oidc".to_string(),
+            fields: HashMap::new(),
+            enabled: true,
+            read_only: false,
+        };
+        let reflected_sso = make_reflected_sso_profile("staging");
+
+        let mut state = test_state_with_profiles_and_auth_profiles(
+            HashMap::new(),
+            Vec::new(),
+            vec![stored_non_aws.clone()],
+        );
+
+        state
+            .auth_provider_registry
+            .register(Arc::new(ReflectingTestAuthProvider::new(
+                "aws-sso",
+                vec![reflected_sso.clone()],
+            )));
+
+        let result = state.list_auth_profiles();
+
+        assert_eq!(result.len(), 2);
+        assert!(
+            result.iter().any(|p| p.id == stored_non_aws.id),
+            "stored non-AWS profile must appear in union"
+        );
+        assert!(
+            result.iter().any(|p| p.id == reflected_sso.id),
+            "reflected AWS profile must appear in union"
+        );
+    }
+
+    #[test]
+    fn list_auth_profiles_excludes_stored_aws_rows_in_favour_of_reflection() {
+        // A stored aws-sso row — this should be excluded from the union
+        // because aws-sso is a reflected provider-id.
+        let stored_aws_row = AuthProfile {
+            id: Uuid::new_v4(),
+            name: "legacy-sso".to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields: HashMap::new(),
+            enabled: true,
+            read_only: false,
+        };
+
+        let reflected_sso = make_reflected_sso_profile("current-sso");
+
+        let mut state = test_state_with_profiles_and_auth_profiles(
+            HashMap::new(),
+            Vec::new(),
+            vec![stored_aws_row.clone()],
+        );
+
+        state
+            .auth_provider_registry
+            .register(Arc::new(ReflectingTestAuthProvider::new(
+                "aws-sso",
+                vec![reflected_sso.clone()],
+            )));
+
+        let result = state.list_auth_profiles();
+
+        assert!(
+            result.iter().all(|p| p.id != stored_aws_row.id),
+            "stored aws-sso row must NOT appear in union (reflection supersedes stored)"
+        );
+        assert!(
+            result.iter().any(|p| p.id == reflected_sso.id),
+            "reflected profile must appear in union"
+        );
+    }
+
     #[test]
     #[cfg(feature = "influxdb")]
     fn influxdb_registration_present_when_feature_enabled() {

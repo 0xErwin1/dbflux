@@ -184,11 +184,7 @@ impl SsoWizard {
 
         let this = cx.entity().clone();
         let task = cx.background_executor().spawn(async move {
-            let _ = login_sso_blocking(
-                Uuid::nil(),
-                &profile_name,
-                &start_url,
-            );
+            let _ = login_sso_blocking(Uuid::nil(), &profile_name, &start_url);
             list_sso_accounts_blocking(&profile_name, &region, &start_url)
         });
 

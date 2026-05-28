@@ -461,9 +461,7 @@ impl AwsSsoSessionAuthProvider {
             .filter(|p| p.is_sso_session)
             .filter_map(|p| {
                 if p.name.is_empty() {
-                    log::warn!(
-                        "aws-config-reflect: skipping sso-session profile with empty name"
-                    );
+                    log::warn!("aws-config-reflect: skipping sso-session profile with empty name");
                     return None;
                 }
 
@@ -883,8 +881,8 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             .get("sso_start_url")
             .map(String::as_str)
             .unwrap_or("");
-        let sso_start_url = resolve_sso_start_url(&profile_name, raw_sso_start_url)
-            .ok_or_else(|| {
+        let sso_start_url =
+            resolve_sso_start_url(&profile_name, raw_sso_start_url).ok_or_else(|| {
                 DbError::InvalidProfile(format!(
                     "AWS SSO profile '{}' has no sso_start_url (check ~/.aws/config)",
                     profile_name
@@ -919,6 +917,10 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
 
     fn abort_login(&self, profile: &AuthProfile) -> bool {
         abort_sso_login(profile.id)
+    }
+
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        AwsSsoAuthProvider::reflect_profiles(self)
     }
 
     fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
@@ -1170,6 +1172,9 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
         Ok(())
     }
 
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        AwsSharedCredentialsAuthProvider::reflect_profiles(self)
+    }
 }
 
 #[async_trait::async_trait]
@@ -1251,6 +1256,10 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
                 }
             })
             .collect()
+    }
+
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        AwsSsoSessionAuthProvider::reflect_profiles(self)
     }
 }
 
@@ -2140,7 +2149,10 @@ sso_region = us-east-1
         assert!(p.enabled);
 
         let expected_id = dbflux_core::auth::aws_profile_uuid("aws-sso", "dev-sso");
-        assert_eq!(p.id, expected_id, "id must equal aws_profile_uuid(aws-sso, name)");
+        assert_eq!(
+            p.id, expected_id,
+            "id must equal aws_profile_uuid(aws-sso, name)"
+        );
 
         assert_eq!(
             p.fields.get("sso_start_url").map(String::as_str),
@@ -2184,7 +2196,10 @@ sso_region = us-east-1
         let profiles = provider.reflect_profiles();
 
         // Only one SSO profile (the sso-session is handled by AwsSsoSessionAuthProvider).
-        let sso = profiles.iter().find(|p| p.name == "my-sso").expect("my-sso must be reflected");
+        let sso = profiles
+            .iter()
+            .find(|p| p.name == "my-sso")
+            .expect("my-sso must be reflected");
 
         assert_eq!(sso.provider_id, "aws-sso");
         assert_eq!(
@@ -2217,7 +2232,10 @@ sso_region = us-east-1
         };
 
         let profiles = provider.reflect_profiles();
-        assert!(profiles.is_empty(), "missing config must yield empty list, no panic");
+        assert!(
+            profiles.is_empty(),
+            "missing config must yield empty list, no panic"
+        );
     }
 
     #[test]
@@ -2300,8 +2318,14 @@ sso_region = us-east-1
         let sso_profiles = sso_provider.reflect_profiles();
         let session_profiles = session_provider.reflect_profiles();
 
-        let sso_p = sso_profiles.iter().find(|p| p.name == "shared").expect("sso shared");
-        let session_p = session_profiles.iter().find(|p| p.name == "shared").expect("session shared");
+        let sso_p = sso_profiles
+            .iter()
+            .find(|p| p.name == "shared")
+            .expect("sso shared");
+        let session_p = session_profiles
+            .iter()
+            .find(|p| p.name == "shared")
+            .expect("session shared");
 
         assert_ne!(
             sso_p.id, session_p.id,
@@ -2347,7 +2371,10 @@ sso_region = us-east-1
         let provider = shared_provider_with_files(config, credentials);
         let profiles = provider.reflect_profiles();
 
-        let ci = profiles.iter().find(|p| p.name == "ci-user").expect("ci-user must be reflected");
+        let ci = profiles
+            .iter()
+            .find(|p| p.name == "ci-user")
+            .expect("ci-user must be reflected");
         assert_eq!(ci.provider_id, "aws-shared-credentials");
         assert!(ci.read_only);
 
@@ -2362,7 +2389,10 @@ sso_region = us-east-1
         let provider = shared_provider_with_files(config, credentials);
         let profiles = provider.reflect_profiles();
 
-        let ci = profiles.iter().find(|p| p.name == "ci-user").expect("ci-user");
+        let ci = profiles
+            .iter()
+            .find(|p| p.name == "ci-user")
+            .expect("ci-user");
         assert_eq!(
             ci.fields.get("region").map(String::as_str),
             Some("us-west-2"),
@@ -2376,7 +2406,10 @@ sso_region = us-east-1
         let provider = shared_provider_with_files("", credentials);
         let profiles = provider.reflect_profiles();
 
-        let p = profiles.iter().find(|p| p.name == "my-profile").expect("my-profile");
+        let p = profiles
+            .iter()
+            .find(|p| p.name == "my-profile")
+            .expect("my-profile");
         assert!(
             p.fields.get("region").is_none(),
             "absent region must not appear in fields"
