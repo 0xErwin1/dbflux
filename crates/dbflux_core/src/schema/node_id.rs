@@ -117,6 +117,18 @@ pub enum SchemaNodeId {
         profile_id: Uuid,
         dashboard_id: Uuid,
     },
+    /// Root folder listing dashboards fetched live from an upstream source
+    /// (e.g. CloudWatch). Children load lazily via `DashboardSource` and are
+    /// never persisted. Shown when the connection advertises `DASHBOARD_SYNC`.
+    RemoteDashboardsFolder {
+        profile_id: Uuid,
+    },
+    /// Clickable item for a single upstream dashboard, identified by its source
+    /// name. Opens read-only; nothing is persisted.
+    RemoteDashboardItem {
+        profile_id: Uuid,
+        name: String,
+    },
     /// Root folder for saved charts under a connection profile.
     /// Always visible, regardless of driver capabilities.
     SavedChartsFolder {
@@ -318,6 +330,8 @@ pub enum SchemaNodeKind {
     MetricLeaf,
     DashboardsFolder,
     DashboardItem,
+    RemoteDashboardsFolder,
+    RemoteDashboardItem,
     SavedChartsFolder,
     SavedChartItem,
     Table,
@@ -377,6 +391,8 @@ impl SchemaNodeId {
             Self::MetricLeaf { .. } => SchemaNodeKind::MetricLeaf,
             Self::DashboardsFolder { .. } => SchemaNodeKind::DashboardsFolder,
             Self::DashboardItem { .. } => SchemaNodeKind::DashboardItem,
+            Self::RemoteDashboardsFolder { .. } => SchemaNodeKind::RemoteDashboardsFolder,
+            Self::RemoteDashboardItem { .. } => SchemaNodeKind::RemoteDashboardItem,
             Self::SavedChartsFolder { .. } => SchemaNodeKind::SavedChartsFolder,
             Self::SavedChartItem { .. } => SchemaNodeKind::SavedChartItem,
             Self::Table { .. } => SchemaNodeKind::Table,
@@ -463,6 +479,8 @@ impl SchemaNodeId {
             | Self::DependentItem { profile_id, .. }
             | Self::DashboardsFolder { profile_id, .. }
             | Self::DashboardItem { profile_id, .. }
+            | Self::RemoteDashboardsFolder { profile_id, .. }
+            | Self::RemoteDashboardItem { profile_id, .. }
             | Self::SavedChartsFolder { profile_id, .. }
             | Self::SavedChartItem { profile_id, .. } => Some(*profile_id),
         }
@@ -524,6 +542,8 @@ const P_METRIC_LEAF: &str = "ML";
 // Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
 const P_DASHBOARDS_FOLDER: &str = "DBF";
 const P_DASHBOARD_ITEM: &str = "DBI";
+const P_REMOTE_DASHBOARDS_FOLDER: &str = "RDBF";
+const P_REMOTE_DASHBOARD_ITEM: &str = "RDBI";
 const P_SAVED_CHARTS_FOLDER: &str = "SCRF";
 const P_SAVED_CHART_ITEM: &str = "SCRI";
 
@@ -932,6 +952,12 @@ impl fmt::Display for SchemaNodeId {
                 dashboard_id,
             } => {
                 write!(f, "{}|{}|{}", P_DASHBOARD_ITEM, profile_id, dashboard_id)
+            }
+            Self::RemoteDashboardsFolder { profile_id } => {
+                write!(f, "{}|{}", P_REMOTE_DASHBOARDS_FOLDER, profile_id)
+            }
+            Self::RemoteDashboardItem { profile_id, name } => {
+                write!(f, "{}|{}|{}", P_REMOTE_DASHBOARD_ITEM, profile_id, name)
             }
             Self::SavedChartsFolder { profile_id } => {
                 write!(f, "{}|{}", P_SAVED_CHARTS_FOLDER, profile_id)
@@ -1545,6 +1571,19 @@ impl FromStr for SchemaNodeId {
                 })
             }
 
+            P_REMOTE_DASHBOARDS_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::RemoteDashboardsFolder { profile_id })
+            }
+
+            P_REMOTE_DASHBOARD_ITEM => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                let name = parts.get(2).ok_or_else(err)?.to_string();
+                Ok(Self::RemoteDashboardItem { profile_id, name })
+            }
+
             P_SAVED_CHARTS_FOLDER => {
                 let profile_id =
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
@@ -1601,6 +1640,8 @@ impl SchemaNodeKind {
                 | Self::MetricLeaf
                 | Self::DashboardsFolder
                 | Self::DashboardItem
+                | Self::RemoteDashboardsFolder
+                | Self::RemoteDashboardItem
                 | Self::SavedChartsFolder
                 | Self::SavedChartItem
         )
@@ -1630,6 +1671,7 @@ impl SchemaNodeKind {
                 | Self::MetricsFolder
                 | Self::MetricNamespaceFolder
                 | Self::DashboardsFolder
+                | Self::RemoteDashboardsFolder
                 | Self::SavedChartsFolder
         )
     }
@@ -1646,6 +1688,7 @@ impl SchemaNodeKind {
                 | Self::Routine
                 | Self::MetricLeaf
                 | Self::DashboardItem
+                | Self::RemoteDashboardItem
                 | Self::SavedChartItem
         )
     }

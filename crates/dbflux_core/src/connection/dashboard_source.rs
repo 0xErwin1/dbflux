@@ -44,4 +44,12 @@ pub trait DashboardSource: Send + Sync {
 
     /// Lists dashboards available in the upstream account / region.
     async fn list_dashboards(&self) -> Result<Vec<DashboardRef>, DbError>;
+
+    /// Label for the sidebar container that lists these dashboards.
+    ///
+    /// The UI reads this generically so it never hard-codes a driver-specific
+    /// name. Defaults to `"Dashboards"`.
+    fn container_label(&self) -> &str {
+        "Dashboards"
+    }
 }
