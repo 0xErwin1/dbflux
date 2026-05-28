@@ -2483,6 +2483,7 @@ dependencies = [
  "chrono",
  "dbflux_core",
  "dirs 5.0.1",
+ "filetime",
  "futures-lite 2.6.1",
  "log",
  "secrecy",

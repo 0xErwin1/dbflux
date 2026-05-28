@@ -35,3 +35,4 @@ futures-lite = "2"
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
 tempfile = "3"
+filetime = "0.2"
