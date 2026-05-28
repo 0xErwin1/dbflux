@@ -1,5 +1,4 @@
 pub(crate) mod context;
-pub mod dashboard_hash;
 pub mod dashboard_import;
 pub mod dashboard_source;
 pub(crate) mod hook;

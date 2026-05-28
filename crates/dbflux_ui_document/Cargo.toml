@@ -23,7 +23,6 @@ dbflux_export.workspace = true
 uuid.workspace = true
 log.workspace = true
 serde_json.workspace = true
-chrono.workspace = true
 lsp-types = "0.97"
 anyhow = "1"
 rfd.workspace = true

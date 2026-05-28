@@ -16,13 +16,13 @@
 use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
-use dbflux_components::saved_chart::MetricSeries;
 use dbflux_components::{
     SavedChart, SavedChartRefreshPolicy, TimeRangePreset,
     chart::{AggKind, AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, SeriesSpec, YScale},
     saved_chart::SavedChartSource,
 };
 use dbflux_core::{CollectionRef, QueryLanguage, ResolvedWindow};
+use dbflux_components::saved_chart::MetricSeries;
 use dbflux_storage::{
     error::StorageError,
     repositories::viz_saved_chart_binding_y::BindingYDto,
@@ -153,7 +153,9 @@ fn dto_to_chart(dto: SavedChartDto) -> Result<SavedChart, StorageError> {
                 .map(|s| MetricSeries {
                     namespace: s.namespace.clone(),
                     metric_name: s.metric_name.clone(),
-                    dimensions: dims_by_series.remove(&s.series_index).unwrap_or_default(),
+                    dimensions: dims_by_series
+                        .remove(&s.series_index)
+                        .unwrap_or_default(),
                     period_seconds: s.period_seconds as u32,
                     statistic: s.statistic.clone(),
                     region: s.region.clone(),
@@ -243,9 +245,7 @@ fn chart_to_dto(
                 lang,
             )
         }
-        SavedChartSource::Metric {
-            series: series_list,
-        } => {
+        SavedChartSource::Metric { series: series_list } => {
             for (s_idx, s) in series_list.iter().enumerate() {
                 metric_series.push(MetricSeriesDto {
                     chart_id: chart.id.to_string(),
@@ -268,7 +268,15 @@ fn chart_to_dto(
                 }
             }
 
-            ("metric".to_string(), None, None, None, None, None, None)
+            (
+                "metric".to_string(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         }
     };
 

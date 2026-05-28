@@ -23,9 +23,7 @@ use dbflux_core::{
 };
 
 use crate::dashboard_import::CloudWatchDashboardImporter;
-use crate::dashboard_source::{
-    CloudWatchDashboardSource, RealCloudWatchDashboardApi, resolve_account_id,
-};
+use crate::dashboard_source::{CloudWatchDashboardSource, RealCloudWatchDashboardApi};
 use crate::metric_catalog::{CloudWatchMetricCatalog, RealCloudWatchClient};
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -116,9 +114,7 @@ struct CloudWatchConnection {
     metric_catalog_impl: CloudWatchMetricCatalog,
     /// Dashboard JSON importer — always present; returns `Some` from `dashboard_importer()`.
     dashboard_importer_impl: CloudWatchDashboardImporter,
-    /// Dashboard sync source — always present; returns `Some` from `dashboard_source()`.
-    /// `account_id` inside may be `None` when STS lookup failed at connect time
-    /// (best-effort per spec R7.1; downstream marks such dashboards detached).
+    /// Dashboard source — always present; returns `Some` from `dashboard_source()`.
     dashboard_source_impl: CloudWatchDashboardSource,
 }
 
@@ -208,7 +204,7 @@ impl DbDriver for CloudWatchDriver {
         _ssh_secret: Option<&SecretString>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let config = profile_config(&profile.config)?;
-        let (client, metrics_client, sdk_config) = build_clients_with_sdk_config(&config)?;
+        let (client, metrics_client) = build_clients(&config)?;
 
         probe_connection(&client, &config)?;
 
@@ -216,16 +212,9 @@ impl DbDriver for CloudWatchDriver {
             RealCloudWatchClient::new(metrics_client.clone()),
         ));
 
-        // STS GetCallerIdentity is best-effort: failure does NOT abort the
-        // connection. Dashboards imported with a `None` account id are
-        // treated as detached (spec R7.1, S1.D).
-        let account_id = runtime().block_on(resolve_account_id(&sdk_config));
-
-        let dashboard_source_impl = CloudWatchDashboardSource::new(
-            Box::new(RealCloudWatchDashboardApi::new(metrics_client.clone())),
-            account_id,
-            config.region.clone(),
-        );
+        let dashboard_source_impl = CloudWatchDashboardSource::new(Box::new(
+            RealCloudWatchDashboardApi::new(metrics_client.clone()),
+        ));
 
         Ok(Box::new(CloudWatchConnection {
             client,
@@ -1098,16 +1087,6 @@ fn profile_config(config: &DbConfig) -> Result<CloudWatchProfileConfig, DbError>
 fn build_clients(
     config: &CloudWatchProfileConfig,
 ) -> Result<(Client, aws_sdk_cloudwatch::Client), DbError> {
-    let (logs_client, metrics_client, _sdk_config) = build_clients_with_sdk_config(config)?;
-    Ok((logs_client, metrics_client))
-}
-
-/// Same as [`build_clients`] but also returns the underlying `SdkConfig` so
-/// callers can spin up auxiliary clients (e.g. STS for `GetCallerIdentity`)
-/// without re-loading credentials.
-fn build_clients_with_sdk_config(
-    config: &CloudWatchProfileConfig,
-) -> Result<(Client, aws_sdk_cloudwatch::Client, aws_config::SdkConfig), DbError> {
     let mut loader =
         aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
 
@@ -1120,7 +1099,7 @@ fn build_clients_with_sdk_config(
     if config.endpoint.is_none() {
         let logs_client = Client::new(&sdk_config);
         let metrics_client = aws_sdk_cloudwatch::Client::new(&sdk_config);
-        return Ok((logs_client, metrics_client, sdk_config));
+        return Ok((logs_client, metrics_client));
     }
 
     let mut logs_builder = CloudWatchConfigBuilder::from(&sdk_config);
@@ -1134,7 +1113,7 @@ fn build_clients_with_sdk_config(
     let logs_client = Client::from_conf(logs_builder.build());
     let metrics_client = aws_sdk_cloudwatch::Client::from_conf(metrics_builder.build());
 
-    Ok((logs_client, metrics_client, sdk_config))
+    Ok((logs_client, metrics_client))
 }
 
 /// Guard: reject period_s == 0 before any network I/O.

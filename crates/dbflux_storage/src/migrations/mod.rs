@@ -144,7 +144,6 @@ impl MigrationRegistry {
         registry.register(mod_011_viz_saved_chart_metric_source::MigrationImpl);
         registry.register(mod_012_viz_saved_chart_metric_series::MigrationImpl);
         registry.register(mod_013_viz_dashboard_panel_kind::MigrationImpl);
-        registry.register(mod_014_dashboard_sync_identity::MigrationImpl);
         registry
     }
 
@@ -296,7 +295,6 @@ mod mod_010_viz_charts_and_dashboards;
 mod mod_011_viz_saved_chart_metric_source;
 mod mod_012_viz_saved_chart_metric_series;
 mod mod_013_viz_dashboard_panel_kind;
-mod mod_014_dashboard_sync_identity;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;

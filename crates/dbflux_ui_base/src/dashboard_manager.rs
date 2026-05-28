@@ -21,73 +21,6 @@ use uuid::Uuid;
 // Domain types
 // ---------------------------------------------------------------------------
 
-/// Origin of a dashboard.
-///
-/// `Local` is the default for dashboards created in DBFlux. `Cloudwatch` marks
-/// dashboards imported from a CloudWatch account; rows in this variant must
-/// also carry a non-`None` `source_dashboard_name` (the upstream name) but may
-/// carry a `None` `source_account_id` when STS lookup failed (detached).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum DashboardSourceKind {
-    #[default]
-    Local,
-    Cloudwatch,
-}
-
-impl DashboardSourceKind {
-    /// String discriminator used in `viz_dashboards.source_kind`.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Cloudwatch => "cloudwatch",
-        }
-    }
-
-    /// Parses the on-disk discriminator. Unknown values fall back to `Local`
-    /// (defensive — the CHECK constraint already rejects unknown values at the
-    /// SQL layer).
-    pub fn from_str_lossy(s: &str) -> Self {
-        match s {
-            "cloudwatch" => Self::Cloudwatch,
-            _ => Self::Local,
-        }
-    }
-}
-
-/// Sync identity attached to a dashboard imported from an external source.
-///
-/// All fields default to `None` / `Local` so user-created dashboards remain
-/// detached from any upstream. Identity is populated by the import path and
-/// updated by the refresh flow.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DashboardSyncIdentity {
-    pub source_kind: DashboardSourceKind,
-    pub source_account_id: Option<String>,
-    pub source_home_region: Option<String>,
-    pub source_dashboard_name: Option<String>,
-    pub source_content_hash: Option<String>,
-    pub source_last_modified: Option<String>,
-    pub source_last_synced_at: Option<String>,
-}
-
-impl DashboardSyncIdentity {
-    /// Returns `true` when this dashboard is linked to an upstream system AND
-    /// the account identity is known (i.e. not detached). Used by the sync
-    /// pill gating helper.
-    pub fn is_linked(&self) -> bool {
-        matches!(self.source_kind, DashboardSourceKind::Cloudwatch)
-            && self.source_account_id.is_some()
-    }
-
-    /// Returns `true` when this dashboard was imported but its upstream
-    /// identity is no longer resolvable (account id missing). Drives the
-    /// "Detached" pill state.
-    pub fn is_detached(&self) -> bool {
-        matches!(self.source_kind, DashboardSourceKind::Cloudwatch)
-            && self.source_account_id.is_none()
-    }
-}
-
 /// In-memory domain record for a dashboard.
 #[derive(Debug, Clone)]
 pub struct Dashboard {
@@ -100,9 +33,6 @@ pub struct Dashboard {
     pub grid_columns: u32,
     pub created_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
-    /// Sync identity captured from the upstream source at import time and
-    /// updated on subsequent refreshes. Default for user-created dashboards.
-    pub sync: DashboardSyncIdentity,
 }
 
 /// Minimal payload for appending a new panel to a dashboard.
@@ -163,13 +93,6 @@ pub struct DashboardPanel {
     pub grid_column: u32,
     pub grid_width: u32,
     pub grid_height: u32,
-    /// Upstream widget index at last import / refresh. `None` for user-added
-    /// panels which the reconcile algorithm preserves.
-    pub source_widget_index: Option<u32>,
-    /// Canonicalized per-widget hash (`"v1:..."`) recorded at import /
-    /// refresh. `None` for user-added panels and for divider rows whose
-    /// upstream provenance is unknown.
-    pub source_widget_hash: Option<String>,
 }
 
 impl DashboardPanel {
@@ -219,16 +142,6 @@ fn dto_to_dashboard(dto: DashboardDto) -> Result<Dashboard, StorageError> {
         dto.shared_refresh_policy_interval_secs,
     )?;
 
-    let sync = DashboardSyncIdentity {
-        source_kind: DashboardSourceKind::from_str_lossy(&dto.source_kind),
-        source_account_id: dto.source_account_id,
-        source_home_region: dto.source_home_region,
-        source_dashboard_name: dto.source_dashboard_name,
-        source_content_hash: dto.source_content_hash,
-        source_last_modified: dto.source_last_modified,
-        source_last_synced_at: dto.source_last_synced_at,
-    };
-
     Ok(Dashboard {
         id,
         name: dto.name,
@@ -239,7 +152,6 @@ fn dto_to_dashboard(dto: DashboardDto) -> Result<Dashboard, StorageError> {
         grid_columns: dto.grid_columns as u32,
         created_at,
         updated_at,
-        sync,
     })
 }
 
@@ -260,17 +172,6 @@ fn dashboard_to_dto(dashboard: &Dashboard) -> DashboardDto {
         grid_columns: dashboard.grid_columns as i64,
         created_at: dashboard.created_at.timestamp_millis(),
         updated_at: dashboard.updated_at.timestamp_millis(),
-        // Sync identity now flows through the domain `Dashboard`. The default
-        // value for user-created dashboards is `Local + None` everywhere, so
-        // round-tripping a fresh dashboard preserves the same state as before
-        // this change.
-        source_kind: dashboard.sync.source_kind.as_str().to_string(),
-        source_account_id: dashboard.sync.source_account_id.clone(),
-        source_home_region: dashboard.sync.source_home_region.clone(),
-        source_dashboard_name: dashboard.sync.source_dashboard_name.clone(),
-        source_content_hash: dashboard.sync.source_content_hash.clone(),
-        source_last_modified: dashboard.sync.source_last_modified.clone(),
-        source_last_synced_at: dashboard.sync.source_last_synced_at.clone(),
     }
 }
 
@@ -311,8 +212,6 @@ fn dto_to_panel(dto: DashboardPanelDto) -> Result<DashboardPanel, StorageError> 
         grid_column: dto.grid_column as u32,
         grid_width: dto.grid_width as u32,
         grid_height: dto.grid_height as u32,
-        source_widget_index: dto.source_widget_index.map(|i| i as u32),
-        source_widget_hash: dto.source_widget_hash,
     })
 }
 
@@ -321,9 +220,11 @@ fn panel_to_dto(panel: &DashboardPanel) -> DashboardPanelDto {
         DashboardPanelKind::Chart { saved_chart_id } => {
             ("chart".to_string(), saved_chart_id.to_string(), None)
         }
-        DashboardPanelKind::Divider { markdown } => {
-            ("divider".to_string(), String::new(), Some(markdown.clone()))
-        }
+        DashboardPanelKind::Divider { markdown } => (
+            "divider".to_string(),
+            String::new(),
+            Some(markdown.clone()),
+        ),
     };
 
     DashboardPanelDto {
@@ -337,8 +238,6 @@ fn panel_to_dto(panel: &DashboardPanel) -> DashboardPanelDto {
         grid_column: panel.grid_column as i64,
         grid_width: panel.grid_width as i64,
         grid_height: panel.grid_height as i64,
-        source_widget_index: panel.source_widget_index.map(|i| i as i64),
-        source_widget_hash: panel.source_widget_hash.clone(),
     }
 }
 
@@ -555,23 +454,6 @@ impl DashboardManager {
         self.dashboards.iter().find(|d| d.id == id)
     }
 
-    /// Look up an existing CloudWatch-linked dashboard by upstream identity.
-    ///
-    /// Returns `Some(id)` when a `Cloudwatch` row matches the given
-    /// `account_id` and upstream `dashboard_name`. Used by the import path to
-    /// decide whether to replace an existing row in place (R1.5 idempotent
-    /// re-import) or insert a new one.
-    pub fn cloudwatch_dashboard_id(&self, account_id: &str, dashboard_name: &str) -> Option<Uuid> {
-        self.dashboards
-            .iter()
-            .find(|d| {
-                matches!(d.sync.source_kind, DashboardSourceKind::Cloudwatch)
-                    && d.sync.source_account_id.as_deref() == Some(account_id)
-                    && d.sync.source_dashboard_name.as_deref() == Some(dashboard_name)
-            })
-            .map(|d| d.id)
-    }
-
     /// All dashboards whose `profile_id` matches the given id.
     pub fn dashboards_for_profile(&self, profile_id: Uuid) -> Vec<&Dashboard> {
         self.dashboards
@@ -613,7 +495,6 @@ impl DashboardManager {
             grid_columns: 2,
             created_at: now,
             updated_at: now,
-            sync: DashboardSyncIdentity::default(),
         };
 
         let dto = dashboard_to_dto(&dashboard);
@@ -675,8 +556,6 @@ impl DashboardManager {
         let new_id = Uuid::new_v4();
         let now = Utc::now();
 
-        // Duplicates intentionally drop sync identity: the new dashboard is a
-        // local copy that does not track the upstream CloudWatch source.
         let new_dashboard = Dashboard {
             id: new_id,
             name: format!("Copy of {}", src.name),
@@ -687,7 +566,6 @@ impl DashboardManager {
             grid_columns: src.grid_columns,
             created_at: now,
             updated_at: now,
-            sync: DashboardSyncIdentity::default(),
         };
 
         let new_panels: Vec<DashboardPanel> = src_panels
@@ -702,8 +580,6 @@ impl DashboardManager {
                 grid_column: p.grid_column,
                 grid_width: p.grid_width,
                 grid_height: p.grid_height,
-                source_widget_index: None,
-                source_widget_hash: None,
             })
             .collect();
 
@@ -807,8 +683,6 @@ impl DashboardManager {
                 grid_column: 0,
                 grid_width: DEFAULT_NEW_PANEL_WIDTH,
                 grid_height: DEFAULT_NEW_PANEL_HEIGHT,
-                source_widget_index: None,
-                source_widget_hash: None,
             });
 
             next_row = next_row.saturating_add(DEFAULT_NEW_PANEL_HEIGHT);
@@ -1066,7 +940,6 @@ mod tests {
             grid_columns: 12,
             created_at: now,
             updated_at: now,
-            sync: DashboardSyncIdentity::default(),
         }
     }
 
@@ -1080,8 +953,6 @@ mod tests {
             grid_column: index * 4,
             grid_width: 4,
             grid_height: 3,
-            source_widget_index: None,
-            source_widget_hash: None,
         }
     }
 
@@ -1501,99 +1372,6 @@ mod tests {
         assert_eq!(panel_index_to_grid(3, 0), (3, 0));
     }
 
-    /// Sync identity round-trips through the manager's upsert + DTO cycle.
-    /// Cloudwatch-linked dashboards must serialize their identity columns and
-    /// re-emerge with the same values when reloaded from storage.
-    #[test]
-    fn test_sync_identity_round_trip_through_upsert() {
-        let (mut mgr, _rt) = make_manager_with_rt();
-        let mut dashboard = sample_dashboard("cw-dash");
-        dashboard.sync = DashboardSyncIdentity {
-            source_kind: DashboardSourceKind::Cloudwatch,
-            source_account_id: Some("999".to_string()),
-            source_home_region: Some("us-east-1".to_string()),
-            source_dashboard_name: Some("my-dash".to_string()),
-            source_content_hash: Some("v1:abcd".to_string()),
-            source_last_modified: None,
-            source_last_synced_at: Some("2026-05-27T00:00:00Z".to_string()),
-        };
-        let id = dashboard.id;
-        mgr.upsert_dashboard(dashboard).unwrap();
-
-        let stored = mgr.dashboard_by_id(id).expect("present in cache");
-        assert_eq!(stored.sync.source_kind, DashboardSourceKind::Cloudwatch);
-        assert_eq!(stored.sync.source_account_id.as_deref(), Some("999"));
-        assert_eq!(
-            stored.sync.source_dashboard_name.as_deref(),
-            Some("my-dash")
-        );
-        assert_eq!(stored.sync.source_content_hash.as_deref(), Some("v1:abcd"));
-    }
-
-    /// `cloudwatch_dashboard_id` returns the in-memory match by upstream
-    /// identity. Detached rows (account_id is None) do NOT match — the lookup
-    /// requires both account and dashboard name to be present.
-    #[test]
-    fn test_cloudwatch_dashboard_id_finds_linked_row() {
-        let (mut mgr, _rt) = make_manager_with_rt();
-
-        let mut linked = sample_dashboard("linked");
-        linked.sync = DashboardSyncIdentity {
-            source_kind: DashboardSourceKind::Cloudwatch,
-            source_account_id: Some("acct".to_string()),
-            source_home_region: Some("us-east-1".to_string()),
-            source_dashboard_name: Some("upstream-name".to_string()),
-            ..Default::default()
-        };
-        let linked_id = linked.id;
-        mgr.upsert_dashboard(linked).unwrap();
-
-        let mut detached = sample_dashboard("detached");
-        detached.sync = DashboardSyncIdentity {
-            source_kind: DashboardSourceKind::Cloudwatch,
-            source_account_id: None,
-            source_home_region: Some("us-east-1".to_string()),
-            source_dashboard_name: Some("other-name".to_string()),
-            ..Default::default()
-        };
-        mgr.upsert_dashboard(detached).unwrap();
-
-        assert_eq!(
-            mgr.cloudwatch_dashboard_id("acct", "upstream-name"),
-            Some(linked_id)
-        );
-        assert_eq!(mgr.cloudwatch_dashboard_id("acct", "no-such-name"), None);
-        // Detached row is intentionally NOT matched because account is None.
-        assert_eq!(mgr.cloudwatch_dashboard_id("acct", "other-name"), None);
-    }
-
-    /// `is_linked` / `is_detached` are mutually exclusive on a Cloudwatch row
-    /// and both are false on a Local row.
-    #[test]
-    fn test_sync_identity_linked_vs_detached_predicates() {
-        let local = DashboardSyncIdentity::default();
-        assert!(!local.is_linked());
-        assert!(!local.is_detached());
-
-        let linked = DashboardSyncIdentity {
-            source_kind: DashboardSourceKind::Cloudwatch,
-            source_account_id: Some("a".into()),
-            source_dashboard_name: Some("d".into()),
-            ..Default::default()
-        };
-        assert!(linked.is_linked());
-        assert!(!linked.is_detached());
-
-        let detached = DashboardSyncIdentity {
-            source_kind: DashboardSourceKind::Cloudwatch,
-            source_account_id: None,
-            source_dashboard_name: Some("d".into()),
-            ..Default::default()
-        };
-        assert!(!detached.is_linked());
-        assert!(detached.is_detached());
-    }
-
     /// Design test #31: replace_panels is atomic; cache is updated only on
     /// success.
     ///
@@ -1613,7 +1391,7 @@ mod tests {
 
         let dashboard = sample_dashboard("test");
         let dashboard_id = dashboard.id;
-        manager.upsert_dashboard(dashboard).unwrap();
+        manager.upsert_dashboard(dashboard);
 
         let chart_id1 = Uuid::new_v4();
         let chart_id2 = Uuid::new_v4();
@@ -1640,8 +1418,6 @@ mod tests {
             grid_column: 0,
             grid_width: 0, // violates CHECK (grid_width >= 1)
             grid_height: 3,
-            source_widget_index: None,
-            source_widget_hash: None,
         };
         let result = manager.replace_panels(dashboard_id, vec![bad_panel]);
 

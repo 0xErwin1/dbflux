@@ -31,12 +31,6 @@ pub struct DashboardPanelDto {
     pub grid_column: i64,
     pub grid_width: i64,
     pub grid_height: i64,
-    /// Upstream widget index this panel was imported from. `None` for
-    /// user-added panels (which are preserved across refresh).
-    pub source_widget_index: Option<i64>,
-    /// Canonicalized widget hash captured at import / last refresh
-    /// (`"v1:..."`). `None` for user-added panels.
-    pub source_widget_hash: Option<String>,
 }
 
 /// Repository for `viz_dashboard_panels`.
@@ -62,8 +56,7 @@ impl DashboardPanelsRepository {
             .prepare(
                 "SELECT dashboard_id, panel_index, panel_kind, saved_chart_id,
                         divider_markdown, title_override,
-                        grid_row, grid_column, grid_width, grid_height,
-                        source_widget_index, source_widget_hash
+                        grid_row, grid_column, grid_width, grid_height
                  FROM viz_dashboard_panels
                  WHERE dashboard_id = ?1
                  ORDER BY panel_index ASC",
@@ -86,8 +79,6 @@ impl DashboardPanelsRepository {
                     grid_column: row.get(7)?,
                     grid_width: row.get(8)?,
                     grid_height: row.get(9)?,
-                    source_widget_index: row.get(10)?,
-                    source_widget_hash: row.get(11)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -111,8 +102,7 @@ impl DashboardPanelsRepository {
             .prepare(
                 "SELECT dashboard_id, panel_index, panel_kind, saved_chart_id,
                         divider_markdown, title_override,
-                        grid_row, grid_column, grid_width, grid_height,
-                        source_widget_index, source_widget_hash
+                        grid_row, grid_column, grid_width, grid_height
                  FROM viz_dashboard_panels
                  WHERE saved_chart_id = ?1
                  ORDER BY dashboard_id, panel_index ASC",
@@ -135,8 +125,6 @@ impl DashboardPanelsRepository {
                     grid_column: row.get(7)?,
                     grid_width: row.get(8)?,
                     grid_height: row.get(9)?,
-                    source_widget_index: row.get(10)?,
-                    source_widget_hash: row.get(11)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -182,9 +170,8 @@ impl DashboardPanelsRepository {
                 "INSERT INTO viz_dashboard_panels
                      (dashboard_id, panel_index, panel_kind, saved_chart_id,
                       divider_markdown, title_override,
-                      grid_row, grid_column, grid_width, grid_height,
-                      source_widget_index, source_widget_hash)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                      grid_row, grid_column, grid_width, grid_height)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     panel.dashboard_id,
                     panel.panel_index,
@@ -196,8 +183,6 @@ impl DashboardPanelsRepository {
                     panel.grid_column,
                     panel.grid_width,
                     panel.grid_height,
-                    panel.source_widget_index,
-                    panel.source_widget_hash,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -207,39 +192,6 @@ impl DashboardPanelsRepository {
         }
 
         tx.commit().map_err(|source| StorageError::Sqlite {
-            path: DB_PATH.into(),
-            source,
-        })?;
-
-        Ok(())
-    }
-
-    /// Updates the upstream-origin fields on a single panel row.
-    ///
-    /// Used by the apply flow after a successful refresh to record the new
-    /// upstream widget index and hash. Touches no other column.
-    pub fn set_panel_source(
-        &self,
-        dashboard_id: Uuid,
-        panel_index: i64,
-        source_widget_index: Option<i64>,
-        source_widget_hash: Option<&str>,
-    ) -> Result<(), StorageError> {
-        let conn = self.conn.lock().map_err(lock_err)?;
-
-        conn.execute(
-            "UPDATE viz_dashboard_panels
-                SET source_widget_index = ?1,
-                    source_widget_hash  = ?2
-              WHERE dashboard_id = ?3 AND panel_index = ?4",
-            rusqlite::params![
-                source_widget_index,
-                source_widget_hash,
-                dashboard_id.to_string(),
-                panel_index,
-            ],
-        )
-        .map_err(|source| StorageError::Sqlite {
             path: DB_PATH.into(),
             source,
         })?;
@@ -348,8 +300,6 @@ mod tests {
             grid_column: 0,
             grid_width: 1,
             grid_height: 1,
-            source_widget_index: None,
-            source_widget_hash: None,
         }
     }
 
@@ -413,8 +363,6 @@ mod tests {
             grid_column: 0,
             grid_width: 0,
             grid_height: 1,
-            source_widget_index: None,
-            source_widget_hash: None,
         }];
         let result = repo.replace_panels_for_dashboard(dashboard_id, &bad);
         assert!(result.is_err(), "should fail due to CHECK constraint");

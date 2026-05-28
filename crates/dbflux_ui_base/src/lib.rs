@@ -26,7 +26,6 @@ pub use app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};
 pub use async_ext::AsyncUpdateResultExt;
 pub use dashboard_manager::{
     Dashboard, DashboardManager, DashboardPanel, DashboardPanelDraft, DashboardPanelKind,
-    DashboardSourceKind, DashboardSyncIdentity,
 };
 pub use keymap::{default_keymap, key_chord_from_gpui};
 pub use saved_chart_manager::SavedChartManager;

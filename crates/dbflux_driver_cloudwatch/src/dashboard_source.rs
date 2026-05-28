@@ -1,16 +1,14 @@
 //! CloudWatch `DashboardSource` implementation.
 //!
-//! Fetches dashboards via `GetDashboard` and `ListDashboards` and computes
-//! the canonical content hash via `dbflux_core::dashboard_content_hash`.
+//! Lists dashboards via `ListDashboards` and fetches a dashboard body via
+//! `GetDashboard`. Dashboards are browsed read-only; nothing is persisted.
 //!
-//! Unit tests stub the AWS client behind the [`CloudWatchApi`] trait so
-//! parsing + hash computation are exercised without live AWS calls.
+//! Unit tests stub the AWS client behind the [`CloudWatchApi`] trait so the
+//! mapping logic is exercised without live AWS calls.
 
 use async_trait::async_trait;
 use aws_sdk_cloudwatch::Client as CloudWatchMetricsClient;
-use dbflux_core::{
-    DashboardRef, DashboardSource, DbError, RemoteDashboard, dashboard_content_hash,
-};
+use dbflux_core::{DashboardRef, DashboardSource, DbError, RemoteDashboard};
 
 /// Minimal CloudWatch dashboard API surface used by [`CloudWatchDashboardSource`].
 ///
@@ -101,30 +99,14 @@ impl CloudWatchApi for RealCloudWatchDashboardApi {
 }
 
 /// Driver-level implementation of [`DashboardSource`].
-///
-/// Holds a cached `account_id` (best-effort; `None` when STS lookup failed
-/// at driver construction) and the `home_region` recorded at connect time.
 pub struct CloudWatchDashboardSource {
     api: Box<dyn CloudWatchApi>,
-    account_id: Option<String>,
-    home_region: String,
 }
 
 impl CloudWatchDashboardSource {
     /// Builds a new source from a boxed [`CloudWatchApi`] implementation.
-    ///
-    /// `account_id` is best-effort: pass `None` when STS resolution failed
-    /// so dashboards are marked detached per spec R7.1.
-    pub fn new(
-        api: Box<dyn CloudWatchApi>,
-        account_id: Option<String>,
-        home_region: String,
-    ) -> Self {
-        Self {
-            api,
-            account_id,
-            home_region,
-        }
+    pub fn new(api: Box<dyn CloudWatchApi>) -> Self {
+        Self { api }
     }
 }
 
@@ -132,17 +114,10 @@ impl CloudWatchDashboardSource {
 impl DashboardSource for CloudWatchDashboardSource {
     async fn fetch_dashboard(&self, name: &str) -> Result<RemoteDashboard, DbError> {
         let body_json = self.api.get_dashboard_body(name).await?;
-        let content_hash = dashboard_content_hash(&body_json)?;
 
         Ok(RemoteDashboard {
             name: name.to_string(),
-            // Caller treats empty account_id as detached on its own; we
-            // still return the empty string here so the value type stays
-            // simple. Persistence converts back to NULL via Option.
-            account_id: self.account_id.clone().unwrap_or_default(),
-            home_region: self.home_region.clone(),
             body_json,
-            content_hash,
             last_modified: None,
         })
     }
@@ -156,29 +131,6 @@ impl DashboardSource for CloudWatchDashboardSource {
                 last_modified: e.last_modified,
             })
             .collect())
-    }
-
-    fn account_id(&self) -> Option<&str> {
-        self.account_id.as_deref()
-    }
-
-    fn home_region(&self) -> &str {
-        &self.home_region
-    }
-}
-
-/// Resolves the calling account id via STS `GetCallerIdentity`.
-///
-/// Best-effort per spec R7.1: returns `None` on failure (logged) so import
-/// can still succeed and downstream code marks the dashboard detached.
-pub async fn resolve_account_id(shared_config: &aws_config::SdkConfig) -> Option<String> {
-    let client = aws_sdk_sts::Client::new(shared_config);
-    match client.get_caller_identity().send().await {
-        Ok(resp) => resp.account,
-        Err(e) => {
-            log::warn!("STS GetCallerIdentity failed; dashboard marks detached: {e}");
-            None
-        }
     }
 }
 
@@ -246,42 +198,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_dashboard_returns_remote_with_v1_hash() {
+    async fn fetch_dashboard_returns_remote_body() {
         let api = Box::new(StubApi::fixed(body()));
-        let src =
-            CloudWatchDashboardSource::new(api, Some("123456789012".into()), "us-east-1".into());
+        let src = CloudWatchDashboardSource::new(api);
 
         let remote = src.fetch_dashboard("prod-overview").await.expect("ok");
         assert_eq!(remote.name, "prod-overview");
-        assert_eq!(remote.account_id, "123456789012");
-        assert_eq!(remote.home_region, "us-east-1");
-        assert!(remote.content_hash.starts_with("v1:"));
         assert!(!remote.body_json.is_empty());
-    }
-
-    #[tokio::test]
-    async fn fetch_dashboard_hash_is_deterministic_across_calls() {
-        let src1 = CloudWatchDashboardSource::new(
-            Box::new(StubApi::fixed(body())),
-            Some("a".into()),
-            "us-east-1".into(),
-        );
-        let src2 = CloudWatchDashboardSource::new(
-            Box::new(StubApi::fixed(body())),
-            Some("a".into()),
-            "us-east-1".into(),
-        );
-        let h1 = src1.fetch_dashboard("d").await.unwrap().content_hash;
-        let h2 = src2.fetch_dashboard("d").await.unwrap().content_hash;
-        assert_eq!(h1, h2);
     }
 
     #[tokio::test]
     async fn fetch_dashboard_propagates_api_error_as_db_error() {
         let mut api = StubApi::fixed(body());
         api.fail_get = true;
-        let src =
-            CloudWatchDashboardSource::new(Box::new(api), Some("a".into()), "us-east-1".into());
+        let src = CloudWatchDashboardSource::new(Box::new(api));
 
         let err = src.fetch_dashboard("d").await.unwrap_err();
         assert!(
@@ -303,8 +233,7 @@ mod tests {
                 last_modified: None,
             },
         ];
-        let src =
-            CloudWatchDashboardSource::new(Box::new(api), Some("123".into()), "us-east-1".into());
+        let src = CloudWatchDashboardSource::new(Box::new(api));
 
         let refs = src.list_dashboards().await.unwrap();
         assert_eq!(refs.len(), 2);
@@ -318,16 +247,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detached_dashboard_when_account_id_is_none() {
-        let src = CloudWatchDashboardSource::new(
-            Box::new(StubApi::fixed(body())),
-            None,
-            "us-east-1".into(),
-        );
-        assert!(src.account_id().is_none());
-        // The RemoteDashboard.account_id falls back to empty string;
-        // persistence is responsible for converting to NULL.
-        let remote = src.fetch_dashboard("d").await.unwrap();
-        assert!(remote.account_id.is_empty());
+    async fn list_dashboards_propagates_api_error() {
+        let mut api = StubApi::fixed("{}");
+        api.fail_list = true;
+        let src = CloudWatchDashboardSource::new(Box::new(api));
+
+        let err = src.list_dashboards().await.unwrap_err();
+        assert!(matches!(err, DbError::QueryFailed(_)));
     }
 }

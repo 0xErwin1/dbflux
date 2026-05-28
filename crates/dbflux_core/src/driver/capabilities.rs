@@ -534,13 +534,12 @@ bitflags! {
         /// capability-driven — no `driver_id` comparison is needed.
         const DASHBOARD_IMPORT = 1 << 51;
 
-        /// Driver implements the `DashboardSource` trait and supports refreshing
-        /// previously-imported dashboards from upstream.
+        /// Driver implements the `DashboardSource` trait: it can list dashboards
+        /// from the upstream system and fetch a dashboard body on demand.
         ///
-        /// When set, the UI exposes the sync status pill, drift indicator, and
-        /// refresh-preview modal for dashboards whose `source_kind` is not `'local'`.
-        /// Gating flows exclusively through this capability — no `driver_id`
-        /// comparisons are allowed.
+        /// When set, the UI lists the driver's dashboards in the sidebar and
+        /// opens them read-only. Gating flows exclusively through this
+        /// capability — no `driver_id` comparisons are allowed.
         const DASHBOARD_SYNC = 1 << 52;
     }
 }

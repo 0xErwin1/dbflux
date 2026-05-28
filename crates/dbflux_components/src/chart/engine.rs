@@ -1783,22 +1783,18 @@ fn render_number_chart(view: &ChartView, cx: &mut Context<ChartView>) -> impl In
             continue;
         }
 
-        let latest_value = view.render_model.decimated.get(series_idx).and_then(|pts| {
-            pts.iter()
-                .rev()
-                .find(|(_, y)| y.is_finite())
-                .map(|(_, y)| *y)
-        });
+        let latest_value = view
+            .render_model
+            .decimated
+            .get(series_idx)
+            .and_then(|pts| pts.iter().rev().find(|(_, y)| y.is_finite()).map(|(_, y)| *y));
 
         let value_text = match latest_value {
             Some(v) => format_number_value(v),
             None => "—".to_string(),
         };
 
-        let accent = palette
-            .get(series_idx)
-            .copied()
-            .unwrap_or(chart_colors.value_fg);
+        let accent = palette.get(series_idx).copied().unwrap_or(chart_colors.value_fg);
 
         tiles.push(
             div()
@@ -2636,8 +2632,13 @@ pub fn format_y_value(y: f64) -> String {
     }
 
     if abs >= 1e3 {
-        const SUFFIXES: &[(f64, &str)] =
-            &[(1e15, "P"), (1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "K")];
+        const SUFFIXES: &[(f64, &str)] = &[
+            (1e15, "P"),
+            (1e12, "T"),
+            (1e9, "G"),
+            (1e6, "M"),
+            (1e3, "K"),
+        ];
 
         for &(threshold, suffix) in SUFFIXES {
             if abs >= threshold {
