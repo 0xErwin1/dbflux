@@ -63,24 +63,14 @@ pub fn ensure_aws_profile_configured(config: &SsoProfileConfig) -> Result<(), Db
     }
 
     let config_path = aws_config_path();
-    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
 
     let profile_header = format!("[profile {}]", config.profile_name);
     let new_block = build_sso_profile_block(config);
 
-    let updated = replace_or_append_profile_block(&existing, &profile_header, &new_block);
-
-    // Ensure the directory exists before writing.
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            DbError::ValueResolutionFailed(format!(
-                "Could not create AWS config directory: {}",
-                err
-            ))
-        })?;
-    }
-
-    std::fs::write(&config_path, updated).map_err(|err| {
+    crate::config::update_aws_config_atomic(&config_path, |existing| {
+        replace_or_append_profile_block(existing, &profile_header, &new_block)
+    })
+    .map_err(|err| {
         DbError::ValueResolutionFailed(format!("Could not write ~/.aws/config: {}", err))
     })
 }
@@ -113,7 +103,6 @@ fn ensure_aws_profile_configured_with_session(
     }
 
     let config_path = aws_config_path();
-    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
 
     let profile_header = format!("[profile {}]", profile_name);
     let profile_block = build_sso_session_profile_block(
@@ -123,22 +112,16 @@ fn ensure_aws_profile_configured_with_session(
         sso_account_id,
         sso_role_name,
     );
-    let after_profile = replace_or_append_profile_block(&existing, &profile_header, &profile_block);
 
     let session_header = format!("[sso-session {}]", session_name);
     let session_block = build_sso_session_block(session_name, sso_start_url, sso_region);
-    let updated = replace_or_append_profile_block(&after_profile, &session_header, &session_block);
 
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            DbError::ValueResolutionFailed(format!(
-                "Could not create AWS config directory: {}",
-                err
-            ))
-        })?;
-    }
-
-    std::fs::write(&config_path, updated).map_err(|err| {
+    crate::config::update_aws_config_atomic(&config_path, |existing| {
+        let after_profile =
+            replace_or_append_profile_block(existing, &profile_header, &profile_block);
+        replace_or_append_profile_block(&after_profile, &session_header, &session_block)
+    })
+    .map_err(|err| {
         DbError::ValueResolutionFailed(format!("Could not write ~/.aws/config: {}", err))
     })
 }
