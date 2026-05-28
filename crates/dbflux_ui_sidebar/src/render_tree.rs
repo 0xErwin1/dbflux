@@ -1103,6 +1103,12 @@ fn resolve_node_icon(
         SchemaNodeKind::DashboardItem => {
             (Some(AppIcon::ChartColumnBig), "", theme.muted_foreground)
         }
+        SchemaNodeKind::RemoteDashboardsFolder => {
+            (Some(AppIcon::ChartColumnBig), "", params.color_orange)
+        }
+        SchemaNodeKind::RemoteDashboardItem => {
+            (Some(AppIcon::ChartColumnBig), "", theme.muted_foreground)
+        }
         SchemaNodeKind::SavedChartsFolder => (Some(AppIcon::ChartArea), "", params.color_orange),
         SchemaNodeKind::SavedChartItem => (Some(AppIcon::ChartArea), "", theme.muted_foreground),
         _ => (None, "", theme.muted_foreground),
