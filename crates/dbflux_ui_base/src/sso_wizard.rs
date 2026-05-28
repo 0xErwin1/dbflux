@@ -149,6 +149,7 @@ impl SsoWizard {
                 fields,
                 enabled: true,
                 read_only: false,
+                dangling_origin: None,
             });
             cx.emit(AuthProfileCreated { profile_id });
             cx.emit(AppStateChanged);

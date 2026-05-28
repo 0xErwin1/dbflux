@@ -40,6 +40,19 @@ pub struct AuthProfile {
     /// Defaults to `false` for stored profiles. `true` for AWS reflected profiles.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub read_only: bool,
+    /// Why this stored profile is dangling, if it is.
+    ///
+    /// Set by the one-time migration when a stored AWS profile can no longer be
+    /// matched to a file section. Known values:
+    /// - `"keyring-only"`: the credentials live only in the DBFlux keyring with no
+    ///   matching `~/.aws/credentials` entry.
+    /// - `"file-gone"`: the profile section disappeared from `~/.aws/config`.
+    ///
+    /// `None` for healthy stored profiles and for all reflected (virtual) profiles.
+    /// This field is never persisted by serialization; it is populated at load time
+    /// from the `dangling_origin` column in `cfg_auth_profiles`.
+    #[serde(skip)]
+    pub dangling_origin: Option<String>,
 }
 
 /// Provider ID rewrites for old `config.type` values.
@@ -144,6 +157,7 @@ impl<'de> Deserialize<'de> for AuthProfile {
             fields,
             enabled,
             read_only,
+            dangling_origin: None,
         })
     }
 }
@@ -161,6 +175,7 @@ impl AuthProfile {
             fields,
             enabled: true,
             read_only: false,
+            dangling_origin: None,
         }
     }
 
@@ -340,6 +355,7 @@ mod tests {
             fields: fields.clone(),
             enabled: true,
             read_only: false,
+            dangling_origin: None,
         };
 
         let serialized = serde_json::to_value(&original).unwrap();

@@ -170,6 +170,20 @@ pub trait DynAuthProvider: Send + Sync {
         vec![]
     }
 
+    /// Write a newly created profile to an external config file instead of
+    /// DBFlux's SQLite store.
+    ///
+    /// Returns `Some(Ok(()))` on a successful file write. Returns `Some(Err(msg))`
+    /// when the write failed. Returns `None` for providers that store profiles
+    /// normally in DBFlux (the UI then falls back to `add_auth_profile`).
+    ///
+    /// Only AWS file-backed providers override this. The Settings UI calls this
+    /// before `add_auth_profile` so it can skip SQLite storage for file-backed
+    /// providers and let reflection pick up the new profile on the next read.
+    fn write_new_profile_to_config(&self, _profile: &AuthProfile) -> Option<Result<(), String>> {
+        None
+    }
+
     /// Abort any in-flight login for `profile` if the provider tracks one.
     ///
     /// Returns `true` if an in-flight login was found and signalled to stop.
@@ -311,6 +325,10 @@ impl DynAuthProvider for SharedDynAuthProvider {
         self.provider.after_profile_saved(profile);
     }
 
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        self.provider.write_new_profile_to_config(profile)
+    }
+
     fn abort_login(&self, profile: &AuthProfile) -> bool {
         self.provider.abort_login(profile)
     }
@@ -377,6 +395,10 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
 
     fn after_profile_saved(&self, profile: &AuthProfile) {
         self.as_ref().after_profile_saved(profile);
+    }
+
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        self.as_ref().write_new_profile_to_config(profile)
     }
 
     fn abort_login(&self, profile: &AuthProfile) -> bool {

@@ -1518,6 +1518,7 @@ fn load_auth_profiles(
                     fields,
                     enabled: dto.enabled,
                     read_only: false,
+                    dangling_origin: dto.dangling_origin,
                 })
             })
             .collect()

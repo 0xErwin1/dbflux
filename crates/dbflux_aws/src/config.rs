@@ -373,11 +373,6 @@ fn flush_section(
     });
 }
 
-pub fn write_profile_to_aws_config(profile: &AwsProfileInfo) -> Result<(), io::Error> {
-    let path = config_file_path();
-    write_profile_to_path(profile, &path)
-}
-
 pub fn restore_aws_config_backup() -> Result<(), io::Error> {
     let path = config_file_path();
     restore_backup_for_path(&path)
@@ -424,125 +419,6 @@ pub(crate) fn update_aws_config_atomic(
     }
 
     write_atomic_with_backup(path, &updated)
-}
-
-fn write_profile_to_path(
-    profile: &AwsProfileInfo,
-    path: &std::path::Path,
-) -> Result<(), io::Error> {
-    update_aws_config_atomic(path, |existing| upsert_profile_section(existing, profile))
-}
-
-fn profile_section_header(name: &str) -> String {
-    if name.eq_ignore_ascii_case("default") {
-        "[default]".to_string()
-    } else {
-        format!("[profile {}]", name)
-    }
-}
-
-fn profile_entries(profile: &AwsProfileInfo) -> Vec<(String, String)> {
-    let mut entries = Vec::new();
-
-    if profile.is_sso {
-        if let Some(value) = profile.sso_start_url.as_ref()
-            && !value.trim().is_empty()
-        {
-            entries.push(("sso_start_url".to_string(), value.clone()));
-        }
-
-        if let Some(value) = profile.sso_region.as_ref()
-            && !value.trim().is_empty()
-        {
-            entries.push(("sso_region".to_string(), value.clone()));
-        }
-
-        if let Some(value) = profile.sso_account_id.as_ref()
-            && !value.trim().is_empty()
-        {
-            entries.push(("sso_account_id".to_string(), value.clone()));
-        }
-
-        if let Some(value) = profile.sso_role_name.as_ref()
-            && !value.trim().is_empty()
-        {
-            entries.push(("sso_role_name".to_string(), value.clone()));
-        }
-    }
-
-    if let Some(value) = profile.region.as_ref()
-        && !value.trim().is_empty()
-    {
-        entries.push(("region".to_string(), value.clone()));
-    }
-
-    entries
-}
-
-fn find_section_bounds(lines: &[String], section_header: &str) -> Option<(usize, usize)> {
-    let start = lines
-        .iter()
-        .position(|line| line.trim().eq_ignore_ascii_case(section_header))?;
-
-    let mut end = lines.len();
-    for (index, line) in lines.iter().enumerate().skip(start + 1) {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            end = index;
-            break;
-        }
-    }
-
-    Some((start, end))
-}
-
-fn upsert_profile_section(contents: &str, profile: &AwsProfileInfo) -> String {
-    let section_header = profile_section_header(&profile.name);
-    let entries = profile_entries(profile);
-
-    let mut lines = contents
-        .lines()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    if let Some((start, end)) = find_section_bounds(&lines, &section_header) {
-        let mut seen = HashMap::<String, bool>::new();
-        for (key, _) in &entries {
-            seen.insert(key.clone(), false);
-        }
-
-        for line in lines.iter_mut().take(end).skip(start + 1) {
-            if let Some((key, _)) = parse_key_value(line.trim())
-                && let Some((_, value)) = entries.iter().find(|(entry_key, _)| *entry_key == key)
-            {
-                *line = format!("{} = {}", key, value);
-                seen.insert(key, true);
-            }
-        }
-
-        let mut insert_index = end;
-        for (key, value) in &entries {
-            if !seen.get(key).copied().unwrap_or(false) {
-                lines.insert(insert_index, format!("{} = {}", key, value));
-                insert_index += 1;
-            }
-        }
-    } else {
-        if !lines.is_empty() && !lines.last().is_some_and(|line| line.trim().is_empty()) {
-            lines.push(String::new());
-        }
-
-        lines.push(section_header);
-        for (key, value) in entries {
-            lines.push(format!("{} = {}", key, value));
-        }
-    }
-
-    let mut updated = lines.join("\n");
-    if !updated.ends_with('\n') {
-        updated.push('\n');
-    }
-    updated
 }
 
 fn write_atomic_with_backup(path: &std::path::Path, content: &str) -> Result<(), io::Error> {
@@ -701,6 +577,53 @@ pub fn append_aws_shared_credentials_profile(
     writeln!(block, "region = {region}").ok();
 
     append_config_block_if_absent(&path, name, &block)
+}
+
+/// Appends a new `[sso-session <name>]` block to `~/.aws/config`.
+///
+/// Creates the `~/.aws/` directory and the config file if they do not exist.
+/// If a section with the given name already exists, the file is left unchanged
+/// and the function returns `Ok(false)`. On a successful write it returns
+/// `Ok(true)`.
+pub fn append_aws_sso_session_profile(
+    name: &str,
+    sso_start_url: &str,
+    sso_region: &str,
+) -> Result<bool, std::io::Error> {
+    let path = config_file_path();
+
+    let mut block = String::new();
+    writeln!(block).ok();
+    writeln!(block, "[sso-session {name}]").ok();
+    writeln!(block, "sso_start_url = {sso_start_url}").ok();
+    writeln!(block, "sso_region = {sso_region}").ok();
+
+    // Use a unique sentinel for sso-session headers (not [default] or [profile X]).
+    // Since `append_config_block_if_absent` checks for [profile X] / [default],
+    // and sso-session sections use [sso-session X], we call `update_aws_config_atomic`
+    // directly with a sso-session-aware existence check.
+    let mut appended = false;
+    let sso_header = format!("[sso-session {name}]");
+
+    update_aws_config_atomic(&path, |existing| {
+        let already_exists = existing
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case(&sso_header));
+
+        if already_exists {
+            return existing.to_string();
+        }
+
+        appended = true;
+        let mut content = existing.to_string();
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&block);
+        content
+    })?;
+
+    Ok(appended)
 }
 
 /// Reads the config file content, returning an empty string if the file does
@@ -996,7 +919,7 @@ output=json
         }
         std::fs::write(path.as_ref(), &seed).expect("seed");
 
-        // Many threads, each upserting its own distinct profile at the same
+        // Many threads, each appending its own distinct profile at the same
         // time. Before the lock + atomic rename, interleaved read-modify-write
         // cycles over a non-atomic write could read a half-written file and
         // persist the truncation, dropping unrelated sections.
@@ -1004,18 +927,9 @@ output=json
         for index in 0..16 {
             let path = Arc::clone(&path);
             handles.push(thread::spawn(move || {
-                let profile = AwsProfileInfo {
-                    name: format!("worker-{index}"),
-                    region: Some("eu-west-1".to_string()),
-                    is_sso: false,
-                    sso_start_url: None,
-                    sso_region: None,
-                    sso_account_id: None,
-                    sso_role_name: None,
-                    sso_session: None,
-                    is_sso_session: false,
-                };
-                write_profile_to_path(&profile, path.as_ref()).expect("write");
+                let name = format!("worker-{index}");
+                let block = format!("\n[profile {name}]\nregion = eu-west-1\n");
+                append_config_block_if_absent(path.as_ref(), &name, &block).expect("write");
             }));
         }
 

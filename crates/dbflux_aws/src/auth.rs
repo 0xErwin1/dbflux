@@ -413,6 +413,7 @@ impl AwsSsoAuthProvider {
                     fields,
                     enabled: true,
                     read_only: true,
+                    dangling_origin: None,
                 })
             })
             .collect()
@@ -484,6 +485,7 @@ impl AwsSsoSessionAuthProvider {
                     fields,
                     enabled: true,
                     read_only: true,
+                    dangling_origin: None,
                 })
             })
             .collect()
@@ -571,6 +573,7 @@ impl AwsSharedCredentialsAuthProvider {
                     fields,
                     enabled: true,
                     read_only: true,
+                    dangling_origin: None,
                 })
             })
             .collect()
@@ -923,6 +926,48 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         AwsSsoAuthProvider::reflect_profiles(self)
     }
 
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        let name = profile.name.trim().to_string();
+        let sso_start_url = profile
+            .fields
+            .get("sso_start_url")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let sso_region = profile
+            .fields
+            .get("sso_region")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let sso_account_id = profile
+            .fields
+            .get("sso_account_id")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let sso_role_name = profile
+            .fields
+            .get("sso_role_name")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let region = profile
+            .fields
+            .get("region")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        Some(
+            crate::config::append_aws_sso_profile(
+                &name,
+                &sso_start_url,
+                &sso_region,
+                &sso_account_id,
+                &sso_role_name,
+                &region,
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        )
+    }
+
     fn detect_importable_profiles(&self) -> Vec<ImportableProfile> {
         let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -1175,6 +1220,21 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
     fn reflect_profiles(&self) -> Vec<AuthProfile> {
         AwsSharedCredentialsAuthProvider::reflect_profiles(self)
     }
+
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        let name = profile.name.trim().to_string();
+        let region = profile
+            .fields
+            .get("region")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        Some(
+            crate::config::append_aws_shared_credentials_profile(&name, &region)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+        )
+    }
 }
 
 #[async_trait::async_trait]
@@ -1260,6 +1320,26 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
 
     fn reflect_profiles(&self) -> Vec<AuthProfile> {
         AwsSsoSessionAuthProvider::reflect_profiles(self)
+    }
+
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        let name = profile.name.trim().to_string();
+        let sso_start_url = profile
+            .fields
+            .get("sso_start_url")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let sso_region = profile
+            .fields
+            .get("sso_region")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        Some(
+            crate::config::append_aws_sso_session_profile(&name, &sso_start_url, &sso_region)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+        )
     }
 }
 
@@ -2024,6 +2104,7 @@ mod tests {
             fields,
             enabled: true,
             read_only: false,
+            dangling_origin: None,
         }
     }
 
@@ -2110,22 +2191,6 @@ mod tests {
         AwsSsoAuthProvider {
             config_cache: Mutex::new(cache),
         }
-    }
-
-    /// Helper: creates a provider with both a config and a credentials file.
-    fn sso_provider_with_config_keep_dir(
-        config_content: &str,
-    ) -> (AwsSsoAuthProvider, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("config");
-        let creds_path = dir.path().join("credentials");
-        std::fs::write(&config_path, config_content).unwrap();
-        std::fs::write(&creds_path, "").unwrap();
-        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
-        let provider = AwsSsoAuthProvider {
-            config_cache: Mutex::new(cache),
-        };
-        (provider, dir)
     }
 
     #[test]
@@ -2442,6 +2507,169 @@ sso_region = us-east-1
                 );
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // S3–S5: write-back prohibition — config file must not be modified
+    // -------------------------------------------------------------------------
+
+    /// S3: `reflect_profiles()` must not write to `~/.aws/config`.
+    ///
+    /// Verified by checking that the config file mtime is unchanged after
+    /// reflect_profiles() completes. Uses a temp file as the config source so
+    /// the real user config is never touched.
+    #[test]
+    fn reflect_profiles_does_not_write_to_config() {
+        let config = r#"
+[profile dev-sso]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+
+        let mtime_before = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_before = std::fs::read(&config_path).unwrap();
+
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        let _ = provider.reflect_profiles();
+
+        let mtime_after = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_after = std::fs::read(&config_path).unwrap();
+
+        assert_eq!(
+            mtime_before, mtime_after,
+            "reflect_profiles() must not modify ~/.aws/config (mtime changed)"
+        );
+        assert_eq!(
+            hash_before, hash_after,
+            "reflect_profiles() must not modify ~/.aws/config (content changed)"
+        );
+    }
+
+    /// S4: `fetch_dynamic_options()` must not write to `~/.aws/config`.
+    ///
+    /// Uses an unknown field id (returns Permanent immediately without network
+    /// calls) while asserting the config file is untouched.
+    #[test]
+    fn fetch_dynamic_options_does_not_write_to_config() {
+        let config = r#"
+[profile dev-sso]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+
+        let mtime_before = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_before = std::fs::read(&config_path).unwrap();
+
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+
+        let profile = make_sso_profile();
+        let request = FetchOptionsRequest {
+            field_id: "unknown_field".to_string(),
+            dependencies: std::collections::HashMap::new(),
+            session: None,
+        };
+        let _result = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(provider.fetch_dynamic_options(&profile, request));
+
+        let mtime_after = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_after = std::fs::read(&config_path).unwrap();
+
+        assert_eq!(
+            mtime_before, mtime_after,
+            "fetch_dynamic_options() must not modify ~/.aws/config (mtime changed)"
+        );
+        assert_eq!(
+            hash_before, hash_after,
+            "fetch_dynamic_options() must not modify ~/.aws/config (content changed)"
+        );
+    }
+
+    /// S5: `login()` must not write to `~/.aws/config`.
+    ///
+    /// Uses a profile without `sso_start_url` to trigger an early error before
+    /// any network calls, while asserting the config file is untouched.
+    #[test]
+    fn login_does_not_write_to_config() {
+        let config = r#"
+[profile dev-sso]
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+
+        let mtime_before = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_before = std::fs::read(&config_path).unwrap();
+
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+
+        // Use a profile with no sso_start_url so login() errors before network
+        // calls. The profile name ("dev-sso") matches a section in the config
+        // but the provider still must not write back.
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("profile_name".to_string(), "dev-sso".to_string());
+        let profile = AuthProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "dev-sso".to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields,
+            enabled: true,
+            read_only: true,
+            dangling_origin: None,
+        };
+
+        let _result = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(provider.login(&profile, Box::new(|_url: Option<String>| {})));
+
+        let mtime_after = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        let hash_after = std::fs::read(&config_path).unwrap();
+
+        assert_eq!(
+            mtime_before, mtime_after,
+            "login() must not modify ~/.aws/config (mtime changed)"
+        );
+        assert_eq!(
+            hash_before, hash_after,
+            "login() must not modify ~/.aws/config (content changed)"
+        );
     }
 
     /// When `sso_account_id` dependency is missing, `sso_role_name` fetch

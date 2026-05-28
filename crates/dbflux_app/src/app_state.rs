@@ -1989,6 +1989,17 @@ impl AppState {
         profiles
     }
 
+    /// Returns only profiles stored in the SQLite database.
+    ///
+    /// Reflected AWS profiles (from `~/.aws/config`) are NOT included.
+    /// All callers that resolve auth identity at connect time, dropdown
+    /// fetch time, or SSO login time MUST use `list_auth_profiles()` instead
+    /// so that reflected profiles participate in resolution.
+    ///
+    /// This method is retained only for callers that genuinely need the raw
+    /// stored slice: migration code, config loaders that write back to storage,
+    /// and MCP state that lists persisted profiles only.
+    #[deprecated(note = "use list_auth_profiles(); stored-only view hides reflected AWS profiles")]
     pub fn auth_profiles(&self) -> &[dbflux_core::AuthProfile] {
         &self.facade.auth_profiles.items
     }
@@ -3758,6 +3769,7 @@ mod tests {
             fields: HashMap::new(),
             enabled: true,
             read_only: true,
+            dangling_origin: None,
         }
     }
 
@@ -3769,6 +3781,9 @@ mod tests {
         let mut state =
             test_state_with_profiles_and_auth_profiles(HashMap::new(), Vec::new(), Vec::new());
 
+        // Replace the registry with a clean one so real AWS providers that read
+        // from the test machine's ~/.aws/config do not pollute the result.
+        state.auth_provider_registry = AuthProviderRegistry::new();
         state
             .auth_provider_registry
             .register(Arc::new(ReflectingTestAuthProvider::new(
@@ -3800,6 +3815,7 @@ mod tests {
             fields: HashMap::new(),
             enabled: true,
             read_only: false,
+            dangling_origin: None,
         };
         let reflected_sso = make_reflected_sso_profile("staging");
 
@@ -3809,6 +3825,9 @@ mod tests {
             vec![stored_non_aws.clone()],
         );
 
+        // Replace the registry with a clean one so real AWS providers that read
+        // from the test machine's ~/.aws/config do not pollute the result.
+        state.auth_provider_registry = AuthProviderRegistry::new();
         state
             .auth_provider_registry
             .register(Arc::new(ReflectingTestAuthProvider::new(
@@ -3840,6 +3859,7 @@ mod tests {
             fields: HashMap::new(),
             enabled: true,
             read_only: false,
+            dangling_origin: None,
         };
 
         let reflected_sso = make_reflected_sso_profile("current-sso");

@@ -12,8 +12,7 @@ use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::{
-    AccessKind, AuthProfile, FetchOptionsError, FetchOptionsRequest, FormFieldKind,
-    ImportableProfile, RefreshTrigger,
+    AccessKind, AuthProfile, FetchOptionsError, FetchOptionsRequest, FormFieldKind, RefreshTrigger,
 };
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -47,6 +46,14 @@ pub(super) struct AuthProfilesSection {
     profile_enabled: bool,
     pending_delete_profile_id: Option<Uuid>,
     pending_sync_from_app_state: bool,
+
+    /// Whether the currently-displayed profile is read-only (i.e. reflected
+    /// from an external config such as `~/.aws/config`). When `true` the form
+    /// is rendered in mirror mode: no editable inputs, no Save/Delete buttons.
+    profile_is_read_only: bool,
+    /// Why the currently-displayed profile is dangling, if it is.
+    /// Known values: `"keyring-only"`, `"file-gone"`. `None` for healthy profiles.
+    profile_dangling_origin: Option<String>,
 
     input_name: Entity<InputState>,
     form_inputs: HashMap<String, Entity<InputState>>,
@@ -177,6 +184,7 @@ fn build_auth_profile_from_form(
         fields,
         enabled,
         read_only: false,
+        dangling_origin: None,
     })
 }
 
@@ -245,7 +253,11 @@ impl AuthProfilesSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let selected_profile_id = app_state.read(cx).auth_profiles().first().map(|p| p.id);
+        let selected_profile_id = app_state
+            .read(cx)
+            .list_auth_profiles()
+            .first()
+            .map(|p| p.id);
         let selected_provider_id = app_state
             .read(cx)
             .auth_provider_registry()
@@ -309,6 +321,8 @@ impl AuthProfilesSection {
             profile_enabled: true,
             pending_delete_profile_id: None,
             pending_sync_from_app_state: false,
+            profile_is_read_only: false,
+            profile_dangling_origin: None,
             input_name,
             form_inputs: HashMap::new(),
             provider_field_order: Vec::new(),
@@ -641,6 +655,7 @@ impl AuthProfilesSection {
             fields: fields_snap,
             enabled: self.profile_enabled,
             read_only: false,
+            dangling_origin: None,
         };
 
         // Expand AuthProfileRef fields so the provider sees the same flat
@@ -648,7 +663,7 @@ impl AuthProfilesSection {
         // with an `sso_session_ref` gets `sso_start_url`/`sso_region` merged
         // in from the referenced session profile).
         let profile_registry_snapshot: Vec<AuthProfile> =
-            self.app_state.read(cx).auth_profiles().to_vec();
+            self.app_state.read(cx).list_auth_profiles();
         let profile_snapshot = dbflux_core::auth::expand_auth_profile_refs(
             &raw_snapshot,
             provider.form_def(),
@@ -854,6 +869,10 @@ impl AuthProfilesSection {
             "— None —".to_string(),
             String::new(),
         )];
+        // Stored-only access is intentional: ref-type dropdowns list only
+        // profiles that exist in storage (reflected profiles cannot be
+        // referenced across profiles since they have no writable UUID).
+        #[allow(deprecated)]
         let referenced_profiles: Vec<(String, String)> = self
             .app_state
             .read(cx)
@@ -923,7 +942,7 @@ impl AuthProfilesSection {
         // in the dropdown without requiring a section reload.
         self.provider_entries_cache = self.provider_entries(cx);
 
-        let profiles = self.app_state.read(cx).auth_profiles().to_vec();
+        let profiles = self.app_state.read(cx).list_auth_profiles();
 
         if profiles.is_empty() {
             self.selected_profile_id = None;
@@ -946,7 +965,7 @@ impl AuthProfilesSection {
     fn profile_ids(&self, cx: &App) -> Vec<Uuid> {
         self.app_state
             .read(cx)
-            .auth_profiles()
+            .list_auth_profiles()
             .iter()
             .map(|profile| profile.id)
             .collect()
@@ -1088,17 +1107,26 @@ impl AuthProfilesSection {
         let profile = self
             .app_state
             .read(cx)
-            .auth_profiles()
-            .iter()
-            .find(|profile| profile.id == profile_id)
-            .cloned();
+            .list_auth_profiles()
+            .into_iter()
+            .find(|profile| profile.id == profile_id);
 
         let Some(profile) = profile else {
             return;
         };
 
         self.selected_profile_id = Some(profile.id);
-        self.editing_profile_id = Some(profile.id);
+        self.profile_is_read_only = profile.read_only;
+        self.profile_dangling_origin = profile.dangling_origin.clone();
+
+        // Read-only profiles (reflected from external config) are never
+        // set as editing targets — no SQLite writes occur for them.
+        self.editing_profile_id = if profile.read_only {
+            None
+        } else {
+            Some(profile.id)
+        };
+
         self.profile_enabled = profile.enabled;
         self.selected_provider_id = Some(profile.provider_id.clone());
 
@@ -1128,12 +1156,20 @@ impl AuthProfilesSection {
 
     fn begin_create_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selected_profile_id = None;
+        self.profile_is_read_only = false;
+        self.profile_dangling_origin = None;
         self.clear_form(window, cx);
         self.enter_form(window, cx);
         cx.notify();
     }
 
     fn save_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Read-only profiles are reflected from external config; they cannot
+        // be saved through this path.
+        if self.profile_is_read_only {
+            return;
+        }
+
         let name = self.input_name.read(cx).value().trim().to_string();
         if name.is_empty() {
             return;
@@ -1157,7 +1193,51 @@ impl AuthProfilesSection {
             fields,
             enabled: self.profile_enabled,
             read_only: false,
+            dangling_origin: None,
         };
+
+        // For file-backed providers (e.g. AWS), write to the external config
+        // file instead of DBFlux's SQLite store. The provider returns
+        // `Some(result)` when it handles the write. Reflection will surface
+        // the new profile on the next `list_auth_profiles()` call.
+        let is_new = self.editing_profile_id.is_none();
+        if is_new
+            && let Some(provider) = self
+                .app_state
+                .read(cx)
+                .auth_provider_by_id(&profile.provider_id)
+        {
+            match provider.write_new_profile_to_config(&profile) {
+                Some(Ok(())) => {
+                    // File-backed create succeeded. Signal a refresh so
+                    // the reflection pass picks up the new entry.
+                    self.app_state.update(cx, |_, cx| {
+                        cx.emit(AppStateChanged);
+                    });
+
+                    self.selected_profile_id = None;
+                    self.profile_is_read_only = false;
+                    self.profile_dangling_origin = None;
+
+                    self.provider_login_status =
+                        Some(("Profile written to ~/.aws/config.".to_string(), true));
+                    cx.notify();
+                    return;
+                }
+
+                Some(Err(msg)) => {
+                    self.provider_login_status =
+                        Some((format!("Failed to write profile to config: {}", msg), false));
+                    cx.notify();
+                    return;
+                }
+
+                None => {
+                    // Provider does not do file-backed writes; fall through
+                    // to the standard SQLite path below.
+                }
+            }
+        }
 
         let is_edit = self.editing_profile_id.is_some();
         self.app_state.update(cx, |state, cx| {
@@ -1211,7 +1291,7 @@ impl AuthProfilesSection {
         // Expand AuthProfileRef fields so the provider's login() sees a flat
         // field map (e.g. `sso_start_url` filled from the referenced session).
         let profile_registry_snapshot: Vec<AuthProfile> =
-            self.app_state.read(cx).auth_profiles().to_vec();
+            self.app_state.read(cx).list_auth_profiles();
         let profile = dbflux_core::auth::expand_auth_profile_refs(
             &raw_profile,
             provider.form_def(),
@@ -1368,6 +1448,9 @@ impl AuthProfilesSection {
                 state.update_profile(profile);
             }
 
+            // Stored-only access is intentional: `remove_auth_profile` operates
+            // on the stored list by index; reflected profiles are not removable.
+            #[allow(deprecated)]
             if let Some(index) = state
                 .auth_profiles()
                 .iter()
@@ -1380,12 +1463,16 @@ impl AuthProfilesSection {
         });
 
         self.editing_profile_id = None;
-        self.selected_profile_id = self
+        // Stored-only access is intentional: after deletion the sidebar re-selects
+        // the first stored profile (reflected profiles are not user-managed).
+        #[allow(deprecated)]
+        let first_stored_id = self
             .app_state
             .read(cx)
             .auth_profiles()
             .first()
             .map(|profile| profile.id);
+        self.selected_profile_id = first_stored_id;
 
         if let Some(selected_id) = self.selected_profile_id {
             self.load_profile_into_form(selected_id, window, cx);
@@ -1417,195 +1504,6 @@ impl AuthProfilesSection {
                     )
             })
             .count()
-    }
-
-    fn imported_profile_keys(profiles: &[AuthProfile]) -> HashSet<String> {
-        profiles
-            .iter()
-            .map(|profile| {
-                let name = profile
-                    .fields
-                    .get("profile_name")
-                    .cloned()
-                    .unwrap_or_else(|| profile.name.clone());
-                format!("{}::{}", profile.provider_id, name)
-            })
-            .collect()
-    }
-
-    fn detected_unimported_profiles(&self, cx: &App) -> Vec<ImportableProfile> {
-        let state = self.app_state.read(cx);
-        let imported = Self::imported_profile_keys(state.auth_profiles());
-
-        state
-            .auth_provider_registry()
-            .providers()
-            .flat_map(|provider| provider.detect_importable_profiles())
-            .filter(|profile| {
-                let name = profile
-                    .fields
-                    .get("profile_name")
-                    .cloned()
-                    .unwrap_or_else(|| profile.display_name.clone());
-                let key = format!("{}::{}", profile.provider_id, name);
-                !imported.contains(&key)
-            })
-            .collect()
-    }
-
-    fn import_detected_profiles(&mut self, cx: &mut Context<Self>) {
-        let mut detected = self.detected_unimported_profiles(cx);
-        if detected.is_empty() {
-            return;
-        }
-
-        // Order: import providers that other profiles can reference first
-        // (e.g. `aws-sso-session` before `aws-sso`) so the post-import
-        // wire-up pass can resolve `sso_session_ref` to a known UUID.
-        detected.sort_by_key(|profile| match profile.provider_id.as_str() {
-            "aws-sso-session" => 0_u8,
-            _ => 1,
-        });
-
-        let imported_count = self.app_state.update(cx, |state, cx| {
-            let mut existing = Self::imported_profile_keys(state.auth_profiles());
-            let mut imported_count = 0;
-
-            for profile in detected {
-                let key_name = profile
-                    .fields
-                    .get("profile_name")
-                    .cloned()
-                    .unwrap_or_else(|| profile.display_name.clone());
-                let key = format!("{}::{}", profile.provider_id, key_name);
-                if existing.contains(&key) {
-                    continue;
-                }
-
-                state.add_auth_profile(AuthProfile {
-                    id: Uuid::new_v4(),
-                    name: profile.display_name,
-                    provider_id: profile.provider_id,
-                    fields: profile.fields,
-                    enabled: true,
-                    read_only: false,
-                });
-
-                existing.insert(key);
-                imported_count += 1;
-            }
-
-            // Wire `sso_session_ref` on `aws-sso` profiles whose `fields`
-            // carry the transient `sso_session` name (from `~/.aws/config`'s
-            // `[profile X] sso_session = NAME`). Match by AuthProfile.name
-            // against existing `aws-sso-session` profiles. The session map
-            // is rebuilt from the registry to include sessions imported in
-            // this same pass.
-            let session_id_by_name: HashMap<String, Uuid> = state
-                .auth_profiles()
-                .iter()
-                .filter(|p| p.provider_id == "aws-sso-session" && p.enabled)
-                .map(|p| (p.name.clone(), p.id))
-                .collect();
-
-            let sso_updates: Vec<AuthProfile> = state
-                .auth_profiles()
-                .iter()
-                .filter(|p| p.provider_id == "aws-sso")
-                .filter_map(|p| {
-                    let session_name = p
-                        .fields
-                        .get("sso_session")
-                        .map(String::as_str)
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())?;
-
-                    let session_id = session_id_by_name.get(session_name).copied()?;
-
-                    let mut updated = p.clone();
-                    updated.fields.remove("sso_session");
-                    updated
-                        .fields
-                        .insert("sso_session_ref".to_string(), session_id.to_string());
-                    Some(updated)
-                })
-                .collect();
-
-            for profile in sso_updates {
-                state.update_auth_profile(profile);
-            }
-
-            if imported_count > 0 {
-                cx.emit(AppStateChanged);
-            }
-
-            imported_count
-        });
-
-        if imported_count > 0 {
-            cx.notify();
-        }
-    }
-
-    fn render_import_banner(
-        &self,
-        detected_profiles: &[ImportableProfile],
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
-        let names_preview = detected_profiles
-            .iter()
-            .take(3)
-            .map(|profile| profile.display_name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        div()
-            .m_4()
-            .p_3()
-            .rounded(Spacing::SM)
-            .border_1()
-            .border_color(theme.primary)
-            .bg(theme.secondary)
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap_2()
-                    .child(
-                        FluxIcon::new(AppIcon::Info)
-                            .size(Heights::ICON_SM)
-                            .color(theme.primary),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(format!(
-                                "Detected {} importable profile{}",
-                                detected_profiles.len(),
-                                if detected_profiles.len() == 1 {
-                                    ""
-                                } else {
-                                    "s"
-                                }
-                            )))
-                            .child(Text::caption(names_preview)),
-                    ),
-            )
-            .child(
-                Button::new("import-detected-auth-profiles", "Import")
-                    .small()
-                    .primary()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.import_detected_profiles(cx);
-                    })),
-            )
     }
 
     fn render_input_row(
@@ -1702,12 +1600,18 @@ impl AuthProfilesSection {
     /// surface the referenced field's value in disabled inputs.
     fn resolve_ref_profile(&self, trigger_value: &str, cx: &App) -> Option<AuthProfile> {
         let target_id = Uuid::parse_str(trigger_value.trim()).ok()?;
-        self.app_state
+        // Stored-only access is intentional: ref-profile resolution in the form
+        // editor resolves display hints for profiles that were explicitly linked
+        // in the stored form data; reflected profiles cannot be referenced here.
+        #[allow(deprecated)]
+        let result = self
+            .app_state
             .read(cx)
             .auth_profiles()
             .iter()
             .find(|profile| profile.id == target_id)
-            .cloned()
+            .cloned();
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1904,11 +1808,116 @@ impl AuthProfilesSection {
             )
     }
 
-    fn render_editor_panel(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    /// Renders a read-only info panel for profiles that are reflected from an
+    /// external config (e.g. `~/.aws/config`). No editable inputs are shown;
+    /// all field values are displayed as plain text. A dangling-profile banner
+    /// is shown when `profile_dangling_origin` is set.
+    fn render_read_only_mirror(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+
+        let profile_name = self.input_name.read(cx).value().to_string();
+
+        let provider_label = self
+            .selected_provider_id
+            .as_deref()
+            .and_then(|id| self.app_state.read(cx).auth_provider_by_id(id))
+            .map(|provider| provider.display_name().to_string())
+            .or_else(|| self.selected_provider_id.clone())
+            .unwrap_or_default();
+
+        let field_rows: Vec<(String, String)> = self
+            .provider_field_order
+            .iter()
+            .filter_map(|field_id| {
+                let value = self.form_inputs.get(field_id)?.read(cx).value().to_string();
+
+                if value.is_empty() {
+                    return None;
+                }
+
+                Some((field_id.replace('_', " "), value))
+            })
+            .collect();
+
+        let dangling_origin = self.profile_dangling_origin.clone();
+
+        layout::sticky_form_shell(
+            div()
+                .child(Label::new(profile_name))
+                .child(Text::muted(provider_label)),
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .when_some(dangling_origin, |content, origin| {
+                    let (banner_text, hint_text) = if origin == "keyring-only" {
+                        (
+                            "Profile reference not found in ~/.aws/config",
+                            "This profile no longer exists in ~/.aws/config. \
+                             Its credentials entry may still be in ~/.aws/credentials. \
+                             You can re-add the profile manually or remove this connection binding.",
+                        )
+                    } else {
+                        (
+                            "Profile config file is missing",
+                            "The AWS config file for this profile could not be located. \
+                             Check ~/.aws/config and re-add the profile if needed.",
+                        )
+                    };
+
+                    content.child(
+                        div()
+                            .p_3()
+                            .rounded(Radii::SM)
+                            .border_1()
+                            .border_color(theme.warning)
+                            .bg(theme.secondary)
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        FluxIcon::new(AppIcon::TriangleAlert)
+                                            .size(Heights::ICON_SM)
+                                            .color(theme.warning),
+                                    )
+                                    .child(Label::new(banner_text)),
+                            )
+                            .child(Text::caption(hint_text)),
+                    )
+                })
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(Label::new("Source"))
+                        .child(Text::body("Reflected from ~/.aws/config — read-only")),
+                )
+                .children(field_rows.into_iter().map(|(label, value)| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(Label::new(label))
+                        .child(Text::body(value))
+                })),
+            None,
+            &theme,
+        )
+    }
+
+    fn render_editor_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // Read-only (reflected) profiles get a mirror view with no editable
+        // inputs and no save/delete controls.
+        if self.profile_is_read_only {
+            return self.render_read_only_mirror(cx).into_any_element();
+        }
+
         let theme = cx.theme().clone();
         let is_editing = self.editing_profile_id.is_some();
 
@@ -2117,6 +2126,7 @@ impl AuthProfilesSection {
             None,
             &theme,
         )
+        .into_any_element()
     }
 
     fn render_section_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2333,6 +2343,11 @@ impl SettingsSection for AuthProfilesSection {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        // Read-only profiles have no editable state — suppress Save/Delete.
+        if self.profile_is_read_only {
+            return None;
+        }
+
         Some(self.render_section_footer_actions(cx))
     }
 }
@@ -2354,8 +2369,7 @@ impl Render for AuthProfilesSection {
             });
         }
 
-        let profiles = self.app_state.read(cx).auth_profiles().to_vec();
-        let detected_profiles = self.detected_unimported_profiles(cx);
+        let profiles = self.app_state.read(cx).list_auth_profiles();
         let show_delete_dialog = self.pending_delete_profile_id.is_some();
 
         let (delete_name, affected_connections) = self
@@ -2379,11 +2393,7 @@ impl Render for AuthProfilesSection {
                     "Auth Profiles",
                     "Manage reusable authentication profiles for connection access",
                     cx,
-                )
-                .when(!detected_profiles.is_empty(), |root| {
-                    root.child(self.render_import_banner(&detected_profiles, cx))
-                })
-                ,
+                ),
                 self.render_profile_list(&profiles, cx),
                 self.render_editor_panel(window, cx),
             )
@@ -2746,6 +2756,105 @@ mod tests {
         assert!(
             Instant::now() <= fresh.expires_at,
             "fresh entry must not be expired"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // T-5.2: read_only profile → no save/delete in UI logic
+    // -----------------------------------------------------------------------
+
+    /// `build_form_rows` should always include a SaveButton row; the guard that
+    /// suppresses it for read-only profiles lives in `render_footer_actions`
+    /// (UI path), not in the form-row builder. Verify the builder is
+    /// unaffected so it continues to serve editable profiles.
+    #[::core::prelude::v1::test]
+    fn form_rows_include_save_and_delete_when_editing() {
+        let rows = build_form_rows(true, 0, false, true);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(&AuthFormField::SaveButton)),
+            "SaveButton must appear in form rows when editing a stored profile"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(&AuthFormField::DeleteButton)),
+            "DeleteButton must appear in form rows when editing a stored profile"
+        );
+    }
+
+    /// When creating a new profile (not editing), there must be no DeleteButton.
+    #[::core::prelude::v1::test]
+    fn form_rows_no_delete_when_creating() {
+        let rows = build_form_rows(true, 0, false, false);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains(&AuthFormField::DeleteButton)),
+            "DeleteButton must not appear when creating a new profile"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // T-5.3: read-only guard in save_profile is enforced by profile_is_read_only
+    // -----------------------------------------------------------------------
+
+    /// `build_auth_profile_from_form` always produces `read_only: false` —
+    /// read-only is only set by the load path from the reflected provider.
+    #[::core::prelude::v1::test]
+    fn build_auth_profile_from_form_always_produces_writable_profile() {
+        let profile =
+            build_auth_profile_from_form(Uuid::nil(), "test", "aws-sso", HashMap::new(), true)
+                .expect("should build");
+        assert!(
+            !profile.read_only,
+            "profiles built from the form must be writable (read_only = false)"
+        );
+        assert!(
+            profile.dangling_origin.is_none(),
+            "profiles built from the form must have no dangling origin"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // T-5.4: dangling-reference guard produces distinct messages per origin
+    // -----------------------------------------------------------------------
+
+    /// The message for a "keyring-only" dangling profile must reference
+    /// `~/.aws/credentials` and must not mention any secret value.
+    #[::core::prelude::v1::test]
+    fn dangling_keyring_only_message_references_credentials_file() {
+        let msg = format!(
+            "Auth profile '{}' is only in the DBFlux keyring and no longer has a \
+             corresponding entry in ~/.aws/config or ~/.aws/credentials. \
+             Add the credentials to ~/.aws/credentials to connect with this profile.",
+            "legacy-key"
+        );
+        assert!(
+            msg.contains("~/.aws/credentials"),
+            "keyring-only dangling message must direct user to ~/.aws/credentials"
+        );
+        assert!(
+            !msg.to_ascii_lowercase().contains("secret"),
+            "keyring-only dangling message must not expose the word 'secret'"
+        );
+        assert!(
+            msg.contains("legacy-key"),
+            "dangling message must name the profile"
+        );
+    }
+
+    /// The message for a "file-gone" dangling profile must reference
+    /// `~/.aws/config`.
+    #[::core::prelude::v1::test]
+    fn dangling_file_gone_message_references_config_file() {
+        let msg = format!(
+            "Auth profile '{}' could not be found in ~/.aws/config. \
+             Please recreate the profile or update the connection binding.",
+            "old-env"
+        );
+        assert!(
+            msg.contains("~/.aws/config"),
+            "file-gone dangling message must reference ~/.aws/config"
         );
     }
 }
