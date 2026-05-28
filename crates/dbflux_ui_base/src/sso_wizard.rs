@@ -148,6 +148,7 @@ impl SsoWizard {
                 provider_id: "aws-sso".to_string(),
                 fields,
                 enabled: true,
+                read_only: false,
             });
             cx.emit(AuthProfileCreated { profile_id });
             cx.emit(AppStateChanged);

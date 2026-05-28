@@ -278,6 +278,7 @@ fn load_auth_profiles(runtime: &StorageRuntime) -> Result<Vec<dbflux_core::AuthP
                 provider_id: dto.provider_id,
                 fields,
                 enabled: dto.enabled,
+                read_only: false,
             })
         })
         .collect()

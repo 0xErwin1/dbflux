@@ -176,6 +176,7 @@ fn build_auth_profile_from_form(
         provider_id: provider_id.to_string(),
         fields,
         enabled,
+        read_only: false,
     })
 }
 
@@ -639,6 +640,7 @@ impl AuthProfilesSection {
             provider_id: provider_id_snap,
             fields: fields_snap,
             enabled: self.profile_enabled,
+            read_only: false,
         };
 
         // Expand AuthProfileRef fields so the provider sees the same flat
@@ -1154,6 +1156,7 @@ impl AuthProfilesSection {
             provider_id,
             fields,
             enabled: self.profile_enabled,
+            read_only: false,
         };
 
         let is_edit = self.editing_profile_id.is_some();
@@ -1485,6 +1488,7 @@ impl AuthProfilesSection {
                     provider_id: profile.provider_id,
                     fields: profile.fields,
                     enabled: true,
+                    read_only: false,
                 });
 
                 existing.insert(key);

@@ -1516,6 +1516,7 @@ fn load_auth_profiles(
                     provider_id: dto.provider_id,
                     fields,
                     enabled: dto.enabled,
+                    read_only: false,
                 })
             })
             .collect()

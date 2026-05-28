@@ -23,6 +23,11 @@ pub struct AuthProviderLoginCapabilities {
 /// `AuthProfile` uses a custom `Deserialize` impl to handle migration from
 /// the legacy `"config"` format (see impl below). `Serialize` is derived
 /// normally and always writes the new `"fields"` format.
+///
+/// `read_only` is `true` for profiles that are reflected live from AWS config
+/// files and must not be edited in DBFlux. Stored profiles always have
+/// `read_only = false`. This field is never persisted to SQLite; reflected
+/// profiles are never serialized.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthProfile {
     pub id: Uuid,
@@ -30,6 +35,11 @@ pub struct AuthProfile {
     pub provider_id: String,
     pub fields: HashMap<String, String>,
     pub enabled: bool,
+    /// Whether this profile is a live reflection and must not be edited in DBFlux.
+    ///
+    /// Defaults to `false` for stored profiles. `true` for AWS reflected profiles.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
 }
 
 /// Provider ID rewrites for old `config.type` values.
@@ -122,12 +132,18 @@ impl<'de> Deserialize<'de> for AuthProfile {
             (HashMap::new(), provider_id)
         };
 
+        let read_only = obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         Ok(AuthProfile {
             id,
             name,
             provider_id,
             fields,
             enabled,
+            read_only,
         })
     }
 }
@@ -144,6 +160,7 @@ impl AuthProfile {
             provider_id: provider_id.into(),
             fields,
             enabled: true,
+            read_only: false,
         }
     }
 
@@ -322,6 +339,7 @@ mod tests {
             provider_id: "aws-sso".to_string(),
             fields: fields.clone(),
             enabled: true,
+            read_only: false,
         };
 
         let serialized = serde_json::to_value(&original).unwrap();

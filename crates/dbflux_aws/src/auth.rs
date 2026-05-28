@@ -20,7 +20,7 @@ use dbflux_core::DbError;
 use dbflux_core::auth::{
     AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthProviderLoginCapabilities, AuthSession,
     AuthSessionState, FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse,
-    ImportableProfile, ResolvedCredentials, UrlCallback,
+    ImportableProfile, ResolvedCredentials, UrlCallback, aws_profile_uuid,
 };
 use dbflux_core::{
     FormFieldDef, FormFieldKind, FormSection, FormTab, RefreshTrigger, SelectOption,
@@ -538,6 +538,99 @@ impl AwsSsoAuthProvider {
         let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.profiles().to_vec()
     }
+
+    /// Reflects all `[profile NAME]` SSO sections from `~/.aws/config` into
+    /// `AuthProfile` records.
+    ///
+    /// Each reflected profile has:
+    /// - `provider_id = "aws-sso"`
+    /// - `id = aws_profile_uuid("aws-sso", name)`
+    /// - `read_only = true`
+    /// - `fields` populated from the parsed config section; `sso_session`
+    ///   indirection is folded in from the referenced `[sso-session]` block.
+    ///
+    /// Malformed sections (empty name, required fields absent) are skipped
+    /// with a log warning. Missing or empty config returns an empty vec.
+    pub fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        let profiles = {
+            let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.profiles().to_vec()
+        };
+
+        // Build a lookup for [sso-session NAME] blocks so we can fold them
+        // into profiles that use the sso_session = NAME indirection.
+        let session_lookup: HashMap<String, &crate::config::AwsProfileInfo> = profiles
+            .iter()
+            .filter(|p| p.is_sso_session)
+            .map(|p| (p.name.to_lowercase(), p))
+            .collect::<HashMap<_, _>>();
+        // Work around the lifetime issue: collect session data into owned vecs.
+        let session_map: HashMap<String, crate::config::AwsProfileInfo> = profiles
+            .iter()
+            .filter(|p| p.is_sso_session)
+            .map(|p| (p.name.to_lowercase(), p.clone()))
+            .collect();
+        drop(session_lookup); // was only used to build session_map
+
+        profiles
+            .iter()
+            .filter(|p| p.is_sso && !p.is_sso_session)
+            .filter_map(|p| {
+                if p.name.is_empty() {
+                    log::warn!("aws-config-reflect: skipping SSO profile with empty name");
+                    return None;
+                }
+
+                let mut fields = HashMap::new();
+                fields.insert("profile_name".to_string(), p.name.clone());
+
+                if let Some(ref region) = p.region {
+                    fields.insert("region".to_string(), region.clone());
+                }
+
+                // Fold sso_session indirection: if the profile references a
+                // [sso-session NAME] block, merge start_url and sso_region
+                // from the session into the profile's fields.
+                if let Some(ref session_name) = p.sso_session {
+                    fields.insert("sso_session".to_string(), session_name.clone());
+
+                    if let Some(session) = session_map.get(&session_name.to_lowercase()) {
+                        if let Some(ref url) = session.sso_start_url {
+                            fields.insert("sso_start_url".to_string(), url.clone());
+                        }
+                        if let Some(ref sso_region) = session.sso_region {
+                            fields.insert("sso_region".to_string(), sso_region.clone());
+                        }
+                    }
+                } else {
+                    if let Some(ref url) = p.sso_start_url {
+                        fields.insert("sso_start_url".to_string(), url.clone());
+                    }
+                    if let Some(ref sso_region) = p.sso_region {
+                        fields.insert("sso_region".to_string(), sso_region.clone());
+                    }
+                }
+
+                if let Some(ref account_id) = p.sso_account_id {
+                    fields.insert("sso_account_id".to_string(), account_id.clone());
+                }
+                if let Some(ref role_name) = p.sso_role_name {
+                    fields.insert("sso_role_name".to_string(), role_name.clone());
+                }
+
+                let id = aws_profile_uuid("aws-sso", &p.name);
+
+                Some(AuthProfile {
+                    id,
+                    name: p.name.clone(),
+                    provider_id: "aws-sso".to_string(),
+                    fields,
+                    enabled: true,
+                    read_only: true,
+                })
+            })
+            .collect()
+    }
 }
 
 impl Default for AwsSsoAuthProvider {
@@ -562,6 +655,55 @@ impl AwsSsoSessionAuthProvider {
             config_cache: Mutex::new(CachedAwsConfig::new()),
         }
     }
+
+    /// Reflects all `[sso-session NAME]` sections from `~/.aws/config` into
+    /// `AuthProfile` records.
+    ///
+    /// Each reflected profile has:
+    /// - `provider_id = "aws-sso-session"`
+    /// - `id = aws_profile_uuid("aws-sso-session", name)` — distinct from
+    ///   the same name under `aws-sso` (S17, provider-id scoping)
+    /// - `read_only = true`
+    ///
+    /// Malformed sections (empty name) are skipped with a log warning.
+    pub fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let profiles = cache.profiles().to_vec();
+
+        profiles
+            .iter()
+            .filter(|p| p.is_sso_session)
+            .filter_map(|p| {
+                if p.name.is_empty() {
+                    log::warn!(
+                        "aws-config-reflect: skipping sso-session profile with empty name"
+                    );
+                    return None;
+                }
+
+                let mut fields = HashMap::new();
+                fields.insert("profile_name".to_string(), p.name.clone());
+
+                if let Some(ref url) = p.sso_start_url {
+                    fields.insert("sso_start_url".to_string(), url.clone());
+                }
+                if let Some(ref sso_region) = p.sso_region {
+                    fields.insert("sso_region".to_string(), sso_region.clone());
+                }
+
+                let id = aws_profile_uuid("aws-sso-session", &p.name);
+
+                Some(AuthProfile {
+                    id,
+                    name: p.name.clone(),
+                    provider_id: "aws-sso-session".to_string(),
+                    fields,
+                    enabled: true,
+                    read_only: true,
+                })
+            })
+            .collect()
+    }
 }
 
 impl Default for AwsSsoSessionAuthProvider {
@@ -570,11 +712,84 @@ impl Default for AwsSsoSessionAuthProvider {
     }
 }
 
-pub struct AwsSharedCredentialsAuthProvider;
+pub struct AwsSharedCredentialsAuthProvider {
+    config_cache: Mutex<CachedAwsConfig>,
+}
 
 impl AwsSharedCredentialsAuthProvider {
     pub fn new() -> Self {
-        Self
+        Self {
+            config_cache: Mutex::new(CachedAwsConfig::new()),
+        }
+    }
+
+    /// Reflects all non-SSO profile names from `~/.aws/config` and
+    /// `~/.aws/credentials` into `AuthProfile` records.
+    ///
+    /// Uses `shared_profile_names()` which unions the non-SSO config sections
+    /// with the credentials-file section names (deduped, case-preserving).
+    ///
+    /// Reflected fields contain `profile_name` and optionally `region` from
+    /// the config file. Key material (`aws_access_key_id`,
+    /// `aws_secret_access_key`) is NEVER included — the AWS SDK reads those
+    /// directly from `~/.aws/credentials` at connect time.
+    pub fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        let mut cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let names = cache.shared_profile_names();
+
+        // Build a region lookup from the config profiles (names only; no keys).
+        let config_profiles = cache.profiles().to_vec();
+        let region_lookup: HashMap<String, String> = config_profiles
+            .iter()
+            .filter(|p| !p.is_sso && !p.is_sso_session)
+            .filter_map(|p| {
+                p.region
+                    .as_ref()
+                    .map(|r| (p.name.to_lowercase(), r.clone()))
+            })
+            .collect();
+
+        names
+            .into_iter()
+            .filter_map(|name| {
+                if name.is_empty() {
+                    log::warn!(
+                        "aws-config-reflect: skipping shared-credentials profile with empty name"
+                    );
+                    return None;
+                }
+
+                let mut fields = HashMap::new();
+                fields.insert("profile_name".to_string(), name.clone());
+
+                if let Some(region) = region_lookup.get(&name.to_lowercase()) {
+                    fields.insert("region".to_string(), region.clone());
+                }
+
+                // Security invariant: no key material in reflected fields.
+                // aws_access_key_id and aws_secret_access_key are intentionally
+                // absent — the AWS SDK reads them from ~/.aws/credentials.
+                debug_assert!(
+                    !fields.contains_key("aws_access_key_id"),
+                    "aws-config-reflect: key material must never appear in reflected fields"
+                );
+                debug_assert!(
+                    !fields.contains_key("aws_secret_access_key"),
+                    "aws-config-reflect: key material must never appear in reflected fields"
+                );
+
+                let id = aws_profile_uuid("aws-shared-credentials", &name);
+
+                Some(AuthProfile {
+                    id,
+                    name: name.clone(),
+                    provider_id: "aws-shared-credentials".to_string(),
+                    fields,
+                    enabled: true,
+                    read_only: true,
+                })
+            })
+            .collect()
     }
 }
 
@@ -2722,6 +2937,7 @@ mod tests {
             provider_id: "aws-sso".to_string(),
             fields,
             enabled: true,
+            read_only: false,
         }
     }
 
@@ -2790,6 +3006,332 @@ mod tests {
             "expected Permanent error for unknown field, got {:?}",
             result
         );
+    }
+
+    // --- T-3.1: AwsSsoAuthProvider::reflect_profiles() ---
+
+    /// Helper: creates a `CachedAwsConfig` backed by a temp config file, wrapped
+    /// in an `AwsSsoAuthProvider`.
+    fn sso_provider_with_config(config_content: &str) -> AwsSsoAuthProvider {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        // Leak the tempdir so the files remain for the test's duration.
+        std::mem::forget(dir);
+        AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        }
+    }
+
+    /// Helper: creates a provider with both a config and a credentials file.
+    fn sso_provider_with_config_keep_dir(
+        config_content: &str,
+    ) -> (AwsSsoAuthProvider, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        (provider, dir)
+    }
+
+    #[test]
+    fn sso_reflect_produces_auth_profile_with_correct_provider_and_uuid() {
+        let config = r#"
+[profile dev-sso]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let provider = sso_provider_with_config(config);
+        let profiles = provider.reflect_profiles();
+
+        assert_eq!(profiles.len(), 1, "expected one reflected SSO profile");
+        let p = &profiles[0];
+
+        assert_eq!(p.provider_id, "aws-sso");
+        assert_eq!(p.name, "dev-sso");
+        assert!(p.read_only, "reflected profile must be read-only");
+        assert!(p.enabled);
+
+        let expected_id = dbflux_core::auth::aws_profile_uuid("aws-sso", "dev-sso");
+        assert_eq!(p.id, expected_id, "id must equal aws_profile_uuid(aws-sso, name)");
+
+        assert_eq!(
+            p.fields.get("sso_start_url").map(String::as_str),
+            Some("https://example.awsapps.com/start")
+        );
+        assert_eq!(
+            p.fields.get("sso_account_id").map(String::as_str),
+            Some("123456789012")
+        );
+        assert_eq!(
+            p.fields.get("sso_role_name").map(String::as_str),
+            Some("DevAccess")
+        );
+        assert_eq!(
+            p.fields.get("profile_name").map(String::as_str),
+            Some("dev-sso")
+        );
+
+        // No secret fields.
+        assert!(
+            !p.fields.contains_key("aws_access_key_id"),
+            "aws_access_key_id must not appear in reflected fields"
+        );
+        assert!(
+            !p.fields.contains_key("aws_secret_access_key"),
+            "aws_secret_access_key must not appear in reflected fields"
+        );
+    }
+
+    #[test]
+    fn sso_reflect_folds_sso_session_indirection() {
+        let config = r#"
+[profile my-sso]
+sso_session = my-org
+
+[sso-session my-org]
+sso_start_url = https://example.awsapps.com/start
+sso_region = us-east-1
+"#;
+        let provider = sso_provider_with_config(config);
+        let profiles = provider.reflect_profiles();
+
+        // Only one SSO profile (the sso-session is handled by AwsSsoSessionAuthProvider).
+        let sso = profiles.iter().find(|p| p.name == "my-sso").expect("my-sso must be reflected");
+
+        assert_eq!(sso.provider_id, "aws-sso");
+        assert_eq!(
+            sso.fields.get("sso_start_url").map(String::as_str),
+            Some("https://example.awsapps.com/start"),
+            "sso_start_url must be folded from the sso-session block"
+        );
+        assert_eq!(
+            sso.fields.get("sso_region").map(String::as_str),
+            Some("us-east-1"),
+            "sso_region must be folded from the sso-session block"
+        );
+        assert_eq!(
+            sso.fields.get("sso_session").map(String::as_str),
+            Some("my-org"),
+            "sso_session reference name must be preserved in fields"
+        );
+    }
+
+    #[test]
+    fn sso_reflect_returns_empty_when_config_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        // config_path intentionally does not exist.
+        let config_path = dir.path().join("nonexistent_config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&creds_path, "").unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+
+        let profiles = provider.reflect_profiles();
+        assert!(profiles.is_empty(), "missing config must yield empty list, no panic");
+    }
+
+    #[test]
+    fn sso_reflect_skips_non_sso_sections_but_reflects_sso_ones() {
+        let config = r#"
+[profile ci-user]
+region = us-west-2
+
+[profile dev-sso]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 123456789012
+sso_role_name = DevAccess
+sso_region = us-east-1
+"#;
+        let provider = sso_provider_with_config(config);
+        let profiles = provider.reflect_profiles();
+
+        // Only SSO profiles; ci-user is shared-credentials, not SSO.
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "dev-sso");
+    }
+
+    // --- T-3.2: AwsSsoSessionAuthProvider::reflect_profiles() ---
+
+    fn sso_session_provider_with_config(config_content: &str) -> AwsSsoSessionAuthProvider {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        std::mem::forget(dir);
+        AwsSsoSessionAuthProvider {
+            config_cache: Mutex::new(cache),
+        }
+    }
+
+    #[test]
+    fn sso_session_reflect_produces_correct_provider_and_uuid() {
+        let config = r#"
+[sso-session my-org]
+sso_start_url = https://example.awsapps.com/start
+sso_region = us-east-1
+"#;
+        let provider = sso_session_provider_with_config(config);
+        let profiles = provider.reflect_profiles();
+
+        assert_eq!(profiles.len(), 1);
+        let p = &profiles[0];
+
+        assert_eq!(p.provider_id, "aws-sso-session");
+        assert_eq!(p.name, "my-org");
+        assert!(p.read_only);
+
+        let expected_id = dbflux_core::auth::aws_profile_uuid("aws-sso-session", "my-org");
+        assert_eq!(p.id, expected_id);
+
+        assert_eq!(
+            p.fields.get("sso_start_url").map(String::as_str),
+            Some("https://example.awsapps.com/start")
+        );
+    }
+
+    #[test]
+    fn sso_session_uuid_differs_from_sso_same_name() {
+        let config = r#"
+[profile shared]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 111122223333
+sso_role_name = Admin
+sso_region = us-east-1
+
+[sso-session shared]
+sso_start_url = https://example.awsapps.com/start
+sso_region = us-east-1
+"#;
+        let sso_provider = sso_provider_with_config(config);
+        let session_provider = sso_session_provider_with_config(config);
+
+        let sso_profiles = sso_provider.reflect_profiles();
+        let session_profiles = session_provider.reflect_profiles();
+
+        let sso_p = sso_profiles.iter().find(|p| p.name == "shared").expect("sso shared");
+        let session_p = session_profiles.iter().find(|p| p.name == "shared").expect("session shared");
+
+        assert_ne!(
+            sso_p.id, session_p.id,
+            "same name under aws-sso vs aws-sso-session must have distinct UUIDs"
+        );
+    }
+
+    #[test]
+    fn sso_session_reflect_returns_empty_when_config_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("nonexistent");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&creds_path, "").unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        let provider = AwsSsoSessionAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        assert!(provider.reflect_profiles().is_empty());
+    }
+
+    // --- T-3.3: AwsSharedCredentialsAuthProvider::reflect_profiles() ---
+
+    fn shared_provider_with_files(
+        config_content: &str,
+        credentials_content: &str,
+    ) -> AwsSharedCredentialsAuthProvider {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, credentials_content).unwrap();
+        let cache = crate::config::CachedAwsConfig::new_with_paths(config_path, creds_path);
+        std::mem::forget(dir);
+        AwsSharedCredentialsAuthProvider {
+            config_cache: Mutex::new(cache),
+        }
+    }
+
+    #[test]
+    fn shared_reflect_includes_credentials_file_profiles() {
+        let credentials = "[ci-user]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCY\n";
+        let config = "";
+        let provider = shared_provider_with_files(config, credentials);
+        let profiles = provider.reflect_profiles();
+
+        let ci = profiles.iter().find(|p| p.name == "ci-user").expect("ci-user must be reflected");
+        assert_eq!(ci.provider_id, "aws-shared-credentials");
+        assert!(ci.read_only);
+
+        let expected_id = dbflux_core::auth::aws_profile_uuid("aws-shared-credentials", "ci-user");
+        assert_eq!(ci.id, expected_id);
+    }
+
+    #[test]
+    fn shared_reflect_reflects_region_from_config_when_present() {
+        let config = "[profile ci-user]\nregion = us-west-2\n";
+        let credentials = "[ci-user]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI\n";
+        let provider = shared_provider_with_files(config, credentials);
+        let profiles = provider.reflect_profiles();
+
+        let ci = profiles.iter().find(|p| p.name == "ci-user").expect("ci-user");
+        assert_eq!(
+            ci.fields.get("region").map(String::as_str),
+            Some("us-west-2"),
+            "region from config must be reflected"
+        );
+    }
+
+    #[test]
+    fn shared_reflect_no_region_does_not_error() {
+        let credentials = "[my-profile]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI\n";
+        let provider = shared_provider_with_files("", credentials);
+        let profiles = provider.reflect_profiles();
+
+        let p = profiles.iter().find(|p| p.name == "my-profile").expect("my-profile");
+        assert!(
+            p.fields.get("region").is_none(),
+            "absent region must not appear in fields"
+        );
+    }
+
+    /// Security assertion: reflected shared-credentials profiles must never
+    /// contain key material (ADR-7 invariant).
+    #[test]
+    fn shared_reflect_never_includes_key_material() {
+        let credentials = "[prod]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCY\n";
+        let provider = shared_provider_with_files("", credentials);
+        let profiles = provider.reflect_profiles();
+
+        for profile in &profiles {
+            let keys_present = profile.fields.contains_key("aws_access_key_id")
+                || profile.fields.contains_key("aws_secret_access_key");
+            assert!(
+                !keys_present,
+                "profile '{}' must not contain key material in reflected fields",
+                profile.name
+            );
+
+            // Also assert no AKIA-pattern value appears anywhere in the fields.
+            for (key, value) in &profile.fields {
+                assert!(
+                    !value.starts_with("AKIA"),
+                    "field '{}' contains an AKIA-pattern value, which is forbidden in reflected fields",
+                    key
+                );
+            }
+        }
     }
 
     /// When `sso_account_id` dependency is missing, `sso_role_name` fetch
