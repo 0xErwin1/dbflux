@@ -18,9 +18,10 @@ use aws_sdk_sts::config::ProvideCredentials;
 
 use dbflux_core::DbError;
 use dbflux_core::auth::{
-    AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthProviderLoginCapabilities, AuthSession,
-    AuthSessionState, FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse,
-    ImportableProfile, ResolvedCredentials, UrlCallback, aws_profile_uuid,
+    AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthProviderLoginCapabilities,
+    AuthSaveOutcome, AuthSession, AuthSessionState, AwsEditFile, AwsEditSnapshot,
+    FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse, ImportableProfile,
+    ResolvedCredentials, UrlCallback, aws_profile_uuid,
 };
 use dbflux_core::{
     FormFieldDef, FormFieldKind, FormSection, FormTab, RefreshTrigger, SelectOption,
@@ -922,6 +923,102 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         abort_sso_login(profile.id)
     }
 
+    /// Captures a SHA-256 snapshot of the `[profile NAME]` section in
+    /// `~/.aws/config` at the moment the edit form opens.
+    ///
+    /// The config section is the only writable target for `aws-sso` profiles.
+    /// Returns `config_section = None` when the section is absent (new profile).
+    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+        let config_path = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.config_path().to_path_buf()
+        };
+
+        let config_section = std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|contents| crate::config::hash_config_section(&contents, name));
+
+        AwsEditSnapshot {
+            config_section,
+            credentials_section: None,
+        }
+    }
+
+    /// Writes the edited SSO profile fields to `~/.aws/config` atomically.
+    ///
+    /// Performs an optimistic-concurrency check under the file lock: re-hashes
+    /// the `[profile NAME]` section from disk and compares against `snapshot`.
+    /// Returns `Conflict { file: Config }` without writing if the section was
+    /// modified externally between `open_edit_snapshot` and this call.
+    ///
+    /// Fields written: `sso_start_url`, `sso_account_id`, `sso_region`,
+    /// `sso_role_name`, `sso_session`, `region`, `output`.
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AwsEditSnapshot,
+    ) -> AuthSaveOutcome {
+        let config_path = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.config_path().to_path_buf()
+        };
+
+        let config_fields: Vec<(String, String)> = [
+            "sso_start_url",
+            "sso_account_id",
+            "sso_region",
+            "sso_role_name",
+            "sso_session",
+            "region",
+            "output",
+        ]
+        .iter()
+        .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
+        .collect();
+
+        let snapshot_hash = snapshot.config_section.as_ref().map(|h| h.0);
+
+        // Use a Cell to signal conflict from within the atomic transform.
+        // The transform is FnOnce, so we capture by reference via a local flag.
+        let conflict_detected = std::cell::Cell::new(false);
+
+        let result = crate::config::update_aws_config_atomic(&config_path, |existing| {
+            let current_hash = crate::config::hash_config_section(existing, name).map(|h| h.0);
+
+            let hashes_match = match (snapshot_hash, current_hash) {
+                (Some(snap), Some(current)) => snap == current,
+                (None, None) => true,
+                _ => false,
+            };
+
+            if !hashes_match {
+                conflict_detected.set(true);
+                return existing.to_string();
+            }
+
+            let borrowed: Vec<(&str, &str)> = config_fields
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            crate::config::replace_or_append_profile_block(existing, name, &borrowed)
+        });
+
+        if result.is_err() {
+            return AuthSaveOutcome::Conflict {
+                file: AwsEditFile::Config,
+            };
+        }
+
+        if conflict_detected.get() {
+            return AuthSaveOutcome::Conflict {
+                file: AwsEditFile::Config,
+            };
+        }
+
+        AuthSaveOutcome::Saved
+    }
+
     fn reflect_profiles(&self) -> Vec<AuthProfile> {
         AwsSsoAuthProvider::reflect_profiles(self)
     }
@@ -1235,6 +1332,166 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
                 .map_err(|e| e.to_string()),
         )
     }
+
+    /// Captures section-hash snapshots for both `~/.aws/config` (`[profile NAME]`)
+    /// and `~/.aws/credentials` (`[NAME]`) at the moment the edit form opens.
+    ///
+    /// Either hash may be `None` when the corresponding section is absent.
+    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+        let (config_path, credentials_path) = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                cache.config_path().to_path_buf(),
+                cache.credentials_path().to_path_buf(),
+            )
+        };
+
+        let config_section = std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|contents| crate::config::hash_config_section(&contents, name));
+
+        let credentials_section = std::fs::read_to_string(&credentials_path)
+            .ok()
+            .and_then(|contents| crate::config::hash_credentials_section(&contents, name));
+
+        AwsEditSnapshot {
+            config_section,
+            credentials_section,
+        }
+    }
+
+    /// Writes edited shared-credentials profile fields atomically to both
+    /// `~/.aws/config` and `~/.aws/credentials` as needed.
+    ///
+    /// Config fields (`region`, `output`) go to `[profile NAME]` in
+    /// `~/.aws/config`. Credentials fields (`aws_access_key_id`,
+    /// `aws_secret_access_key`, `aws_session_token`) go to `[NAME]` in
+    /// `~/.aws/credentials`.
+    ///
+    /// Write order: config first, credentials second (ADR-11). Each write has
+    /// its own conflict check under the shared lock. If config writes but
+    /// credentials conflicts, returns `PartialSaved { written: Config,
+    /// conflicted: Credentials }`.
+    ///
+    /// Secret fields: `aws_secret_access_key` and `aws_session_token` transit
+    /// only transiently inside the write transform and are never persisted to
+    /// DBFlux storage or logs.
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AwsEditSnapshot,
+    ) -> AuthSaveOutcome {
+        let (config_path, credentials_path) = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                cache.config_path().to_path_buf(),
+                cache.credentials_path().to_path_buf(),
+            )
+        };
+
+        // Config-side fields (non-secret).
+        let config_fields: Vec<(String, String)> = ["region", "output"]
+            .iter()
+            .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
+            .collect();
+
+        // Credentials-side fields (includes write-only secrets).
+        let creds_fields: Vec<(String, String)> = [
+            "aws_access_key_id",
+            "aws_secret_access_key",
+            "aws_session_token",
+        ]
+        .iter()
+        .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
+        .collect();
+
+        let has_config_fields = !config_fields.is_empty();
+        let has_creds_fields = !creds_fields.is_empty();
+
+        // Write config section first (when there are config-side fields to write).
+        let config_written = if has_config_fields {
+            let snapshot_hash = snapshot.config_section.as_ref().map(|h| h.0);
+            let conflict_detected = std::cell::Cell::new(false);
+
+            let config_fields_borrowed = config_fields.clone();
+            let result = crate::config::update_aws_config_atomic(&config_path, |existing| {
+                let current_hash = crate::config::hash_config_section(existing, name).map(|h| h.0);
+
+                let hashes_match = match (snapshot_hash, current_hash) {
+                    (Some(snap), Some(current)) => snap == current,
+                    (None, None) => true,
+                    _ => false,
+                };
+
+                if !hashes_match {
+                    conflict_detected.set(true);
+                    return existing.to_string();
+                }
+
+                let borrowed: Vec<(&str, &str)> = config_fields_borrowed
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                crate::config::replace_or_append_profile_block(existing, name, &borrowed)
+            });
+
+            if result.is_err() || conflict_detected.get() {
+                return AuthSaveOutcome::Conflict {
+                    file: AwsEditFile::Config,
+                };
+            }
+
+            true
+        } else {
+            false
+        };
+
+        // Write credentials section second (when there are credentials-side fields).
+        if has_creds_fields {
+            let snapshot_hash = snapshot.credentials_section.as_ref().map(|h| h.0);
+            let conflict_detected = std::cell::Cell::new(false);
+
+            let creds_fields_borrowed = creds_fields.clone();
+            let result =
+                crate::config::update_aws_credentials_atomic(&credentials_path, |existing| {
+                    let current_hash =
+                        crate::config::hash_credentials_section(existing, name).map(|h| h.0);
+
+                    let hashes_match = match (snapshot_hash, current_hash) {
+                        (Some(snap), Some(current)) => snap == current,
+                        (None, None) => true,
+                        _ => false,
+                    };
+
+                    if !hashes_match {
+                        conflict_detected.set(true);
+                        return existing.to_string();
+                    }
+
+                    let borrowed: Vec<(&str, &str)> = creds_fields_borrowed
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), v.as_str()))
+                        .collect();
+                    crate::config::replace_or_append_credentials_block(existing, name, &borrowed)
+                });
+
+            if result.is_err() || conflict_detected.get() {
+                return if config_written {
+                    AuthSaveOutcome::PartialSaved {
+                        written: AwsEditFile::Config,
+                        conflicted: AwsEditFile::Credentials,
+                    }
+                } else {
+                    AuthSaveOutcome::Conflict {
+                        file: AwsEditFile::Credentials,
+                    }
+                };
+            }
+        }
+
+        AuthSaveOutcome::Saved
+    }
 }
 
 #[async_trait::async_trait]
@@ -1340,6 +1597,80 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
                 .map(|_| ())
                 .map_err(|e| e.to_string()),
         )
+    }
+
+    /// Captures a SHA-256 snapshot of the `[sso-session NAME]` section in
+    /// `~/.aws/config` at the moment the edit form opens.
+    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+        let config_path = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.config_path().to_path_buf()
+        };
+
+        let config_section = std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|contents| crate::config::hash_sso_session_section(&contents, name));
+
+        AwsEditSnapshot {
+            config_section,
+            credentials_section: None,
+        }
+    }
+
+    /// Writes the edited sso-session fields to the `[sso-session NAME]` section
+    /// in `~/.aws/config` atomically.
+    ///
+    /// Fields written: `sso_start_url`, `sso_region`, `sso_registration_scopes`.
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AwsEditSnapshot,
+    ) -> AuthSaveOutcome {
+        let config_path = {
+            let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
+            cache.config_path().to_path_buf()
+        };
+
+        let session_fields: Vec<(String, String)> =
+            ["sso_start_url", "sso_region", "sso_registration_scopes"]
+                .iter()
+                .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
+                .collect();
+
+        let snapshot_hash = snapshot.config_section.as_ref().map(|h| h.0);
+        let conflict_detected = std::cell::Cell::new(false);
+
+        let result = crate::config::update_aws_config_atomic(&config_path, |existing| {
+            let current_hash = crate::config::hash_sso_session_section(existing, name).map(|h| h.0);
+
+            let hashes_match = match (snapshot_hash, current_hash) {
+                (Some(snap), Some(current)) => snap == current,
+                (None, None) => true,
+                _ => false,
+            };
+
+            if !hashes_match {
+                conflict_detected.set(true);
+                return existing.to_string();
+            }
+
+            // Build a replacement `[sso-session NAME]` block using the
+            // sso-session-specific block builder.
+            let borrowed: Vec<(&str, &str)> = session_fields
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            crate::config::replace_or_append_sso_session_block(existing, name, &borrowed)
+        });
+
+        if result.is_err() || conflict_detected.get() {
+            return AuthSaveOutcome::Conflict {
+                file: AwsEditFile::Config,
+            };
+        }
+
+        AuthSaveOutcome::Saved
     }
 }
 
@@ -2691,6 +3022,478 @@ sso_region = us-east-1
             matches!(result, Err(FetchOptionsError::Permanent(_))),
             "expected Permanent error when sso_account_id is absent, got {:?}",
             result
+        );
+    }
+
+    // =========================================================================
+    // WU-E3: open_edit_snapshot + save_edit per-provider tests
+    // =========================================================================
+
+    // Helper: creates an AwsSsoAuthProvider backed by a temp config file.
+    fn sso_provider_with_config_and_creds(
+        config_content: &str,
+        creds_content: &str,
+    ) -> (
+        AwsSsoAuthProvider,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, creds_content).unwrap();
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        (provider, config_path, creds_path, dir)
+    }
+
+    // Helper: creates an AwsSharedCredentialsAuthProvider backed by temp files.
+    fn shared_provider_with_paths(
+        config_content: &str,
+        creds_content: &str,
+    ) -> (
+        AwsSharedCredentialsAuthProvider,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, creds_content).unwrap();
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSharedCredentialsAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        (provider, config_path, creds_path, dir)
+    }
+
+    // Helper: creates an AwsSsoSessionAuthProvider backed by a temp config file.
+    fn sso_session_provider_with_config_path(
+        config_content: &str,
+    ) -> (
+        AwsSsoSessionAuthProvider,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&config_path, config_content).unwrap();
+        std::fs::write(&creds_path, "").unwrap();
+        let cache =
+            crate::config::CachedAwsConfig::new_with_paths(config_path.clone(), creds_path.clone());
+        let provider = AwsSsoSessionAuthProvider {
+            config_cache: Mutex::new(cache),
+        };
+        (provider, config_path, creds_path, dir)
+    }
+
+    // ── E3.3 (aws-sso): optimistic concurrency ────────────────────────────────
+
+    /// S28: no external change between snapshot and save → `Saved`.
+    #[test]
+    fn sso_save_edit_no_external_change_returns_saved() {
+        let config = "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nsso_account_id = 111111111111\n";
+        let (provider, _config, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+        assert!(
+            snapshot.config_section.is_some(),
+            "open_edit_snapshot must capture a hash for an existing section"
+        );
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "999999999999".to_string());
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved when no external change, got {:?}",
+            outcome
+        );
+    }
+
+    /// S29: same section changed on disk between snapshot and save → `Conflict`.
+    #[test]
+    fn sso_save_edit_same_section_changed_externally_returns_conflict() {
+        let config = "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nsso_account_id = 111111111111\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        // Take snapshot before external change.
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+
+        // Simulate external edit of the same section.
+        std::fs::write(
+            &config_path,
+            "[profile dev-sso]\nsso_start_url = https://example.awsapps.com/start\nsso_account_id = 222222222222\n",
+        )
+        .unwrap();
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "999999999999".to_string());
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(
+            matches!(
+                outcome,
+                AuthSaveOutcome::Conflict {
+                    file: AwsEditFile::Config
+                }
+            ),
+            "expected Conflict(Config) when same section changed externally, got {:?}",
+            outcome
+        );
+
+        // File must be unchanged (nothing written on conflict).
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            after.contains("222222222222"),
+            "file must retain external change, not the user's edit"
+        );
+        assert!(
+            !after.contains("999999999999"),
+            "user's conflicted edit must not appear in file"
+        );
+    }
+
+    /// S30: a DIFFERENT section changed externally → save succeeds.
+    #[test]
+    fn sso_save_edit_different_section_changed_does_not_conflict() {
+        let config = "[profile dev-sso]\nsso_account_id = 111111111111\n\n[profile staging]\nsso_account_id = 555555555555\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+
+        // External change to a DIFFERENT section.
+        std::fs::write(
+            &config_path,
+            "[profile dev-sso]\nsso_account_id = 111111111111\n\n[profile staging]\nsso_account_id = 999999999999\n",
+        )
+        .unwrap();
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "777777777777".to_string());
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved when only a different section changed, got {:?}",
+            outcome
+        );
+
+        // Both sections must be present: dev-sso updated, staging preserved.
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            after.contains("777777777777"),
+            "dev-sso edit must be applied"
+        );
+        assert!(
+            after.contains("999999999999"),
+            "staging external change must be preserved"
+        );
+    }
+
+    /// Surgical write: other sections in the config file are byte-identical after save.
+    #[test]
+    fn sso_save_edit_is_surgical_other_sections_unchanged() {
+        let config = "[profile other]\nregion = eu-west-1\n\n[profile dev-sso]\nsso_account_id = 111111111111\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+        let other_hash_before = crate::config::hash_config_section(
+            &std::fs::read_to_string(&config_path).unwrap(),
+            "other",
+        );
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "999999999999".to_string());
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved));
+
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        let other_hash_after = crate::config::hash_config_section(&after, "other");
+
+        assert_eq!(
+            other_hash_before.map(|h| h.0),
+            other_hash_after.map(|h| h.0),
+            "other section must be byte-identical after surgical write"
+        );
+    }
+
+    // ── E3.4 (aws-shared-credentials): credentials merge semantics ────────────
+
+    /// Blank secret field preserves existing on-disk value (S27).
+    #[test]
+    fn shared_save_edit_blank_secret_preserves_existing() {
+        let config = "[profile ci]\nregion = us-east-1\n";
+        // Using AWS-doc-compliant dummy values (not real credentials).
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        let (provider, _config_path, creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+
+        // Leave secret blank; only update access_key_id.
+        let mut fields = HashMap::new();
+        fields.insert(
+            "aws_access_key_id".to_string(),
+            "AKIAI44QH8DHBEXAMPLE".to_string(),
+        );
+        // aws_secret_access_key intentionally absent from fields → blank = preserve.
+
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved, got {:?}",
+            outcome
+        );
+
+        let after = std::fs::read_to_string(&creds_path).unwrap();
+        assert!(
+            after.contains("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"),
+            "existing secret must be preserved when the field is omitted from edited_fields"
+        );
+        assert!(
+            after.contains("AKIAI44QH8DHBEXAMPLE"),
+            "access key id must be updated"
+        );
+    }
+
+    /// Non-blank secret field overwrites the on-disk value (S26).
+    #[test]
+    fn shared_save_edit_non_blank_secret_overwrites() {
+        let config = "";
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        let (provider, _config_path, creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "aws_secret_access_key".to_string(),
+            "je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY".to_string(),
+        );
+
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved, got {:?}",
+            outcome
+        );
+
+        let after = std::fs::read_to_string(&creds_path).unwrap();
+        assert!(
+            after.contains("je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY"),
+            "new secret must be written"
+        );
+        assert!(
+            !after.contains("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"),
+            "old secret must be replaced"
+        );
+    }
+
+    /// The `AuthSaveOutcome` returned never exposes the secret value.
+    #[test]
+    fn shared_save_edit_outcome_contains_no_secret() {
+        let config = "";
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        let (provider, _config_path, _creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+        let mut fields = HashMap::new();
+        fields.insert(
+            "aws_secret_access_key".to_string(),
+            "je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY".to_string(),
+        );
+
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+
+        // The outcome is a unit-like enum — no variant carries a value payload.
+        // Assert no secret appears in the debug representation.
+        let debug_repr = format!("{:?}", outcome);
+        assert!(
+            !debug_repr.contains("je7MtGbClwBF"),
+            "AuthSaveOutcome debug must not expose the secret value"
+        );
+        assert!(
+            !debug_repr.contains("wJalrXUtnFEMI"),
+            "AuthSaveOutcome debug must not expose the old secret value"
+        );
+    }
+
+    // ── PartialSaved path ─────────────────────────────────────────────────────
+
+    /// When config writes but credentials section conflicts, returns PartialSaved.
+    #[test]
+    fn shared_save_edit_partial_saved_when_credentials_conflict() {
+        let config = "[profile ci]\nregion = us-east-1\n";
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+        let (provider, _config_path, creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        // Take snapshot BEFORE external change to credentials.
+        let snapshot = provider.open_edit_snapshot("ci");
+
+        // Simulate external edit of the credentials section only.
+        std::fs::write(
+            &creds_path,
+            "[ci]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n",
+        )
+        .unwrap();
+
+        // Edit both config (region) and credentials (access key id).
+        let mut fields = HashMap::new();
+        fields.insert("region".to_string(), "eu-west-1".to_string());
+        fields.insert(
+            "aws_access_key_id".to_string(),
+            "AKIAZZZZZZZZZEXAMPLE".to_string(),
+        );
+
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+        assert!(
+            matches!(
+                outcome,
+                AuthSaveOutcome::PartialSaved {
+                    written: AwsEditFile::Config,
+                    conflicted: AwsEditFile::Credentials,
+                }
+            ),
+            "expected PartialSaved(Config written, Credentials conflicted), got {:?}",
+            outcome
+        );
+    }
+
+    // ── Surgical write: credentials file ─────────────────────────────────────
+
+    /// Other sections in ~/.aws/credentials are byte-identical after save (S31).
+    #[test]
+    fn shared_save_edit_credentials_surgical_other_sections_unchanged() {
+        let config = "";
+        let creds = "[prod]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n\n[ci]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n";
+        let (provider, _config_path, creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+        let prod_hash_before = crate::config::hash_credentials_section(
+            &std::fs::read_to_string(&creds_path).unwrap(),
+            "prod",
+        );
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "aws_access_key_id".to_string(),
+            "AKIAZZZZZZZZZEXAMPLE".to_string(),
+        );
+        let outcome = provider.save_edit("ci", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved));
+
+        let after = std::fs::read_to_string(&creds_path).unwrap();
+        let prod_hash_after = crate::config::hash_credentials_section(&after, "prod");
+
+        assert_eq!(
+            prod_hash_before.map(|h| h.0),
+            prod_hash_after.map(|h| h.0),
+            "prod section must be byte-identical after surgical credentials write"
+        );
+    }
+
+    // ── E3.3 (aws-sso-session): optimistic concurrency ───────────────────────
+
+    /// sso-session provider: no external change → Saved.
+    #[test]
+    fn sso_session_save_edit_no_external_change_returns_saved() {
+        let config = "[sso-session my-org]\nsso_start_url = https://example.awsapps.com/start\nsso_region = us-east-1\n";
+        let (provider, _config_path, _creds_path, _dir) =
+            sso_session_provider_with_config_path(config);
+
+        let snapshot = provider.open_edit_snapshot("my-org");
+        assert!(
+            snapshot.config_section.is_some(),
+            "snapshot must capture existing sso-session section hash"
+        );
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_region".to_string(), "eu-west-1".to_string());
+
+        let outcome = provider.save_edit("my-org", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "expected Saved when no external change, got {:?}",
+            outcome
+        );
+    }
+
+    /// sso-session provider: same section changed externally → Conflict.
+    #[test]
+    fn sso_session_save_edit_same_section_changed_returns_conflict() {
+        let config = "[sso-session my-org]\nsso_start_url = https://example.awsapps.com/start\nsso_region = us-east-1\n";
+        let (provider, config_path, _creds_path, _dir) =
+            sso_session_provider_with_config_path(config);
+
+        let snapshot = provider.open_edit_snapshot("my-org");
+
+        // External change to the same section.
+        std::fs::write(
+            &config_path,
+            "[sso-session my-org]\nsso_start_url = https://example.awsapps.com/start\nsso_region = ap-southeast-1\n",
+        )
+        .unwrap();
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_region".to_string(), "eu-west-1".to_string());
+
+        let outcome = provider.save_edit("my-org", &fields, &snapshot);
+        assert!(
+            matches!(
+                outcome,
+                AuthSaveOutcome::Conflict {
+                    file: AwsEditFile::Config
+                }
+            ),
+            "expected Conflict(Config) when sso-session section changed, got {:?}",
+            outcome
+        );
+    }
+
+    // ── open_edit_snapshot for absent sections ────────────────────────────────
+
+    /// open_edit_snapshot returns None hashes when the section doesn't exist yet.
+    #[test]
+    fn open_edit_snapshot_absent_section_returns_none_hashes() {
+        let (provider, _config, _creds, _dir) = sso_provider_with_config_and_creds("", "");
+
+        let snapshot = provider.open_edit_snapshot("nonexistent");
+        assert!(
+            snapshot.config_section.is_none(),
+            "absent config section must produce None hash in snapshot"
+        );
+        assert!(
+            snapshot.credentials_section.is_none(),
+            "absent credentials section must produce None hash in snapshot"
+        );
+    }
+
+    /// shared-credentials: open_edit_snapshot captures both config and credentials hashes.
+    #[test]
+    fn shared_open_edit_snapshot_captures_both_file_hashes() {
+        let config = "[profile ci]\nregion = us-east-1\n";
+        let creds = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+        let (provider, _config_path, _creds_path, _dir) = shared_provider_with_paths(config, creds);
+
+        let snapshot = provider.open_edit_snapshot("ci");
+        assert!(
+            snapshot.config_section.is_some(),
+            "config_section hash must be Some when [profile ci] exists"
+        );
+        assert!(
+            snapshot.credentials_section.is_some(),
+            "credentials_section hash must be Some when [ci] exists"
         );
     }
 }

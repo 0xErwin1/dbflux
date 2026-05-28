@@ -75,6 +75,16 @@ impl CachedAwsConfig {
         Self::default()
     }
 
+    /// Returns the path to the AWS config file used by this cache instance.
+    pub fn config_path(&self) -> &std::path::Path {
+        &self.config_path
+    }
+
+    /// Returns the path to the AWS credentials file used by this cache instance.
+    pub fn credentials_path(&self) -> &std::path::Path {
+        &self.credentials_path
+    }
+
     /// Creates a `CachedAwsConfig` with explicit file paths.
     ///
     /// Used in tests to point the cache at temporary files instead of the
@@ -703,8 +713,6 @@ fn append_config_block_if_absent(
 /// Used internally to extract the raw bytes for section hashing
 /// (`hash_config_section`, `hash_credentials_section`) and for conflict
 /// detection inside the atomic write transforms.
-// WU-E3 (auth.rs) will add the production call sites; allowed until then.
-#[allow(dead_code)]
 fn section_raw_bytes<'a>(contents: &'a str, header: &str) -> Option<&'a str> {
     let header_lower = header.to_lowercase();
 
@@ -776,7 +784,6 @@ fn section_raw_bytes<'a>(contents: &'a str, header: &str) -> Option<&'a str> {
 ///
 /// The hash is over raw bytes — whitespace, comments, and value order are all
 /// captured — so any byte-level change produces a different hash.
-#[allow(dead_code)]
 pub(crate) fn hash_config_section(contents: &str, profile_name: &str) -> Option<AwsSectionHash> {
     let header = if profile_name.eq_ignore_ascii_case("default") {
         "[default]".to_string()
@@ -789,13 +796,25 @@ pub(crate) fn hash_config_section(contents: &str, profile_name: &str) -> Option<
     Some(AwsSectionHash(digest.into()))
 }
 
+/// Returns the SHA-256 hash of the raw bytes of an `[sso-session NAME]` section
+/// in a config-file string.
+///
+/// Uses the `[sso-session NAME]` header form, which differs from the
+/// `[profile NAME]` form used by `hash_config_section`. Returns `None` when
+/// the section is absent from `contents`.
+pub(crate) fn hash_sso_session_section(contents: &str, name: &str) -> Option<AwsSectionHash> {
+    let header = format!("[sso-session {name}]");
+    let raw = section_raw_bytes(contents, &header)?;
+    let digest = Sha256::digest(raw.as_bytes());
+    Some(AwsSectionHash(digest.into()))
+}
+
 /// Returns the SHA-256 hash of the raw bytes of the named section in a
 /// credentials-file string.
 ///
 /// The section is identified by its bare `[NAME]` header (credentials files
 /// do not use the `profile ` prefix). Returns `None` when the section is
 /// absent from `contents`.
-#[allow(dead_code)]
 pub(crate) fn hash_credentials_section(contents: &str, name: &str) -> Option<AwsSectionHash> {
     let header = format!("[{name}]");
     let raw = section_raw_bytes(contents, &header)?;
@@ -818,7 +837,6 @@ pub(crate) fn hash_credentials_section(contents: &str, name: &str) -> Option<Aws
 /// original file's permissions on the temp file and backup file (security
 /// requirement). If the original file does not yet exist the temp file is
 /// written with the same permissions as the new file (0600 on Unix).
-#[allow(dead_code)]
 pub(crate) fn update_aws_credentials_atomic(
     path: &Path,
     transform: impl FnOnce(&str) -> String,
@@ -842,7 +860,6 @@ pub(crate) fn update_aws_credentials_atomic(
 /// credentials files written on Unix are never world-readable.
 ///
 /// On non-Unix platforms the behaviour is identical to `write_atomic_with_backup`.
-#[allow(dead_code)]
 fn write_atomic_with_backup_perms(path: &Path, content: &str) -> Result<(), io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -893,7 +910,6 @@ fn write_atomic_with_backup_perms(path: &Path, content: &str) -> Result<(), io::
 /// `fields` lists the key/value pairs to write into the section. Keys not
 /// listed in `fields` that are present in the existing section are preserved
 /// (merge-write semantics: only explicitly passed keys are changed).
-#[allow(dead_code)]
 pub(crate) fn replace_or_append_credentials_block(
     contents: &str,
     name: &str,
@@ -932,7 +948,6 @@ pub(crate) fn replace_or_append_credentials_block(
 
 /// Locates the byte offset of the first line in `contents` whose lowercased
 /// trim equals `header_lower`.
-#[allow(dead_code)]
 fn find_section_start(contents: &str, header_lower: &str) -> usize {
     let mut offset = 0;
     for line in contents.lines() {
@@ -960,7 +975,6 @@ fn find_section_start(contents: &str, header_lower: &str) -> usize {
 /// `fields` lists the key/value pairs to write into the section. Keys not
 /// listed in `fields` that are present in the existing section are preserved
 /// (merge-write semantics).
-#[allow(dead_code)]
 pub(crate) fn replace_or_append_profile_block(
     contents: &str,
     name: &str,
@@ -996,8 +1010,40 @@ pub(crate) fn replace_or_append_profile_block(
     result
 }
 
+/// Replaces or appends an `[sso-session NAME]` section block in a config-file string.
+///
+/// Analogous to `replace_or_append_profile_block` but uses the `[sso-session NAME]`
+/// header form required for sso-session sections in `~/.aws/config`.
+pub(crate) fn replace_or_append_sso_session_block(
+    contents: &str,
+    name: &str,
+    fields: &[(&str, &str)],
+) -> String {
+    let header = format!("[sso-session {name}]");
+    let header_lower = header.to_lowercase();
+    let new_block = build_profile_block(&header, contents, fields);
+
+    let Some(raw) = section_raw_bytes(contents, &header) else {
+        let mut result = contents.to_string();
+        if !result.is_empty() && !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push('\n');
+        result.push_str(&new_block);
+        return result;
+    };
+
+    let start = find_section_start(contents, &header_lower);
+    let end = start + raw.len();
+
+    let mut result = String::with_capacity(contents.len());
+    result.push_str(&contents[..start]);
+    result.push_str(&new_block);
+    result.push_str(&contents[end..]);
+    result
+}
+
 /// Builds the replacement `[profile NAME]` section block for `~/.aws/config`.
-#[allow(dead_code)]
 fn build_profile_block(header: &str, contents: &str, fields: &[(&str, &str)]) -> String {
     // Collect existing keys from the current on-disk section, in order.
     let mut existing_keys: Vec<(String, String)> = Vec::new();
@@ -1045,7 +1091,6 @@ fn build_profile_block(header: &str, contents: &str, fields: &[(&str, &str)]) ->
 /// applies the caller-provided `fields` as overrides, and emits the merged
 /// section. Keys provided with an empty string value are omitted (kept as-is
 /// from the existing section — blank = preserve).
-#[allow(dead_code)]
 fn build_credentials_block(
     header: &str,
     contents: &str,

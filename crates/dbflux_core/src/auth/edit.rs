@@ -1,16 +1,16 @@
-/// Edit-session types for AWS profile write-back.
-///
-/// These types are part of the optimistic-concurrency contract between the
-/// Settings UI and the AWS write-back layer (spec R9.3, design section 11).
-/// They live in `dbflux_core` so both `dbflux_aws` (write seam) and
-/// `dbflux_ui_windows` (Settings UI) share the same types without creating
-/// a direct dependency between those crates.
-///
-/// # Security invariant
-///
-/// `AwsSectionHash` carries only a SHA-256 digest — never raw section bytes
-/// or secret values. `AuthSaveOutcome` carries only file identifiers, never
-/// key material. No `Debug` or `Display` impl on these types prints secrets.
+//! Edit-session types for AWS profile write-back.
+//!
+//! These types are part of the optimistic-concurrency contract between the
+//! Settings UI and the AWS write-back layer (spec R9.3, design section 11).
+//! They live in `dbflux_core` so both `dbflux_aws` (write seam) and
+//! `dbflux_ui_windows` (Settings UI) share the same types without creating
+//! a direct dependency between those crates.
+//!
+//! # Security invariant
+//!
+//! `AwsSectionHash` carries only a SHA-256 digest — never raw section bytes
+//! or secret values. `AuthSaveOutcome` carries only file identifiers, never
+//! key material. No `Debug` or `Display` impl on these types prints secrets.
 
 /// Identifies which AWS credential file a write targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,7 +193,11 @@ mod tests {
             written: AwsEditFile::Config,
             conflicted: AwsEditFile::Credentials,
         };
-        let AuthSaveOutcome::PartialSaved { written, conflicted } = outcome else {
+        let AuthSaveOutcome::PartialSaved {
+            written,
+            conflicted,
+        } = outcome
+        else {
             panic!("expected PartialSaved variant");
         };
         assert_eq!(written, AwsEditFile::Config);
@@ -217,7 +221,10 @@ mod tests {
 
         for outcome in &outcomes {
             let repr = format!("{outcome:?}");
-            assert!(!repr.contains("AKIA"), "outcome debug must not contain AKIA");
+            assert!(
+                !repr.contains("AKIA"),
+                "outcome debug must not contain AKIA"
+            );
             assert!(
                 !repr.contains("aws_secret_access_key"),
                 "outcome debug must not contain secret key name"
