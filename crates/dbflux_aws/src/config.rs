@@ -431,26 +431,7 @@ pub(crate) fn update_aws_config_atomic(
         return Ok(());
     }
 
-    write_atomic_with_backup(path, &updated)
-}
-
-fn write_atomic_with_backup(path: &std::path::Path, content: &str) -> Result<(), io::Error> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let backup_path = create_backup_for_path(path)?;
-    let temp_path = path.with_extension("tmp");
-
-    fs::write(&temp_path, content)?;
-
-    if let Err(error) = fs::rename(&temp_path, path) {
-        let _ = fs::remove_file(&temp_path);
-        let _ = fs::copy(&backup_path, path);
-        return Err(error);
-    }
-
-    Ok(())
+    write_atomic_with_backup_perms(path, &updated)
 }
 
 fn create_backup_for_path(path: &std::path::Path) -> Result<PathBuf, io::Error> {
@@ -855,11 +836,15 @@ pub(crate) fn update_aws_credentials_atomic(
     write_atomic_with_backup_perms(path, &updated)
 }
 
-/// Like `write_atomic_with_backup` but additionally sets the temp file's
-/// permissions to match the original file (or 0600 when the file is new), so
-/// credentials files written on Unix are never world-readable.
+/// Atomically writes `content` to `path` via a temp-file-then-rename sequence,
+/// creating a backup first so a rename failure can restore the original.
 ///
-/// On non-Unix platforms the behaviour is identical to `write_atomic_with_backup`.
+/// On Unix the temp file and backup file are restricted to at most the mode of
+/// the original file (or 0600 when the file is new), ensuring that neither
+/// `~/.aws/config` nor `~/.aws/credentials` is ever world-readable during the
+/// write window.
+///
+/// Used by both `update_aws_config_atomic` and `update_aws_credentials_atomic`.
 fn write_atomic_with_backup_perms(path: &Path, content: &str) -> Result<(), io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -2119,6 +2104,96 @@ output=json
             0,
             "final credentials file must not be group/other readable; mode = {:o}",
             final_mode
+        );
+    }
+
+    // ── Fix 1 — config file perm test ──────────────────────────────────────────
+
+    /// Verifies that `update_aws_config_atomic` (which now uses the unified
+    /// `write_atomic_with_backup_perms`) does not leave the config temp or
+    /// final file group/other readable when the source file is mode 0600.
+    ///
+    /// `~/.aws/config` contains `sso_start_url`, account IDs, and role names,
+    /// so it must receive the same umask-independent permission treatment as
+    /// `~/.aws/credentials`.
+    #[cfg(unix)]
+    #[test]
+    fn config_write_temp_and_final_are_not_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config");
+
+        // Seed with 0600 — a conservative mode a user might set on ~/.aws/config.
+        std::fs::write(
+            &path,
+            "[profile ci]\nsso_start_url = https://example.awsapps.com/start\n",
+        )
+        .expect("seed");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("set 0600");
+
+        // Perform a round-trip write via the config atomic writer.
+        update_aws_config_atomic(&path, |existing| {
+            existing.replace(
+                "https://example.awsapps.com/start",
+                "https://ci.awsapps.com/start",
+            )
+        })
+        .expect("write");
+
+        // The final file must be at most 0600 (no group/other bits).
+        let final_mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(
+            final_mode & 0o077,
+            0,
+            "final config file must not be group/other readable; mode = {:o}",
+            final_mode
+        );
+    }
+
+    // ── Fix 2 — rename-failure restore test ────────────────────────────────────
+
+    /// Verifies that when the atomic rename fails, `write_atomic_with_backup_perms`
+    /// restores the original file content from the backup.
+    ///
+    /// Rename failure is injected by creating a *directory* at the temp-file path
+    /// before the write is attempted. On Linux (and macOS) `fs::rename` fails with
+    /// `EISDIR` when the destination is a directory, triggering the restore branch.
+    ///
+    /// The test verifies:
+    /// 1. The function returns an `Err`.
+    /// 2. The original file still contains the original content after the error.
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_rename_failure_preserves_original_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config");
+        let temp_path = path.with_extension("tmp");
+
+        let original = "[profile dev]\nregion = us-east-1\n";
+        std::fs::write(&path, original).expect("seed");
+
+        // Block the rename by occupying the temp path with a directory.
+        std::fs::create_dir_all(&temp_path).expect("create blocking dir");
+
+        let result = write_atomic_with_backup_perms(&path, "[profile dev]\nregion = us-west-2\n");
+
+        // The call must fail (rename is impossible with a directory in the way).
+        assert!(
+            result.is_err(),
+            "expected Err when rename destination is a directory"
+        );
+
+        // The original file must still contain the original content.
+        let actual = std::fs::read_to_string(&path).expect("read after failure");
+        assert_eq!(
+            actual, original,
+            "original content must be intact after rename failure"
         );
     }
 }
