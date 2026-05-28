@@ -239,6 +239,16 @@ impl Sidebar {
             let is_time_series_db = schema.is_time_series();
             let conn_metadata = connected.connection.metadata();
             let conn_capabilities = conn_metadata.capabilities;
+
+            // Drivers that can browse upstream dashboards get a read-only
+            // listing container. Capability-gated — no driver_id branching.
+            if conn_capabilities.contains(DriverCapabilities::DASHBOARD_SYNC) {
+                profile_children.push(Self::build_remote_dashboards_folder_item(
+                    profile_id,
+                    state,
+                    metric_fetch_errors,
+                ));
+            }
             let conn_category = conn_metadata.category;
             let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
             let metric_cache = state.metric_catalog_cache().clone();
@@ -521,6 +531,87 @@ impl Sidebar {
         .children(children)
     }
 
+    /// Build the container that lists dashboards fetched live from the
+    /// connection's upstream source (drivers advertising `DASHBOARD_SYNC`).
+    ///
+    /// The label is taken from the driver's `DashboardSource::container_label`
+    /// so the UI never hard-codes a driver name. Children are lazy: a "Loading"
+    /// placeholder until the listing cache is populated on first expansion.
+    fn build_remote_dashboards_folder_item(
+        profile_id: Uuid,
+        state: &AppStateEntity,
+        fetch_errors: &HashMap<String, String>,
+    ) -> TreeItem {
+        let label = state
+            .connections()
+            .get(&profile_id)
+            .and_then(|conn| {
+                conn.connection
+                    .dashboard_source()
+                    .map(|s| s.container_label().to_string())
+            })
+            .unwrap_or_else(|| "Dashboards".to_string());
+
+        let folder_id = SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let children =
+            Self::build_remote_dashboard_children(profile_id, state, &folder_id, fetch_errors);
+
+        let label = match state.remote_dashboard_cache().peek(profile_id) {
+            Some(list) => format!("{} ({})", label, list.len()),
+            None => label,
+        };
+
+        TreeItem::new(folder_id, label).expanded(false).children(children)
+    }
+
+    /// Build the `RemoteDashboardItem` children for a `RemoteDashboardsFolder`.
+    ///
+    /// Reads the session listing cache. A cache miss yields a single "Loading"
+    /// placeholder; the fetch is kicked off when the folder is expanded. A
+    /// recorded fetch error yields an error node, and an empty listing yields a
+    /// non-clickable hint.
+    fn build_remote_dashboard_children(
+        profile_id: Uuid,
+        state: &AppStateEntity,
+        folder_id: &str,
+        fetch_errors: &HashMap<String, String>,
+    ) -> Vec<TreeItem> {
+        let Some(dashboards) = state.remote_dashboard_cache().peek(profile_id) else {
+            if let Some(error) = fetch_errors.get(folder_id) {
+                return vec![TreeItem::new(
+                    format!("remote_dashboards_error:{profile_id}"),
+                    format!("Error: {error} — collapse and expand to retry"),
+                )];
+            }
+            return vec![Self::loading_placeholder(
+                profile_id,
+                "",
+                "remote-dashboards-loading",
+            )];
+        };
+
+        if dashboards.is_empty() {
+            return vec![TreeItem::new(
+                format!("remote_dashboards_empty:{profile_id}"),
+                "No dashboards in this account/region".to_string(),
+            )];
+        }
+
+        dashboards
+            .iter()
+            .map(|d| {
+                TreeItem::new(
+                    SchemaNodeId::RemoteDashboardItem {
+                        profile_id,
+                        name: d.name.clone(),
+                    }
+                    .to_string(),
+                    d.name.clone(),
+                )
+            })
+            .collect()
+    }
+
     /// Build the `SavedChartsFolder` tree node for a connected profile.
     ///
     /// Children are one `SavedChartItem` per chart returned by the manager,
@@ -607,7 +698,7 @@ impl Sidebar {
                         chart_id: c.id,
                     }
                     .to_string(),
-                    Self::saved_chart_display_label(&c),
+                    Self::saved_chart_display_label(c),
                 )
             })
             .collect()
@@ -2562,6 +2653,60 @@ mod tests {
             item.id.as_ref().contains("SCRF"),
             "SavedChartsFolder ID must contain the 'SCRF' prefix"
         );
+    }
+
+    #[test]
+    fn test_remote_dashboard_children_show_loading_on_cache_miss() {
+        let (state, profile_id) = make_state_with_profile();
+        let folder_id = dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let errors = HashMap::new();
+
+        let children =
+            Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].label.as_ref(), "Loading...");
+    }
+
+    #[test]
+    fn test_remote_dashboard_children_show_error_when_recorded() {
+        let (state, profile_id) = make_state_with_profile();
+        let folder_id = dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let mut errors = HashMap::new();
+        errors.insert(folder_id.clone(), "access denied".to_string());
+
+        let children =
+            Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
+
+        assert_eq!(children.len(), 1);
+        assert!(children[0].label.as_ref().contains("access denied"));
+    }
+
+    #[test]
+    fn test_remote_dashboard_children_list_items_when_cached() {
+        let (state, profile_id) = make_state_with_profile();
+        state.remote_dashboard_cache().store(
+            profile_id,
+            vec![
+                dbflux_core::DashboardRef {
+                    name: "prod".to_string(),
+                    last_modified: None,
+                },
+                dbflux_core::DashboardRef {
+                    name: "staging".to_string(),
+                    last_modified: None,
+                },
+            ],
+        );
+
+        let folder_id = dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let errors = HashMap::new();
+        let children =
+            Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
+
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].label.as_ref(), "prod");
+        assert!(children[0].id.as_ref().starts_with("RDBI"));
     }
 
     #[test]

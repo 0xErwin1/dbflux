@@ -907,6 +907,9 @@ impl Workspace {
                 SidebarEvent::OpenDashboard { dashboard_id } => {
                     this.open_dashboard(*dashboard_id, window, cx);
                 }
+                SidebarEvent::OpenRemoteDashboard { profile_id, name } => {
+                    this.open_remote_dashboard(*profile_id, name.clone(), window, cx);
+                }
                 SidebarEvent::OpenSavedChart { chart_id } => {
                     this.open_saved_chart(*chart_id, window, cx);
                 }

@@ -116,6 +116,11 @@ pub struct AppState {
     /// Shared via `Arc` so multiple chart documents can read and write it
     /// without holding a reference to `AppState` itself.
     pub metric_catalog_cache: Arc<crate::metric_catalog_cache::MetricCatalogCache>,
+    /// Session-scoped cache for upstream dashboard listings (read-only browse).
+    ///
+    /// Shared via `Arc` so the sidebar can read and write it without holding a
+    /// reference to `AppState` itself.
+    pub remote_dashboard_cache: Arc<crate::remote_dashboard_cache::RemoteDashboardCache>,
     /// Tracks whether the audit service was initialized from a degraded (in-memory)
     /// store because the real SQLite database could not be opened. When true,
     /// bootstrap_audit_settings will not enable the service even if persisted
@@ -293,6 +298,7 @@ impl AppState {
                 dbflux_ssh::SessionPassphraseVault::new(),
             )),
             metric_catalog_cache: crate::metric_catalog_cache::MetricCatalogCache::new(),
+            remote_dashboard_cache: crate::remote_dashboard_cache::RemoteDashboardCache::new(),
             #[cfg(feature = "mcp")]
             mcp_runtime,
             saved_charts_repo,
@@ -918,11 +924,20 @@ impl AppState {
         self.facade.connections.disconnect(profile_id);
         // Evict stale metric catalog data for this connection.
         self.metric_catalog_cache.invalidate(profile_id);
+        // Evict the cached remote dashboard listing for this connection.
+        self.remote_dashboard_cache.invalidate(profile_id);
     }
 
     /// Access the session-scoped metric catalog cache.
     pub fn metric_catalog_cache(&self) -> &Arc<crate::metric_catalog_cache::MetricCatalogCache> {
         &self.metric_catalog_cache
+    }
+
+    /// Access the session-scoped remote dashboard listing cache.
+    pub fn remote_dashboard_cache(
+        &self,
+    ) -> &Arc<crate::remote_dashboard_cache::RemoteDashboardCache> {
+        &self.remote_dashboard_cache
     }
 
     #[allow(dead_code)]

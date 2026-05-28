@@ -134,6 +134,14 @@ pub enum SidebarEvent {
         dashboard_id: Uuid,
     },
 
+    /// Open a dashboard fetched live from the connection's upstream source,
+    /// read-only. Emitted when the user clicks a `RemoteDashboardItem` node.
+    /// Nothing is persisted; the body is fetched on open.
+    OpenRemoteDashboard {
+        profile_id: Uuid,
+        name: String,
+    },
+
     /// Open or focus an existing saved-chart tab.
     ///
     /// Emitted when the user clicks a `SavedChartItem` node in the sidebar tree.
@@ -788,6 +796,8 @@ pub struct Sidebar {
     pending_metric_namespace_fetches: HashMap<Uuid, Task<()>>,
     /// In-flight metric fetch tasks, keyed by (profile_id, namespace).
     pending_metric_fetches: HashMap<(Uuid, String), Task<()>>,
+    /// In-flight remote-dashboard listing fetches, keyed by profile_id.
+    pending_remote_dashboard_fetches: HashMap<Uuid, Task<()>>,
     /// Per-node metric fetch error messages for retry UI.
     ///
     /// Key is the parent node id string (MetricsFolder or MetricNamespaceFolder).
@@ -1009,6 +1019,7 @@ impl Sidebar {
             pending_tunnel_auth_profile_id: None,
             pending_metric_namespace_fetches: HashMap::new(),
             pending_metric_fetches: HashMap::new(),
+            pending_remote_dashboard_fetches: HashMap::new(),
             metric_fetch_errors: HashMap::new(),
         }
     }
@@ -1269,6 +1280,9 @@ impl Sidebar {
             }
             SchemaNodeId::DashboardItem { dashboard_id, .. } => {
                 cx.emit(SidebarEvent::OpenDashboard { dashboard_id });
+            }
+            SchemaNodeId::RemoteDashboardItem { profile_id, name } => {
+                cx.emit(SidebarEvent::OpenRemoteDashboard { profile_id, name });
             }
             SchemaNodeId::SavedChartItem { chart_id, .. } => {
                 cx.emit(SidebarEvent::OpenSavedChart { chart_id });

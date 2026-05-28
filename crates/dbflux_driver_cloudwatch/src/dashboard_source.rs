@@ -132,6 +132,12 @@ impl DashboardSource for CloudWatchDashboardSource {
             })
             .collect())
     }
+
+    fn container_label(&self) -> &str {
+        // Distinguish the upstream listing from the local, user-created
+        // "Dashboards" folder shown for every connection.
+        "CloudWatch Dashboards"
+    }
 }
 
 #[cfg(test)]

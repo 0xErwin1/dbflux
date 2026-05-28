@@ -2201,6 +2201,242 @@ impl Workspace {
         self.open_dashboard(dashboard_id, window, cx);
     }
 
+    /// Open a dashboard fetched live from the connection's upstream source,
+    /// read-only. Nothing is persisted: the body is fetched via
+    /// `DashboardSource::fetch_dashboard`, parsed with the connection's
+    /// dashboard importer, and rendered into an ephemeral `DashboardDocument`.
+    /// Re-opening the same dashboard focuses the existing tab (id is derived
+    /// deterministically from the profile + name); it does not re-fetch while
+    /// the tab is open. This method does not inspect `driver_id`.
+    pub(super) fn open_remote_dashboard(
+        &mut self,
+        profile_id: uuid::Uuid,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::DocumentKey;
+
+        // Deterministic id so re-opening the same upstream dashboard dedups to
+        // the open tab instead of stacking duplicates.
+        let dashboard_id = uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_OID,
+            format!("remote-dashboard:{profile_id}:{name}").as_bytes(),
+        );
+
+        let key = DocumentKey::Dashboard { dashboard_id };
+        if let Some(existing) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| mgr.activate(existing, cx));
+            self.set_focus(FocusTarget::Document, window, cx);
+            return;
+        }
+
+        let connection = match self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+        {
+            Some(c) => c,
+            None => {
+                return Toast::error("Connection not found for this dashboard.")
+                    .meta_right(now_hms())
+                    .push(cx);
+            }
+        };
+
+        let app_state = self.app_state.clone();
+        let name_for_fetch = name.clone();
+
+        // Fetch + parse off the foreground thread; both the source and the
+        // importer live on the connection, so the whole IO+parse runs here.
+        let background = cx.background_executor().spawn(async move {
+            let source = connection
+                .dashboard_source()
+                .ok_or_else(|| "The connection does not support dashboard browsing.".to_string())?;
+            let remote = source
+                .fetch_dashboard(&name_for_fetch)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let importer = connection
+                .dashboard_importer()
+                .ok_or_else(|| "The connection cannot parse dashboards.".to_string())?;
+            importer
+                .import(&remote.body_json)
+                .map(|specs| (remote.body_json, specs))
+                .map_err(|e| format!("Dashboard parse failed: {e}"))
+        });
+
+        cx.spawn_in(window, async move |this, cx| {
+            let result = background.await;
+            this.update_in(cx, |this, window, cx| {
+                let specs = match result {
+                    Ok((_body, specs)) => specs,
+                    Err(message) => {
+                        return Toast::error(message).meta_right(now_hms()).push(cx);
+                    }
+                };
+
+                this.open_remote_dashboard_document(
+                    dashboard_id,
+                    name,
+                    profile_id,
+                    specs,
+                    app_state,
+                    window,
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Build the ephemeral `DashboardDocument` from parsed widget specs and open
+    /// it. In-memory only — no `SavedChart`/`Dashboard`/panel rows are written.
+    #[allow(clippy::too_many_arguments)]
+    fn open_remote_dashboard_document(
+        &mut self,
+        dashboard_id: uuid::Uuid,
+        name: String,
+        profile_id: uuid::Uuid,
+        specs: Vec<dbflux_core::WidgetImportSpec>,
+        app_state: Entity<dbflux_ui_base::AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::dashboard::PanelGridPos;
+        use crate::ui::document::{ChartDocument, DashboardDocument, DashboardPanelSlot};
+        use dbflux_components::chart::{AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale};
+        use dbflux_components::common::time_range::view::TimeRangePanel;
+        use dbflux_components::saved_chart::{MetricSeries, SavedChart, SavedChartRefreshPolicy};
+
+        let doc = cx.new(|cx| {
+            let panel_slots: Vec<DashboardPanelSlot> = specs
+                .iter()
+                .map(|spec| {
+                    // CloudWatch widgets live on a 24-column grid; DBFlux uses
+                    // 12, so x/width are halved (clamped to >= 1 col).
+                    let grid_pos = PanelGridPos {
+                        grid_row: spec.layout.y,
+                        grid_column: spec.layout.x / 2,
+                        grid_width: (spec.layout.width / 2).max(1),
+                        grid_height: spec.layout.height.max(1),
+                    };
+
+                    let series = match &spec.kind {
+                        dbflux_core::WidgetImportKind::TextDivider { markdown } => {
+                            return DashboardPanelSlot::Divider {
+                                markdown: markdown.clone(),
+                                grid_pos,
+                            };
+                        }
+                        dbflux_core::WidgetImportKind::Metric { series, .. } => series,
+                    };
+
+                    let view = match &spec.kind {
+                        dbflux_core::WidgetImportKind::Metric { view, .. } => *view,
+                        dbflux_core::WidgetImportKind::TextDivider { .. } => unreachable!(),
+                    };
+
+                    let metric_series: Vec<MetricSeries> = series
+                        .iter()
+                        .map(|s| MetricSeries {
+                            namespace: s.namespace.clone(),
+                            metric_name: s.metric_name.clone(),
+                            dimensions: s.dimensions.clone(),
+                            period_seconds: s.period_seconds,
+                            statistic: s.statistic.clone(),
+                            region: s.region.clone(),
+                            label: s.label.clone(),
+                        })
+                        .collect();
+
+                    let chart_kind = match view {
+                        dbflux_core::MetricView::SingleValue => ChartKind::Number,
+                        dbflux_core::MetricView::StackedArea => ChartKind::Area,
+                        dbflux_core::MetricView::TimeSeries => ChartKind::Line,
+                    };
+
+                    let placeholder_spec = ChartSpec {
+                        kind: chart_kind,
+                        x_axis: AxisSpec {
+                            column_index: 0,
+                            label: String::new(),
+                            kind: AxisKind::Time,
+                            unit: None,
+                        },
+                        series: Vec::new(),
+                        legend_visible: false,
+                        decimation_threshold: 500,
+                        binding: BindingSpec::default(),
+                        track_source_indices: false,
+                        y_scale: YScale::Linear,
+                    };
+
+                    let chart_name = if spec.title.trim().is_empty() {
+                        let mut names: Vec<&str> =
+                            series.iter().map(|s| s.metric_name.as_str()).collect();
+                        names.sort_unstable();
+                        names.dedup();
+                        names.join(", ")
+                    } else {
+                        spec.title.clone()
+                    };
+
+                    let saved_chart = SavedChart::new_metric(
+                        chart_name,
+                        profile_id,
+                        metric_series,
+                        placeholder_spec,
+                        BindingSpec::default(),
+                    );
+
+                    let app_state_inner = app_state.clone();
+                    let panel_entity = cx.new(|cx| {
+                        let mut chart = ChartDocument::from_saved(
+                            &saved_chart,
+                            app_state_inner,
+                            window,
+                            cx,
+                        )
+                        .expect("metric source is always valid for ChartDocument");
+                        chart.set_embedded(true, cx);
+                        chart
+                    });
+
+                    DashboardPanelSlot::Loaded {
+                        panel: panel_entity,
+                        grid_pos,
+                        title_override: None,
+                    }
+                })
+                .collect();
+
+            let shared_time_range =
+                cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+
+            DashboardDocument::new(
+                dashboard_id,
+                name,
+                panel_slots,
+                shared_time_range,
+                None,
+                SavedChartRefreshPolicy::Off,
+                app_state.clone(),
+                cx,
+            )
+        });
+
+        let pane = crate::ui::document::DashboardDocument::into_pane(doc, cx);
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     /// Reconnects to profiles referenced by restored session documents.
     pub(super) fn reopen_last_connections(&mut self, cx: &mut Context<Self>) {
         let profile_ids: std::collections::HashSet<uuid::Uuid> = self

@@ -370,6 +370,10 @@ impl Sidebar {
             self.spawn_fetch_metrics(*profile_id, database, namespace, cx);
         }
 
+        if let Some(SchemaNodeId::RemoteDashboardsFolder { profile_id }) = &parsed {
+            self.spawn_fetch_remote_dashboards(*profile_id, cx);
+        }
+
         if matches!(parsed, Some(SchemaNodeId::Database { .. })) {
             self.handle_database_click(item_id, cx);
         }
@@ -559,6 +563,87 @@ impl Sidebar {
         });
 
         self.pending_metric_fetches.insert(fetch_key, task);
+    }
+
+    /// Fetch the upstream dashboard listing for a connection if not cached.
+    ///
+    /// Mirrors `spawn_fetch_metric_namespaces`: peek the cache, dedup in-flight
+    /// fetches, run the async `DashboardSource::list_dashboards` call on the
+    /// background executor, then write the result through the cache and rebuild
+    /// the tree on the foreground. Nothing is persisted — the listing is
+    /// session-scoped.
+    pub(super) fn spawn_fetch_remote_dashboards(
+        &mut self,
+        profile_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        let cache = self.app_state.read(cx).remote_dashboard_cache().clone();
+
+        // Cache hit — no fetch needed.
+        if cache.peek(profile_id).is_some() {
+            return;
+        }
+
+        // Deduplicate in-flight fetches.
+        if self
+            .pending_remote_dashboard_fetches
+            .contains_key(&profile_id)
+        {
+            return;
+        }
+
+        let connection = match self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .map(|c| c.connection.clone())
+        {
+            Some(c) => c,
+            None => return,
+        };
+
+        let parent_id = SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let sidebar = cx.entity().clone();
+
+        let background_task = cx.background_executor().spawn(async move {
+            let source = match connection.dashboard_source() {
+                Some(s) => s,
+                None => return Err("driver does not support dashboard listing".to_string()),
+            };
+            source.list_dashboards().await.map_err(|e| e.to_string())
+        });
+
+        let task = cx.spawn(async move |_this, cx| {
+            let result = background_task.await;
+            cx.update(|cx| {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar
+                        .pending_remote_dashboard_fetches
+                        .remove(&profile_id);
+                    match result {
+                        Ok(dashboards) => {
+                            cache.store(profile_id, dashboards);
+                            sidebar.metric_fetch_errors.remove(&parent_id);
+                        }
+                        Err(msg) => {
+                            sidebar
+                                .metric_fetch_errors
+                                .insert(parent_id, msg.clone());
+                            log::warn!(
+                                "Failed to list dashboards for {}: {}",
+                                profile_id,
+                                msg
+                            );
+                        }
+                    }
+                    sidebar.rebuild_tree_with_overrides(cx);
+                });
+            })
+            .log_if_dropped();
+        });
+
+        self.pending_remote_dashboard_fetches.insert(profile_id, task);
     }
 
     fn collection_node_is_event_stream(

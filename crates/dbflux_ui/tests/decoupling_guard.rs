@@ -102,9 +102,7 @@ fn test_block_lines(source: &str) -> std::collections::HashSet<usize> {
                     brace_depth += 1;
                 }
                 '}' => {
-                    if brace_depth > 0 {
-                        brace_depth -= 1;
-                    }
+                    brace_depth = brace_depth.saturating_sub(1);
                     if in_test_depth > 0 {
                         if brace_depth <= brace_depth_at_entry {
                             in_test_depth = 0;

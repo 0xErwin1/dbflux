@@ -2075,6 +2075,39 @@ mod tests {
     }
 
     #[test]
+    fn test_node_id_remote_dashboards_folder_roundtrip() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        roundtrip(SchemaNodeId::RemoteDashboardsFolder { profile_id: uuid });
+    }
+
+    #[test]
+    fn test_node_id_remote_dashboard_item_roundtrip() {
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        roundtrip(SchemaNodeId::RemoteDashboardItem {
+            profile_id,
+            name: "prod-overview".to_string(),
+        });
+    }
+
+    #[test]
+    fn test_node_id_remote_dashboard_item_name_with_special_chars() {
+        // Dashboard names with hyphens/dots/underscores must survive the
+        // pipe-delimited encoding (splitn absorbs any trailing content).
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        roundtrip(SchemaNodeId::RemoteDashboardItem {
+            profile_id,
+            name: "My_Dashboard.v2-final".to_string(),
+        });
+    }
+
+    #[test]
+    fn test_remote_dashboard_item_shows_pointer_and_needs_click() {
+        assert!(SchemaNodeKind::RemoteDashboardItem.shows_pointer_cursor());
+        assert!(SchemaNodeKind::RemoteDashboardItem.needs_click_handler());
+        assert!(SchemaNodeKind::RemoteDashboardsFolder.is_expandable_folder());
+    }
+
+    #[test]
     fn test_node_id_saved_charts_folder_roundtrip() {
         let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
         roundtrip(SchemaNodeId::SavedChartsFolder { profile_id: uuid });
