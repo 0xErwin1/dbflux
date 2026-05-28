@@ -30,6 +30,7 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 sha1 = "0.10"
+sha2 = "0.10"
 futures-lite = "2"
 
 [dev-dependencies]

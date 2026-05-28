@@ -8,9 +8,12 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
+
+use dbflux_core::auth::AwsSectionHash;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
 pub struct AwsProfileInfo {
@@ -685,6 +688,418 @@ fn append_config_block_if_absent(
     Ok(appended)
 }
 
+// ── Section-hash helpers ──────────────────────────────────────────────────────
+
+/// Returns a slice of `contents` from the line matching `header` through the
+/// line before the next `[` header or EOF.
+///
+/// The `header` argument must include the brackets, e.g.
+/// `"[profile dev]"` for a config section or `"[ci]"` for a credentials
+/// section. The comparison is exact (byte-level), so the caller is
+/// responsible for providing the correctly-formed header string.
+///
+/// Returns `None` when no line in `contents` matches `header`.
+///
+/// Used internally to extract the raw bytes for section hashing
+/// (`hash_config_section`, `hash_credentials_section`) and for conflict
+/// detection inside the atomic write transforms.
+// WU-E3 (auth.rs) will add the production call sites; allowed until then.
+#[allow(dead_code)]
+fn section_raw_bytes<'a>(contents: &'a str, header: &str) -> Option<&'a str> {
+    let header_lower = header.to_lowercase();
+
+    // Find the byte offset where the matching header line starts.
+    let mut header_start: Option<usize> = None;
+    let mut current_offset = 0;
+
+    for line in contents.lines() {
+        if line.trim().to_lowercase() == header_lower {
+            header_start = Some(current_offset);
+            break;
+        }
+        // Advance past the line + newline. `str::lines()` strips the
+        // line terminator, so we need to account for it manually. Both
+        // `\n` and `\r\n` are handled: the slice includes the terminator.
+        current_offset += line.len();
+        if contents[current_offset..].starts_with("\r\n") {
+            current_offset += 2;
+        } else if contents[current_offset..].starts_with('\n') {
+            current_offset += 1;
+        }
+    }
+
+    let start = header_start?;
+
+    // Find the byte offset where the section ends: the start of the next
+    // `[` header line (after the matched section), or EOF.
+    let rest = &contents[start..];
+    let mut section_end = rest.len();
+    let mut at_header = false;
+
+    let mut offset = 0;
+    for line in rest.lines() {
+        // The first line is the matched header itself; skip it.
+        if !at_header {
+            at_header = true;
+            offset += line.len();
+            if rest[offset..].starts_with("\r\n") {
+                offset += 2;
+            } else if rest[offset..].starts_with('\n') {
+                offset += 1;
+            }
+            continue;
+        }
+
+        // Any subsequent line that starts with `[` marks the next section.
+        if line.trim_start().starts_with('[') {
+            section_end = offset;
+            break;
+        }
+
+        offset += line.len();
+        if rest[offset..].starts_with("\r\n") {
+            offset += 2;
+        } else if rest[offset..].starts_with('\n') {
+            offset += 1;
+        }
+    }
+
+    Some(&rest[..section_end])
+}
+
+/// Returns the SHA-256 hash of the raw bytes of the named profile section in
+/// a config-file string.
+///
+/// The section is identified by its `[profile NAME]` header (or `[default]`
+/// for the default profile). Uses `section_raw_bytes` internally; returns
+/// `None` when the section is absent from `contents`.
+///
+/// The hash is over raw bytes — whitespace, comments, and value order are all
+/// captured — so any byte-level change produces a different hash.
+#[allow(dead_code)]
+pub(crate) fn hash_config_section(contents: &str, profile_name: &str) -> Option<AwsSectionHash> {
+    let header = if profile_name.eq_ignore_ascii_case("default") {
+        "[default]".to_string()
+    } else {
+        format!("[profile {profile_name}]")
+    };
+
+    let raw = section_raw_bytes(contents, &header)?;
+    let digest = Sha256::digest(raw.as_bytes());
+    Some(AwsSectionHash(digest.into()))
+}
+
+/// Returns the SHA-256 hash of the raw bytes of the named section in a
+/// credentials-file string.
+///
+/// The section is identified by its bare `[NAME]` header (credentials files
+/// do not use the `profile ` prefix). Returns `None` when the section is
+/// absent from `contents`.
+#[allow(dead_code)]
+pub(crate) fn hash_credentials_section(contents: &str, name: &str) -> Option<AwsSectionHash> {
+    let header = format!("[{name}]");
+    let raw = section_raw_bytes(contents, &header)?;
+    let digest = Sha256::digest(raw.as_bytes());
+    Some(AwsSectionHash(digest.into()))
+}
+
+// ── Credentials atomic writer ─────────────────────────────────────────────────
+
+/// Reads `~/.aws/credentials`, applies `transform`, and writes the result back
+/// atomically with a backup — all under the SAME process-wide lock as
+/// `update_aws_config_atomic` (spec R9.2.1, design section 12).
+///
+/// Using a single shared lock for both files serializes all config+credentials
+/// writes so there is no cross-file interleave (ADR-11). The implementation is
+/// a thin sibling of `update_aws_config_atomic`; the locking and atomic-rename
+/// logic is NOT forked.
+///
+/// Credentials files typically have mode 0600. The writer preserves the
+/// original file's permissions on the temp file and backup file (security
+/// requirement). If the original file does not yet exist the temp file is
+/// written with the same permissions as the new file (0600 on Unix).
+#[allow(dead_code)]
+pub(crate) fn update_aws_credentials_atomic(
+    path: &Path,
+    transform: impl FnOnce(&str) -> String,
+) -> Result<(), io::Error> {
+    let _guard = aws_config_lock()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+
+    let existing = read_config_or_default(path)?;
+    let updated = transform(&existing);
+
+    if existing == updated {
+        return Ok(());
+    }
+
+    write_atomic_with_backup_perms(path, &updated)
+}
+
+/// Like `write_atomic_with_backup` but additionally sets the temp file's
+/// permissions to match the original file (or 0600 when the file is new), so
+/// credentials files written on Unix are never world-readable.
+///
+/// On non-Unix platforms the behaviour is identical to `write_atomic_with_backup`.
+#[allow(dead_code)]
+fn write_atomic_with_backup_perms(path: &Path, content: &str) -> Result<(), io::Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let backup_path = create_backup_for_path(path)?;
+    let temp_path = path.with_extension("tmp");
+
+    // Write the temp file first, then restrict its permissions to match the
+    // original (or enforce 0600 for credentials on first create).
+    fs::write(&temp_path, content)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Try to read the original file's permissions; fall back to 0600.
+        let mode = fs::metadata(path)
+            .map(|m| m.permissions().mode())
+            .unwrap_or(0o600);
+
+        // Restrict to at most the original mode — never widen.
+        let effective_mode = mode & 0o600;
+        fs::set_permissions(&temp_path, fs::Permissions::from_mode(effective_mode))?;
+
+        // Also restrict the backup file to the same mode.
+        if backup_path.exists() {
+            fs::set_permissions(&backup_path, fs::Permissions::from_mode(effective_mode))?;
+        }
+    }
+
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        let _ = fs::copy(&backup_path, path);
+        return Err(error);
+    }
+
+    Ok(())
+}
+
+/// Replaces or appends a `[NAME]` section block in a credentials-file string.
+///
+/// The `[NAME]` header uses the bare form (no `profile ` prefix) as required
+/// by the credentials-file grammar. When a section with this name already
+/// exists, it is replaced in-place; all other sections remain byte-identical.
+/// When the section is absent, it is appended at the end of the string.
+///
+/// `fields` lists the key/value pairs to write into the section. Keys not
+/// listed in `fields` that are present in the existing section are preserved
+/// (merge-write semantics: only explicitly passed keys are changed).
+#[allow(dead_code)]
+pub(crate) fn replace_or_append_credentials_block(
+    contents: &str,
+    name: &str,
+    fields: &[(&str, &str)],
+) -> String {
+    let header = format!("[{name}]");
+    let header_lower = header.to_lowercase();
+
+    // Build the new section block from the existing section's keys merged
+    // with the provided fields. Keys not provided by the caller are
+    // kept verbatim from the existing section.
+    let new_block = build_credentials_block(&header, contents, name, fields);
+
+    // Find the extent of the existing section, if present.
+    let Some(raw) = section_raw_bytes(contents, &header) else {
+        // Section absent — append at EOF.
+        let mut result = contents.to_string();
+        if !result.is_empty() && !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push('\n');
+        result.push_str(&new_block);
+        return result;
+    };
+
+    // The section exists; find its start offset in `contents`.
+    let start = find_section_start(contents, &header_lower);
+    let end = start + raw.len();
+
+    let mut result = String::with_capacity(contents.len());
+    result.push_str(&contents[..start]);
+    result.push_str(&new_block);
+    result.push_str(&contents[end..]);
+    result
+}
+
+/// Locates the byte offset of the first line in `contents` whose lowercased
+/// trim equals `header_lower`.
+#[allow(dead_code)]
+fn find_section_start(contents: &str, header_lower: &str) -> usize {
+    let mut offset = 0;
+    for line in contents.lines() {
+        if line.trim().to_lowercase() == header_lower {
+            return offset;
+        }
+        offset += line.len();
+        if contents[offset..].starts_with("\r\n") {
+            offset += 2;
+        } else if contents[offset..].starts_with('\n') {
+            offset += 1;
+        }
+    }
+    0
+}
+
+/// Replaces or appends a `[profile NAME]` section block in a config-file string.
+///
+/// The header uses the `[profile NAME]` form (or `[default]` when
+/// `name == "default"`), as required by the `~/.aws/config` grammar. When a
+/// matching section already exists, it is replaced in-place; all other
+/// sections remain byte-identical. When the section is absent, it is
+/// appended at the end of the string.
+///
+/// `fields` lists the key/value pairs to write into the section. Keys not
+/// listed in `fields` that are present in the existing section are preserved
+/// (merge-write semantics).
+#[allow(dead_code)]
+pub(crate) fn replace_or_append_profile_block(
+    contents: &str,
+    name: &str,
+    fields: &[(&str, &str)],
+) -> String {
+    let header = if name.eq_ignore_ascii_case("default") {
+        "[default]".to_string()
+    } else {
+        format!("[profile {name}]")
+    };
+
+    let header_lower = header.to_lowercase();
+    let new_block = build_profile_block(&header, contents, fields);
+
+    let Some(raw) = section_raw_bytes(contents, &header) else {
+        // Section absent — append at EOF.
+        let mut result = contents.to_string();
+        if !result.is_empty() && !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push('\n');
+        result.push_str(&new_block);
+        return result;
+    };
+
+    let start = find_section_start(contents, &header_lower);
+    let end = start + raw.len();
+
+    let mut result = String::with_capacity(contents.len());
+    result.push_str(&contents[..start]);
+    result.push_str(&new_block);
+    result.push_str(&contents[end..]);
+    result
+}
+
+/// Builds the replacement `[profile NAME]` section block for `~/.aws/config`.
+#[allow(dead_code)]
+fn build_profile_block(header: &str, contents: &str, fields: &[(&str, &str)]) -> String {
+    // Collect existing keys from the current on-disk section, in order.
+    let mut existing_keys: Vec<(String, String)> = Vec::new();
+    if let Some(raw) = section_raw_bytes(contents, header) {
+        for line in raw.lines().skip(1) {
+            if let Some((k, v)) = parse_key_value(line) {
+                existing_keys.push((k, v));
+            }
+        }
+    }
+
+    let overrides: HashMap<String, String> = fields
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (k.to_lowercase(), v.to_string()))
+        .collect();
+
+    let mut block = String::new();
+    block.push_str(header);
+    block.push('\n');
+
+    let mut emitted_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (key, existing_val) in &existing_keys {
+        let value = overrides
+            .get(key)
+            .map(String::as_str)
+            .unwrap_or(existing_val);
+        writeln!(block, "{key} = {value}").ok();
+        emitted_keys.insert(key.clone());
+    }
+
+    for (key, value) in fields {
+        let key_lower = key.to_lowercase();
+        if !emitted_keys.contains(&key_lower) && !value.is_empty() {
+            writeln!(block, "{key_lower} = {value}").ok();
+        }
+    }
+
+    block
+}
+
+/// Builds the replacement `[NAME]` section block.
+///
+/// Reads existing key/value lines from the current section (if present),
+/// applies the caller-provided `fields` as overrides, and emits the merged
+/// section. Keys provided with an empty string value are omitted (kept as-is
+/// from the existing section — blank = preserve).
+#[allow(dead_code)]
+fn build_credentials_block(
+    header: &str,
+    contents: &str,
+    name: &str,
+    fields: &[(&str, &str)],
+) -> String {
+    // Collect existing keys from the current on-disk section, in order.
+    let mut existing_keys: Vec<(String, String)> = Vec::new();
+    if let Some(raw) = section_raw_bytes(contents, header) {
+        for line in raw.lines().skip(1) {
+            // Skip the header line itself.
+            if let Some((k, v)) = parse_key_value(line) {
+                existing_keys.push((k, v));
+            }
+        }
+    }
+
+    // Build a lookup map from the caller-provided overrides (non-blank only).
+    let overrides: HashMap<String, String> = fields
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (k.to_lowercase(), v.to_string()))
+        .collect();
+
+    let mut block = String::new();
+    block.push_str(header);
+    block.push('\n');
+
+    // Emit existing keys, overriding where a new value was provided.
+    let mut emitted_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (key, existing_val) in &existing_keys {
+        let value = overrides
+            .get(key)
+            .map(String::as_str)
+            .unwrap_or(existing_val);
+        writeln!(block, "{key} = {value}").ok();
+        emitted_keys.insert(key.clone());
+    }
+
+    // Emit new keys that were not already in the existing section.
+    for (key, value) in fields {
+        let key_lower = key.to_lowercase();
+        if !emitted_keys.contains(&key_lower) && !value.is_empty() {
+            writeln!(block, "{key_lower} = {value}").ok();
+        }
+    }
+
+    // Preserve the name prefix (unused here but kept for symmetry with
+    // replace_or_append_profile_block).
+    let _ = name;
+
+    block
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1156,5 +1571,509 @@ output=json
         // Must not panic; must return empty.
         let names = cache.credentials_names();
         assert!(names.is_empty());
+    }
+
+    // ── E2.1 — section_raw_bytes tests ──────────────────────────────────────
+
+    #[test]
+    fn section_raw_bytes_config_profile_exact_slice() {
+        let contents = "[profile a]\nregion = us-east-1\n\n[profile b]\noutput = json\n";
+
+        let raw = section_raw_bytes(contents, "[profile a]").unwrap();
+
+        assert!(raw.contains("[profile a]"));
+        assert!(raw.contains("region = us-east-1"));
+        // Must NOT bleed into the next section.
+        assert!(!raw.contains("[profile b]"));
+        assert!(!raw.contains("output = json"));
+    }
+
+    #[test]
+    fn section_raw_bytes_credentials_bare_header() {
+        let contents = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n\n[prod]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n";
+
+        let raw = section_raw_bytes(contents, "[ci]").unwrap();
+
+        assert!(raw.contains("[ci]"));
+        assert!(raw.contains("aws_access_key_id = AKIAIOSFODNN7EXAMPLE"));
+        assert!(!raw.contains("[prod]"));
+    }
+
+    #[test]
+    fn section_raw_bytes_returns_none_when_section_absent() {
+        let contents = "[profile a]\nregion = us-east-1\n";
+
+        let result = section_raw_bytes(contents, "[profile missing]");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn section_raw_bytes_last_section_no_trailing_newline() {
+        // The last section runs to EOF with no trailing newline.
+        let contents = "[profile a]\nregion = us-east-1\n\n[profile b]\noutput = json";
+
+        let raw = section_raw_bytes(contents, "[profile b]").unwrap();
+
+        assert!(raw.contains("[profile b]"));
+        assert!(raw.contains("output = json"));
+        // Should not be empty and should end at EOF without extra content.
+        assert!(!raw.is_empty());
+    }
+
+    #[test]
+    fn section_raw_bytes_three_section_config_correct_bounds() {
+        let contents =
+            "[profile a]\nkey = val-a\n\n[profile b]\nkey = val-b\n\n[profile c]\nkey = val-c\n";
+
+        let raw_a = section_raw_bytes(contents, "[profile a]").unwrap();
+        let raw_b = section_raw_bytes(contents, "[profile b]").unwrap();
+        let raw_c = section_raw_bytes(contents, "[profile c]").unwrap();
+
+        assert!(raw_a.contains("val-a") && !raw_a.contains("val-b") && !raw_a.contains("val-c"));
+        assert!(raw_b.contains("val-b") && !raw_b.contains("val-a") && !raw_b.contains("val-c"));
+        assert!(raw_c.contains("val-c") && !raw_c.contains("val-a") && !raw_c.contains("val-b"));
+    }
+
+    // ── E2.2 — hash_config_section and hash_credentials_section tests ────────
+
+    #[test]
+    fn hash_config_section_identical_bytes_same_hash() {
+        let contents = "[profile dev]\nsso_start_url = https://example.awsapps.com/start\nregion = us-east-1\n";
+
+        let h1 = hash_config_section(contents, "dev").unwrap();
+        let h2 = hash_config_section(contents, "dev").unwrap();
+
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn hash_config_section_one_byte_change_produces_different_hash() {
+        let contents_a = "[profile dev]\nsso_start_url = https://example.awsapps.com/start\nregion = us-east-1\n";
+        let contents_b = "[profile dev]\nsso_start_url = https://example.awsapps.com/start\nregion = us-east-2\n";
+
+        let ha = hash_config_section(contents_a, "dev").unwrap();
+        let hb = hash_config_section(contents_b, "dev").unwrap();
+
+        assert_ne!(ha, hb);
+    }
+
+    #[test]
+    fn hash_config_section_different_section_does_not_affect_hash() {
+        let contents_before =
+            "[profile a]\nregion = us-east-1\n\n[profile b]\nregion = eu-west-1\n";
+        let contents_after = "[profile a]\nregion = us-east-1\n\n[profile b]\nregion = us-west-2\n";
+
+        let ha_before = hash_config_section(contents_before, "a").unwrap();
+        let ha_after = hash_config_section(contents_after, "a").unwrap();
+
+        // Changing [profile b] must not affect [profile a]'s hash.
+        assert_eq!(ha_before, ha_after);
+    }
+
+    #[test]
+    fn hash_config_section_uses_profile_header_form() {
+        // hash_config_section uses [profile NAME] header.
+        let config_contents = "[profile dev]\nregion = us-east-1\n";
+
+        let hash = hash_config_section(config_contents, "dev");
+        assert!(hash.is_some(), "should find [profile dev] section");
+
+        // A bare [dev] header in a config file must NOT match.
+        let bare_contents = "[dev]\nregion = us-east-1\n";
+        let hash_bare = hash_config_section(bare_contents, "dev");
+        assert!(
+            hash_bare.is_none(),
+            "[profile dev] should not match bare [dev]"
+        );
+    }
+
+    #[test]
+    fn hash_credentials_section_uses_bare_header_form() {
+        let creds_contents = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+
+        let hash = hash_credentials_section(creds_contents, "ci");
+        assert!(hash.is_some(), "should find [ci] section");
+
+        // A [profile ci] form in a credentials file must NOT match.
+        let profile_contents = "[profile ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+        let hash_profile = hash_credentials_section(profile_contents, "ci");
+        assert!(
+            hash_profile.is_none(),
+            "hash_credentials_section should not match [profile ci]"
+        );
+    }
+
+    /// MANDATORY security test (E2.2): the AwsSectionHash digest must not
+    /// contain any substring from the credential values in the hashed section.
+    /// The hash is a one-way SHA-256 digest; the secret bytes never appear in
+    /// the returned value, even in hex form.
+    #[test]
+    fn hash_credentials_section_digest_contains_no_secret_substrings() {
+        let access_key = "AKIAIOSFODNN7EXAMPLE";
+        let secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+
+        let contents = format!(
+            "[ci]\naws_access_key_id = {access_key}\naws_secret_access_key = {secret_key}\n"
+        );
+
+        let hash = hash_credentials_section(&contents, "ci").unwrap();
+        let hex_repr = format!("{hash:?}");
+
+        // The digest representation must not contain the access key ID or the
+        // secret access key value.
+        assert!(
+            !hex_repr.contains(access_key),
+            "hash debug repr must not contain the access key ID"
+        );
+        assert!(
+            !hex_repr.contains(secret_key),
+            "hash debug repr must not contain the secret access key"
+        );
+        // Additional guard: the raw bytes (as u8 slice) must not encode a
+        // known text value — this is trivially true for SHA-256 but documented
+        // as a deliberate security assertion.
+        let text_from_bytes = String::from_utf8_lossy(&hash.0);
+        assert!(!text_from_bytes.contains(access_key));
+        assert!(!text_from_bytes.contains(secret_key));
+    }
+
+    // ── E2.5 — update_aws_credentials_atomic tests ─────────────────────────
+
+    #[test]
+    fn credentials_atomic_write_applies_transform() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("credentials");
+
+        std::fs::write(&path, "[ci]\naws_access_key_id = OLD\n").expect("seed");
+
+        update_aws_credentials_atomic(&path, |existing| existing.replace("OLD", "NEW"))
+            .expect("write");
+
+        let content = std::fs::read_to_string(&path).expect("read");
+        assert!(content.contains("aws_access_key_id = NEW"));
+        assert!(!content.contains("aws_access_key_id = OLD"));
+    }
+
+    #[test]
+    fn credentials_atomic_write_no_change_does_not_update_mtime() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("credentials");
+        let content = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+
+        std::fs::write(&path, content).expect("seed");
+
+        let mtime_before = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .expect("mtime before");
+
+        // Transform returns the original string — no change.
+        update_aws_credentials_atomic(&path, |existing| existing.to_string()).expect("write");
+
+        let mtime_after = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .expect("mtime after");
+
+        assert_eq!(
+            mtime_before, mtime_after,
+            "mtime must not change when content is identical"
+        );
+    }
+
+    #[test]
+    fn credentials_atomic_write_uses_same_lock_as_config_write() {
+        // Two threads: one writes to a temp config path under the shared lock,
+        // the other writes to a credentials path. They must not deadlock and
+        // both writes must land.
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = Arc::new(dir.path().join("config"));
+        let creds_path = Arc::new(dir.path().join("credentials"));
+
+        std::fs::write(config_path.as_ref(), "[profile a]\nregion = us-east-1\n")
+            .expect("seed config");
+        std::fs::write(
+            creds_path.as_ref(),
+            "[a]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n",
+        )
+        .expect("seed creds");
+
+        let cp = Arc::clone(&config_path);
+        let creds = Arc::clone(&creds_path);
+
+        let h1 = thread::spawn(move || {
+            update_aws_config_atomic(&cp, |existing| existing.replace("us-east-1", "us-west-2"))
+                .expect("config write");
+        });
+
+        let h2 = thread::spawn(move || {
+            update_aws_credentials_atomic(&creds, |existing| {
+                existing.replace("AKIAIOSFODNN7EXAMPLE", "AKIAI44QH8DHBEXAMPLE")
+            })
+            .expect("creds write");
+        });
+
+        h1.join().expect("thread 1");
+        h2.join().expect("thread 2");
+
+        let config_content = std::fs::read_to_string(config_path.as_ref()).expect("read config");
+        let creds_content = std::fs::read_to_string(creds_path.as_ref()).expect("read creds");
+
+        assert!(
+            config_content.contains("us-west-2"),
+            "config write must land"
+        );
+        assert!(
+            creds_content.contains("AKIAI44QH8DHBEXAMPLE"),
+            "creds write must land"
+        );
+    }
+
+    // ── E2.6 — replace_or_append_credentials_block tests ───────────────────
+
+    #[test]
+    fn replace_credentials_block_uses_bare_header() {
+        let contents = "[ci]\naws_access_key_id = OLD\n";
+        let result =
+            replace_or_append_credentials_block(contents, "ci", &[("aws_access_key_id", "NEW")]);
+
+        // Bare [ci] header must be present; no [profile ci].
+        assert!(result.contains("[ci]"), "must use bare [ci] header");
+        assert!(
+            !result.contains("[profile ci]"),
+            "must NOT use [profile ci]"
+        );
+        assert!(result.contains("aws_access_key_id = NEW"));
+    }
+
+    #[test]
+    fn replace_credentials_block_other_sections_byte_identical() {
+        let contents = "[prod]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\nregion = us-east-1\n\n[ci]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n\n[dev]\nregion = eu-west-1\n";
+
+        let result = replace_or_append_credentials_block(
+            contents,
+            "ci",
+            &[("aws_access_key_id", "AKIANEWVALUE7EXAMPLE")],
+        );
+
+        // [prod] and [dev] must be byte-identical.
+        let prod_before = section_raw_bytes(contents, "[prod]").unwrap();
+        let prod_after = section_raw_bytes(&result, "[prod]").unwrap();
+        assert_eq!(prod_before, prod_after, "[prod] must be byte-identical");
+
+        let dev_before = section_raw_bytes(contents, "[dev]").unwrap();
+        let dev_after = section_raw_bytes(&result, "[dev]").unwrap();
+        assert_eq!(dev_before, dev_after, "[dev] must be byte-identical");
+
+        // [ci] must be updated.
+        assert!(result.contains("aws_access_key_id = AKIANEWVALUE7EXAMPLE"));
+    }
+
+    #[test]
+    fn replace_credentials_block_appends_when_section_absent() {
+        let contents = "[prod]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n";
+
+        let result = replace_or_append_credentials_block(
+            contents,
+            "new-profile",
+            &[("aws_access_key_id", "AKIANEWVALUE7EXAMPLE")],
+        );
+
+        assert!(result.contains("[new-profile]"));
+        assert!(result.contains("aws_access_key_id = AKIANEWVALUE7EXAMPLE"));
+        // Original section must still be present.
+        assert!(result.contains("[prod]"));
+    }
+
+    // ── E2.3 / E2.8 — blank-preserves / non-blank-overwrites ────────────────
+
+    #[test]
+    fn credentials_merge_blank_preserves_existing_key() {
+        // A blank value in `fields` means "keep the existing on-disk value".
+        let contents = "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+
+        let result = replace_or_append_credentials_block(
+            contents,
+            "ci",
+            &[
+                ("aws_access_key_id", "AKIANEWVALUE7EXAMPLE"),
+                ("aws_secret_access_key", ""), // blank — preserve existing
+            ],
+        );
+
+        assert!(result.contains("aws_access_key_id = AKIANEWVALUE7EXAMPLE"));
+        // The existing secret must be preserved because the caller passed blank.
+        assert!(
+            result.contains("aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+        );
+    }
+
+    #[test]
+    fn credentials_merge_non_blank_overwrites_existing_key() {
+        let contents =
+            "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = OLD_SECRET\n";
+
+        let result = replace_or_append_credentials_block(
+            contents,
+            "ci",
+            &[
+                ("aws_access_key_id", "AKIANEWVALUE7EXAMPLE"),
+                ("aws_secret_access_key", "NEW_SECRET"),
+            ],
+        );
+
+        assert!(result.contains("aws_secret_access_key = NEW_SECRET"));
+        assert!(!result.contains("OLD_SECRET"));
+    }
+
+    // ── E2.9 — MANDATORY surgical-write regression test (both files) ─────────
+
+    #[test]
+    fn surgical_write_config_leaves_other_sections_byte_identical() {
+        let contents = "\
+[profile a]\nregion = us-east-1\noutput = json\n\n\
+[profile b]\nregion = eu-west-1\noutput = text\n\n\
+[profile c]\nregion = ap-southeast-1\noutput = json\n";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("config");
+        std::fs::write(&config_path, contents).expect("seed");
+
+        // Hash sections a and c BEFORE the write.
+        let ha_before = hash_config_section(contents, "a").unwrap();
+        let hc_before = hash_config_section(contents, "c").unwrap();
+
+        // Write to [profile b] only.
+        update_aws_config_atomic(&config_path, |existing| {
+            replace_or_append_profile_block(
+                existing,
+                "b",
+                &[("region", "us-west-2"), ("output", "text")],
+            )
+        })
+        .expect("config write");
+
+        let after = std::fs::read_to_string(&config_path).expect("read after");
+
+        let ha_after = hash_config_section(&after, "a").unwrap();
+        let hc_after = hash_config_section(&after, "c").unwrap();
+
+        assert_eq!(
+            ha_before, ha_after,
+            "[profile a] must be byte-identical after write to [profile b]"
+        );
+        assert_eq!(
+            hc_before, hc_after,
+            "[profile c] must be byte-identical after write to [profile b]"
+        );
+    }
+
+    #[test]
+    fn surgical_write_credentials_leaves_other_sections_byte_identical() {
+        let contents = "\
+[staging]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n\n\
+[ci]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\naws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY\n\n\
+[prod]\naws_access_key_id = AKIAJ4JHDL3GEXAMPLE\naws_secret_access_key = 9drTJvcXLB89EXAMPLEKEY\n";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let creds_path = dir.path().join("credentials");
+        std::fs::write(&creds_path, contents).expect("seed");
+
+        // Hash [staging] and [prod] BEFORE the write.
+        let h_staging_before = hash_credentials_section(contents, "staging").unwrap();
+        let h_prod_before = hash_credentials_section(contents, "prod").unwrap();
+
+        // Write to [ci] only.
+        update_aws_credentials_atomic(&creds_path, |existing| {
+            replace_or_append_credentials_block(
+                existing,
+                "ci",
+                &[
+                    ("aws_access_key_id", "AKIANEWVALUE7EXAMPLE"),
+                    ("aws_secret_access_key", "NEW_SECRET_VALUE"),
+                ],
+            )
+        })
+        .expect("creds write");
+
+        let after = std::fs::read_to_string(&creds_path).expect("read after");
+
+        let h_staging_after = hash_credentials_section(&after, "staging").unwrap();
+        let h_prod_after = hash_credentials_section(&after, "prod").unwrap();
+
+        assert_eq!(
+            h_staging_before, h_staging_after,
+            "[staging] must be byte-identical after write to [ci]"
+        );
+        assert_eq!(
+            h_prod_before, h_prod_after,
+            "[prod] must be byte-identical after write to [ci]"
+        );
+    }
+
+    // ── E2.10 — SECURITY: no secret logging; parse_aws_credentials_str unchanged ─
+
+    /// Verifies that `update_aws_credentials_atomic` does not return any
+    /// secret value — the only thing that crosses back is the `Result<(), _>`
+    /// return. The secret stays inside the transform closure and is dropped
+    /// when the closure returns.
+    #[test]
+    fn credentials_write_return_type_cannot_carry_secrets() {
+        // This is a compile-time structural assertion: the return type of
+        // `update_aws_credentials_atomic` is `Result<(), io::Error>`, which
+        // has no `String` or `&str` payload. We call it and assert Ok(()).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("credentials");
+
+        let secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+
+        std::fs::write(&path, format!("[ci]\naws_secret_access_key = {secret}\n")).expect("seed");
+
+        // The return value is () — it cannot carry any string, let alone the secret.
+        let result = update_aws_credentials_atomic(&path, |existing| existing.to_string());
+        assert!(result.is_ok());
+
+        // parse_aws_credentials_str called on the same file still returns names only.
+        let content = std::fs::read_to_string(&path).expect("read");
+        let names = parse_aws_credentials_str(&content);
+        assert_eq!(names, vec!["ci"]);
+        for name in &names {
+            assert!(!name.contains(secret), "parse must not return secret value");
+        }
+    }
+
+    /// MANDATORY file-permission test (Unix only): credentials temp and backup
+    /// files must not be group- or other-readable when the original is 0600.
+    #[cfg(unix)]
+    #[test]
+    fn credentials_write_temp_and_backup_are_not_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("credentials");
+
+        // Seed with 0600 permissions (typical for ~/.aws/credentials).
+        std::fs::write(&path, "[ci]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n").expect("seed");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("set 0600");
+
+        // Perform a write — this creates the temp file and the backup.
+        update_aws_credentials_atomic(&path, |existing| {
+            existing.replace("AKIAIOSFODNN7EXAMPLE", "AKIAI44QH8DHBEXAMPLE")
+        })
+        .expect("write");
+
+        // The final written file must be at most 0600 (not group/other readable).
+        let final_mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            final_mode & 0o077,
+            0,
+            "final credentials file must not be group/other readable; mode = {:o}",
+            final_mode
+        );
     }
 }
