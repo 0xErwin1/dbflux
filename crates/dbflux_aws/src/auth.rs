@@ -2080,10 +2080,6 @@ mod tests {
         }
     }
 
-    fn field_def_by_id<'a>(fields: &'a [FormFieldDef], id: &str) -> Option<&'a FormFieldDef> {
-        fields.iter().find(|f| f.id == id)
-    }
-
     // -------------------------------------------------------------------------
     // T16: fetch_dynamic_options unit tests (no live AWS calls)
     // -------------------------------------------------------------------------

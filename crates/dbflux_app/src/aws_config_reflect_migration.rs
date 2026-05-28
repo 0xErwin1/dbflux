@@ -662,8 +662,7 @@ mod tests {
         insert_auth_profile(&runtime, &old_id, "ci-user", "aws-static-credentials");
 
         let old_id_clone = old_id.clone();
-        let mut keyring_checked = false;
-        // We can't capture and mutate in the Fn closure easily, so we use an Arc<Mutex>.
+        // The Fn closure can't capture-and-mutate a local, so track the probe via Arc<Mutex>.
         let checked = Arc::new(std::sync::Mutex::new(false));
         let checked_clone = checked.clone();
 
