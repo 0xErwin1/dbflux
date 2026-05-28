@@ -509,7 +509,12 @@ impl ConnectionManagerWindow {
         let focused = show_focus && field_focus == Some(self.form_focus);
 
         match &field_def.kind {
-            FormFieldKind::Text | FormFieldKind::Password | FormFieldKind::Number => {
+            // WriteOnly fields behave identically to Password in connection forms:
+            // the input is masked and starts empty.
+            FormFieldKind::Text
+            | FormFieldKind::Password
+            | FormFieldKind::WriteOnly
+            | FormFieldKind::Number => {
                 let Some(input_state) = self.input_state_for_field(&field_def.id) else {
                     return div().into_any_element();
                 };

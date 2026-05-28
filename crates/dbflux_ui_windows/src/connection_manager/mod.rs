@@ -1033,7 +1033,8 @@ impl ConnectionManagerWindow {
         for field in fields {
             let placeholder = &field.placeholder;
             let default_value = &field.default_value;
-            let is_masked = field.kind == FormFieldKind::Password;
+            let is_masked =
+                field.kind == FormFieldKind::Password || field.kind == FormFieldKind::WriteOnly;
             let field_id = field.id.clone();
 
             let input = cx.new(|cx| {

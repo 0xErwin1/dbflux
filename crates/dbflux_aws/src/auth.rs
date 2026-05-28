@@ -413,7 +413,8 @@ impl AwsSsoAuthProvider {
                     provider_id: "aws-sso".to_string(),
                     fields,
                     enabled: true,
-                    read_only: true,
+                    // Reflected non-dangling profiles are editable (design §13).
+                    read_only: false,
                     dangling_origin: None,
                 })
             })
@@ -485,7 +486,8 @@ impl AwsSsoSessionAuthProvider {
                     provider_id: "aws-sso-session".to_string(),
                     fields,
                     enabled: true,
-                    read_only: true,
+                    // Reflected non-dangling profiles are editable (design §13).
+                    read_only: false,
                     dangling_origin: None,
                 })
             })
@@ -573,7 +575,8 @@ impl AwsSharedCredentialsAuthProvider {
                     provider_id: "aws-shared-credentials".to_string(),
                     fields,
                     enabled: true,
-                    read_only: true,
+                    // Reflected non-dangling profiles are editable (design §13).
+                    read_only: false,
                     dangling_origin: None,
                 })
             })
@@ -689,13 +692,66 @@ fn build_aws_shared_credentials_form() -> AuthFormDef {
         tabs: vec![FormTab {
             id: "main".to_string(),
             label: "Main".to_string(),
-            sections: vec![FormSection {
-                title: "AWS Shared Credentials".to_string(),
-                fields: vec![
-                    required_text_field("profile_name", "AWS Profile Name", "default"),
-                    required_text_field("region", "Region", "us-east-1"),
-                ],
-            }],
+            sections: vec![
+                FormSection {
+                    title: "AWS Shared Credentials".to_string(),
+                    fields: vec![
+                        required_text_field("profile_name", "AWS Profile Name", "default"),
+                        required_text_field("region", "Region", "us-east-1"),
+                        FormFieldDef {
+                            id: "aws_access_key_id".to_string(),
+                            label: "Access Key ID".to_string(),
+                            kind: FormFieldKind::Text,
+                            placeholder: "AKIAIOSFODNN7EXAMPLE".to_string(),
+                            required: false,
+                            default_value: String::new(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
+                            help: Some(
+                                "Written to the [name] section in ~/.aws/credentials.".to_string(),
+                            ),
+                        },
+                    ],
+                },
+                FormSection {
+                    title: "Credentials (write-only)".to_string(),
+                    fields: vec![
+                        FormFieldDef {
+                            id: "aws_secret_access_key".to_string(),
+                            label: "Secret Access Key".to_string(),
+                            kind: FormFieldKind::WriteOnly,
+                            placeholder: "Leave blank to keep current".to_string(),
+                            required: false,
+                            default_value: String::new(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
+                            help: Some(
+                                "Write-only. Leave blank to preserve the existing value in \
+                                 ~/.aws/credentials. Enter a value to overwrite it."
+                                    .to_string(),
+                            ),
+                        },
+                        FormFieldDef {
+                            id: "aws_session_token".to_string(),
+                            label: "Session Token".to_string(),
+                            kind: FormFieldKind::WriteOnly,
+                            placeholder: "Leave blank to keep current".to_string(),
+                            required: false,
+                            default_value: String::new(),
+                            enabled_when_checked: None,
+                            enabled_when_unchecked: None,
+                            disabled_when_field_set: None,
+                            help: Some(
+                                "Optional. Write-only. Leave blank to preserve the existing \
+                                 value in ~/.aws/credentials."
+                                    .to_string(),
+                            ),
+                        },
+                    ],
+                },
+            ],
         }],
     }
 }
@@ -2537,7 +2593,11 @@ sso_region = us-east-1
 
         assert_eq!(p.provider_id, "aws-sso");
         assert_eq!(p.name, "dev-sso");
-        assert!(p.read_only, "reflected profile must be read-only");
+        // Non-dangling reflected profiles are editable (design §13); read_only = false.
+        assert!(
+            !p.read_only,
+            "non-dangling reflected profile must be editable (read_only = false)"
+        );
         assert!(p.enabled);
 
         let expected_id = dbflux_core::auth::aws_profile_uuid("aws-sso", "dev-sso");
@@ -2680,7 +2740,8 @@ sso_region = us-east-1
 
         assert_eq!(p.provider_id, "aws-sso-session");
         assert_eq!(p.name, "my-org");
-        assert!(p.read_only);
+        // Non-dangling reflected profiles are editable (design §13); read_only = false.
+        assert!(!p.read_only);
 
         let expected_id = dbflux_core::auth::aws_profile_uuid("aws-sso-session", "my-org");
         assert_eq!(p.id, expected_id);
@@ -2768,7 +2829,8 @@ sso_region = us-east-1
             .find(|p| p.name == "ci-user")
             .expect("ci-user must be reflected");
         assert_eq!(ci.provider_id, "aws-shared-credentials");
-        assert!(ci.read_only);
+        // Non-dangling reflected profiles are editable (design §13); read_only = false.
+        assert!(!ci.read_only);
 
         let expected_id = dbflux_core::auth::aws_profile_uuid("aws-shared-credentials", "ci-user");
         assert_eq!(ci.id, expected_id);
@@ -3495,5 +3557,109 @@ sso_region = us-east-1
             snapshot.credentials_section.is_some(),
             "credentials_section hash must be Some when [ci] exists"
         );
+    }
+
+    // ── E5: Workspace-level security audit ────────────────────────────────────
+
+    /// E5.1: `AuthSaveOutcome` debug representation contains no secret material
+    /// after a credentials write. (Cross-crate security regression guard.)
+    #[test]
+    fn e5_auth_save_outcome_debug_never_exposes_secret() {
+        let creds = "[myprofile]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        let (provider, _config_path, _creds_path, _dir) = shared_provider_with_paths("", creds);
+
+        let snapshot = provider.open_edit_snapshot("myprofile");
+        let mut fields = HashMap::new();
+        // Use a distinct value so we can check it is not present in the outcome.
+        fields.insert(
+            "aws_secret_access_key".to_string(),
+            "A1B2C3D4E5F6EXAMPLEKEY".to_string(),
+        );
+
+        let outcome = provider.save_edit("myprofile", &fields, &snapshot);
+        let debug_repr = format!("{outcome:?}");
+
+        let secret_patterns = [
+            "A1B2C3D4E5F6",
+            "wJalrXUtnFEMI",
+            "aws_secret_access_key",
+            "AKIA",
+        ];
+        for pattern in &secret_patterns {
+            assert!(
+                !debug_repr.contains(pattern),
+                "AuthSaveOutcome debug must not contain '{pattern}': got {debug_repr}"
+            );
+        }
+    }
+
+    /// E5.2: Surgical write to `~/.aws/config` leaves non-target sections
+    /// byte-identical. Also verified in WU-E3 tests; re-stated here as a
+    /// workspace-level regression anchor.
+    #[test]
+    fn e5_surgical_write_config_leaves_other_sections_byte_identical() {
+        let config = "[profile dev]\nsso_start_url = https://before.example.com/start\n\
+                      sso_region = us-east-1\n\
+                      sso_account_id = 111111111111\n\
+                      [profile staging]\nregion = eu-west-1\n";
+        let provider = sso_provider_with_config(config);
+
+        let snapshot = provider.open_edit_snapshot("dev");
+
+        // Record the staging section hash before the write using the public hash helper.
+        let staging_hash_before = crate::config::hash_config_section(config, "staging");
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_account_id".to_string(), "999999999999".to_string());
+
+        let outcome = provider.save_edit("dev", &fields, &snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "save should succeed; got {outcome:?}"
+        );
+
+        // Re-read the config to get the post-write content and check staging.
+        let config_path = provider
+            .config_cache
+            .lock()
+            .unwrap()
+            .config_path()
+            .to_path_buf();
+        let after = std::fs::read_to_string(&config_path).unwrap();
+
+        let staging_hash_after = crate::config::hash_config_section(&after, "staging");
+
+        assert_eq!(
+            staging_hash_before.map(|h| h.0),
+            staging_hash_after.map(|h| h.0),
+            "[profile staging] section hash must be identical after editing [profile dev]"
+        );
+    }
+
+    /// E5.3: Names-only enumeration never returns values that resemble AWS
+    /// access keys, even when the credentials file contains them.
+    #[test]
+    fn e5_names_only_enumeration_contains_no_key_material() {
+        let creds = "[ci-user]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n\
+                     aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n\
+                     [staging]\naws_access_key_id = AKIAI44QH8DHBEXAMPLE\n";
+
+        let names = crate::config::parse_aws_credentials_str(creds);
+
+        for name in &names {
+            assert!(
+                !name.starts_with("AKIA"),
+                "enumerated name '{name}' looks like an access key; key material must not be returned"
+            );
+            assert!(
+                !name.contains("secret") && !name.contains("wJalrX"),
+                "enumerated name '{name}' contains secret material"
+            );
+        }
+
+        // Exactly the two profile names must be returned.
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"ci-user".to_string()));
+        assert!(names.contains(&"staging".to_string()));
     }
 }

@@ -77,7 +77,8 @@ pub fn create_inputs<T>(
                     _ => {
                         let placeholder = field.placeholder.clone();
                         let value = initial_value;
-                        let masked = field.kind == FormFieldKind::Password;
+                        let masked = field.kind == FormFieldKind::Password
+                            || field.kind == FormFieldKind::WriteOnly;
 
                         let input = cx.new(|cx| {
                             let mut input = InputState::new(window, cx).placeholder(placeholder);

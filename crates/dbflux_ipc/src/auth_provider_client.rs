@@ -319,13 +319,18 @@ pub fn build_fetch_dependencies(
         })
         .unwrap_or_default();
 
-    // Collect a set of field ids that have Password kind.
+    // Collect a set of field ids that have Password or WriteOnly kind.
+    // Both carry secret values and are filtered from dependency maps sent to
+    // external RPC providers unless the provider opts in via
+    // `secret_dependency_opt_in`.
     let password_field_ids: std::collections::HashSet<&str> = form_def
         .tabs
         .iter()
         .flat_map(|tab| tab.sections.iter())
         .flat_map(|section| section.fields.iter())
-        .filter(|field| field.kind == FormFieldKind::Password)
+        .filter(|field| {
+            field.kind == FormFieldKind::Password || field.kind == FormFieldKind::WriteOnly
+        })
         .map(|field| field.id.as_str())
         .collect();
 

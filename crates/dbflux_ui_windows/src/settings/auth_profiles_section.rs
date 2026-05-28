@@ -12,7 +12,8 @@ use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::{
-    AccessKind, AuthProfile, FetchOptionsError, FetchOptionsRequest, FormFieldKind, RefreshTrigger,
+    AccessKind, AuthProfile, AuthSaveOutcome, AwsEditFile, AwsEditSnapshot, FetchOptionsError,
+    FetchOptionsRequest, FormFieldKind, RefreshTrigger,
 };
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -47,13 +48,30 @@ pub(super) struct AuthProfilesSection {
     pending_delete_profile_id: Option<Uuid>,
     pending_sync_from_app_state: bool,
 
-    /// Whether the currently-displayed profile is read-only (i.e. reflected
-    /// from an external config such as `~/.aws/config`). When `true` the form
-    /// is rendered in mirror mode: no editable inputs, no Save/Delete buttons.
+    /// Whether the currently-displayed profile is read-only (i.e. it is a
+    /// dangling reflected profile with no on-disk section to target). When
+    /// `true` the form is rendered in mirror mode: no editable inputs, no
+    /// Save/Delete buttons.
+    ///
+    /// Non-dangling reflected AWS profiles have `read_only = false` and are
+    /// editable — their edits are written directly to `~/.aws/config` /
+    /// `~/.aws/credentials` via `save_edit` (design §13, §14).
     profile_is_read_only: bool,
     /// Why the currently-displayed profile is dangling, if it is.
     /// Known values: `"keyring-only"`, `"file-gone"`. `None` for healthy profiles.
     profile_dangling_origin: Option<String>,
+
+    /// Opaque snapshot token captured when an editable reflected AWS profile is
+    /// loaded for editing. Passed back to `save_edit` at save time for the
+    /// optimistic-concurrency check (spec R9.3.1, design §10).
+    ///
+    /// `None` for stored (non-reflected) profiles — those use the standard
+    /// SQLite save path which has no snapshot concept.
+    edit_snapshot: Option<AwsEditSnapshot>,
+    /// Non-`None` when a `save_edit` call returned `Conflict` or `PartialSaved`.
+    /// Contains a human-readable message to display, plus `true` if a Reload
+    /// button should be shown.
+    edit_conflict_msg: Option<(String, bool)>,
 
     input_name: Entity<InputState>,
     form_inputs: HashMap<String, Entity<InputState>>,
@@ -138,11 +156,12 @@ fn build_form_rows(
     dynamic_field_count: usize,
     selected_provider_supports_login: bool,
     is_editing: bool,
+    is_reflected: bool,
 ) -> Vec<Vec<AuthFormField>> {
     let mut rows = vec![vec![AuthFormField::Name]];
 
-    // The provider selector is always a single dropdown widget — one focusable slot.
-    if has_providers {
+    // Reflected profiles have a fixed provider; the selector is not shown.
+    if has_providers && !is_reflected {
         rows.push(vec![AuthFormField::Provider(0)]);
     }
 
@@ -154,9 +173,13 @@ fn build_form_rows(
         rows.push(vec![AuthFormField::ProviderLogin]);
     }
 
-    rows.push(vec![AuthFormField::Enabled]);
+    // Reflected profiles do not expose the Enabled toggle (it is managed by
+    // the file) and do not have a Delete button.
+    if !is_reflected {
+        rows.push(vec![AuthFormField::Enabled]);
+    }
 
-    if is_editing {
+    if is_editing && !is_reflected {
         rows.push(vec![AuthFormField::DeleteButton, AuthFormField::SaveButton]);
     } else {
         rows.push(vec![AuthFormField::SaveButton]);
@@ -186,6 +209,15 @@ fn build_auth_profile_from_form(
         read_only: false,
         dangling_origin: None,
     })
+}
+
+/// Returns a human-readable label for an `AwsEditFile` variant, used in
+/// conflict and partial-save messages shown in the Settings UI.
+fn file_label(file: AwsEditFile) -> &'static str {
+    match file {
+        AwsEditFile::Config => "~/.aws/config",
+        AwsEditFile::Credentials => "~/.aws/credentials",
+    }
 }
 
 /// Update `field_login_hint` and `provider_login_status` for a
@@ -323,6 +355,8 @@ impl AuthProfilesSection {
             pending_sync_from_app_state: false,
             profile_is_read_only: false,
             profile_dangling_origin: None,
+            edit_snapshot: None,
+            edit_conflict_msg: None,
             input_name,
             form_inputs: HashMap::new(),
             provider_field_order: Vec::new(),
@@ -492,7 +526,9 @@ impl AuthProfilesSection {
                     let input = cx.new(|cx| {
                         let state = InputState::new(window, cx).placeholder(placeholder);
                         match kind {
-                            FormFieldKind::Password => state.masked(true),
+                            FormFieldKind::Password | FormFieldKind::WriteOnly => {
+                                state.masked(true)
+                            }
                             _ => state,
                         }
                     });
@@ -911,6 +947,8 @@ impl AuthProfilesSection {
     fn clear_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editing_profile_id = None;
         self.profile_enabled = true;
+        self.edit_snapshot = None;
+        self.edit_conflict_msg = None;
 
         self.input_name.update(cx, |state, cx| {
             state.set_value("", window, cx);
@@ -1118,10 +1156,13 @@ impl AuthProfilesSection {
         self.selected_profile_id = Some(profile.id);
         self.profile_is_read_only = profile.read_only;
         self.profile_dangling_origin = profile.dangling_origin.clone();
+        self.edit_conflict_msg = None;
 
-        // Read-only profiles (reflected from external config) are never
-        // set as editing targets — no SQLite writes occur for them.
-        self.editing_profile_id = if profile.read_only {
+        // Reflected (file-backed) profiles use the edit-save path; stored
+        // profiles use the SQLite path.  Both require an editing_profile_id
+        // for the save-button to appear.
+        self.editing_profile_id = if profile.dangling_origin.is_some() {
+            // Dangling profiles are truly read-only: no section to write to.
             None
         } else {
             Some(profile.id)
@@ -1136,12 +1177,52 @@ impl AuthProfilesSection {
 
         self.rebuild_form_inputs(window, cx);
 
+        // Determine which field ids are WriteOnly so we never pre-fill them.
+        let write_only_fields: std::collections::HashSet<String> = self
+            .selected_provider(cx)
+            .map(|provider| {
+                provider
+                    .form_def()
+                    .tabs
+                    .iter()
+                    .flat_map(|tab| tab.sections.iter())
+                    .flat_map(|section| section.fields.iter())
+                    .filter(|field| field.kind == FormFieldKind::WriteOnly)
+                    .map(|field| field.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         for (field_id, input) in &self.form_inputs {
-            let value = profile.fields.get(field_id).cloned().unwrap_or_default();
+            // WriteOnly fields are always rendered empty (spec R9.4.1, S33).
+            let value = if write_only_fields.contains(field_id) {
+                String::new()
+            } else {
+                profile.fields.get(field_id).cloned().unwrap_or_default()
+            };
+
             input.update(cx, |state, cx| {
-                state.set_value(value.clone(), window, cx);
+                state.set_value(value, window, cx);
             });
         }
+
+        // Capture the edit snapshot for editable reflected profiles.  The
+        // snapshot is used at save time for the optimistic-concurrency check
+        // (spec R9.3.1, design §10).
+        //
+        // Dangling profiles have no snapshot (no section to hash); stored
+        // profiles don't need one (they go through SQLite, not save_edit).
+        self.edit_snapshot = if profile.dangling_origin.is_none() && !profile.read_only {
+            // Reflected, editable profile — snapshot the on-disk section.
+            let provider = self
+                .app_state
+                .read(cx)
+                .auth_provider_by_id(&profile.provider_id);
+
+            provider.map(|p| p.open_edit_snapshot(&profile.name))
+        } else {
+            None
+        };
 
         // Clear options cache so DynamicSelect dropdowns are re-fetched for
         // the newly loaded profile's field values.
@@ -1164,8 +1245,7 @@ impl AuthProfilesSection {
     }
 
     fn save_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Read-only profiles are reflected from external config; they cannot
-        // be saved through this path.
+        // Dangling profiles (truly read-only) cannot be saved.
         if self.profile_is_read_only {
             return;
         }
@@ -1178,6 +1258,13 @@ impl AuthProfilesSection {
         let Some(provider_id) = self.selected_provider_id.clone() else {
             return;
         };
+
+        // When an edit snapshot is present, this is a reflected AWS profile.
+        // Route through save_edit rather than SQLite.
+        if let Some(snapshot) = self.edit_snapshot.clone() {
+            self.save_edit_profile(name, provider_id, snapshot, window, cx);
+            return;
+        }
 
         let profile_id = self.editing_profile_id.unwrap_or_else(Uuid::new_v4);
         let fields = self
@@ -1260,6 +1347,109 @@ impl AuthProfilesSection {
 
         self.selected_profile_id = Some(profile_id);
         self.load_profile_into_form(profile_id, window, cx);
+    }
+
+    /// Save path for reflected AWS profiles: calls `save_edit` with the
+    /// optimistic-concurrency snapshot and handles `Conflict` / `PartialSaved`
+    /// outcomes (spec R9.3.4, R9.3.6, S29, S35, design §14).
+    ///
+    /// Fields with `FormFieldKind::WriteOnly` that are left blank are omitted
+    /// from the field map so the provider preserves the existing on-disk value
+    /// (spec R9.4.2, S27). Secret values transit only through this method's
+    /// stack frame — they are never stored in `self` beyond the call site
+    /// (spec R9.6.1, R9.6.4).
+    fn save_edit_profile(
+        &mut self,
+        name: String,
+        provider_id: String,
+        snapshot: AwsEditSnapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(provider) = self.app_state.read(cx).auth_provider_by_id(&provider_id) else {
+            return;
+        };
+
+        // Determine which fields are WriteOnly so blank values can be omitted.
+        let write_only_ids: std::collections::HashSet<String> = provider
+            .form_def()
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.sections.iter())
+            .flat_map(|section| section.fields.iter())
+            .filter(|field| field.kind == FormFieldKind::WriteOnly)
+            .map(|field| field.id.clone())
+            .collect();
+
+        // Build the edited fields map.  Blank WriteOnly fields are excluded so
+        // the provider treats them as "preserve existing on-disk value".
+        let fields: HashMap<String, String> = self
+            .form_inputs
+            .iter()
+            .filter_map(|(field_id, input)| {
+                let value = input.read(cx).value().to_string();
+                if write_only_ids.contains(field_id) && value.is_empty() {
+                    // Blank secret field — omit so the provider preserves the
+                    // existing on-disk value (spec R9.4.2).
+                    None
+                } else {
+                    Some((field_id.clone(), value))
+                }
+            })
+            .collect();
+
+        let outcome = provider.save_edit(&name, &fields, &snapshot);
+
+        match outcome {
+            AuthSaveOutcome::Saved => {
+                // Write succeeded. Signal a refresh so reflection picks up the
+                // updated section (mtime change drives cache invalidation).
+                self.edit_conflict_msg = None;
+                self.app_state.update(cx, |_, cx| {
+                    cx.emit(AppStateChanged);
+                });
+
+                self.provider_login_status =
+                    Some(("Profile saved to ~/.aws/config.".to_string(), true));
+
+                // Reload the form to pick up the new values and a fresh snapshot.
+                let profile_id = self.editing_profile_id;
+                if let Some(id) = profile_id {
+                    self.load_profile_into_form(id, window, cx);
+                }
+            }
+
+            AuthSaveOutcome::Conflict { file } => {
+                // Section changed on disk since the form was opened — block save.
+                let file_label = file_label(file);
+                self.edit_conflict_msg = Some((
+                    format!(
+                        "This profile was modified on disk ({file_label}) since you opened it. \
+                         Reload to see the current values before saving."
+                    ),
+                    true,
+                ));
+                cx.notify();
+            }
+
+            AuthSaveOutcome::PartialSaved {
+                written,
+                conflicted,
+            } => {
+                // One file succeeded; the other conflicted.
+                let written_label = file_label(written);
+                let conflicted_label = file_label(conflicted);
+                self.edit_conflict_msg = Some((
+                    format!(
+                        "{written_label} was saved successfully, but {conflicted_label} was \
+                         modified on disk since you opened the form. Reload to refresh the \
+                         credentials section and re-apply your changes."
+                    ),
+                    true,
+                ));
+                cx.notify();
+            }
+        }
     }
 
     fn login_selected_profile(&mut self, cx: &mut Context<Self>) {
@@ -1504,17 +1694,6 @@ impl AuthProfilesSection {
                     )
             })
             .count()
-    }
-
-    fn render_input_row(
-        &self,
-        label: &str,
-        input: &Entity<InputState>,
-        field: AuthFormField,
-        is_focused: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        self.render_input_row_disabled(label, input, field, is_focused, false, None, None, cx)
     }
 
     /// Renders the inline login-URL panel: shows the verification URL with
@@ -2017,7 +2196,18 @@ impl AuthProfilesSection {
                         })
                         .unwrap_or((false, None, None));
 
-                    self.render_input_row_disabled(
+                    // WriteOnly fields get a help hint appended below the input
+                    // to clarify write-only semantics (spec S33, R9.4.1).
+                    let extra_hint: Option<String> =
+                        if field.kind == FormFieldKind::WriteOnly && !disabled {
+                            Some(field.help.clone().unwrap_or_else(|| {
+                                "Leave blank to keep the current value.".to_string()
+                            }))
+                        } else {
+                            None
+                        };
+
+                    let rendered = self.render_input_row_disabled(
                         &field.label,
                         input,
                         form_field,
@@ -2026,13 +2216,27 @@ impl AuthProfilesSection {
                         disabled_hint,
                         inherited_value,
                         cx,
-                    )
-                    .into_any_element()
+                    );
+
+                    // Wrap with extra write-only hint if needed.
+                    if let Some(hint) = extra_hint {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(rendered)
+                            .child(Text::caption(hint))
+                            .into_any_element()
+                    } else {
+                        rendered.into_any_element()
+                    }
                 } else {
                     div().into_any_element()
                 }
             })
             .collect();
+
+        let conflict_msg = self.edit_conflict_msg.clone();
 
         layout::sticky_form_shell(
             div()
@@ -2047,15 +2251,63 @@ impl AuthProfilesSection {
                 .flex()
                 .flex_col()
                 .gap_4()
+                .when_some(conflict_msg, |content, (msg, show_reload)| {
+                    let theme = cx.theme().clone();
+                    content.child(
+                        div()
+                            .p_3()
+                            .rounded(Radii::SM)
+                            .border_1()
+                            .border_color(theme.warning)
+                            .bg(theme.secondary)
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        FluxIcon::new(AppIcon::TriangleAlert)
+                                            .size(Heights::ICON_SM)
+                                            .color(theme.warning),
+                                    )
+                                    .child(Label::new("Profile Changed on Disk")),
+                            )
+                            .child(Text::caption(msg))
+                            .when(show_reload, |panel| {
+                                panel.child(
+                                    Button::new("edit-reload-profile", "Reload")
+                                        .small()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            if let Some(id) = this.selected_profile_id {
+                                                this.load_profile_into_form(id, window, cx);
+                                            }
+                                        })),
+                                )
+                            }),
+                    )
+                })
                 .child({
                     let is_focused = self.auth_form_field == AuthFormField::Name
                         && self.auth_focus == AuthFocus::Form
                         && self.content_focused;
-                    self.render_input_row(
+                    let is_reflected = self.edit_snapshot.is_some();
+                    // Reflected profiles: name is the section key in ~/.aws/config
+                    // and cannot be renamed from the DBFlux edit form (spec non-req).
+                    self.render_input_row_disabled(
                         "Name",
                         &self.input_name,
                         AuthFormField::Name,
                         is_focused,
+                        is_reflected,
+                        if is_reflected {
+                            Some("Profile name is read from ~/.aws/config and cannot be renamed here.".to_string())
+                        } else {
+                            None
+                        },
+                        None,
                         cx,
                     )
                 })
@@ -2065,7 +2317,24 @@ impl AuthProfilesSection {
                         .flex_col()
                         .gap_2()
                         .child(Label::new("Provider"))
-                        .child(self.render_provider_selector(window, cx)),
+                        .when(self.edit_snapshot.is_none(), |row| {
+                            row.child(self.render_provider_selector(window, cx))
+                        })
+                        .when(self.edit_snapshot.is_some(), |row| {
+                            // Reflected profiles: provider is fixed by the file section type.
+                            let provider_label = self
+                                .selected_provider_id
+                                .as_deref()
+                                .and_then(|id| {
+                                    self.app_state
+                                        .read(cx)
+                                        .auth_provider_by_id(id)
+                                        .map(|p| p.display_name().to_string())
+                                })
+                                .or_else(|| self.selected_provider_id.clone())
+                                .unwrap_or_default();
+                            row.child(Text::body(provider_label))
+                        }),
                 )
                 .children(dynamic_fields)
                 .when(self.selected_provider_supports_login, |content| {
@@ -2108,21 +2377,26 @@ impl AuthProfilesSection {
                             content.child(self.render_login_url_panel(url, cx))
                         })
                 })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Checkbox::new("auth-profile-enabled")
-                                .checked(self.profile_enabled)
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.profile_enabled = *checked;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(Text::body("Enabled")),
-                ),
+                .when(self.edit_snapshot.is_none(), |content| {
+                    // The enabled toggle only applies to stored (SQLite-backed)
+                    // profiles. Reflected AWS profiles are always enabled and
+                    // managed by the ~/.aws/config file.
+                    content.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Checkbox::new("auth-profile-enabled")
+                                    .checked(self.profile_enabled)
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        this.profile_enabled = *checked;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(Text::body("Enabled")),
+                    )
+                }),
             None,
             &theme,
         )
@@ -2131,6 +2405,9 @@ impl AuthProfilesSection {
 
     fn render_section_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         let is_editing = self.editing_profile_id.is_some();
+        // Reflected profiles are edited in-place via save_edit; they cannot be
+        // deleted from DBFlux (the file section is the source of truth).
+        let is_reflected = self.edit_snapshot.is_some();
         let is_form_focused = self.auth_focus == AuthFocus::Form && self.content_focused;
         let primary = cx.theme().primary;
 
@@ -2138,7 +2415,7 @@ impl AuthProfilesSection {
             .flex()
             .items_center()
             .gap_3()
-            .when(is_editing, |root| {
+            .when(is_editing && !is_reflected, |root| {
                 root.child(layout::footer_action_frame(
                     is_form_focused && self.auth_form_field == AuthFormField::DeleteButton,
                     primary,
@@ -2171,7 +2448,13 @@ impl AuthProfilesSection {
                 primary,
                 Button::new(
                     "save-auth-profile",
-                    if is_editing { "Update" } else { "Create" },
+                    if is_reflected {
+                        "Save to File"
+                    } else if is_editing {
+                        "Update"
+                    } else {
+                        "Create"
+                    },
                 )
                 .small()
                 .primary()
@@ -2242,6 +2525,7 @@ impl FormSection for AuthProfilesSection {
             self.provider_field_order.len(),
             self.selected_provider_supports_login,
             self.editing_profile_id.is_some(),
+            self.edit_snapshot.is_some(),
         )
     }
 
@@ -2441,7 +2725,7 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn form_rows_include_generic_provider_login_without_aws_feature() {
-        let rows = build_form_rows(true, 2, true, false);
+        let rows = build_form_rows(true, 2, true, false, false);
 
         assert!(
             rows.iter()
@@ -2769,7 +3053,7 @@ mod tests {
     /// unaffected so it continues to serve editable profiles.
     #[::core::prelude::v1::test]
     fn form_rows_include_save_and_delete_when_editing() {
-        let rows = build_form_rows(true, 0, false, true);
+        let rows = build_form_rows(true, 0, false, true, false);
         assert!(
             rows.iter()
                 .any(|row| row.contains(&AuthFormField::SaveButton)),
@@ -2785,7 +3069,7 @@ mod tests {
     /// When creating a new profile (not editing), there must be no DeleteButton.
     #[::core::prelude::v1::test]
     fn form_rows_no_delete_when_creating() {
-        let rows = build_form_rows(true, 0, false, false);
+        let rows = build_form_rows(true, 0, false, false, false);
         assert!(
             !rows
                 .iter()
@@ -2856,5 +3140,270 @@ mod tests {
             msg.contains("~/.aws/config"),
             "file-gone dangling message must reference ~/.aws/config"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // WU-E4: Editable form state-transition logic (non-GPUI-render parts)
+    // -----------------------------------------------------------------------
+
+    /// E4: Reflected profiles (non-dangling) must NOT produce a Delete button
+    /// row in `build_form_rows` — they are edited via `save_edit`, not deleted
+    /// from DBFlux (spec S36, design §14).
+    #[::core::prelude::v1::test]
+    fn reflected_profile_has_no_delete_button_row() {
+        let rows = build_form_rows(true, 3, false, true, /* is_reflected */ true);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains(&AuthFormField::DeleteButton)),
+            "reflected profiles must not expose a Delete button"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(&AuthFormField::SaveButton)),
+            "reflected profiles must still expose a Save button"
+        );
+    }
+
+    /// E4: Reflected profiles must NOT include the Enabled row — the enabled
+    /// state is managed by the AWS file, not DBFlux.
+    #[::core::prelude::v1::test]
+    fn reflected_profile_has_no_enabled_row() {
+        let rows = build_form_rows(true, 2, false, true, /* is_reflected */ true);
+        assert!(
+            !rows.iter().any(|row| row.contains(&AuthFormField::Enabled)),
+            "reflected profiles must not expose the Enabled toggle"
+        );
+    }
+
+    /// E4: Reflected profiles must NOT include the Provider selector row —
+    /// provider is fixed by the file section type.
+    #[::core::prelude::v1::test]
+    fn reflected_profile_has_no_provider_selector_row() {
+        let rows = build_form_rows(
+            /* has_providers */ true, 2, false, true, /* is_reflected */ true,
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| { row.iter().any(|f| matches!(f, AuthFormField::Provider(_))) }),
+            "reflected profiles must not expose the provider selector row"
+        );
+    }
+
+    /// E4: `collect_edited_fields` omits blank `WriteOnly` fields so the
+    /// provider preserves the existing on-disk value (spec R9.4.2, S27).
+    ///
+    /// This exercises the logic inline rather than through the GPUI form
+    /// (render code cannot be unit-tested without a GPUI context).
+    #[::core::prelude::v1::test]
+    fn edited_fields_omit_blank_write_only_field() {
+        let write_only_ids: std::collections::HashSet<String> = [
+            "aws_secret_access_key".to_string(),
+            "aws_session_token".to_string(),
+        ]
+        .into_iter()
+        .collect();
+
+        // Simulate the form value map: access key present, secret blank.
+        let form_values: Vec<(String, String)> = vec![
+            (
+                "aws_access_key_id".to_string(),
+                "AKIAIOSFODNN7EXAMPLE".to_string(),
+            ),
+            ("aws_secret_access_key".to_string(), String::new()), // blank — must be omitted
+            ("aws_session_token".to_string(), String::new()),     // blank — must be omitted
+        ];
+
+        let fields: HashMap<String, String> = form_values
+            .into_iter()
+            .filter_map(|(field_id, value)| {
+                if write_only_ids.contains(&field_id) && value.is_empty() {
+                    None
+                } else {
+                    Some((field_id, value))
+                }
+            })
+            .collect();
+
+        assert!(
+            fields.contains_key("aws_access_key_id"),
+            "non-secret fields must be included"
+        );
+        assert!(
+            !fields.contains_key("aws_secret_access_key"),
+            "blank secret field must be omitted so provider preserves on-disk value"
+        );
+        assert!(
+            !fields.contains_key("aws_session_token"),
+            "blank session token must be omitted"
+        );
+    }
+
+    /// E4: A non-blank `WriteOnly` field IS included in the edited fields map
+    /// so the provider overwrites the on-disk value (spec R9.4.3, S26).
+    #[::core::prelude::v1::test]
+    fn edited_fields_include_non_blank_write_only_field() {
+        let write_only_ids: std::collections::HashSet<String> =
+            ["aws_secret_access_key".to_string()].into_iter().collect();
+
+        let form_values: Vec<(String, String)> = vec![
+            (
+                "aws_access_key_id".to_string(),
+                "AKIAIOSFODNN7EXAMPLE".to_string(),
+            ),
+            (
+                "aws_secret_access_key".to_string(),
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            ),
+        ];
+
+        let fields: HashMap<String, String> = form_values
+            .into_iter()
+            .filter_map(|(field_id, value)| {
+                if write_only_ids.contains(&field_id) && value.is_empty() {
+                    None
+                } else {
+                    Some((field_id, value))
+                }
+            })
+            .collect();
+
+        assert!(
+            fields.contains_key("aws_secret_access_key"),
+            "non-blank secret field must be included in the save payload"
+        );
+    }
+
+    /// E4: `Conflict` outcome produces a conflict message that names the file
+    /// and offers a Reload affordance (spec R9.3.4, S29). The state-transition
+    /// logic in `save_edit_profile` is tested indirectly through the helpers
+    /// that compute the conflict message — the GPUI state mutation itself
+    /// is render-only and cannot be unit-tested here.
+    #[::core::prelude::v1::test]
+    fn conflict_message_references_file_and_suggests_reload() {
+        // Simulate what `save_edit_profile` produces on Conflict { Config }.
+        let file = AwsEditFile::Config;
+        let file_name = file_label(file);
+        let msg = format!(
+            "This profile was modified on disk ({file_name}) since you opened it. \
+             Reload to see the current values before saving."
+        );
+        assert!(
+            msg.contains("~/.aws/config"),
+            "conflict message must name the affected file"
+        );
+        assert!(
+            msg.to_lowercase().contains("reload"),
+            "conflict message must mention the Reload action"
+        );
+        assert!(
+            !msg.contains("AKIA"),
+            "conflict message must not contain credential patterns"
+        );
+    }
+
+    /// E4: `PartialSaved` outcome produces a message that names BOTH files
+    /// (written and conflicted) and offers a Reload affordance (spec S35).
+    #[::core::prelude::v1::test]
+    fn partial_saved_message_names_both_files() {
+        let written = AwsEditFile::Config;
+        let conflicted = AwsEditFile::Credentials;
+        let msg = format!(
+            "{} was saved successfully, but {} was modified on disk since you opened \
+             the form. Reload to refresh the credentials section and re-apply your changes.",
+            file_label(written),
+            file_label(conflicted),
+        );
+        assert!(
+            msg.contains("~/.aws/config"),
+            "partial-saved message must name the written file"
+        );
+        assert!(
+            msg.contains("~/.aws/credentials"),
+            "partial-saved message must name the conflicted file"
+        );
+        assert!(
+            msg.to_lowercase().contains("reload"),
+            "partial-saved message must mention the Reload action"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // WU-E5: Security audit — outcomes and types carry no secrets
+    // -----------------------------------------------------------------------
+
+    /// E5.1: `AuthSaveOutcome` Debug representation contains no secret patterns.
+    /// This is also tested in dbflux_core, but we re-verify at the UI boundary
+    /// where the type is matched and messages are constructed.
+    #[::core::prelude::v1::test]
+    fn auth_save_outcome_debug_has_no_secrets() {
+        use dbflux_core::AuthSaveOutcome;
+
+        let outcomes = [
+            AuthSaveOutcome::Saved,
+            AuthSaveOutcome::Conflict {
+                file: AwsEditFile::Config,
+            },
+            AuthSaveOutcome::PartialSaved {
+                written: AwsEditFile::Config,
+                conflicted: AwsEditFile::Credentials,
+            },
+        ];
+
+        let secret_patterns = ["AKIA", "wJalrX", "aws_secret_access_key", "SECRET"];
+
+        for outcome in &outcomes {
+            let repr = format!("{outcome:?}");
+            for pattern in &secret_patterns {
+                assert!(
+                    !repr.contains(pattern),
+                    "AuthSaveOutcome debug must not contain '{pattern}' (found in: {repr})"
+                );
+            }
+        }
+    }
+
+    /// E5.2: `file_label` returns the correct file path strings.
+    #[::core::prelude::v1::test]
+    fn file_label_returns_correct_paths() {
+        assert_eq!(file_label(AwsEditFile::Config), "~/.aws/config");
+        assert_eq!(file_label(AwsEditFile::Credentials), "~/.aws/credentials");
+    }
+
+    /// E5.3: `AwsEditFile` variants are distinct and `file_label` output
+    /// contains no credential values.
+    #[::core::prelude::v1::test]
+    fn file_label_contains_no_credential_material() {
+        for file in [AwsEditFile::Config, AwsEditFile::Credentials] {
+            let label = file_label(file);
+            assert!(
+                !label.contains("AKIA"),
+                "file label must not contain access key patterns"
+            );
+            assert!(
+                !label.contains("secret"),
+                "file label must not contain 'secret'"
+            );
+        }
+    }
+
+    /// E5.4: `build_form_rows` for a reflected profile never exposes the
+    /// Enabled or Delete rows, regardless of the field count.
+    #[::core::prelude::v1::test]
+    fn reflected_form_rows_have_no_enabled_or_delete_for_any_field_count() {
+        for field_count in [0usize, 1, 5, 10] {
+            let rows = build_form_rows(true, field_count, false, true, true);
+            assert!(
+                !rows.iter().any(|r| r.contains(&AuthFormField::Enabled)),
+                "Enabled row must be absent for reflected profiles (field_count={field_count})"
+            );
+            assert!(
+                !rows
+                    .iter()
+                    .any(|r| r.contains(&AuthFormField::DeleteButton)),
+                "Delete row must be absent for reflected profiles (field_count={field_count})"
+            );
+        }
     }
 }
