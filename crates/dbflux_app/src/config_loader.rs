@@ -756,6 +756,7 @@ pub fn save_auth_profiles(
             enabled: profile.enabled,
             created_at: String::new(),
             updated_at: String::new(),
+            dangling_origin: None,
         };
 
         if existing_ids.contains(&dto.id) {

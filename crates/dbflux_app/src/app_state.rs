@@ -272,6 +272,11 @@ impl AppState {
             log::warn!("Failed to bootstrap MCP runtime from persistence: {}", e);
         }
 
+        #[cfg(feature = "aws")]
+        if let Err(e) = state.bootstrap_aws_config_reflect_migration() {
+            log::warn!("aws_config_reflect_migration failed (non-fatal): {}", e);
+        }
+
         if let Err(e) = state.bootstrap_audit_settings() {
             log::warn!("Failed to bootstrap audit settings: {}", e);
             let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
@@ -483,6 +488,92 @@ impl AppState {
                 "Failed to record audit bootstrap success event: {}",
                 rec_err
             );
+        }
+
+        Ok(())
+    }
+
+    /// Runs the one-time AWS config reflection migration at startup.
+    ///
+    /// Reads the live AWS config files once, passes the section name sets to the
+    /// migration, and logs any dangling profiles as non-blocking warnings. This
+    /// method is only compiled when the `aws` feature is enabled because it
+    /// depends on `CachedAwsConfig` from `dbflux_aws`.
+    ///
+    /// Failure is non-fatal: the caller logs the error and continues startup.
+    #[cfg(feature = "aws")]
+    fn bootstrap_aws_config_reflect_migration(&self) -> Result<(), String> {
+        use std::collections::HashSet;
+
+        use dbflux_aws::CachedAwsConfig;
+
+        use crate::aws_config_reflect_migration::run_aws_config_reflect_migration;
+
+        // Obtain section names from the AWS config files.
+        // CachedAwsConfig::new() initializes the cache; errors are non-fatal
+        // (an empty config means zero stored AWS rows match → no rebinds).
+        let mut aws_config = CachedAwsConfig::new();
+
+        // All profile section names from ~/.aws/config (SSO and non-SSO).
+        let config_section_names: HashSet<String> = aws_config
+            .profiles()
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+
+        // Section names from ~/.aws/credentials (bare [NAME] headers).
+        let credentials_names: HashSet<String> =
+            aws_config.credentials_names().iter().cloned().collect();
+
+        // Union of both: any name present in either file is a match candidate.
+        let all_config_names: HashSet<String> = config_section_names
+            .union(&credentials_names)
+            .cloned()
+            .collect();
+
+        // We do not have access to the real keyring in this context without
+        // loading a full SecretManager. Use a best-effort probe: the stored
+        // auth profile's `provider_id == "aws-static-credentials"` is a
+        // sufficient signal for the dangling-origin classification. The keyring
+        // predicate is used only to choose between "keyring-only" and
+        // "file-gone" for static profiles; we pass a conservative closure that
+        // returns `true` for all static-credentials profiles so they are
+        // classified as "keyring-only" (the safer choice: preserves the keyring
+        // entry and keeps the stored row).
+        //
+        // The actual keyring secret is never read or deleted by this migration.
+        let static_provider = "aws-static-credentials";
+        let auth_repo = self.storage_runtime.auth_profiles();
+        let static_ids: std::collections::HashSet<String> = auth_repo
+            .all()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.provider_id == static_provider)
+            .map(|r| r.id)
+            .collect();
+
+        let summary = run_aws_config_reflect_migration(
+            &self.storage_runtime,
+            &all_config_names,
+            &credentials_names,
+            move |id: &str| static_ids.contains(id),
+        )
+        .map_err(|e| e.to_string())?;
+
+        for dangling in &summary.dangling {
+            if let crate::aws_config_reflect_migration::ProfileMigrationOutcome::Dangling {
+                id,
+                origin,
+            } = dangling
+            {
+                log::warn!(
+                    "AWS config reflect migration: profile {} is dangling \
+                     (origin={}). The connection will fail at connect time until \
+                     the credential source is restored.",
+                    id,
+                    origin.as_str()
+                );
+            }
         }
 
         Ok(())

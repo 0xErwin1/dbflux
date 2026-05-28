@@ -8,6 +8,7 @@ use crate::artifacts::ArtifactStore;
 use crate::error::StorageError;
 use crate::migrations::MigrationRegistry;
 use crate::paths;
+use crate::repositories::app_meta::AppMetaRepository;
 use crate::repositories::audit::AuditRepository;
 use crate::repositories::audit_settings::AuditSettingsRepository;
 use crate::repositories::auth_profiles::AuthProfileRepository;
@@ -136,6 +137,11 @@ impl StorageRuntime {
     // All repositories now use the single unified database connection.
     // Config-domain and state-domain tables coexist in the same database
     // with domain-prefixed names (cfg_*, st_*).
+
+    /// Creates an app metadata repository for one-time migration flags.
+    pub fn app_meta(&self) -> AppMetaRepository {
+        AppMetaRepository::new(self.dbflux_db())
+    }
 
     /// Creates a connection profile repository.
     pub fn connection_profiles(&self) -> ConnectionProfileRepository {

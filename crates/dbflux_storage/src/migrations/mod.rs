@@ -140,6 +140,7 @@ impl MigrationRegistry {
         registry.register(mod_007_session_exec_ctx_json::MigrationImpl);
         registry.register(mod_008_general_settings_style::MigrationImpl);
         registry.register(mod_009_mssql_instance::MigrationImpl);
+        registry.register(mod_010_aws_reflect_migration_flag::MigrationImpl);
         registry
     }
 
@@ -287,6 +288,7 @@ mod mod_006_rpc_service_api_contract;
 mod mod_007_session_exec_ctx_json;
 mod mod_008_general_settings_style;
 mod mod_009_mssql_instance;
+mod mod_010_aws_reflect_migration_flag;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -296,6 +298,7 @@ pub use mod_005_rpc_service_kind::MigrationImpl as MigrationImplRpcServiceKind;
 pub use mod_006_rpc_service_api_contract::MigrationImpl as MigrationImplRpcServiceApiContract;
 pub use mod_007_session_exec_ctx_json::MigrationImpl as MigrationImplSessionExecCtxJson;
 pub use mod_008_general_settings_style::MigrationImpl as MigrationImplGeneralSettingsStyle;
+pub use mod_010_aws_reflect_migration_flag::MigrationImpl as MigrationImplAwsReflectMigrationFlag;
 
 // ---------------------------------------------------------------------------
 // Database verification utilities
@@ -498,6 +501,14 @@ mod tests {
 
         // System domain tables
         assert!(tables.contains("sys_migrations"), "missing sys_migrations");
+        assert!(tables.contains("sys_app_meta"), "missing sys_app_meta");
+
+        // Migration 010: dangling_origin column on cfg_auth_profiles
+        let auth_columns = column_names(&conn, "cfg_auth_profiles");
+        assert!(
+            auth_columns.contains("dangling_origin"),
+            "cfg_auth_profiles missing dangling_origin column"
+        );
 
         drop(conn);
         let _ = std::fs::remove_dir_all(temp_dir);
