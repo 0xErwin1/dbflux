@@ -10,7 +10,7 @@ pub use accounts::{
 };
 pub use auth::{
     AwsSharedCredentialsAuthProvider, AwsSsoAuthProvider, AwsSsoSessionAuthProvider,
-    AwsStaticCredentialsAuthProvider, SsoLoginHandle, abort_sso_login, login_sso_blocking,
+    SsoLoginHandle, abort_sso_login, login_sso_blocking,
     start_sso_login_blocking, wait_for_sso_session_blocking,
 };
 pub use config::{

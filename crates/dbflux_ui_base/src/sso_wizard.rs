@@ -170,8 +170,6 @@ impl SsoWizard {
         let profile_name = self.input_profile_name.read(cx).value().trim().to_string();
         let start_url = self.input_start_url.read(cx).value().trim().to_string();
         let region = self.input_region.read(cx).value().trim().to_string();
-        let account_id = self.input_account_id.read(cx).value().trim().to_string();
-        let role_name = self.input_role_name.read(cx).value().trim().to_string();
 
         if profile_name.is_empty() || start_url.is_empty() || region.is_empty() {
             self.status =
@@ -190,9 +188,6 @@ impl SsoWizard {
                 Uuid::nil(),
                 &profile_name,
                 &start_url,
-                &region,
-                &account_id,
-                &role_name,
             );
             list_sso_accounts_blocking(&profile_name, &region, &start_url)
         });

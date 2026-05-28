@@ -219,8 +219,6 @@ impl AppState {
             auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoAuthProvider::new()));
             auth_provider_registry
                 .register(Arc::new(dbflux_aws::AwsSharedCredentialsAuthProvider::new()));
-            auth_provider_registry
-                .register(Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new()));
         }
 
         if !services.is_empty() {

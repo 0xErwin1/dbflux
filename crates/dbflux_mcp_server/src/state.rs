@@ -844,12 +844,9 @@ fn build_auth_provider_registry(
             as Arc<dyn DynAuthProvider>;
         registry.insert(shared.provider_id().to_string(), shared);
 
-        let static_credentials = Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new())
-            as Arc<dyn DynAuthProvider>;
-        registry.insert(
-            static_credentials.provider_id().to_string(),
-            static_credentials,
-        );
+        // aws-static-credentials provider removed (ADR-7): DBFlux no longer
+        // stores AWS long-lived secrets. Shared-credentials profiles are
+        // reflected from ~/.aws/credentials via AwsSharedCredentialsAuthProvider.
     }
 
     load_external_auth_providers(&mut registry, services);

@@ -39,93 +39,6 @@ const SSO_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 /// The `verification_url` is extracted from `aws sso login` stdout and is
 /// ready to be surfaced in the UI. The login is not yet complete — the caller
 /// must still wait (poll the SSO cache) for the session to appear.
-/// All SSO fields needed to write a complete `[profile X]` block in `~/.aws/config`.
-pub struct SsoProfileConfig {
-    pub profile_name: String,
-    pub region: String,
-    pub sso_start_url: String,
-    pub sso_account_id: String,
-    pub sso_role_name: String,
-}
-
-/// Writes (or updates) a `[profile <name>]` block in `~/.aws/config` with
-/// all SSO fields so that `aws sso login --profile <name>` runs non-interactively.
-///
-/// Only writes fields that are non-empty. Existing lines for the profile are
-/// replaced; unrelated parts of the file are left untouched.
-pub fn ensure_aws_profile_configured(config: &SsoProfileConfig) -> Result<(), DbError> {
-    // Skip if we don't have the minimum required fields to make the profile useful.
-    if config.sso_start_url.trim().is_empty()
-        || config.sso_account_id.trim().is_empty()
-        || config.sso_role_name.trim().is_empty()
-    {
-        return Ok(());
-    }
-
-    let config_path = aws_config_path();
-
-    let profile_header = format!("[profile {}]", config.profile_name);
-    let new_block = build_sso_profile_block(config);
-
-    crate::config::update_aws_config_atomic(&config_path, |existing| {
-        replace_or_append_profile_block(existing, &profile_header, &new_block)
-    })
-    .map_err(|err| {
-        DbError::ValueResolutionFailed(format!("Could not write ~/.aws/config: {}", err))
-    })
-}
-
-/// Writes both a session-form `[profile NAME]` block (with `sso_session =`
-/// indirection) and the referenced `[sso-session SESSION]` block to
-/// `~/.aws/config`. Both blocks are fully rewritten so any stale keys (e.g.
-/// a stray `sso_region =` inside the profile block) are cleaned up.
-fn ensure_aws_profile_configured_with_session(
-    profile_name: &str,
-    session_name: &str,
-    region: &str,
-    sso_account_id: &str,
-    sso_role_name: &str,
-    sso_start_url: &str,
-    sso_region: &str,
-) -> Result<(), DbError> {
-    // Account ID and Role Name are optional here: writing the session-form
-    // profile block is what sanitizes a malformed `[profile X]` (e.g. a
-    // stray `sso_region` line that AWS SDK rejects). We want that
-    // sanitation to happen as soon as the user has picked an `sso-session`
-    // ref, even before they've filled in account/role — otherwise the SDK
-    // can't load the config to call `list_sso_accounts` and populate the
-    // dropdowns in the first place.
-    if profile_name.trim().is_empty()
-        || session_name.trim().is_empty()
-        || sso_start_url.trim().is_empty()
-    {
-        return Ok(());
-    }
-
-    let config_path = aws_config_path();
-
-    let profile_header = format!("[profile {}]", profile_name);
-    let profile_block = build_sso_session_profile_block(
-        profile_name,
-        session_name,
-        region,
-        sso_account_id,
-        sso_role_name,
-    );
-
-    let session_header = format!("[sso-session {}]", session_name);
-    let session_block = build_sso_session_block(session_name, sso_start_url, sso_region);
-
-    crate::config::update_aws_config_atomic(&config_path, |existing| {
-        let after_profile =
-            replace_or_append_profile_block(existing, &profile_header, &profile_block);
-        replace_or_append_profile_block(&after_profile, &session_header, &session_block)
-    })
-    .map_err(|err| {
-        DbError::ValueResolutionFailed(format!("Could not write ~/.aws/config: {}", err))
-    })
-}
-
 fn aws_config_path() -> std::path::PathBuf {
     // AWS_CONFIG_FILE env var overrides the default location.
     if let Ok(path) = std::env::var("AWS_CONFIG_FILE") {
@@ -135,133 +48,6 @@ fn aws_config_path() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("~"))
         .join(".aws")
         .join("config")
-}
-
-fn build_sso_profile_block(config: &SsoProfileConfig) -> String {
-    let mut lines = vec![
-        format!("[profile {}]", config.profile_name),
-        format!("sso_start_url = {}", config.sso_start_url),
-        format!("sso_region = {}", config.region),
-        format!("sso_account_id = {}", config.sso_account_id),
-        format!("sso_role_name = {}", config.sso_role_name),
-    ];
-
-    if !config.region.is_empty() {
-        lines.push(format!("region = {}", config.region));
-    }
-
-    lines.push("output = json".to_string());
-    lines.push(String::new()); // trailing newline after block
-
-    lines.join("\n")
-}
-
-/// Builds a session-form `[profile X]` block that references an
-/// `[sso-session NAME]` block via `sso_session = NAME`. Used when the
-/// DBFlux profile declares an `sso_session_ref` so the written block
-/// matches the AWS SDK's expected indirection form and does not duplicate
-/// SSO config keys that must live under the session.
-fn build_sso_session_profile_block(
-    profile_name: &str,
-    session_name: &str,
-    region: &str,
-    sso_account_id: &str,
-    sso_role_name: &str,
-) -> String {
-    let mut lines = vec![
-        format!("[profile {}]", profile_name),
-        format!("sso_session = {}", session_name),
-    ];
-
-    // Account ID and Role Name are optional in the on-disk block: the AWS
-    // SDK accepts profiles with only `sso_session = X` (no credentials can
-    // be generated, but the profile parses cleanly and the SSO token cache
-    // works, so `list_sso_accounts` / `list_sso_account_roles` can be
-    // called to populate the DBFlux dropdowns).
-    if !sso_account_id.trim().is_empty() {
-        lines.push(format!("sso_account_id = {}", sso_account_id));
-    }
-    if !sso_role_name.trim().is_empty() {
-        lines.push(format!("sso_role_name = {}", sso_role_name));
-    }
-
-    if !region.is_empty() {
-        lines.push(format!("region = {}", region));
-    }
-
-    lines.push("output = json".to_string());
-    lines.push(String::new());
-
-    lines.join("\n")
-}
-
-/// Builds an `[sso-session NAME]` block.
-fn build_sso_session_block(session_name: &str, sso_start_url: &str, sso_region: &str) -> String {
-    let mut lines = vec![
-        format!("[sso-session {}]", session_name),
-        format!("sso_start_url = {}", sso_start_url),
-    ];
-
-    if !sso_region.is_empty() {
-        lines.push(format!("sso_region = {}", sso_region));
-    }
-
-    // Default scopes — AWS CLI requires this for the session form.
-    lines.push("sso_registration_scopes = sso:account:access".to_string());
-    lines.push(String::new());
-
-    lines.join("\n")
-}
-
-/// Replaces an existing `[profile X]` block in the INI content with
-/// `new_block`, or appends it if the profile does not exist yet.
-///
-/// A profile block spans from its header line until the next `[` section
-/// header (or end of file).
-fn replace_or_append_profile_block(content: &str, header: &str, new_block: &str) -> String {
-    let mut result = String::with_capacity(content.len() + new_block.len());
-    let mut inside_target = false;
-    let mut replaced = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        if trimmed == header {
-            // Start of the target profile — emit the new block instead.
-            result.push_str(new_block);
-            inside_target = true;
-            replaced = true;
-            continue;
-        }
-
-        if inside_target {
-            // Skip lines belonging to the old profile block.
-            if trimmed.starts_with('[') {
-                // Next section starts — stop skipping and emit this line.
-                inside_target = false;
-                result.push_str(line);
-                result.push('\n');
-            }
-            // else: still inside old block, discard.
-            continue;
-        }
-
-        result.push_str(line);
-        result.push('\n');
-    }
-
-    if !replaced {
-        // Profile didn't exist — append with a blank line separator.
-        if !result.ends_with("\n\n") {
-            if !result.ends_with('\n') {
-                result.push('\n');
-            }
-            result.push('\n');
-        }
-        result.push_str(new_block);
-    }
-
-    result
 }
 
 pub struct SsoLoginHandle {
@@ -799,20 +585,6 @@ impl Default for AwsSharedCredentialsAuthProvider {
     }
 }
 
-pub struct AwsStaticCredentialsAuthProvider;
-
-impl AwsStaticCredentialsAuthProvider {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for AwsStaticCredentialsAuthProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 fn required_text_field(id: &str, label: &str, placeholder: &str) -> FormFieldDef {
     FormFieldDef {
         id: id.to_string(),
@@ -820,21 +592,6 @@ fn required_text_field(id: &str, label: &str, placeholder: &str) -> FormFieldDef
         kind: FormFieldKind::Text,
         placeholder: placeholder.to_string(),
         required: true,
-        default_value: String::new(),
-        enabled_when_checked: None,
-        enabled_when_unchecked: None,
-        disabled_when_field_set: None,
-        help: None,
-    }
-}
-
-fn password_field(id: &str, label: &str, placeholder: &str, required: bool) -> FormFieldDef {
-    FormFieldDef {
-        id: id.to_string(),
-        label: label.to_string(),
-        kind: FormFieldKind::Password,
-        placeholder: placeholder.to_string(),
-        required,
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
@@ -976,24 +733,6 @@ fn build_aws_sso_session_form() -> AuthFormDef {
     }
 }
 
-fn build_aws_static_credentials_form() -> AuthFormDef {
-    AuthFormDef {
-        tabs: vec![FormTab {
-            id: "main".to_string(),
-            label: "Main".to_string(),
-            sections: vec![FormSection {
-                title: "AWS Static Credentials".to_string(),
-                fields: vec![
-                    required_text_field("access_key_id", "Access Key ID", "AKIAIOSFODNN7EXAMPLE"),
-                    password_field("secret_access_key", "Secret Access Key", "", true),
-                    password_field("session_token", "Session Token", "", false),
-                    required_text_field("region", "Region", "us-east-1"),
-                ],
-            }],
-        }],
-    }
-}
-
 fn non_expiring_login(
     profile: &AuthProfile,
     provider_id: &str,
@@ -1035,106 +774,6 @@ fn effective_aws_profile_name(profile: &AuthProfile) -> Option<&str> {
     }
 
     None
-}
-
-fn sso_profile_config_from_auth_profile(profile: &AuthProfile) -> Option<SsoProfileConfig> {
-    if profile.provider_id != "aws-sso" {
-        return None;
-    }
-
-    let profile_name = effective_aws_profile_name(profile)?.to_string();
-    let region = profile.fields.get("region")?.trim().to_string();
-    let sso_start_url = profile.fields.get("sso_start_url")?.trim().to_string();
-    let sso_account_id = profile.fields.get("sso_account_id")?.trim().to_string();
-    let sso_role_name = profile.fields.get("sso_role_name")?.trim().to_string();
-
-    if region.is_empty()
-        || sso_start_url.is_empty()
-        || sso_account_id.is_empty()
-        || sso_role_name.is_empty()
-    {
-        return None;
-    }
-
-    Some(SsoProfileConfig {
-        profile_name,
-        region,
-        sso_start_url,
-        sso_account_id,
-        sso_role_name,
-    })
-}
-
-fn ensure_sso_profile_configured_from_auth_profile(profile: &AuthProfile) {
-    // When the DBFlux profile references an `aws-sso-session` (expanded via
-    // `expand_auth_profile_refs`, which stashes the session name under
-    // `sso_session_ref_name`), write the session-form block. This sanitizes
-    // any stray `sso_region` lines inside the user's existing flat profile
-    // block, which AWS SDK rejects when `sso_session = X` is also present.
-    let profile_name = effective_aws_profile_name(profile).map(ToOwned::to_owned);
-    let session_name = profile
-        .fields
-        .get("sso_session_ref_name")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    if let (Some(profile_name), Some(session_name)) = (profile_name.as_ref(), session_name.as_ref())
-    {
-        let region = profile
-            .fields
-            .get("region")
-            .map(String::as_str)
-            .unwrap_or("");
-        let sso_account_id = profile
-            .fields
-            .get("sso_account_id")
-            .map(String::as_str)
-            .unwrap_or("");
-        let sso_role_name = profile
-            .fields
-            .get("sso_role_name")
-            .map(String::as_str)
-            .unwrap_or("");
-        let sso_start_url = profile
-            .fields
-            .get("sso_start_url")
-            .map(String::as_str)
-            .unwrap_or("");
-        let sso_region = profile
-            .fields
-            .get("sso_region")
-            .map(String::as_str)
-            .unwrap_or(region);
-
-        if let Err(err) = ensure_aws_profile_configured_with_session(
-            profile_name,
-            session_name,
-            region,
-            sso_account_id,
-            sso_role_name,
-            sso_start_url,
-            sso_region,
-        ) {
-            log::warn!(
-                "Failed to sync AWS SSO session-form profile '{}' into ~/.aws/config: {}",
-                profile_name,
-                err
-            );
-        }
-        return;
-    }
-
-    let Some(config) = sso_profile_config_from_auth_profile(profile) else {
-        return;
-    };
-
-    if let Err(err) = ensure_aws_profile_configured(&config) {
-        log::warn!(
-            "Failed to sync AWS SSO profile '{}' into ~/.aws/config: {}",
-            config.profile_name,
-            err
-        );
-    }
 }
 
 fn profile_name_and_region(profile: &AuthProfile) -> (Option<&str>, &str) {
@@ -1186,80 +825,6 @@ fn build_aws_value_providers_blocking(
 /// Builds an `SdkConfig` from explicit static credentials stored in the
 /// auth profile's `fields` map, bypassing the default credential chain.
 ///
-/// Reads `access_key_id`, `secret_access_key`, `session_token`, and `region`
-/// from `profile.fields`. Returns an error if `access_key_id` or
-/// `secret_access_key` is absent or empty.
-fn build_static_sdk_config_blocking(
-    profile: &AuthProfile,
-) -> Result<aws_config::SdkConfig, DbError> {
-    let access_key_id = profile
-        .fields
-        .get("access_key_id")
-        .map(String::as_str)
-        .unwrap_or("");
-    if access_key_id.is_empty() {
-        return Err(DbError::ValueResolutionFailed(
-            "Missing required field 'access_key_id' for static AWS credentials".to_string(),
-        ));
-    }
-
-    let secret_access_key = profile
-        .fields
-        .get("secret_access_key")
-        .map(String::as_str)
-        .unwrap_or("");
-    if secret_access_key.is_empty() {
-        return Err(DbError::ValueResolutionFailed(
-            "Missing required field 'secret_access_key' for static AWS credentials".to_string(),
-        ));
-    }
-
-    let session_token = profile
-        .fields
-        .get("session_token")
-        .map(String::as_str)
-        .filter(|s| !s.is_empty())
-        .map(String::from);
-
-    let region = profile
-        .fields
-        .get("region")
-        .cloned()
-        .unwrap_or_else(|| "us-east-1".to_string());
-
-    let access_key_id = access_key_id.to_string();
-    let secret_access_key = secret_access_key.to_string();
-
-    let creds = aws_sdk_sts::config::Credentials::new(
-        access_key_id,
-        secret_access_key,
-        session_token,
-        None,
-        "dbflux-static",
-    );
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .map_err(|err| {
-            DbError::ValueResolutionFailed(format!(
-                "Failed to create Tokio runtime for static AWS provider init: {}",
-                err
-            ))
-        })?;
-
-    runtime.block_on(async move {
-        let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .credentials_provider(creds)
-            .region(aws_config::Region::new(region))
-            .load()
-            .await;
-
-        Ok(sdk_config)
-    })
-}
-
 #[async_trait::async_trait]
 impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     fn provider_id(&self) -> &'static str {
@@ -1287,8 +852,6 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     }
 
     async fn validate_session(&self, profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
-        ensure_sso_profile_configured_from_auth_profile(profile);
-
         let profile_name = effective_aws_profile_name(profile).unwrap_or("");
         let sso_start_url = profile
             .fields
@@ -1315,7 +878,6 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         let profile_name = effective_aws_profile_name(profile)
             .map(ToOwned::to_owned)
             .unwrap_or_default();
-        let region = profile.fields.get("region").cloned().unwrap_or_default();
         let raw_sso_start_url = profile
             .fields
             .get("sso_start_url")
@@ -1324,63 +886,13 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         let sso_start_url = resolve_sso_start_url(&profile_name, raw_sso_start_url)
             .ok_or_else(|| {
                 DbError::InvalidProfile(format!(
-                    "AWS SSO profile '{}' has no sso_start_url (not set in DBFlux profile, not in ~/.aws/config directly or via sso_session)",
+                    "AWS SSO profile '{}' has no sso_start_url (check ~/.aws/config)",
                     profile_name
                 ))
             })?;
-        let sso_account_id = profile
-            .fields
-            .get("sso_account_id")
-            .cloned()
-            .unwrap_or_default();
-        let sso_role_name = profile
-            .fields
-            .get("sso_role_name")
-            .cloned()
-            .unwrap_or_default();
 
-        // If the DBFlux profile references an `aws-sso-session` profile,
-        // write the session-form profile block (`sso_session = NAME`)
-        // alongside the `[sso-session NAME]` block. Otherwise write the
-        // flat profile block as before. The expansion step stored the
-        // referenced session's name under `sso_session_ref_name`.
-        let session_name = profile
-            .fields
-            .get("sso_session_ref_name")
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
-        if let Some(session_name) = session_name.as_ref() {
-            let sso_region = profile
-                .fields
-                .get("sso_region")
-                .cloned()
-                .unwrap_or_else(|| region.clone());
-
-            if let Err(err) = ensure_aws_profile_configured_with_session(
-                &profile_name,
-                session_name,
-                &region,
-                &sso_account_id,
-                &sso_role_name,
-                &sso_start_url,
-                &sso_region,
-            ) {
-                log::warn!("Could not write AWS session-form profile config: {}", err);
-            }
-        } else {
-            let sso_config = SsoProfileConfig {
-                profile_name: profile_name.clone(),
-                region: region.clone(),
-                sso_start_url: sso_start_url.clone(),
-                sso_account_id: sso_account_id.clone(),
-                sso_role_name: sso_role_name.clone(),
-            };
-            if let Err(err) = ensure_aws_profile_configured(&sso_config) {
-                log::warn!("Could not write AWS profile config: {}", err);
-            }
-        }
-
+        // The profile section already exists in ~/.aws/config (it was reflected
+        // from the file). No write-back to the config file is needed here.
         sso_login_with_url(profile, &profile_name, &sso_start_url, url_callback).await
     }
 
@@ -1452,40 +964,6 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             .collect()
     }
 
-    fn after_profile_saved(&self, profile: &AuthProfile) {
-        let Some(profile_name) = profile.fields.get("profile_name") else {
-            return;
-        };
-        let Some(sso_start_url) = profile.fields.get("sso_start_url") else {
-            return;
-        };
-        let Some(region) = profile.fields.get("region") else {
-            return;
-        };
-        let Some(sso_account_id) = profile.fields.get("sso_account_id") else {
-            return;
-        };
-        let Some(sso_role_name) = profile.fields.get("sso_role_name") else {
-            return;
-        };
-
-        let profile_info = crate::config::AwsProfileInfo {
-            name: profile_name.clone(),
-            region: Some(region.clone()),
-            is_sso: true,
-            sso_start_url: Some(sso_start_url.clone()),
-            sso_region: Some(region.clone()),
-            sso_account_id: Some(sso_account_id.clone()),
-            sso_role_name: Some(sso_role_name.clone()),
-            sso_session: None,
-            is_sso_session: false,
-        };
-
-        if let Err(err) = crate::config::write_profile_to_aws_config(&profile_info) {
-            log::warn!("Failed to write AWS SSO profile to config: {}", err);
-        }
-    }
-
     /// Fetches runtime options for `sso_account_id` and `sso_role_name`
     /// `DynamicSelect` fields.
     ///
@@ -1500,12 +978,6 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         profile: &AuthProfile,
         request: FetchOptionsRequest,
     ) -> Result<FetchOptionsResponse, FetchOptionsError> {
-        // Sync `~/.aws/config` with the current profile state before any AWS
-        // SDK call. Without this, a stale or malformed `[profile X]` block
-        // (e.g. one with a stray `sso_region` line that the SDK rejects)
-        // makes every dynamic-options fetch fail.
-        ensure_sso_profile_configured_from_auth_profile(profile);
-
         let profile_name = effective_aws_profile_name(profile)
             .unwrap_or("")
             .to_string();
@@ -1698,98 +1170,6 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
         Ok(())
     }
 
-    fn after_profile_saved(&self, profile: &AuthProfile) {
-        let Some(profile_name) = profile.fields.get("profile_name") else {
-            return;
-        };
-        let Some(region) = profile.fields.get("region") else {
-            return;
-        };
-
-        let profile_info = crate::config::AwsProfileInfo {
-            name: profile_name.clone(),
-            region: Some(region.clone()),
-            is_sso: false,
-            sso_start_url: None,
-            sso_region: None,
-            sso_account_id: None,
-            sso_role_name: None,
-            sso_session: None,
-            is_sso_session: false,
-        };
-
-        if let Err(err) = crate::config::write_profile_to_aws_config(&profile_info) {
-            log::warn!(
-                "Failed to write AWS shared credentials profile to config: {}",
-                err
-            );
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl dbflux_core::auth::DynAuthProvider for AwsStaticCredentialsAuthProvider {
-    fn provider_id(&self) -> &'static str {
-        "aws-static-credentials"
-    }
-
-    fn display_name(&self) -> &'static str {
-        "AWS Static Credentials"
-    }
-
-    fn form_def(&self) -> &'static AuthFormDef {
-        static FORM: OnceLock<AuthFormDef> = OnceLock::new();
-        FORM.get_or_init(build_aws_static_credentials_form)
-    }
-
-    fn capabilities(&self) -> &AuthProviderCapabilities {
-        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
-            login: AuthProviderLoginCapabilities {
-                supported: false,
-                verification_url_progress: false,
-            },
-        };
-
-        &CAPABILITIES
-    }
-
-    async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
-        Ok(AuthSessionState::Valid { expires_at: None })
-    }
-
-    async fn login(
-        &self,
-        profile: &AuthProfile,
-        url_callback: UrlCallback,
-    ) -> Result<AuthSession, DbError> {
-        Ok(non_expiring_login(
-            profile,
-            self.provider_id(),
-            url_callback,
-        ))
-    }
-
-    async fn resolve_credentials(
-        &self,
-        profile: &AuthProfile,
-    ) -> Result<ResolvedCredentials, DbError> {
-        resolve_aws_credentials(profile).await
-    }
-
-    fn register_value_providers(
-        &self,
-        profile: &AuthProfile,
-        _session: Option<&AuthSession>,
-        resolver: &mut dbflux_core::values::CompositeValueResolver,
-    ) -> Result<(), DbError> {
-        let sdk_config = build_static_sdk_config_blocking(profile)?;
-
-        resolver
-            .register_secret_provider(Arc::new(AwsSecretsManagerProvider::new(sdk_config.clone())));
-        resolver.register_parameter_provider(Arc::new(AwsSsmParameterProvider::new(sdk_config)));
-
-        Ok(())
-    }
 }
 
 #[async_trait::async_trait]
@@ -1979,8 +1359,6 @@ pub(crate) fn validate_sso_session(sso_start_url: &str) -> Result<AuthSessionSta
 /// is safe to call from async contexts without an active Tokio reactor
 /// (e.g. the GPUI background executor).
 async fn resolve_aws_credentials(profile: &AuthProfile) -> Result<ResolvedCredentials, DbError> {
-    ensure_sso_profile_configured_from_auth_profile(profile);
-
     let profile_name = effective_aws_profile_name(profile).map(ToOwned::to_owned);
     let region = profile
         .fields
@@ -2377,22 +1755,15 @@ impl std::future::Future for SleepFuture {
 /// Safe to call from a plain OS thread with no async runtime. Used by the
 /// Settings UI login button which runs on the GPUI background executor
 /// (which has no Tokio reactor).
+/// Performs a blocking SSO login for the given profile.
+///
+/// The profile section must already exist in `~/.aws/config` (it is reflected
+/// from the file). No write to `~/.aws/config` is performed here.
 pub fn login_sso_blocking(
     profile_id: uuid::Uuid,
     profile_name: &str,
     sso_start_url: &str,
-    sso_region: &str,
-    sso_account_id: &str,
-    sso_role_name: &str,
 ) -> Result<AuthSession, DbError> {
-    ensure_aws_profile_configured(&SsoProfileConfig {
-        profile_name: profile_name.to_string(),
-        region: sso_region.to_string(),
-        sso_start_url: sso_start_url.to_string(),
-        sso_account_id: sso_account_id.to_string(),
-        sso_role_name: sso_role_name.to_string(),
-    })?;
-
     let handle = start_sso_login_blocking(profile_name)?;
     log::debug!(
         "AWS SSO login started for profile '{}', verification URL: {:?}",
@@ -2543,57 +1914,6 @@ mod tests {
     }
 
     #[test]
-    fn sso_profile_config_can_be_derived_from_auth_profile_fields() {
-        let profile = AuthProfile::new(
-            "Aws example",
-            "aws-sso",
-            [
-                ("profile_name".to_string(), "example".to_string()),
-                ("region".to_string(), "us-east-1".to_string()),
-                (
-                    "sso_start_url".to_string(),
-                    "https://example.awsapps.com/start".to_string(),
-                ),
-                ("sso_account_id".to_string(), "123456789012".to_string()),
-                (
-                    "sso_role_name".to_string(),
-                    "AdministratorAccess".to_string(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        );
-
-        let config = sso_profile_config_from_auth_profile(&profile).expect("sso profile config");
-
-        assert_eq!(config.profile_name, "example");
-        assert_eq!(config.region, "us-east-1");
-        assert_eq!(config.sso_account_id, "123456789012");
-        assert_eq!(config.sso_role_name, "AdministratorAccess");
-    }
-
-    #[test]
-    fn static_credentials_do_not_fall_back_to_auth_profile_name() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("static-creds", "aws-static-credentials", fields);
-
-        let (profile_name, region) = profile_name_and_region(&profile);
-
-        assert_eq!(profile_name, None);
-        assert_eq!(region, "us-east-1");
-    }
-
-    #[test]
     fn aws_sso_capabilities_advertise_interactive_login() {
         let provider = AwsSsoAuthProvider::new();
 
@@ -2610,7 +1930,7 @@ mod tests {
     }
 
     #[test]
-    fn non_interactive_aws_providers_keep_login_disabled() {
+    fn shared_credentials_provider_keeps_login_disabled() {
         let shared = AwsSharedCredentialsAuthProvider::new();
         let shared_capabilities =
             <AwsSharedCredentialsAuthProvider as dbflux_core::auth::DynAuthProvider>::capabilities(
@@ -2618,14 +1938,6 @@ mod tests {
             );
         assert!(!shared_capabilities.login.supported);
         assert!(!shared_capabilities.login.verification_url_progress);
-
-        let static_provider = AwsStaticCredentialsAuthProvider::new();
-        let static_capabilities =
-            <AwsStaticCredentialsAuthProvider as dbflux_core::auth::DynAuthProvider>::capabilities(
-                &static_provider,
-            );
-        assert!(!static_capabilities.login.supported);
-        assert!(!static_capabilities.login.verification_url_progress);
     }
 
     #[test]
@@ -2681,241 +1993,6 @@ mod tests {
 
     fn field_def_by_id<'a>(fields: &'a [FormFieldDef], id: &str) -> Option<&'a FormFieldDef> {
         fields.iter().find(|f| f.id == id)
-    }
-
-    #[test]
-    fn static_credentials_form_has_all_fields() {
-        let form = build_aws_static_credentials_form();
-
-        let fields = &form.tabs[0].sections[0].fields;
-
-        let access_key =
-            field_def_by_id(fields, "access_key_id").expect("access_key_id field missing");
-        assert_eq!(access_key.kind, FormFieldKind::Text);
-        assert!(access_key.required);
-
-        let secret_key =
-            field_def_by_id(fields, "secret_access_key").expect("secret_access_key field missing");
-        assert_eq!(secret_key.kind, FormFieldKind::Password);
-        assert!(secret_key.required);
-
-        let session_token =
-            field_def_by_id(fields, "session_token").expect("session_token field missing");
-        assert_eq!(session_token.kind, FormFieldKind::Password);
-        assert!(!session_token.required);
-
-        let region = field_def_by_id(fields, "region").expect("region field missing");
-        assert_eq!(region.kind, FormFieldKind::Text);
-        assert!(region.required);
-    }
-
-    #[test]
-    fn static_credentials_missing_access_key_returns_error() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
-
-        let result = build_static_sdk_config_blocking(&profile);
-        assert!(result.is_err());
-
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("access_key_id"),
-            "Error should mention access_key_id, got: {}",
-            err_msg
-        );
-    }
-
-    #[test]
-    fn static_credentials_missing_secret_key_returns_error() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
-
-        let result = build_static_sdk_config_blocking(&profile);
-        assert!(result.is_err());
-
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("secret_access_key"),
-            "Error should mention secret_access_key, got: {}",
-            err_msg
-        );
-    }
-
-    #[test]
-    fn static_credentials_empty_session_token_succeeds() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("session_token".to_string(), String::new());
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("test-static", "aws-static-credentials", fields);
-
-        let result = build_static_sdk_config_blocking(&profile);
-
-        // The SdkConfig load attempts a network call to STS regional endpoints,
-        // which may fail in CI without real AWS credentials. The important
-        // assertion is that the function passes validation — it must NOT return
-        // a "missing required field" error for access_key_id, secret_access_key,
-        // or session_token (since the latter is optional and was provided as empty).
-        match result {
-            Ok(_) => {}
-            Err(err) => {
-                let msg = err.to_string();
-                let forbidden_fields = ["access_key_id", "secret_access_key", "session_token"];
-                for field in &forbidden_fields {
-                    assert!(
-                        !msg.contains(field),
-                        "Should not fail on field '{}', got error: {}",
-                        field,
-                        msg
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn static_credentials_missing_session_token_succeeds() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-        // Deliberately NOT inserting "session_token" at all.
-
-        let profile = AuthProfile::new("test-static-no-token", "aws-static-credentials", fields);
-
-        let result = build_static_sdk_config_blocking(&profile);
-
-        // Same as the empty-session-token test — we just need to verify the
-        // function does not error on missing session_token (it's optional).
-        // Network failures from fake credentials are acceptable.
-        match result {
-            Ok(_) => {}
-            Err(err) => {
-                let msg = err.to_string();
-                assert!(
-                    !msg.contains("access_key_id"),
-                    "Should not fail on access_key_id, got: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("secret_access_key"),
-                    "Should not fail on secret_access_key, got: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("session_token"),
-                    "session_token is optional, got error mentioning it: {}",
-                    msg
-                );
-            }
-        }
-    }
-
-    /// Verifies that `register_value_providers()` exercises the full code path
-    /// through `build_static_sdk_config_blocking` with present-but-fake
-    /// credentials. The AWS SDK will reject the fake credentials at runtime,
-    /// but the test proves the function does not fail on missing-field
-    /// validation and that the error (if any) propagates correctly.
-    ///
-    /// The happy path (real AWS credentials resolving to a working SdkConfig
-    /// and providers being registered) requires integration testing with live
-    /// AWS credentials and is not covered here.
-    #[test]
-    fn static_credentials_register_value_providers_with_fake_credentials() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "access_key_id".to_string(),
-            "AKIAIOSFODNN7EXAMPLE".to_string(),
-        );
-        fields.insert(
-            "secret_access_key".to_string(),
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCY".to_string(),
-        );
-        fields.insert("region".to_string(), "us-east-1".to_string());
-
-        let profile = AuthProfile::new("test-register", "aws-static-credentials", fields);
-
-        let provider = AwsStaticCredentialsAuthProvider::new();
-        let cache = Arc::new(dbflux_core::values::ValueCache::new(
-            std::time::Duration::from_secs(60),
-        ));
-        let mut resolver = dbflux_core::values::CompositeValueResolver::new(cache);
-
-        let result = dbflux_core::auth::DynAuthProvider::register_value_providers(
-            &provider,
-            &profile,
-            None,
-            &mut resolver,
-        );
-
-        // With fake credentials, the SdkConfig load may or may not succeed
-        // depending on the environment. The critical assertion is that if it
-        // fails, the error is NOT about missing required fields — proving the
-        // validation passed and the error came from the AWS SDK layer.
-        match result {
-            Ok(()) => {
-                // SdkConfig loaded successfully — verify providers were registered.
-                let secret_providers = resolver.available_secret_providers();
-                let param_providers = resolver.available_parameter_providers();
-
-                assert!(
-                    secret_providers
-                        .iter()
-                        .any(|(id, _)| *id == "aws-secrets-manager"),
-                    "Expected aws-secrets-manager provider to be registered, found: {:?}",
-                    secret_providers
-                );
-                assert!(
-                    param_providers.iter().any(|(id, _)| *id == "aws-ssm"),
-                    "Expected aws-ssm provider to be registered, found: {:?}",
-                    param_providers
-                );
-            }
-            Err(err) => {
-                let msg = err.to_string();
-                assert!(
-                    !msg.contains("access_key_id"),
-                    "Should not fail on access_key_id validation, got: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("secret_access_key"),
-                    "Should not fail on secret_access_key validation, got: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("session_token"),
-                    "session_token is optional, got: {}",
-                    msg
-                );
-            }
-        }
     }
 
     // -------------------------------------------------------------------------
