@@ -54,7 +54,7 @@
 //! The `sys_app_meta` key `aws_config_reflect_migrated` acts as a guard. Once
 //! set, subsequent calls to `run_aws_config_reflect_migration` are no-ops.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use log::{info, warn};
 
@@ -162,74 +162,85 @@ pub fn run_aws_config_reflect_migration(
         .filter(|row| AWS_PROVIDER_IDS.contains(&row.provider_id.as_str()))
         .collect();
 
-    // Collect all names (case-insensitive lookup).
-    let all_names_lower: HashSet<String> = all_config_names
+    // Case-insensitive lookup from a section name to its canonical (file-cased)
+    // form. Reflection derives the profile UUID from the file section name, so
+    // rebinding to the canonical casing keeps connection bindings resolvable.
+    let canonical_by_lower: HashMap<String, String> = all_config_names
         .iter()
         .chain(credentials_names.iter())
-        .map(|n| n.to_lowercase())
+        .map(|n| (n.to_lowercase(), n.clone()))
         .collect();
 
     let mut summary = MigrationSummary::default();
 
     for row in aws_rows {
-        let name_lower = row.name.to_lowercase();
-        let matched = all_names_lower.contains(&name_lower);
+        // The real AWS section name lives in the `profile_name` field. The
+        // display `name` may be decorated (the old import flow prefixed it with
+        // "AWS "), so matching or deriving the UUID from it would mark every
+        // imported profile dangling and leave its connections unbound.
+        let stored_fields = auth_repo.get_fields(&row.id).unwrap_or_default();
+        let aws_name = stored_fields
+            .get("profile_name")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| row.name.trim().to_string());
 
-        if matched {
-            // Determine the canonical name (preserve original casing from first
-            // matching source — we use the stored name since it was the original).
-            let new_provider_id = reflected_provider_id(&row.provider_id);
-            let new_id = aws_profile_uuid(new_provider_id, &row.name);
-            let new_id_str = new_id.to_string();
+        match canonical_by_lower.get(&aws_name.to_lowercase()) {
+            Some(canonical_name) => {
+                let new_provider_id = reflected_provider_id(&row.provider_id);
+                let new_id = aws_profile_uuid(new_provider_id, canonical_name);
+                let new_id_str = new_id.to_string();
 
-            // Perform transactional rebind: update all connection rows that
-            // reference the old UUID, then delete the stored auth-profile row.
-            let connections_rebound = rebind_and_delete(runtime, &row.id, &new_id_str)?;
+                // Perform transactional rebind: update all connection rows that
+                // reference the old UUID, then delete the stored auth-profile row.
+                let connections_rebound = rebind_and_delete(runtime, &row.id, &new_id_str)?;
 
-            // Log orphaned keyring entry notice (do NOT delete it).
-            if keyring_has_secret_fn(&row.id) {
+                // Log orphaned keyring entry notice (do NOT delete it).
+                if keyring_has_secret_fn(&row.id) {
+                    info!(
+                        "aws_config_reflect_migration: profile '{}' (id={}) rebound to {}; \
+                         a keyring secret for the old ID is now orphaned and can be cleaned up \
+                         via a future consent-gated action",
+                        aws_name, row.id, new_id_str
+                    );
+                }
+
                 info!(
-                    "aws_config_reflect_migration: profile '{}' (id={}) rebound to {}; \
-                     a keyring secret for the old ID is now orphaned and can be cleaned up \
-                     via a future consent-gated action",
-                    row.name, row.id, new_id_str
+                    "aws_config_reflect_migration: rebound '{}' {} -> {} ({} connections)",
+                    aws_name, row.id, new_id_str, connections_rebound
                 );
+
+                summary.rebound.push(ProfileMigrationOutcome::Rebound {
+                    old_id: row.id,
+                    new_id: new_id_str,
+                    connections_rebound,
+                });
             }
+            None => {
+                // Not found in config files — determine dangling origin.
+                let is_static = row.provider_id == "aws-static-credentials";
+                let has_secret = keyring_has_secret_fn(&row.id);
 
-            info!(
-                "aws_config_reflect_migration: rebound '{}' {} -> {} ({} connections)",
-                row.name, row.id, new_id_str, connections_rebound
-            );
+                let origin = if is_static && has_secret {
+                    DanglingOrigin::KeyringOnly
+                } else {
+                    DanglingOrigin::FileGone
+                };
 
-            summary.rebound.push(ProfileMigrationOutcome::Rebound {
-                old_id: row.id,
-                new_id: new_id_str,
-                connections_rebound,
-            });
-        } else {
-            // Not found in config files — determine dangling origin.
-            let is_static = row.provider_id == "aws-static-credentials";
-            let has_secret = keyring_has_secret_fn(&row.id);
+                warn!(
+                    "aws_config_reflect_migration: profile '{}' (id={}) not found in AWS config \
+                     files — marked dangling (origin={})",
+                    aws_name,
+                    row.id,
+                    origin.as_str()
+                );
 
-            let origin = if is_static && has_secret {
-                DanglingOrigin::KeyringOnly
-            } else {
-                DanglingOrigin::FileGone
-            };
+                auth_repo.set_dangling_origin(&row.id, origin.as_str())?;
 
-            warn!(
-                "aws_config_reflect_migration: profile '{}' (id={}) not found in AWS config \
-                 files — marked dangling (origin={})",
-                row.name,
-                row.id,
-                origin.as_str()
-            );
-
-            auth_repo.set_dangling_origin(&row.id, origin.as_str())?;
-
-            summary
-                .dangling
-                .push(ProfileMigrationOutcome::Dangling { id: row.id, origin });
+                summary
+                    .dangling
+                    .push(ProfileMigrationOutcome::Dangling { id: row.id, origin });
+            }
         }
     }
 
@@ -549,6 +560,55 @@ mod tests {
         assert_eq!(
             conn2.auth_profile_id.as_deref(),
             Some(expected_new_id.as_str())
+        );
+    }
+
+    // Regression: the display name is decorated (e.g. an "AWS " prefix from the
+    // old import flow) while the real section name lives in the `profile_name`
+    // field. Matching and UUID derivation must use the field, otherwise the
+    // profile is wrongly marked dangling and its connections lose their binding.
+    #[test]
+    fn decorated_display_name_matches_via_profile_name_field() {
+        let runtime = open_runtime();
+        let old_id = Uuid::new_v4().to_string();
+        insert_auth_profile(&runtime, &old_id, "AWS dev-sso", "aws-sso");
+
+        let mut fields = HashMap::new();
+        fields.insert("profile_name".to_string(), "dev-sso".to_string());
+        runtime
+            .auth_profiles()
+            .set_fields(&old_id, &fields)
+            .expect("set profile_name field");
+
+        let conn_id = Uuid::new_v4().to_string();
+        insert_connection(&runtime, &conn_id, &old_id);
+
+        let expected_new_id = aws_profile_uuid("aws-sso", "dev-sso").to_string();
+
+        let result = run_aws_config_reflect_migration(
+            &runtime,
+            &names(&["dev-sso"]),
+            &names(&[]),
+            no_keyring,
+        )
+        .expect("migration");
+
+        assert_eq!(
+            result.rebound.len(),
+            1,
+            "profile must rebind via its profile_name field, not the display name"
+        );
+        assert_eq!(result.dangling.len(), 0, "must not be marked dangling");
+
+        let conn = runtime
+            .connection_profiles()
+            .get(&conn_id)
+            .expect("get")
+            .expect("exists");
+        assert_eq!(
+            conn.auth_profile_id.as_deref(),
+            Some(expected_new_id.as_str()),
+            "connection must rebind to the reflected deterministic UUID"
         );
     }
 
