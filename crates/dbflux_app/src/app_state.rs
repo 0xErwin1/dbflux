@@ -240,8 +240,6 @@ impl AppState {
             auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoAuthProvider::new()));
             auth_provider_registry
                 .register(Arc::new(dbflux_aws::AwsSharedCredentialsAuthProvider::new()));
-            auth_provider_registry
-                .register(Arc::new(dbflux_aws::AwsStaticCredentialsAuthProvider::new()));
         }
 
         if !services.is_empty() {
@@ -311,6 +309,11 @@ impl AppState {
         #[cfg(feature = "mcp")]
         if let Err(e) = state.bootstrap_mcp_runtime_from_persistence() {
             log::warn!("Failed to bootstrap MCP runtime from persistence: {}", e);
+        }
+
+        #[cfg(feature = "aws")]
+        if let Err(e) = state.bootstrap_aws_config_reflect_migration() {
+            log::warn!("aws_config_reflect_migration failed (non-fatal): {}", e);
         }
 
         if let Err(e) = state.bootstrap_audit_settings() {
@@ -524,6 +527,92 @@ impl AppState {
                 "Failed to record audit bootstrap success event: {}",
                 rec_err
             );
+        }
+
+        Ok(())
+    }
+
+    /// Runs the one-time AWS config reflection migration at startup.
+    ///
+    /// Reads the live AWS config files once, passes the section name sets to the
+    /// migration, and logs any dangling profiles as non-blocking warnings. This
+    /// method is only compiled when the `aws` feature is enabled because it
+    /// depends on `CachedAwsConfig` from `dbflux_aws`.
+    ///
+    /// Failure is non-fatal: the caller logs the error and continues startup.
+    #[cfg(feature = "aws")]
+    fn bootstrap_aws_config_reflect_migration(&self) -> Result<(), String> {
+        use std::collections::HashSet;
+
+        use dbflux_aws::CachedAwsConfig;
+
+        use crate::aws_config_reflect_migration::run_aws_config_reflect_migration;
+
+        // Obtain section names from the AWS config files.
+        // CachedAwsConfig::new() initializes the cache; errors are non-fatal
+        // (an empty config means zero stored AWS rows match → no rebinds).
+        let mut aws_config = CachedAwsConfig::new();
+
+        // All profile section names from ~/.aws/config (SSO and non-SSO).
+        let config_section_names: HashSet<String> = aws_config
+            .profiles()
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+
+        // Section names from ~/.aws/credentials (bare [NAME] headers).
+        let credentials_names: HashSet<String> =
+            aws_config.credentials_names().iter().cloned().collect();
+
+        // Union of both: any name present in either file is a match candidate.
+        let all_config_names: HashSet<String> = config_section_names
+            .union(&credentials_names)
+            .cloned()
+            .collect();
+
+        // We do not have access to the real keyring in this context without
+        // loading a full SecretManager. Use a best-effort probe: the stored
+        // auth profile's `provider_id == "aws-static-credentials"` is a
+        // sufficient signal for the dangling-origin classification. The keyring
+        // predicate is used only to choose between "keyring-only" and
+        // "file-gone" for static profiles; we pass a conservative closure that
+        // returns `true` for all static-credentials profiles so they are
+        // classified as "keyring-only" (the safer choice: preserves the keyring
+        // entry and keeps the stored row).
+        //
+        // The actual keyring secret is never read or deleted by this migration.
+        let static_provider = "aws-static-credentials";
+        let auth_repo = self.storage_runtime.auth_profiles();
+        let static_ids: std::collections::HashSet<String> = auth_repo
+            .all()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.provider_id == static_provider)
+            .map(|r| r.id)
+            .collect();
+
+        let summary = run_aws_config_reflect_migration(
+            &self.storage_runtime,
+            &all_config_names,
+            &credentials_names,
+            move |id: &str| static_ids.contains(id),
+        )
+        .map_err(|e| e.to_string())?;
+
+        for dangling in &summary.dangling {
+            if let crate::aws_config_reflect_migration::ProfileMigrationOutcome::Dangling {
+                id,
+                origin,
+            } = dangling
+            {
+                log::warn!(
+                    "AWS config reflect migration: profile {} is dangling \
+                     (origin={}). The connection will fail at connect time until \
+                     the credential source is restored.",
+                    id,
+                    origin.as_str()
+                );
+            }
         }
 
         Ok(())
@@ -1921,6 +2010,44 @@ impl AppState {
         }
     }
 
+    /// Returns all auth profiles visible to the application: stored non-AWS profiles
+    /// unioned with AWS profiles reflected live from `~/.aws/config` and
+    /// `~/.aws/credentials`.
+    ///
+    /// This is the single read seam for auth profiles. All callers must use this
+    /// method instead of reading `facade.auth_profiles.items` directly, so that
+    /// reflected AWS profiles are always included.
+    pub fn list_auth_profiles(&self) -> Vec<dbflux_core::AuthProfile> {
+        const AWS_REFLECTED_PROVIDER_IDS: &[&str] =
+            &["aws-sso", "aws-sso-session", "aws-shared-credentials"];
+
+        let mut profiles: Vec<dbflux_core::AuthProfile> = self
+            .facade
+            .auth_profiles
+            .items
+            .iter()
+            .filter(|p| !AWS_REFLECTED_PROVIDER_IDS.contains(&p.provider_id.as_str()))
+            .cloned()
+            .collect();
+
+        for provider in self.auth_provider_registry.providers() {
+            profiles.extend(provider.reflect_profiles());
+        }
+
+        profiles
+    }
+
+    /// Returns only profiles stored in the SQLite database.
+    ///
+    /// Reflected AWS profiles (from `~/.aws/config`) are NOT included.
+    /// All callers that resolve auth identity at connect time, dropdown
+    /// fetch time, or SSO login time MUST use `list_auth_profiles()` instead
+    /// so that reflected profiles participate in resolution.
+    ///
+    /// This method is retained only for callers that genuinely need the raw
+    /// stored slice: migration code, config loaders that write back to storage,
+    /// and MCP state that lists persisted profiles only.
+    #[deprecated(note = "use list_auth_profiles(); stored-only view hides reflected AWS profiles")]
     pub fn auth_profiles(&self) -> &[dbflux_core::AuthProfile] {
         &self.facade.auth_profiles.items
     }
@@ -2835,6 +2962,31 @@ impl AppState {
         self.auth_provider_registry.get(provider_id)
     }
 
+    /// Provider ids that exist only to be referenced by another provider's
+    /// `AuthProfileRef` field (e.g. an SSO-session block referenced by an SSO
+    /// profile). Profiles from these providers are building blocks, not
+    /// standalone connection credentials, so a connection's Auth Profile picker
+    /// must exclude them. Derived from the form definitions so the UI stays
+    /// agnostic to concrete provider ids.
+    pub fn reference_only_auth_provider_ids(&self) -> HashSet<String> {
+        use dbflux_core::FormFieldKind;
+
+        let mut ids = HashSet::new();
+        for provider in self.auth_provider_registry.providers() {
+            let form = provider.form_def();
+            for tab in &form.tabs {
+                for section in &tab.sections {
+                    for field in &section.fields {
+                        if let FormFieldKind::AuthProfileRef { provider_id } = &field.kind {
+                            ids.insert(provider_id.clone());
+                        }
+                    }
+                }
+            }
+        }
+        ids
+    }
+
     pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
         ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
     }
@@ -2884,12 +3036,9 @@ impl AppState {
             .or(profile.auth_profile_id);
 
         let selected_auth_profile = selected_auth_profile_id.and_then(|auth_id| {
-            self.facade
-                .auth_profiles
-                .items
-                .iter()
+            self.list_auth_profiles()
+                .into_iter()
                 .find(|p| p.id == auth_id && p.enabled)
-                .cloned()
         });
 
         let auth_profile =
@@ -2943,7 +3092,7 @@ impl AppState {
                 })?;
 
             let profile_registry_snapshot: Vec<dbflux_core::auth::AuthProfile> =
-                self.facade.auth_profiles.items.clone();
+                self.list_auth_profiles();
             let expanded = dbflux_core::auth::expand_auth_profile_refs(
                 &profile,
                 provider.form_def(),
@@ -3035,7 +3184,7 @@ impl AppState {
             return None;
         }
 
-        if let Some(profile) = self.facade.auth_profiles.items.iter().find(|auth_profile| {
+        if let Some(profile) = self.list_auth_profiles().into_iter().find(|auth_profile| {
             auth_profile.enabled
                 && auth_profile
                     .fields
@@ -3046,7 +3195,7 @@ impl AppState {
                     .get(&auth_profile.provider_id)
                     .is_some_and(|provider| provider.capabilities().login.supported)
         }) {
-            return Some(profile.clone());
+            return Some(profile);
         }
 
         self.auth_provider_registry
@@ -3662,6 +3811,200 @@ mod tests {
     }
 
     /// a driver whose `driver_key()` is `"builtin:influxdb"`.
+    // --- T-3.6: list_auth_profiles() union seam ---
+
+    struct ReflectingTestAuthProvider {
+        provider_id: String,
+        reflected: Vec<AuthProfile>,
+    }
+
+    impl ReflectingTestAuthProvider {
+        fn new(provider_id: impl Into<String>, reflected: Vec<AuthProfile>) -> Self {
+            Self {
+                provider_id: provider_id.into(),
+                reflected,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DynAuthProvider for ReflectingTestAuthProvider {
+        fn provider_id(&self) -> &str {
+            &self.provider_id
+        }
+
+        fn display_name(&self) -> &str {
+            "Reflecting Test Provider"
+        }
+
+        fn form_def(&self) -> &AuthFormDef {
+            static FORM: std::sync::OnceLock<AuthFormDef> = std::sync::OnceLock::new();
+            FORM.get_or_init(|| AuthFormDef { tabs: vec![] })
+        }
+
+        async fn validate_session(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<AuthSessionState, DbError> {
+            Ok(AuthSessionState::LoginRequired)
+        }
+
+        async fn login(
+            &self,
+            profile: &AuthProfile,
+            url_callback: UrlCallback,
+        ) -> Result<AuthSession, DbError> {
+            url_callback(None);
+            Ok(AuthSession {
+                provider_id: self.provider_id.clone(),
+                profile_id: profile.id,
+                expires_at: None,
+                data: None,
+            })
+        }
+
+        async fn resolve_credentials(
+            &self,
+            _profile: &AuthProfile,
+        ) -> Result<ResolvedCredentials, DbError> {
+            Ok(ResolvedCredentials::default())
+        }
+
+        fn reflect_profiles(&self) -> Vec<AuthProfile> {
+            self.reflected.clone()
+        }
+    }
+
+    fn make_reflected_sso_profile(name: &str) -> AuthProfile {
+        use dbflux_core::auth::aws_profile_uuid;
+        let id = aws_profile_uuid("aws-sso", name);
+        AuthProfile {
+            id,
+            name: name.to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields: HashMap::new(),
+            enabled: true,
+            read_only: true,
+            dangling_origin: None,
+        }
+    }
+
+    #[test]
+    fn list_auth_profiles_returns_reflected_aws_profiles_when_store_is_empty() {
+        let reflected_a = make_reflected_sso_profile("dev");
+        let reflected_b = make_reflected_sso_profile("prod");
+
+        let mut state =
+            test_state_with_profiles_and_auth_profiles(HashMap::new(), Vec::new(), Vec::new());
+
+        // Replace the registry with a clean one so real AWS providers that read
+        // from the test machine's ~/.aws/config do not pollute the result.
+        state.auth_provider_registry = AuthProviderRegistry::new();
+        state
+            .auth_provider_registry
+            .register(Arc::new(ReflectingTestAuthProvider::new(
+                "aws-sso",
+                vec![reflected_a.clone(), reflected_b.clone()],
+            )));
+
+        let result = state.list_auth_profiles();
+
+        assert_eq!(result.len(), 2, "expected exactly two reflected profiles");
+        assert!(
+            result
+                .iter()
+                .any(|p| p.id == reflected_a.id && p.name == "dev")
+        );
+        assert!(
+            result
+                .iter()
+                .any(|p| p.id == reflected_b.id && p.name == "prod")
+        );
+    }
+
+    #[test]
+    fn list_auth_profiles_includes_stored_non_aws_profile_alongside_reflected() {
+        let stored_non_aws = AuthProfile {
+            id: Uuid::new_v4(),
+            name: "OIDC Provider".to_string(),
+            provider_id: "custom-oidc".to_string(),
+            fields: HashMap::new(),
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+        let reflected_sso = make_reflected_sso_profile("staging");
+
+        let mut state = test_state_with_profiles_and_auth_profiles(
+            HashMap::new(),
+            Vec::new(),
+            vec![stored_non_aws.clone()],
+        );
+
+        // Replace the registry with a clean one so real AWS providers that read
+        // from the test machine's ~/.aws/config do not pollute the result.
+        state.auth_provider_registry = AuthProviderRegistry::new();
+        state
+            .auth_provider_registry
+            .register(Arc::new(ReflectingTestAuthProvider::new(
+                "aws-sso",
+                vec![reflected_sso.clone()],
+            )));
+
+        let result = state.list_auth_profiles();
+
+        assert_eq!(result.len(), 2);
+        assert!(
+            result.iter().any(|p| p.id == stored_non_aws.id),
+            "stored non-AWS profile must appear in union"
+        );
+        assert!(
+            result.iter().any(|p| p.id == reflected_sso.id),
+            "reflected AWS profile must appear in union"
+        );
+    }
+
+    #[test]
+    fn list_auth_profiles_excludes_stored_aws_rows_in_favour_of_reflection() {
+        // A stored aws-sso row — this should be excluded from the union
+        // because aws-sso is a reflected provider-id.
+        let stored_aws_row = AuthProfile {
+            id: Uuid::new_v4(),
+            name: "legacy-sso".to_string(),
+            provider_id: "aws-sso".to_string(),
+            fields: HashMap::new(),
+            enabled: true,
+            read_only: false,
+            dangling_origin: None,
+        };
+
+        let reflected_sso = make_reflected_sso_profile("current-sso");
+
+        let mut state = test_state_with_profiles_and_auth_profiles(
+            HashMap::new(),
+            Vec::new(),
+            vec![stored_aws_row.clone()],
+        );
+
+        state
+            .auth_provider_registry
+            .register(Arc::new(ReflectingTestAuthProvider::new(
+                "aws-sso",
+                vec![reflected_sso.clone()],
+            )));
+
+        let result = state.list_auth_profiles();
+
+        assert!(
+            result.iter().all(|p| p.id != stored_aws_row.id),
+            "stored aws-sso row must NOT appear in union (reflection supersedes stored)"
+        );
+        assert!(
+            result.iter().any(|p| p.id == reflected_sso.id),
+            "reflected profile must appear in union"
+        );
+    }
+
     #[test]
     #[cfg(feature = "influxdb")]
     fn influxdb_registration_present_when_feature_enabled() {

@@ -451,13 +451,13 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
     match kind {
         DbKind::Postgres => dbflux_core::DbConfig::default_postgres(),
         DbKind::SQLite => dbflux_core::DbConfig::default_sqlite(),
-        DbKind::MySQL => dbflux_core::DbConfig::default_mysql(),
+        DbKind::MySQL | DbKind::MariaDB => dbflux_core::DbConfig::default_mysql(),
         DbKind::MongoDB => dbflux_core::DbConfig::default_mongodb(),
         DbKind::Redis => dbflux_core::DbConfig::default_redis(),
         DbKind::DynamoDB => dbflux_core::DbConfig::default_dynamodb(),
         DbKind::CloudWatchLogs => dbflux_core::DbConfig::default_cloudwatch_logs(),
+        DbKind::InfluxDB => dbflux_core::DbConfig::default_influxdb(),
         DbKind::SqlServer => dbflux_core::DbConfig::default_sqlserver(),
-        _ => dbflux_core::DbConfig::default_postgres(),
     }
 }
 
@@ -756,6 +756,7 @@ pub fn save_auth_profiles(
             enabled: profile.enabled,
             created_at: String::new(),
             updated_at: String::new(),
+            dangling_origin: None,
         };
 
         if existing_ids.contains(&dto.id) {
@@ -1516,6 +1517,8 @@ fn load_auth_profiles(
                     provider_id: dto.provider_id,
                     fields,
                     enabled: dto.enabled,
+                    read_only: false,
+                    dangling_origin: dto.dangling_origin,
                 })
             })
             .collect()
@@ -1619,16 +1622,36 @@ fn load_ssh_tunnels(
 #[cfg(test)]
 mod tests {
     use super::{
-        general_settings_theme_to_storage, load_config, save_profiles, save_services,
-        save_ssh_tunnels, theme_setting_from_storage,
+        default_db_config_for_kind, general_settings_theme_to_storage, load_config, save_profiles,
+        save_services, save_ssh_tunnels, theme_setting_from_storage,
     };
     use dbflux_core::{
-        AccessKind, ConnectionProfile, DbConfig, GeneralSettings, RpcServiceKind, ServiceConfig,
-        SshAuthMethod, SshTunnelConfig, SshTunnelProfile, ThemeSetting,
+        AccessKind, ConnectionProfile, DbConfig, DbKind, GeneralSettings, RpcServiceKind,
+        ServiceConfig, SshAuthMethod, SshTunnelConfig, SshTunnelProfile, ThemeSetting,
     };
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_storage::repositories::general_settings::GeneralSettingsDto;
     use uuid::Uuid;
+
+    #[test]
+    fn default_db_config_for_kind_maps_mariadb_to_mysql_config() {
+        assert!(matches!(
+            default_db_config_for_kind(DbKind::MariaDB),
+            DbConfig::MySQL { .. }
+        ));
+        assert!(matches!(
+            default_db_config_for_kind(DbKind::MySQL),
+            DbConfig::MySQL { .. }
+        ));
+    }
+
+    #[test]
+    fn default_db_config_for_kind_maps_influxdb_to_influx_config() {
+        assert!(matches!(
+            default_db_config_for_kind(DbKind::InfluxDB),
+            DbConfig::InfluxDB { .. }
+        ));
+    }
 
     #[test]
     fn theme_setting_storage_round_trip_supports_exactly_three_ayu_values() {

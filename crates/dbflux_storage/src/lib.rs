@@ -10,6 +10,7 @@ pub mod sqlite_tree_store;
 
 pub use artifacts::ArtifactStore;
 pub use bootstrap::{OwnedConnection, StorageRuntime};
+pub use repositories::app_meta::AppMetaRepository;
 pub use repositories::audit::{
     AppendAuditEvent, AppendAuditEventExtended, AuditAggregateParams, AuditEventDto,
     AuditGroupColumn, AuditQueryFilter, AuditRepository,

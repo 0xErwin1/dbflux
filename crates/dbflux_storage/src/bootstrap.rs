@@ -8,6 +8,7 @@ use crate::artifacts::ArtifactStore;
 use crate::error::StorageError;
 use crate::migrations::MigrationRegistry;
 use crate::paths;
+use crate::repositories::app_meta::AppMetaRepository;
 use crate::repositories::audit::AuditRepository;
 use crate::repositories::audit_settings::AuditSettingsRepository;
 use crate::repositories::auth_profiles::AuthProfileRepository;
@@ -59,8 +60,16 @@ impl StorageRuntime {
     pub fn for_path(dbflux_db_path: PathBuf) -> Result<Self, StorageError> {
         // Open and validate dbflux.db - apply migrations if needed
         let dbflux_conn = crate::sqlite::open_database(&dbflux_db_path)?;
+
+        // Run migrations with foreign-key enforcement disabled so table-rebuild
+        // migrations (drop + recreate to change constraints) do not cascade-delete
+        // child rows when the parent table is dropped. Enforcement is restored for
+        // normal runtime use immediately afterwards.
+        crate::sqlite::set_foreign_keys(&dbflux_conn, false)?;
         let registry = MigrationRegistry::new();
         registry.run_all(&dbflux_conn)?;
+        crate::sqlite::set_foreign_keys(&dbflux_conn, true)?;
+
         info!("Unified database ready at {}", dbflux_db_path.display());
 
         // Initialize the artifact store using the parent directory of dbflux.db as data root.
@@ -139,6 +148,11 @@ impl StorageRuntime {
     // All repositories now use the single unified database connection.
     // Config-domain and state-domain tables coexist in the same database
     // with domain-prefixed names (cfg_*, st_*).
+
+    /// Creates an app metadata repository for one-time migration flags.
+    pub fn app_meta(&self) -> AppMetaRepository {
+        AppMetaRepository::new(self.dbflux_db())
+    }
 
     /// Creates a connection profile repository.
     pub fn connection_profiles(&self) -> ConnectionProfileRepository {

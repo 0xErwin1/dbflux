@@ -684,7 +684,7 @@ impl ConnectionManagerWindow {
             pending_wizard_auth_profile_selection: false,
             known_auth_profile_ids: app_state
                 .read(cx)
-                .auth_profiles()
+                .list_auth_profiles()
                 .iter()
                 .map(|profile| profile.id)
                 .collect(),
@@ -846,13 +846,15 @@ impl ConnectionManagerWindow {
 
         instance.conn_mcp_enabled = profile.mcp_governance.as_ref().is_some_and(|g| g.enabled);
 
-        let first_binding = profile
-            .mcp_governance
-            .as_ref()
-            .and_then(|governance| governance.policy_bindings.first().cloned());
-
         #[cfg(feature = "mcp")]
-        instance.load_mcp_dropdowns(first_binding.as_ref(), window, cx);
+        {
+            let first_binding = profile
+                .mcp_governance
+                .as_ref()
+                .and_then(|governance| governance.policy_bindings.first().cloned());
+
+            instance.load_mcp_dropdowns(first_binding.as_ref(), window, cx);
+        }
 
         instance.selected_proxy_id = profile.proxy_profile_id;
         instance.selected_auth_profile_id = profile.auth_profile_id;
@@ -1033,7 +1035,8 @@ impl ConnectionManagerWindow {
         for field in fields {
             let placeholder = &field.placeholder;
             let default_value = &field.default_value;
-            let is_masked = field.kind == FormFieldKind::Password;
+            let is_masked =
+                field.kind == FormFieldKind::Password || field.kind == FormFieldKind::WriteOnly;
             let field_id = field.id.clone();
 
             let input = cx.new(|cx| {
@@ -2170,7 +2173,12 @@ impl ConnectionManagerWindow {
 
     /// Populate the auth profile dropdown from the current list of saved profiles.
     fn populate_auth_profile_dropdown(&mut self, cx: &mut Context<Self>) {
-        let profiles = self.app_state.read(cx).auth_profiles().to_vec();
+        let profiles = self.app_state.read(cx).list_auth_profiles();
+
+        // Exclude reference-only providers (e.g. SSO-session blocks): they are
+        // building blocks referenced by other profiles, not selectable as a
+        // connection's own auth profile.
+        let reference_only = self.app_state.read(cx).reference_only_auth_provider_ids();
 
         let mut auth_items = vec![dbflux_components::controls::DropdownItem::with_value(
             "None", "",
@@ -2185,6 +2193,9 @@ impl ConnectionManagerWindow {
 
         for profile in &profiles {
             if !profile.enabled {
+                continue;
+            }
+            if reference_only.contains(&profile.provider_id) {
                 continue;
             }
             let session_status = match self.auth_profile_session_states.get(&profile.id) {
@@ -2220,28 +2231,47 @@ impl ConnectionManagerWindow {
             "__new_auth_profile__",
         ));
 
-        let selected_index = self
+        // If the bound auth-profile UUID is not in the current reflected list,
+        // add a "(profile not found)" placeholder entry so the dropdown shows
+        // something instead of falling back silently to "None".
+        let auth_selected_index = self
             .selected_auth_profile_id
             .and_then(|id| {
-                self.auth_profile_uuids
-                    .iter()
-                    .position(|uid| *uid == id)
-                    .map(|pos| pos + 1)
+                let pos = self.auth_profile_uuids.iter().position(|uid| *uid == id);
+                pos.map(|p| p + 1).or_else(|| {
+                    // Bound profile is not reflected — insert a dangling sentinel.
+                    let dangling_label = format!("(profile not found) [{}]", id);
+                    auth_items.push(dbflux_components::controls::DropdownItem::with_value(
+                        dangling_label,
+                        id.to_string(),
+                    ));
+                    self.auth_profile_uuids.push(id);
+                    Some(self.auth_profile_uuids.len())
+                })
             })
             .unwrap_or(0);
 
         self.auth_profile_dropdown.update(cx, |dropdown, cx| {
             dropdown.set_items(auth_items, cx);
-            dropdown.set_selected_index(Some(selected_index), cx);
+            dropdown.set_selected_index(Some(auth_selected_index), cx);
         });
 
         let ssm_selected_index = self
             .selected_ssm_auth_profile_id
             .and_then(|id| {
-                self.ssm_auth_profile_uuids
+                let pos = self
+                    .ssm_auth_profile_uuids
                     .iter()
-                    .position(|uid| *uid == id)
-                    .map(|pos| pos + 1)
+                    .position(|uid| *uid == id);
+                pos.map(|p| p + 1).or_else(|| {
+                    let dangling_label = format!("(profile not found) [{}]", id);
+                    ssm_items.push(dbflux_components::controls::DropdownItem::with_value(
+                        dangling_label,
+                        id.to_string(),
+                    ));
+                    self.ssm_auth_profile_uuids.push(id);
+                    Some(self.ssm_auth_profile_uuids.len())
+                })
             })
             .unwrap_or(0);
 
@@ -2256,20 +2286,18 @@ impl ConnectionManagerWindow {
 
         self.app_state
             .read(cx)
-            .auth_profiles()
-            .iter()
+            .list_auth_profiles()
+            .into_iter()
             .find(|profile| profile.id == selected_id && profile.enabled)
-            .cloned()
     }
 
     fn refresh_auth_profile_sessions(&mut self, cx: &mut Context<Self>) {
         let profiles = self
             .app_state
             .read(cx)
-            .auth_profiles()
-            .iter()
+            .list_auth_profiles()
+            .into_iter()
             .filter(|profile| profile.enabled)
-            .cloned()
             .collect::<Vec<_>>();
 
         let this = cx.entity().clone();
@@ -2316,7 +2344,7 @@ impl ConnectionManagerWindow {
         self.known_auth_profile_ids = self
             .app_state
             .read(cx)
-            .auth_profiles()
+            .list_auth_profiles()
             .iter()
             .map(|profile| profile.id)
             .collect();
@@ -2347,7 +2375,7 @@ impl ConnectionManagerWindow {
     }
 
     fn handle_app_state_changed(&mut self, cx: &mut Context<Self>) {
-        let current_profiles = self.app_state.read(cx).auth_profiles().to_vec();
+        let current_profiles = self.app_state.read(cx).list_auth_profiles();
         let current_ids = current_profiles
             .iter()
             .map(|profile| profile.id)
@@ -2565,10 +2593,9 @@ impl ConnectionManagerWindow {
         let selected_profile = self
             .app_state
             .read(cx)
-            .auth_profiles()
-            .iter()
-            .find(|profile| profile.id == auth_profile_id)
-            .cloned();
+            .list_auth_profiles()
+            .into_iter()
+            .find(|profile| profile.id == auth_profile_id);
 
         let Some(profile) = selected_profile else {
             return;

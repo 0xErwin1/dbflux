@@ -3135,11 +3135,11 @@ impl Sidebar {
             hook_context,
         ) = match self.app_state.update(cx, |state, _cx| {
             if state.is_operation_pending(profile_id, None) {
-                return Err("Connection already pending".to_string());
+                return Err(("Connection already pending".to_string(), false));
             }
 
             if !state.start_pending_operation(profile_id, None) {
-                return Err("Operation started by another thread".to_string());
+                return Err(("Operation started by another thread".to_string(), false));
             }
 
             let cancel = CancelToken::new();
@@ -3162,13 +3162,26 @@ impl Sidebar {
                 }
                 Err(error) => {
                     state.finish_pending_operation(profile_id, None);
-                    Err(error)
+                    Err((error, true))
                 }
             }
         }) {
             Ok(values) => values,
-            Err(e) => {
-                log::info!("Pipeline connect skipped: {}", e);
+            Err((message, is_user_error)) => {
+                // Benign concurrency skips (already pending / raced start) stay
+                // info-only. A real preparation failure is actionable (e.g. a
+                // missing auth profile) and must reach the user, not just logs.
+                if is_user_error {
+                    log::warn!("Pipeline connect failed: {}", message);
+                    self.pending_toast = Some(PendingToast {
+                        message,
+                        is_error: true,
+                    });
+                    self.refresh_tree(cx);
+                    cx.notify();
+                } else {
+                    log::info!("Pipeline connect skipped: {}", message);
+                }
                 return;
             }
         };

@@ -41,6 +41,19 @@ pub enum RefreshTrigger {
 pub enum FormFieldKind {
     Text,
     Password,
+    /// A write-only secret input.
+    ///
+    /// The field is rendered as a masked, always-empty input. The placeholder
+    /// signals write-only semantics (e.g. "Leave blank to keep current"). When
+    /// the user saves without entering a value, the provider receives an empty
+    /// string; it MUST interpret blank as "preserve the existing on-disk value"
+    /// (spec R9.4.2). A non-blank value is written to disk and then discarded
+    /// from memory — it is never stored in DBFlux SQLite, keyring, or logs
+    /// (spec R9.4.4, R9.6).
+    ///
+    /// Use this instead of `Password` for credentials that live exclusively on
+    /// disk and must never be pre-filled or round-tripped through the UI.
+    WriteOnly,
     Number,
     FilePath,
     Checkbox,

@@ -1,3 +1,5 @@
+mod edit;
+mod identity;
 mod refs;
 mod types;
 
@@ -11,6 +13,8 @@ use crate::DbError;
 use crate::driver::form::DriverFormDef;
 use crate::values::CompositeValueResolver;
 
+pub use edit::{AuthSaveOutcome, AwsEditFile, AwsEditSnapshot, AwsSectionHash};
+pub use identity::{AWS_AUTH_NAMESPACE, aws_profile_uuid};
 pub use refs::{AuthProfileLookup, expand_auth_profile_refs};
 pub use types::*;
 
@@ -159,12 +163,69 @@ pub trait DynAuthProvider: Send + Sync {
     /// The default is a no-op.
     fn after_profile_saved(&self, _profile: &AuthProfile) {}
 
+    /// Synthesize virtual `AuthProfile` records by reading external config files
+    /// (e.g., `~/.aws/config` and `~/.aws/credentials`) without storing anything.
+    ///
+    /// Returned profiles carry `read_only = true`. The default returns an empty list;
+    /// AWS providers override this to enumerate their respective profile types.
+    fn reflect_profiles(&self) -> Vec<AuthProfile> {
+        vec![]
+    }
+
+    /// Write a newly created profile to an external config file instead of
+    /// DBFlux's SQLite store.
+    ///
+    /// Returns `Some(Ok(()))` on a successful file write. Returns `Some(Err(msg))`
+    /// when the write failed. Returns `None` for providers that store profiles
+    /// normally in DBFlux (the UI then falls back to `add_auth_profile`).
+    ///
+    /// Only AWS file-backed providers override this. The Settings UI calls this
+    /// before `add_auth_profile` so it can skip SQLite storage for file-backed
+    /// providers and let reflection pick up the new profile on the next read.
+    fn write_new_profile_to_config(&self, _profile: &AuthProfile) -> Option<Result<(), String>> {
+        None
+    }
+
     /// Abort any in-flight login for `profile` if the provider tracks one.
     ///
     /// Returns `true` if an in-flight login was found and signalled to stop.
     /// The default returns `false` (no abort capability).
     fn abort_login(&self, _profile: &AuthProfile) -> bool {
         false
+    }
+
+    /// Capture a section-hash snapshot at the moment the edit form opens.
+    ///
+    /// The returned `AwsEditSnapshot` is an opaque token: it holds the
+    /// SHA-256 digest(s) of the on-disk section byte slice(s) so the write
+    /// seam can detect external edits before committing (spec R9.3.1).
+    ///
+    /// The default implementation returns an empty snapshot (both hashes
+    /// `None`), which means the provider does not support file-backed editing.
+    /// AWS providers override this to capture real section hashes.
+    fn open_edit_snapshot(&self, _name: &str) -> AwsEditSnapshot {
+        AwsEditSnapshot {
+            config_section: None,
+            credentials_section: None,
+        }
+    }
+
+    /// Persist the user's edited fields to the provider's backing file(s).
+    ///
+    /// Compares the current on-disk section hash(es) against `snapshot` under
+    /// the file lock. Returns `Conflict` or `PartialSaved` when a concurrent
+    /// external change is detected (spec R9.3.4, R9.3.5).
+    ///
+    /// The default implementation returns `AuthSaveOutcome::Saved` without
+    /// writing anything — safe no-op for non-file-backed providers. AWS
+    /// providers override this with a real atomic write-back.
+    fn save_edit(
+        &self,
+        _name: &str,
+        _fields: &HashMap<String, String>,
+        _snapshot: &AwsEditSnapshot,
+    ) -> AuthSaveOutcome {
+        AuthSaveOutcome::Saved
     }
 
     /// Fetch the available options for a `DynamicSelect` field declared in this
@@ -300,6 +361,10 @@ impl DynAuthProvider for SharedDynAuthProvider {
         self.provider.after_profile_saved(profile);
     }
 
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        self.provider.write_new_profile_to_config(profile)
+    }
+
     fn abort_login(&self, profile: &AuthProfile) -> bool {
         self.provider.abort_login(profile)
     }
@@ -310,6 +375,19 @@ impl DynAuthProvider for SharedDynAuthProvider {
         request: FetchOptionsRequest,
     ) -> Result<FetchOptionsResponse, FetchOptionsError> {
         self.provider.fetch_dynamic_options(profile, request).await
+    }
+
+    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+        self.provider.open_edit_snapshot(name)
+    }
+
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AwsEditSnapshot,
+    ) -> AuthSaveOutcome {
+        self.provider.save_edit(name, fields, snapshot)
     }
 }
 
@@ -368,6 +446,10 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
         self.as_ref().after_profile_saved(profile);
     }
 
+    fn write_new_profile_to_config(&self, profile: &AuthProfile) -> Option<Result<(), String>> {
+        self.as_ref().write_new_profile_to_config(profile)
+    }
+
     fn abort_login(&self, profile: &AuthProfile) -> bool {
         self.as_ref().abort_login(profile)
     }
@@ -378,6 +460,19 @@ impl DynAuthProvider for std::sync::Arc<dyn DynAuthProvider> {
         request: FetchOptionsRequest,
     ) -> Result<FetchOptionsResponse, FetchOptionsError> {
         self.as_ref().fetch_dynamic_options(profile, request).await
+    }
+
+    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+        self.as_ref().open_edit_snapshot(name)
+    }
+
+    fn save_edit(
+        &self,
+        name: &str,
+        fields: &HashMap<String, String>,
+        snapshot: &AwsEditSnapshot,
+    ) -> AuthSaveOutcome {
+        self.as_ref().save_edit(name, fields, snapshot)
     }
 }
 
