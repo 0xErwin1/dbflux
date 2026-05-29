@@ -76,44 +76,87 @@ impl CodeDocument {
 
         let entity = cx.entity().clone();
         let app_state = self.app_state.clone();
+        let dialog_available = dbflux_ui_base::file_dialog::is_native_file_dialog_available();
 
         self._pending_save = Some(cx.spawn(async move |_this, cx| {
-            let file_handle = rfd::AsyncFileDialog::new()
-                .set_title("Save Script As")
-                .set_file_name(&suggested_name)
-                .add_filter(language_name, &[default_ext])
-                .add_filter("All Files", &["*"])
-                .save_file()
-                .await;
+            let target: Option<(std::path::PathBuf, bool)> = if dialog_available {
+                let file_handle = rfd::AsyncFileDialog::new()
+                    .set_title("Save Script As")
+                    .set_file_name(&suggested_name)
+                    .add_filter(&language_name, &[&default_ext])
+                    .add_filter("All Files", &["*"])
+                    .save_file()
+                    .await;
 
-            let Some(handle) = file_handle else {
+                file_handle.map(|handle| (handle.path().to_path_buf(), false))
+            } else {
+                match dbflux_ui_base::file_dialog::fallback_export_dir() {
+                    Ok(dir) => Some((
+                        dbflux_ui_base::file_dialog::unique_path_in(&dir, &suggested_name),
+                        true,
+                    )),
+                    Err(err) => {
+                        let err_text = format!(
+                            "Save failed — file dialog unavailable and fallback directory could not be created: {}",
+                            err
+                        );
+                        log::error!("{}", err_text);
+                        cx.update(|cx| {
+                            dbflux_ui_base::toast::Toast::error(err_text)
+                                .meta_right(dbflux_ui_base::toast::now_hms())
+                                .push(cx);
+                        })
+                        .ok();
+                        return;
+                    }
+                }
+            };
+
+            let Some((path, used_fallback)) = target else {
+                // Native dialog was available and user cancelled — no toast.
                 return;
             };
 
-            let path = handle.path().to_path_buf();
             let write_result = std::fs::write(&path, &content);
 
             match write_result {
                 Ok(()) => {
+                    let path_for_update = path.clone();
                     cx.update(|cx| {
                         entity.update(cx, |doc, cx| {
                             if let Some(scratch) = doc.scratch_path.take() {
                                 let _ = std::fs::remove_file(&scratch);
                             }
 
-                            doc.path = Some(path.clone());
+                            doc.path = Some(path_for_update.clone());
                             doc.mark_clean(cx);
                         });
 
                         app_state.update(cx, |state, cx| {
-                            state.record_recent_file(path);
+                            state.record_recent_file(path_for_update.clone());
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
+
+                        if used_fallback {
+                            dbflux_ui_base::toast::Toast::warning(format!(
+                                "Native file picker unavailable — script saved to {} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog.",
+                                path_for_update.display()
+                            ))
+                            .meta_right(dbflux_ui_base::toast::now_hms())
+                            .push(cx);
+                        }
                     })
                     .ok();
                 }
                 Err(e) => {
-                    log::error!("Failed to save file: {}", e);
+                    let err_text = format!("Failed to save script: {}", e);
+                    log::error!("{}", err_text);
+                    cx.update(|cx| {
+                        dbflux_ui_base::toast::Toast::error(err_text)
+                            .meta_right(dbflux_ui_base::toast::now_hms())
+                            .push(cx);
+                    })
+                    .ok();
                 }
             }
         }));

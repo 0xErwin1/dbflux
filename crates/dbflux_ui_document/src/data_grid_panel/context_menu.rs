@@ -864,14 +864,11 @@ impl DataGridPanel {
             return;
         }
 
-        let formats = dbflux_export::available_formats(&self.result.shape);
+        let _ = window;
+        let _formats = dbflux_export::available_formats(&self.result.shape);
 
-        if formats.len() == 1 {
-            self.export_with_format(formats[0], window, cx);
-        } else {
-            self.export_menu_open = !self.export_menu_open;
-            cx.notify();
-        }
+        self.export_menu_open = !self.export_menu_open;
+        cx.notify();
     }
 
     pub fn export_with_format(
@@ -889,33 +886,84 @@ impl DataGridPanel {
         let format_name = format.name();
 
         let entity = cx.entity().clone();
+        let audit_service = self.app_state.read(cx).audit_service().clone();
+        let dialog_available = dbflux_ui_base::file_dialog::is_native_file_dialog_available();
 
         cx.spawn(async move |_this, cx| {
-            let file_handle = rfd::AsyncFileDialog::new()
-                .set_title(format!("Export as {}", format_name))
-                .set_file_name(&suggested_name)
-                .add_filter(format_name, &[extension])
-                .save_file()
-                .await;
+            let target: Option<(std::path::PathBuf, bool)> = if dialog_available {
+                let file_handle = rfd::AsyncFileDialog::new()
+                    .set_title(format!("Export as {}", format_name))
+                    .set_file_name(&suggested_name)
+                    .add_filter(format_name, &[extension])
+                    .save_file()
+                    .await;
 
-            let Some(handle) = file_handle else {
+                file_handle.map(|handle| (handle.path().to_path_buf(), false))
+            } else {
+                match dbflux_ui_base::file_dialog::fallback_export_dir() {
+                    Ok(dir) => Some((
+                        dbflux_ui_base::file_dialog::unique_path_in(&dir, &suggested_name),
+                        true,
+                    )),
+                    Err(err) => {
+                        record_export_audit(
+                            &audit_service,
+                            format_name,
+                            None,
+                            true,
+                            false,
+                            Some(&err),
+                        );
+                        let message = format!(
+                            "Export failed — file dialog unavailable and fallback directory could not be created: {}",
+                            err
+                        );
+                        cx.update(|cx| {
+                            entity.update(cx, |panel, cx| {
+                                panel.pending_toast =
+                                    Some(PendingToast { message, is_error: true });
+                                cx.notify();
+                            });
+                        })
+                        .log_if_dropped();
+                        return;
+                    }
+                }
+            };
+
+            let Some((target_path, used_fallback)) = target else {
+                // Native dialog was available and the user cancelled — no
+                // toast, no audit. Cancellations are not failures.
                 return;
             };
 
-            let path = handle.path().to_path_buf();
-
             let export_result = (|| {
-                let file = File::create(&path)?;
+                let file = File::create(&target_path)?;
                 let mut writer = BufWriter::new(file);
                 dbflux_export::export(&result, format, &mut writer)?;
                 Ok::<_, dbflux_export::ExportError>(())
             })();
 
-            let message = match &export_result {
-                Ok(()) => format!("Exported to {}", path.display()),
-                Err(e) => format!("Export failed: {}", e),
+            let (message, is_error) = match &export_result {
+                Ok(()) if used_fallback => (
+                    format!(
+                        "Native file picker unavailable — exported to {} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog.",
+                        target_path.display()
+                    ),
+                    false,
+                ),
+                Ok(()) => (format!("Exported to {}", target_path.display()), false),
+                Err(e) => (format!("Export failed: {}", e), true),
             };
-            let is_error = export_result.is_err();
+
+            record_export_audit(
+                &audit_service,
+                format_name,
+                Some(&target_path),
+                is_error,
+                used_fallback,
+                export_result.as_ref().err().map(|e| e.to_string()).as_deref(),
+            );
 
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
@@ -926,6 +974,68 @@ impl DataGridPanel {
             .log_if_dropped();
         })
         .detach();
+    }
+
+    pub fn copy_to_clipboard_with_format(
+        &mut self,
+        format: ExportFormat,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_menu_open = false;
+
+        if matches!(format, ExportFormat::Binary) {
+            self.pending_toast = Some(PendingToast {
+                message:
+                    "Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead."
+                        .to_string(),
+                is_error: true,
+            });
+            cx.notify();
+            return;
+        }
+
+        let mut buffer: Vec<u8> = Vec::new();
+        let export_result = dbflux_export::export(&self.result, format, &mut buffer);
+
+        let format_name = format.name();
+        let audit_service = self.app_state.read(cx).audit_service().clone();
+
+        match export_result {
+            Ok(()) => match String::from_utf8(buffer) {
+                Ok(text) => {
+                    let byte_len = text.len();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
+                    self.pending_toast = Some(PendingToast {
+                        message: format!(
+                            "Copied {} ({} bytes) to clipboard",
+                            format_name, byte_len
+                        ),
+                        is_error: false,
+                    });
+                    cx.notify();
+                }
+                Err(e) => {
+                    let err_text = format!("Cannot copy non-UTF8 output: {}", e);
+                    record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
+                    self.pending_toast = Some(PendingToast {
+                        message: err_text,
+                        is_error: true,
+                    });
+                    cx.notify();
+                }
+            },
+            Err(e) => {
+                let err_text = e.to_string();
+                record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
+                self.pending_toast = Some(PendingToast {
+                    message: format!("Copy failed: {}", err_text),
+                    is_error: true,
+                });
+                cx.notify();
+            }
+        }
     }
 
     fn export_base_name(&self) -> String {
@@ -4317,6 +4427,113 @@ impl DataGridPanel {
             CellKind::Unsupported(type_name) => Value::Unsupported(type_name.to_string()),
             CellKind::AutoGenerated(expr) => Value::Text(format!("DEFAULT({})", expr)),
         }
+    }
+}
+
+fn record_export_audit(
+    audit_service: &dbflux_audit::AuditService,
+    format_name: &str,
+    path: Option<&std::path::Path>,
+    is_error: bool,
+    used_fallback: bool,
+    error_text: Option<&str>,
+) {
+    use dbflux_core::chrono::Utc;
+    use dbflux_core::observability::{
+        EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
+    };
+
+    let (severity, outcome) = match (is_error, used_fallback) {
+        (true, _) => (EventSeverity::Error, EventOutcome::Failure),
+        (false, true) => (EventSeverity::Warn, EventOutcome::Success),
+        (false, false) => (EventSeverity::Info, EventOutcome::Success),
+    };
+
+    let action = if is_error {
+        "result_export_failed"
+    } else if used_fallback {
+        "result_export_fallback"
+    } else {
+        "result_export"
+    };
+
+    let mut summary = format!("Result export ({})", format_name);
+    if used_fallback && !is_error {
+        summary.push_str(" — fallback directory used (no native file picker)");
+    }
+    if let Some(p) = path {
+        summary.push_str(&format!(" -> {}", p.display()));
+    }
+    if let Some(err) = error_text {
+        summary.push_str(&format!(": {}", err));
+    }
+
+    let event = EventRecord::new(
+        Utc::now().timestamp_millis(),
+        severity,
+        EventCategory::Query,
+        outcome,
+    )
+    .with_action(action.to_string())
+    .with_summary(summary)
+    .with_actor_id("ui:user");
+
+    if let Err(e) = audit_service.record(event) {
+        log::warn!("Failed to record export audit event: {}", e);
+    }
+}
+
+fn record_clipboard_audit(
+    audit_service: &dbflux_audit::AuditService,
+    format_name: &str,
+    byte_len: Option<usize>,
+    error_text: Option<&str>,
+) {
+    use dbflux_core::chrono::Utc;
+    use dbflux_core::observability::{
+        EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
+    };
+
+    let is_error = error_text.is_some();
+    let severity = if is_error {
+        EventSeverity::Error
+    } else {
+        EventSeverity::Info
+    };
+    let outcome = if is_error {
+        EventOutcome::Failure
+    } else {
+        EventOutcome::Success
+    };
+
+    let mut summary = if is_error {
+        format!("Clipboard export failed ({})", format_name)
+    } else {
+        format!("Clipboard export ({})", format_name)
+    };
+    if let Some(len) = byte_len {
+        summary.push_str(&format!(" — {} bytes", len));
+    }
+    if let Some(err) = error_text {
+        summary.push_str(&format!(": {}", err));
+    }
+
+    let event = EventRecord::new(
+        Utc::now().timestamp_millis(),
+        severity,
+        EventCategory::Query,
+        outcome,
+    )
+    .with_action(if is_error {
+        "result_clipboard_failed".to_string()
+    } else {
+        "result_clipboard".to_string()
+    })
+    .with_summary(summary)
+    .with_actor_id("ui:user");
+
+    if let Err(e) = audit_service.record(event) {
+        log::warn!("Failed to record clipboard audit event: {}", e);
     }
 }
 
