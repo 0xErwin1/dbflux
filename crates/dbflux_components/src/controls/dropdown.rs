@@ -661,7 +661,7 @@ impl Render for Dropdown {
         let variant = self.trigger_variant();
         let trigger = self.render_trigger(label, disabled, cx);
 
-        let container = div()
+        div()
             .id(self.id.clone())
             .debug_selector({
                 let id = self.id.to_string();
@@ -670,9 +670,7 @@ impl Render for Dropdown {
             .w_full()
             .when(variant == DropdownTriggerVariant::Compact, |el| el.h_full())
             .child(trigger)
-            .child(self.render_menu(cx));
-
-        container
+            .child(self.render_menu(cx))
     }
 }
 

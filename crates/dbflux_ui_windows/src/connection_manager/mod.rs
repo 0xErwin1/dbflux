@@ -846,13 +846,15 @@ impl ConnectionManagerWindow {
 
         instance.conn_mcp_enabled = profile.mcp_governance.as_ref().is_some_and(|g| g.enabled);
 
-        let first_binding = profile
-            .mcp_governance
-            .as_ref()
-            .and_then(|governance| governance.policy_bindings.first().cloned());
-
         #[cfg(feature = "mcp")]
-        instance.load_mcp_dropdowns(first_binding.as_ref(), window, cx);
+        {
+            let first_binding = profile
+                .mcp_governance
+                .as_ref()
+                .and_then(|governance| governance.policy_bindings.first().cloned());
+
+            instance.load_mcp_dropdowns(first_binding.as_ref(), window, cx);
+        }
 
         instance.selected_proxy_id = profile.proxy_profile_id;
         instance.selected_auth_profile_id = profile.auth_profile_id;
