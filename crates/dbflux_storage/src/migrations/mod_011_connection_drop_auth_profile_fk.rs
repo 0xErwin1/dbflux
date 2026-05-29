@@ -183,7 +183,10 @@ mod tests {
             !fks.contains(&"cfg_auth_profiles".to_string()),
             "auth_profile_id FK must be dropped"
         );
-        assert!(fks.contains(&"cfg_proxy_profiles".to_string()), "proxy FK kept");
+        assert!(
+            fks.contains(&"cfg_proxy_profiles".to_string()),
+            "proxy FK kept"
+        );
         assert!(
             fks.contains(&"cfg_ssh_tunnel_profiles".to_string()),
             "ssh FK kept"

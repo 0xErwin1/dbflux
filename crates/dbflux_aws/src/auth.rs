@@ -80,12 +80,24 @@ pub fn start_sso_login_blocking(profile_name: &str) -> Result<SsoLoginHandle, Db
     use std::process::{Command, Stdio};
 
     log::debug!(
-        "Spawning 'aws sso login --no-browser --profile {}'",
+        "Spawning 'aws sso login --no-browser --use-device-code --profile {}'",
         profile_name
     );
 
+    // `--use-device-code` forces the device-authorization grant instead of the
+    // modern PKCE/loopback default. It yields a short verification URL with the
+    // code autofilled (`...#/device?user_code=XXXX-YYYY`) — far cleaner to show
+    // and copy than the long `/authorize?...&redirect_uri=127.0.0.1...` URL, and
+    // it needs no local loopback listener (works on headless/remote setups).
     let mut child = Command::new("aws")
-        .args(["sso", "login", "--no-browser", "--profile", profile_name])
+        .args([
+            "sso",
+            "login",
+            "--no-browser",
+            "--use-device-code",
+            "--profile",
+            profile_name,
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
