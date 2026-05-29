@@ -228,17 +228,22 @@ impl Sidebar {
         {
             let mut profile_children = Vec::new();
 
-            // Always prepend Dashboards and Saved Charts folders for every
-            // connected profile, regardless of driver type.
-            profile_children.push(Self::build_dashboards_folder_item(profile_id, state));
-            profile_children.push(Self::build_saved_charts_folder_item(profile_id, state));
-
             let strategy = connected.connection.schema_loading_strategy();
             let uses_lazy_loading = strategy == SchemaLoadingStrategy::LazyPerDatabase;
             let is_document_db = schema.is_document();
             let is_time_series_db = schema.is_time_series();
             let conn_metadata = connected.connection.metadata();
             let conn_capabilities = conn_metadata.capabilities;
+
+            // Surface the per-profile Dashboards / Saved Charts folders only
+            // for drivers that opt in via `CHART_AUTHORING`. Drivers without
+            // a natural chart-authoring UX (e.g. plain relational stores) keep
+            // their sidebar focused on the native browsing model. Gating is
+            // purely capability-driven — no driver_id or category branching.
+            if conn_capabilities.contains(DriverCapabilities::CHART_AUTHORING) {
+                profile_children.push(Self::build_dashboards_folder_item(profile_id, state));
+                profile_children.push(Self::build_saved_charts_folder_item(profile_id, state));
+            }
 
             // Drivers that can browse upstream dashboards get a read-only
             // listing container. Capability-gated — no driver_id branching.

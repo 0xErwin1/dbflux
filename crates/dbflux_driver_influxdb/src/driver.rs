@@ -33,7 +33,8 @@ pub static INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         | DriverCapabilities::MULTIPLE_DATABASES
         | DriverCapabilities::PAGINATION
         | DriverCapabilities::EXPORT_CSV
-        | DriverCapabilities::EXPORT_JSON,
+        | DriverCapabilities::EXPORT_JSON
+        | DriverCapabilities::CHART_AUTHORING,
     default_port: Some(8086),
     uri_scheme: "http".into(),
     icon: Icon::Influxdb,
@@ -427,6 +428,16 @@ mod tests {
             INFLUXDB_METADATA
                 .capabilities
                 .contains(DriverCapabilities::EXPORT_JSON)
+        );
+    }
+
+    #[test]
+    fn influxdb_metadata_advertises_chart_authoring() {
+        assert!(
+            INFLUXDB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be advertised so the sidebar surfaces Dashboards / Saved Charts folders for Influx connections"
         );
     }
 

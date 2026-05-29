@@ -37,7 +37,8 @@ pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driv
         .union(DriverCapabilities::METRIC_SERIES)
         .union(DriverCapabilities::METRIC_CATALOG)
         .union(DriverCapabilities::DASHBOARD_IMPORT)
-        .union(DriverCapabilities::DASHBOARD_SYNC),
+        .union(DriverCapabilities::DASHBOARD_SYNC)
+        .union(DriverCapabilities::CHART_AUTHORING),
     default_port: None,
     uri_scheme: "cloudwatch".into(),
     icon: Icon::Logs,
@@ -1840,6 +1841,16 @@ mod tests {
         assert!(
             caps.contains(DriverCapabilities::DASHBOARD_SYNC),
             "DASHBOARD_SYNC must be advertised so the UI surfaces sync affordances"
+        );
+    }
+
+    #[test]
+    fn cloudwatch_metadata_advertises_chart_authoring() {
+        assert!(
+            CLOUDWATCH_METADATA
+                .capabilities
+                .contains(DriverCapabilities::CHART_AUTHORING),
+            "CHART_AUTHORING must be advertised so the sidebar surfaces Dashboards / Saved Charts folders for CW connections"
         );
     }
 }

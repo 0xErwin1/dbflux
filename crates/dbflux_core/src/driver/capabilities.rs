@@ -541,6 +541,18 @@ bitflags! {
         /// opens them read-only. Gating flows exclusively through this
         /// capability — no `driver_id` comparisons are allowed.
         const DASHBOARD_SYNC = 1 << 52;
+
+        /// Driver participates in DBFlux's local chart-authoring flow: users
+        /// commonly turn its query/metric results into `SavedChart`s and group
+        /// them into `Dashboard`s persisted in DBFlux's own SQLite store.
+        ///
+        /// When set, the sidebar surfaces the per-profile `Dashboards` and
+        /// `Saved Charts` folders. When unset, those folders are hidden so the
+        /// driver's tree stays focused on its native browsing model. This is
+        /// independent of `DASHBOARD_SYNC` (upstream listing) and
+        /// `DASHBOARD_IMPORT` (JSON import). Gating flows exclusively through
+        /// this capability — no `driver_id` or `category` comparisons.
+        const CHART_AUTHORING = 1 << 53;
     }
 }
 
@@ -2841,5 +2853,36 @@ mod tests {
         let dbg = format!("{combined:?}");
         assert!(dbg.contains("DASHBOARD_IMPORT"));
         assert!(dbg.contains("DASHBOARD_SYNC"));
+    }
+
+    #[test]
+    fn test_chart_authoring_bit_value() {
+        assert_eq!(
+            DriverCapabilities::CHART_AUTHORING.bits(),
+            1u64 << 53,
+            "CHART_AUTHORING must equal 1 << 53"
+        );
+    }
+
+    #[test]
+    fn test_chart_authoring_no_collision() {
+        let bits = DriverCapabilities::CHART_AUTHORING.bits();
+
+        assert_eq!(
+            bits.count_ones(),
+            1,
+            "CHART_AUTHORING must be a power of two"
+        );
+
+        for (name, cap) in DriverCapabilities::all().iter_names() {
+            if name == "CHART_AUTHORING" {
+                continue;
+            }
+            assert_eq!(
+                cap.bits() & bits,
+                0,
+                "CHART_AUTHORING bit (1 << 53) collides with existing flag '{name}'"
+            );
+        }
     }
 }
