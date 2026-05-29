@@ -2521,7 +2521,7 @@ impl MssqlConnection {
             );
         }
 
-        Ok(builder.build())
+        Ok(builder.build_sorted())
     }
 
     fn fetch_constraints(

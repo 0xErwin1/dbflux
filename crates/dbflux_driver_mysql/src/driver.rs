@@ -3221,7 +3221,7 @@ fn fetch_foreign_keys(
         );
     }
 
-    Ok(builder.build())
+    Ok(builder.build_sorted())
 }
 
 /// Translate a Value filter expression to a SQL WHERE clause string for MySQL.
