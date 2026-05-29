@@ -377,7 +377,10 @@ impl MetricSource {
     /// Used by sidebar dedup to keep a stable identity even after the picker
     /// rebuilds the source value.
     pub fn primary_namespace(&self) -> &str {
-        self.series.first().map(|s| s.namespace.as_str()).unwrap_or("")
+        self.series
+            .first()
+            .map(|s| s.namespace.as_str())
+            .unwrap_or("")
     }
 
     /// Returns the metric name of the first series, or `""` when empty.

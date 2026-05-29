@@ -220,11 +220,9 @@ fn panel_to_dto(panel: &DashboardPanel) -> DashboardPanelDto {
         DashboardPanelKind::Chart { saved_chart_id } => {
             ("chart".to_string(), saved_chart_id.to_string(), None)
         }
-        DashboardPanelKind::Divider { markdown } => (
-            "divider".to_string(),
-            String::new(),
-            Some(markdown.clone()),
-        ),
+        DashboardPanelKind::Divider { markdown } => {
+            ("divider".to_string(), String::new(), Some(markdown.clone()))
+        }
     };
 
     DashboardPanelDto {

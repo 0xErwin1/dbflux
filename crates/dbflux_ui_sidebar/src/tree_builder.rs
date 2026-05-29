@@ -566,7 +566,9 @@ impl Sidebar {
             None => label,
         };
 
-        TreeItem::new(folder_id, label).expanded(false).children(children)
+        TreeItem::new(folder_id, label)
+            .expanded(false)
+            .children(children)
     }
 
     /// Build the `RemoteDashboardItem` children for a `RemoteDashboardsFolder`.
@@ -724,8 +726,7 @@ impl Sidebar {
         if let dbflux_components::SavedChartSource::Metric { series } = &chart.source
             && !series.is_empty()
         {
-            let mut names: Vec<&str> =
-                series.iter().map(|s| s.metric_name.as_str()).collect();
+            let mut names: Vec<&str> = series.iter().map(|s| s.metric_name.as_str()).collect();
             names.sort_unstable();
             names.dedup();
             let joined = names.join(", ");
@@ -2663,7 +2664,8 @@ mod tests {
     #[test]
     fn test_remote_dashboard_children_show_loading_on_cache_miss() {
         let (state, profile_id) = make_state_with_profile();
-        let folder_id = dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let folder_id =
+            dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
         let errors = HashMap::new();
 
         let children =
@@ -2676,7 +2678,8 @@ mod tests {
     #[test]
     fn test_remote_dashboard_children_show_error_when_recorded() {
         let (state, profile_id) = make_state_with_profile();
-        let folder_id = dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let folder_id =
+            dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
         let mut errors = HashMap::new();
         errors.insert(folder_id.clone(), "access denied".to_string());
 
@@ -2704,7 +2707,8 @@ mod tests {
             ],
         );
 
-        let folder_id = dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let folder_id =
+            dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
         let errors = HashMap::new();
         let children =
             Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);

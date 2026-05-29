@@ -746,10 +746,7 @@ impl DashboardDocument {
             if !self.collapsed_divider_indices.contains(&(*slot_idx as u32)) {
                 continue;
             }
-            let row_end = dividers
-                .get(i + 1)
-                .map(|(_, r, _)| *r)
-                .unwrap_or(u32::MAX);
+            let row_end = dividers.get(i + 1).map(|(_, r, _)| *r).unwrap_or(u32::MAX);
             let payload_height = row_end.saturating_sub(*row_start + *divider_height);
 
             for (other_idx, slot) in self.panel_slots.iter().enumerate() {

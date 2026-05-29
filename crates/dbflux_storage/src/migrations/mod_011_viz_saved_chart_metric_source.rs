@@ -319,5 +319,4 @@ mod tests {
             "legacy query row must have NULL metric namespace after rebuild"
         );
     }
-
 }

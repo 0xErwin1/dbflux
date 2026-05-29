@@ -618,23 +618,15 @@ impl Sidebar {
             let result = background_task.await;
             cx.update(|cx| {
                 sidebar.update(cx, |sidebar, cx| {
-                    sidebar
-                        .pending_remote_dashboard_fetches
-                        .remove(&profile_id);
+                    sidebar.pending_remote_dashboard_fetches.remove(&profile_id);
                     match result {
                         Ok(dashboards) => {
                             cache.store(profile_id, dashboards);
                             sidebar.metric_fetch_errors.remove(&parent_id);
                         }
                         Err(msg) => {
-                            sidebar
-                                .metric_fetch_errors
-                                .insert(parent_id, msg.clone());
-                            log::warn!(
-                                "Failed to list dashboards for {}: {}",
-                                profile_id,
-                                msg
-                            );
+                            sidebar.metric_fetch_errors.insert(parent_id, msg.clone());
+                            log::warn!("Failed to list dashboards for {}: {}", profile_id, msg);
                         }
                     }
                     sidebar.rebuild_tree_with_overrides(cx);
@@ -643,7 +635,8 @@ impl Sidebar {
             .log_if_dropped();
         });
 
-        self.pending_remote_dashboard_fetches.insert(profile_id, task);
+        self.pending_remote_dashboard_fetches
+            .insert(profile_id, task);
     }
 
     fn collection_node_is_event_stream(

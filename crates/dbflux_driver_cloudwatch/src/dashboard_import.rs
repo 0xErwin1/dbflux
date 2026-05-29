@@ -110,10 +110,7 @@ impl DashboardImporter for CloudWatchDashboardImporter {
 /// Parse a single CloudWatch `metric` widget into a `WidgetImportSpec` whose
 /// `kind` is `WidgetImportKind::Metric`. Expands `"..."` and `"."` shorthand
 /// tokens and respects the trailing per-metric options object.
-fn parse_metric_widget(
-    widget: &Value,
-    layout: WidgetLayout,
-) -> Result<WidgetImportSpec, DbError> {
+fn parse_metric_widget(widget: &Value, layout: WidgetLayout) -> Result<WidgetImportSpec, DbError> {
     let props = widget
         .get("properties")
         .ok_or_else(|| DbError::Parse("metric widget missing 'properties'".to_string()))?;
@@ -166,9 +163,7 @@ fn parse_metric_widget(
 
     for metric_entry in metrics_arr {
         let entry = metric_entry.as_array().ok_or_else(|| {
-            DbError::Parse(
-                "each entry in 'metrics' must be an array (shorthand form)".to_string(),
-            )
+            DbError::Parse("each entry in 'metrics' must be an array (shorthand form)".to_string())
         })?;
 
         let (tokens, options) = split_trailing_options(entry);
@@ -333,12 +328,10 @@ fn expand_metric_tokens(
         let val_token = token_strs.get(i + 1).copied().flatten();
 
         let key = resolve_token(key_token, || {
-            previous
-                .and_then(|p| p.dimensions.get(dim_index).map(|(k, _)| k.clone()))
+            previous.and_then(|p| p.dimensions.get(dim_index).map(|(k, _)| k.clone()))
         });
         let val = resolve_token(val_token, || {
-            previous
-                .and_then(|p| p.dimensions.get(dim_index).map(|(_, v)| v.clone()))
+            previous.and_then(|p| p.dimensions.get(dim_index).map(|(_, v)| v.clone()))
         });
 
         if let (Some(k), Some(v)) = (key, val)
@@ -492,7 +485,11 @@ mod tests {
             .import(json)
             .expect("mixed widget dashboard must import metric + text");
 
-        assert_eq!(result.len(), 2, "metric and text widgets must produce specs");
+        assert_eq!(
+            result.len(),
+            2,
+            "metric and text widgets must produce specs"
+        );
 
         let s = series_of(&result[0]);
         assert_eq!(s.len(), 1);
@@ -528,7 +525,9 @@ mod tests {
         }"#;
 
         let importer = CloudWatchDashboardImporter;
-        let result = importer.import(json).expect("ellipsis shorthand must expand");
+        let result = importer
+            .import(json)
+            .expect("ellipsis shorthand must expand");
 
         assert_eq!(result.len(), 1, "two series belong to one widget");
         let series = series_of(&result[0]);

@@ -2226,7 +2226,8 @@ impl Workspace {
 
         let key = DocumentKey::Dashboard { dashboard_id };
         if let Some(existing) = self.tab_manager.read(cx).find_by_key(&key, cx) {
-            self.tab_manager.update(cx, |mgr, cx| mgr.activate(existing, cx));
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.activate(existing, cx));
             self.set_focus(FocusTarget::Document, window, cx);
             return;
         }
@@ -2308,7 +2309,9 @@ impl Workspace {
     ) {
         use crate::ui::document::dashboard::PanelGridPos;
         use crate::ui::document::{ChartDocument, DashboardDocument, DashboardPanelSlot};
-        use dbflux_components::chart::{AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale};
+        use dbflux_components::chart::{
+            AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
+        };
         use dbflux_components::common::time_range::view::TimeRangePanel;
         use dbflux_components::saved_chart::{MetricSeries, SavedChart, SavedChartRefreshPolicy};
 
@@ -2395,13 +2398,9 @@ impl Workspace {
 
                     let app_state_inner = app_state.clone();
                     let panel_entity = cx.new(|cx| {
-                        let mut chart = ChartDocument::from_saved(
-                            &saved_chart,
-                            app_state_inner,
-                            window,
-                            cx,
-                        )
-                        .expect("metric source is always valid for ChartDocument");
+                        let mut chart =
+                            ChartDocument::from_saved(&saved_chart, app_state_inner, window, cx)
+                                .expect("metric source is always valid for ChartDocument");
                         chart.set_embedded(true, cx);
                         chart
                     });
@@ -2414,8 +2413,7 @@ impl Workspace {
                 })
                 .collect();
 
-            let shared_time_range =
-                cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+            let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
 
             DashboardDocument::new(
                 dashboard_id,
