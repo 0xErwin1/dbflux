@@ -440,6 +440,7 @@ impl Dropdown {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        cx.stop_propagation();
         self.toggle_open(cx);
     }
 
@@ -526,6 +527,7 @@ impl Dropdown {
             .on_scroll_wheel(cx.listener(Self::handle_menu_scroll_wheel))
             .shadow_lg()
             .occlude()
+            .on_mouse_down_out(cx.listener(Self::handle_mouse_down_out))
             .children(items);
 
         deferred(
@@ -619,7 +621,12 @@ impl Dropdown {
             }
         }
 
-        if !disabled {
+        // Only the closed trigger toggles open. While open, dismissal is owned
+        // by the menu's on_mouse_down_out: a click on the trigger lands outside
+        // the (deferred, snap-positioned) menu and closes it. Keeping on_click
+        // here while open would re-toggle (down dismisses, up reopens),
+        // producing the open/close flicker that surfaced after window resize.
+        if !disabled && !self.open {
             trigger = trigger.on_click(cx.listener(Self::handle_trigger_click));
         }
 
@@ -654,7 +661,7 @@ impl Render for Dropdown {
         let variant = self.trigger_variant();
         let trigger = self.render_trigger(label, disabled, cx);
 
-        let mut container = div()
+        let container = div()
             .id(self.id.clone())
             .debug_selector({
                 let id = self.id.to_string();
@@ -664,10 +671,6 @@ impl Render for Dropdown {
             .when(variant == DropdownTriggerVariant::Compact, |el| el.h_full())
             .child(trigger)
             .child(self.render_menu(cx));
-
-        if self.open {
-            container = container.on_mouse_down_out(cx.listener(Self::handle_mouse_down_out));
-        }
 
         container
     }
