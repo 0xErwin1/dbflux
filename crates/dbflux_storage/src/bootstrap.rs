@@ -57,8 +57,16 @@ impl StorageRuntime {
     pub fn for_path(dbflux_db_path: PathBuf) -> Result<Self, StorageError> {
         // Open and validate dbflux.db - apply migrations if needed
         let dbflux_conn = crate::sqlite::open_database(&dbflux_db_path)?;
+
+        // Run migrations with foreign-key enforcement disabled so table-rebuild
+        // migrations (drop + recreate to change constraints) do not cascade-delete
+        // child rows when the parent table is dropped. Enforcement is restored for
+        // normal runtime use immediately afterwards.
+        crate::sqlite::set_foreign_keys(&dbflux_conn, false)?;
         let registry = MigrationRegistry::new();
         registry.run_all(&dbflux_conn)?;
+        crate::sqlite::set_foreign_keys(&dbflux_conn, true)?;
+
         info!("Unified database ready at {}", dbflux_db_path.display());
 
         // Initialize the artifact store using the parent directory of dbflux.db as data root.

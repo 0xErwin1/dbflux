@@ -141,6 +141,7 @@ impl MigrationRegistry {
         registry.register(mod_008_general_settings_style::MigrationImpl);
         registry.register(mod_009_mssql_instance::MigrationImpl);
         registry.register(mod_010_aws_reflect_migration_flag::MigrationImpl);
+        registry.register(mod_011_connection_drop_auth_profile_fk::MigrationImpl);
         registry
     }
 
@@ -289,6 +290,7 @@ mod mod_007_session_exec_ctx_json;
 mod mod_008_general_settings_style;
 mod mod_009_mssql_instance;
 mod mod_010_aws_reflect_migration_flag;
+mod mod_011_connection_drop_auth_profile_fk;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
