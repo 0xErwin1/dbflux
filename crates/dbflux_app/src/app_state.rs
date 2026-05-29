@@ -2889,6 +2889,31 @@ impl AppState {
         self.auth_provider_registry.get(provider_id)
     }
 
+    /// Provider ids that exist only to be referenced by another provider's
+    /// `AuthProfileRef` field (e.g. an SSO-session block referenced by an SSO
+    /// profile). Profiles from these providers are building blocks, not
+    /// standalone connection credentials, so a connection's Auth Profile picker
+    /// must exclude them. Derived from the form definitions so the UI stays
+    /// agnostic to concrete provider ids.
+    pub fn reference_only_auth_provider_ids(&self) -> HashSet<String> {
+        use dbflux_core::FormFieldKind;
+
+        let mut ids = HashSet::new();
+        for provider in self.auth_provider_registry.providers() {
+            let form = provider.form_def();
+            for tab in &form.tabs {
+                for section in &tab.sections {
+                    for field in &section.fields {
+                        if let FormFieldKind::AuthProfileRef { provider_id } = &field.kind {
+                            ids.insert(provider_id.clone());
+                        }
+                    }
+                }
+            }
+        }
+        ids
+    }
+
     pub fn resolve_profile_hooks(&self, profile: &ConnectionProfile) -> ConnectionHooks {
         ConnectionHooks::resolve_from_bindings(profile, &self.hook_definitions)
     }

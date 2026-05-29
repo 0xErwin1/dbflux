@@ -2173,6 +2173,11 @@ impl ConnectionManagerWindow {
     fn populate_auth_profile_dropdown(&mut self, cx: &mut Context<Self>) {
         let profiles = self.app_state.read(cx).list_auth_profiles();
 
+        // Exclude reference-only providers (e.g. SSO-session blocks): they are
+        // building blocks referenced by other profiles, not selectable as a
+        // connection's own auth profile.
+        let reference_only = self.app_state.read(cx).reference_only_auth_provider_ids();
+
         let mut auth_items = vec![dbflux_components::controls::DropdownItem::with_value(
             "None", "",
         )];
@@ -2186,6 +2191,9 @@ impl ConnectionManagerWindow {
 
         for profile in &profiles {
             if !profile.enabled {
+                continue;
+            }
+            if reference_only.contains(&profile.provider_id) {
                 continue;
             }
             let session_status = match self.auth_profile_session_states.get(&profile.id) {
