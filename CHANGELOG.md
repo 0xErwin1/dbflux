@@ -4,8 +4,31 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0-dev.10] - 2026-05-29
+
 ### Added
 
+* **Saved charts, dashboards, and CloudWatch dashboard browsing (#152)** —
+  Charts created from query results can now be saved, organized into
+  dashboards, and reopened from the sidebar. CloudWatch connections gain a
+  browse view that lists the account's dashboards as a read-only catalog so
+  they can be inspected without round-tripping through the AWS console.
+  The change also lands the workspace's PaneHandle/ResultPanel refactor:
+  document tabs share a single closure-erased shell and a universal chrome
+  row built from `ToolbarSegment`s, so the mode bar, filter bar, and
+  refresh dropdown wrap responsively on narrow windows instead of pushing
+  controls off-screen.
+* **AWS profiles reflected live from `~/.aws` as source of truth (#149)** —
+  AWS SSO, SSO-session, and shared-credentials profiles are now enumerated
+  on demand from `~/.aws/config` and `~/.aws/credentials` via mtime-guarded
+  caches, with a deterministic UUIDv5 identity per `(provider_id, name)` so
+  reflected profiles are stable across launches without ever being stored.
+  DBFlux holds zero AWS key material on disk (ADR-7): the static-credentials
+  provider and its write-back paths are gone, and all `~/.aws/config`
+  writers now go through the atomic locked primitive so concurrent edits
+  can no longer truncate the file. Reflected entries surface in the auth
+  picker as read-only and are distinguished from stored profiles by a new
+  `AuthProfile.read_only` flag.
 * **AWS SSO sessions as first-class auth profiles** — A new `aws-sso-session`
   auth provider models the `[sso-session NAME]` block of `~/.aws/config` as
   its own profile, and `aws-sso` profiles reference it via a generic
@@ -18,6 +41,10 @@ All notable changes to DBFlux will be documented in this file.
   provider so re-importing matches sessions by name. Account/role dropdowns
   always probe with a session marker, so they populate as soon as a valid
   SSO session exists without forcing a new login.
+* **Copy-to-clipboard export from the data grid (#153)** — The data-grid
+  export menu now offers *Copy to clipboard* alongside *Save as file* for
+  every text-friendly format. Binary export is deliberately disabled with
+  guidance to use Hex or Base64 instead.
 
 ### Changed
 
@@ -30,6 +57,32 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Native file dialog now has a fallback path with user feedback (#153)** —
+  `rfd::AsyncFileDialog::save_file()` returns `None` on both user-cancel and
+  backend-failure, so on Linux systems without `xdg-desktop-portal` /
+  `zenity` / `kdialog` the data-grid export and script *Save As* silently
+  dropped the action. DBFlux now pre-flights the backend via a PATH probe;
+  when none is available it writes to `~/.local/share/dbflux/exports/` with
+  a non-clobbering filename, raises a warning toast, and emits a
+  `result_export_fallback` audit event. When a backend exists, `None` is
+  treated as a genuine cancel. Script *Save As* mirrors the same pattern
+  and now surfaces write failures via toast instead of a silent log line.
+* **Schema drift modal no longer fires on every SELECT for multi-FK tables
+  (#151)** — The MySQL/MariaDB and MSSQL drivers built their foreign-key
+  list from a `HashMap`'s values, whose iteration order is nondeterministic.
+  Drift compares cached vs fresh foreign keys positionally and hashes the
+  fingerprint in order, so two identical fetches in a different order looked
+  like a change. Both drivers now use `ForeignKeyBuilder::build_sorted()`,
+  matching the order the SQL `ORDER BY` already specifies and the Postgres
+  driver's behavior.
+* **MariaDB and InfluxDB profiles default to the correct config variants**
+  — `default_db_config_for_kind` fell through to `default_postgres()` for
+  MariaDB and InfluxDB, so a profile loaded via this fallback got a Postgres
+  config while keeping its real kind; saving then persisted the mismatch,
+  and connecting failed with *"Expected MySQL configuration"* for MariaDB.
+  MariaDB now maps to `default_mysql()` and InfluxDB to `default_influxdb()`;
+  the catch-all arm is removed so new `DbKind` variants fail to compile
+  instead of silently degrading to Postgres.
 * **AWS SSO login no longer hangs after a successful browser flow** — The
   cache lookup that polled for the new SSO token relied on
   `sha1(start_url)` as the filename. AWS CLI v2 actually names the file
