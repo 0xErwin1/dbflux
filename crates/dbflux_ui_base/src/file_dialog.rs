@@ -62,8 +62,13 @@ pub fn fallback_export_dir() -> Result<PathBuf, String> {
 
     let exports = data_dir.join("exports");
 
-    std::fs::create_dir_all(&exports)
-        .map_err(|e| format!("Failed to create exports directory {}: {}", exports.display(), e))?;
+    std::fs::create_dir_all(&exports).map_err(|e| {
+        format!(
+            "Failed to create exports directory {}: {}",
+            exports.display(),
+            e
+        )
+    })?;
 
     Ok(exports)
 }
