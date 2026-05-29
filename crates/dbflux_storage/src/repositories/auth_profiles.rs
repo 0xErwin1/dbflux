@@ -81,7 +81,7 @@ impl AuthProfileRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT id, name, provider_id, enabled, created_at, updated_at
+                SELECT id, name, provider_id, enabled, created_at, updated_at, dangling_origin
                 FROM cfg_auth_profiles
                 ORDER BY name ASC
                 "#,
@@ -100,6 +100,7 @@ impl AuthProfileRepository {
                     enabled: row.get::<_, i32>(3)? != 0,
                     created_at: row.get(4)?,
                     updated_at: row.get(5)?,
+                    dangling_origin: row.get(6)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -132,7 +133,7 @@ impl AuthProfileRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT id, name, provider_id, enabled, created_at, updated_at
+                SELECT id, name, provider_id, enabled, created_at, updated_at, dangling_origin
                 FROM cfg_auth_profiles
                 WHERE id = ?1
                 "#,
@@ -150,6 +151,7 @@ impl AuthProfileRepository {
                 enabled: row.get::<_, i32>(3)? != 0,
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
+                dangling_origin: row.get(6)?,
             })
         });
 
@@ -221,6 +223,7 @@ impl AuthProfileRepository {
                     name = ?2,
                     provider_id = ?3,
                     enabled = ?4,
+                    dangling_origin = ?5,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -229,6 +232,7 @@ impl AuthProfileRepository {
                     profile.name,
                     profile.provider_id,
                     profile.enabled as i32,
+                    profile.dangling_origin,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -251,6 +255,25 @@ impl AuthProfileRepository {
         Ok(())
     }
 
+    /// Marks a stored auth profile as dangling by setting its `dangling_origin`.
+    ///
+    /// This is a targeted update that leaves all other fields intact.
+    pub fn set_dangling_origin(&self, id: &str, origin: &str) -> Result<(), StorageError> {
+        self.conn()
+            .execute(
+                "UPDATE cfg_auth_profiles \
+                 SET dangling_origin = ?2, updated_at = datetime('now') \
+                 WHERE id = ?1",
+                rusqlite::params![id, origin],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
+
+        Ok(())
+    }
+
     /// Inserts a new auth profile from the core AuthProfile type.
     pub fn insert_auth_profile(
         &self,
@@ -263,6 +286,7 @@ impl AuthProfileRepository {
             enabled: profile.enabled,
             created_at: String::new(),
             updated_at: String::new(),
+            dangling_origin: None,
         };
 
         // Insert the profile
@@ -313,6 +337,10 @@ impl AuthProfileRepository {
 /// DTO for auth profile storage.
 /// Note: fields are stored in auth_profile_fields child table.
 /// The fields_json column was dropped in migration v10.
+///
+/// `dangling_origin` is `None` for healthy profiles. When set, the profile is
+/// dangling — the stored row exists but the backing credential source is gone.
+/// See migration 010 for the allowed values (`"keyring-only"`, `"file-gone"`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthProfileDto {
     pub id: String,
@@ -321,10 +349,12 @@ pub struct AuthProfileDto {
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
+    /// When present, marks the profile as dangling; see migration 010 docs.
+    pub dangling_origin: Option<String>,
 }
 
 impl AuthProfileDto {
-    /// Creates a new DTO.
+    /// Creates a new DTO without a dangling origin (healthy profile).
     pub fn new(id: Uuid, name: String, provider_id: String) -> Self {
         Self {
             id: id.to_string(),
@@ -333,6 +363,7 @@ impl AuthProfileDto {
             enabled: true,
             created_at: String::new(),
             updated_at: String::new(),
+            dangling_origin: None,
         }
     }
 }

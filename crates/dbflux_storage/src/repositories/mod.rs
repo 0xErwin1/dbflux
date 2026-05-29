@@ -3,6 +3,7 @@
 //! Each repository provides CRUD operations for a specific config domain.
 //! Config repositories operate on `dbflux.db`.
 
+pub mod app_meta;
 pub mod audit;
 pub mod audit_settings;
 pub mod saved_filters;

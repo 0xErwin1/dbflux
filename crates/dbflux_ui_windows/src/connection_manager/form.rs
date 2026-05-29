@@ -183,6 +183,48 @@ impl ConnectionManagerWindow {
             }
         }
 
+        // T-5.4: Dangling-reference guard. When a bound auth-profile UUID no
+        // longer resolves to any entry in the current reflected+stored union,
+        // block the connect with a user-facing message. When the stored profile
+        // is present but marked dangling, tailor the message to the origin.
+        if let Some(auth_profile_id) = self.selected_auth_profile_id {
+            let bound_profile = self
+                .app_state
+                .read(cx)
+                .list_auth_profiles()
+                .into_iter()
+                .find(|profile| profile.id == auth_profile_id);
+
+            match bound_profile {
+                None => {
+                    self.validation_errors.push(format!(
+                        "AWS profile '{}' not found in ~/.aws/config — please restore or \
+                         recreate the profile in ~/.aws/config before connecting.",
+                        auth_profile_id
+                    ));
+                }
+
+                Some(profile) if profile.dangling_origin.as_deref() == Some("keyring-only") => {
+                    self.validation_errors.push(format!(
+                        "Auth profile '{}' is only in the DBFlux keyring and no longer has a \
+                         corresponding entry in ~/.aws/config or ~/.aws/credentials. \
+                         Add the credentials to ~/.aws/credentials to connect with this profile.",
+                        profile.name
+                    ));
+                }
+
+                Some(profile) if profile.dangling_origin.is_some() => {
+                    self.validation_errors.push(format!(
+                        "Auth profile '{}' could not be found in ~/.aws/config. \
+                         Please recreate the profile or update the connection binding.",
+                        profile.name
+                    ));
+                }
+
+                _ => {}
+            }
+        }
+
         let uses_dynamic_auth_sources = self.collect_value_refs(cx).values().any(|value_ref| {
             matches!(
                 value_ref,
@@ -199,14 +241,14 @@ impl ConnectionManagerWindow {
                 return self.validation_errors.is_empty();
             };
 
-            let selected_profile = self
+            let bound_profile = self
                 .app_state
                 .read(cx)
-                .auth_profiles()
-                .iter()
+                .list_auth_profiles()
+                .into_iter()
                 .find(|profile| profile.id == auth_profile_id);
 
-            if let Some(profile) = selected_profile {
+            if let Some(profile) = bound_profile {
                 if self
                     .app_state
                     .read(cx)
@@ -219,10 +261,8 @@ impl ConnectionManagerWindow {
                     ));
                 }
             } else {
-                self.validation_errors.push(
-                    "Selected Auth Profile no longer exists. Re-select it in Access tab."
-                        .to_string(),
-                );
+                // Already reported above in the dangling-reference guard; no
+                // duplicate message needed.
             }
         }
 
@@ -739,7 +779,8 @@ impl ConnectionManagerWindow {
                         Err(error) => {
                             info!("Test connection failed: {}", error);
                             this.test_status = TestStatus::Failed;
-                            this.test_error = Some(error);
+                            this.test_error =
+                                Some(normalize_aws_credentials_error(&profile_name, &error));
                             this.test_result = None;
                         }
                     }
@@ -753,5 +794,81 @@ impl ConnectionManagerWindow {
             }
         })
         .detach();
+    }
+}
+
+/// Detect AWS SDK credential-resolution failures and replace them with a
+/// user-facing message that directs to `~/.aws/credentials`.
+///
+/// AWS SDK error strings for missing credentials typically contain phrases
+/// like "no credentials" or "CredentialsNotLoaded". We normalise these so the
+/// user sees a clear, actionable message and is never prompted to enter a
+/// secret access key directly into DBFlux.
+fn normalize_aws_credentials_error(profile_name: &str, error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+
+    let is_missing_credentials = lower.contains("no credentials")
+        || lower.contains("credentials not found")
+        || lower.contains("credentialsnotloaded")
+        || lower.contains("no credential providers")
+        || lower.contains("no credentials in chain");
+
+    if is_missing_credentials {
+        return format!(
+            "AWS credentials for profile '{}' could not be resolved. \
+             Add the credentials to ~/.aws/credentials (or use environment \
+             variables / IAM role) and retry. \
+             DBFlux does not store AWS access keys — credentials are read \
+             directly by the AWS SDK.",
+            profile_name
+        );
+    }
+
+    error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn normalize_aws_credentials_error_rewrites_no_credentials() {
+        let result = normalize_aws_credentials_error("my-profile", "no credentials provided");
+        assert!(
+            result.contains("~/.aws/credentials"),
+            "error should direct user to ~/.aws/credentials"
+        );
+        assert!(!result.contains("secret"), "error must not mention secrets");
+        assert!(
+            result.contains("my-profile"),
+            "error should name the profile"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn normalize_aws_credentials_error_rewrites_credentials_not_found() {
+        let result =
+            normalize_aws_credentials_error("ci-user", "Credentials not found for profile");
+        assert!(result.contains("~/.aws/credentials"));
+        assert!(result.contains("ci-user"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn normalize_aws_credentials_error_rewrites_no_credentials_in_chain() {
+        let result = normalize_aws_credentials_error("prod", "no credentials in chain");
+        assert!(result.contains("~/.aws/credentials"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn normalize_aws_credentials_error_preserves_unrelated_errors() {
+        let original = "connection refused: 127.0.0.1:5432";
+        let result = normalize_aws_credentials_error("pg-local", original);
+        assert_eq!(result, original);
+    }
+
+    #[::core::prelude::v1::test]
+    fn normalize_aws_credentials_error_is_case_insensitive() {
+        let result = normalize_aws_credentials_error("dev", "NO CREDENTIALS");
+        assert!(result.contains("~/.aws/credentials"));
     }
 }

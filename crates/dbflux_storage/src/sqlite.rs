@@ -44,6 +44,20 @@ fn apply_default_pragmas(conn: &Connection, path: &Path) -> Result<(), StorageEr
     Ok(())
 }
 
+/// Toggles foreign-key enforcement on `conn`.
+///
+/// Must be called OUTSIDE any open transaction — `PRAGMA foreign_keys` is a
+/// no-op while a transaction is active. Migrations that rebuild a table (drop +
+/// recreate to change constraints) require enforcement OFF, otherwise dropping
+/// a referenced parent triggers cascading deletes on its child rows.
+pub fn set_foreign_keys(conn: &Connection, enabled: bool) -> Result<(), StorageError> {
+    conn.pragma_update(None, "foreign_keys", if enabled { "ON" } else { "OFF" })
+        .map_err(|source| StorageError::Sqlite {
+            path: std::path::PathBuf::from("<dbflux>"),
+            source,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

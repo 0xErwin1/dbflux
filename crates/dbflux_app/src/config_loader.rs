@@ -756,6 +756,7 @@ pub fn save_auth_profiles(
             enabled: profile.enabled,
             created_at: String::new(),
             updated_at: String::new(),
+            dangling_origin: None,
         };
 
         if existing_ids.contains(&dto.id) {
@@ -1516,6 +1517,8 @@ fn load_auth_profiles(
                     provider_id: dto.provider_id,
                     fields,
                     enabled: dto.enabled,
+                    read_only: false,
+                    dangling_origin: dto.dangling_origin,
                 })
             })
             .collect()
