@@ -3184,12 +3184,6 @@ impl DataGridPanel {
         let formats = dbflux_export::available_formats(&self.result.shape);
         let menu_open = self.export_menu_open;
 
-        let label = if formats.len() == 1 {
-            format!("Export {}", formats[0].name())
-        } else {
-            "Export".to_string()
-        };
-
         div()
             .id("export-trigger")
             .relative()
@@ -3209,14 +3203,12 @@ impl DataGridPanel {
                     .small()
                     .color(theme.muted_foreground),
             )
-            .child(Text::caption(label).muted_foreground())
-            .when(formats.len() > 1, |d| {
-                d.child(
-                    Icon::new(AppIcon::ChevronDown)
-                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                        .color(theme.muted_foreground),
-                )
-            })
+            .child(Text::caption("Export").muted_foreground())
+            .child(
+                Icon::new(AppIcon::ChevronDown)
+                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                    .color(theme.muted_foreground),
+            )
             .when(menu_open, |d| {
                 d.child(self.render_export_menu(formats, theme, cx))
             })
@@ -3228,12 +3220,28 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let items: Vec<AnyElement> = formats
-            .iter()
-            .enumerate()
-            .map(|(idx, &format)| {
+        let section_header = |label: &'static str| -> AnyElement {
+            div()
+                .px(Spacing::SM)
+                .mx(Spacing::XS)
+                .pt(Spacing::XS)
+                .pb_0()
+                .child(
+                    Text::caption(label)
+                        .font_size(FontSizes::XS)
+                        .muted_foreground(),
+                )
+                .into_any_element()
+        };
+
+        let mut items: Vec<AnyElement> = Vec::with_capacity(formats.len() * 2 + 3);
+
+        items.push(section_header("Save as file"));
+
+        for (idx, &format) in formats.iter().enumerate() {
+            items.push(
                 div()
-                    .id(SharedString::from(format!("export-{}", idx)))
+                    .id(SharedString::from(format!("export-save-{}", idx)))
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
@@ -3247,10 +3255,56 @@ impl DataGridPanel {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.export_with_format(format, window, cx);
                     }))
+                    .child(
+                        Icon::new(AppIcon::Download)
+                            .small()
+                            .color(theme.muted_foreground),
+                    )
                     .child(Text::body(format.name()))
-                    .into_any_element()
-            })
-            .collect();
+                    .into_any_element(),
+            );
+        }
+
+        items.push(
+            div()
+                .mx(Spacing::XS)
+                .my(Spacing::XS)
+                .h(px(1.0))
+                .bg(theme.border)
+                .into_any_element(),
+        );
+
+        items.push(section_header("Copy to clipboard"));
+
+        for (idx, &format) in formats.iter().enumerate() {
+            let copyable = !matches!(format, dbflux_export::ExportFormat::Binary);
+            let row = div()
+                .id(SharedString::from(format!("export-copy-{}", idx)))
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .h(Heights::ROW_COMPACT)
+                .px(Spacing::SM)
+                .mx(Spacing::XS)
+                .rounded(Radii::SM)
+                .text_size(FontSizes::SM)
+                .when(copyable, |d| {
+                    d.cursor_pointer()
+                        .hover(|d| d.bg(theme.secondary))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.copy_to_clipboard_with_format(format, window, cx);
+                        }))
+                })
+                .when(!copyable, |d| d.opacity(0.5))
+                .child(
+                    Icon::new(AppIcon::Copy)
+                        .small()
+                        .color(theme.muted_foreground),
+                )
+                .child(Text::body(format.name()))
+                .into_any_element();
+            items.push(row);
+        }
 
         deferred(
             surface_raised(cx)
@@ -3258,7 +3312,7 @@ impl DataGridPanel {
                 .bottom_full()
                 .right_0()
                 .mb(Spacing::XS)
-                .w(px(160.0))
+                .w(px(200.0))
                 .shadow_lg()
                 .py(Spacing::XS)
                 .occlude()
