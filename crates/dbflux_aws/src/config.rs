@@ -964,6 +964,7 @@ pub(crate) fn replace_or_append_profile_block(
     contents: &str,
     name: &str,
     fields: &[(&str, &str)],
+    remove_keys: &[&str],
 ) -> String {
     let header = if name.eq_ignore_ascii_case("default") {
         "[default]".to_string()
@@ -972,7 +973,7 @@ pub(crate) fn replace_or_append_profile_block(
     };
 
     let header_lower = header.to_lowercase();
-    let new_block = build_profile_block(&header, contents, fields);
+    let new_block = build_profile_block(&header, contents, fields, remove_keys);
 
     let Some(raw) = section_raw_bytes(contents, &header) else {
         // Section absent — append at EOF.
@@ -1006,7 +1007,7 @@ pub(crate) fn replace_or_append_sso_session_block(
 ) -> String {
     let header = format!("[sso-session {name}]");
     let header_lower = header.to_lowercase();
-    let new_block = build_profile_block(&header, contents, fields);
+    let new_block = build_profile_block(&header, contents, fields, &[]);
 
     let Some(raw) = section_raw_bytes(contents, &header) else {
         let mut result = contents.to_string();
@@ -1029,7 +1030,21 @@ pub(crate) fn replace_or_append_sso_session_block(
 }
 
 /// Builds the replacement `[profile NAME]` section block for `~/.aws/config`.
-fn build_profile_block(header: &str, contents: &str, fields: &[(&str, &str)]) -> String {
+///
+/// Existing on-disk keys not present in `fields` are preserved (merge
+/// semantics), so unmanaged keys survive a save. Keys listed in `remove_keys`
+/// are dropped from the section entirely — used to enforce mutually exclusive
+/// AWS keys (e.g. a session-backed profile must not also carry an inline
+/// `sso_start_url`).
+fn build_profile_block(
+    header: &str,
+    contents: &str,
+    fields: &[(&str, &str)],
+    remove_keys: &[&str],
+) -> String {
+    let remove: std::collections::HashSet<String> =
+        remove_keys.iter().map(|k| k.to_lowercase()).collect();
+
     // Collect existing keys from the current on-disk section, in order.
     let mut existing_keys: Vec<(String, String)> = Vec::new();
     if let Some(raw) = section_raw_bytes(contents, header) {
@@ -1052,6 +1067,10 @@ fn build_profile_block(header: &str, contents: &str, fields: &[(&str, &str)]) ->
 
     let mut emitted_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (key, existing_val) in &existing_keys {
+        if remove.contains(key) {
+            continue;
+        }
+
         let value = overrides
             .get(key)
             .map(String::as_str)
@@ -1062,6 +1081,9 @@ fn build_profile_block(header: &str, contents: &str, fields: &[(&str, &str)]) ->
 
     for (key, value) in fields {
         let key_lower = key.to_lowercase();
+        if remove.contains(&key_lower) {
+            continue;
+        }
         if !emitted_keys.contains(&key_lower) && !value.is_empty() {
             writeln!(block, "{key_lower} = {value}").ok();
         }
@@ -1980,6 +2002,7 @@ output=json
                 existing,
                 "b",
                 &[("region", "us-west-2"), ("output", "text")],
+                &[],
             )
         })
         .expect("config write");

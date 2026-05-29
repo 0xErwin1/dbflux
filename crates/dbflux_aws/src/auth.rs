@@ -382,6 +382,16 @@ impl AwsSsoAuthProvider {
                     fields.insert("sso_session".to_string(), session_name.clone());
 
                     if let Some(session) = session_map.get(&session_name.to_lowercase()) {
+                        // Expose the referenced session's deterministic UUID
+                        // under the form's `sso_session_ref` field so the
+                        // Settings dropdown pre-selects it on load. The value
+                        // must match the id minted by the sso-session provider,
+                        // so derive it from the section's canonical header name.
+                        fields.insert(
+                            "sso_session_ref".to_string(),
+                            aws_profile_uuid("aws-sso-session", &session.name).to_string(),
+                        );
+
                         if let Some(ref url) = session.sso_start_url {
                             fields.insert("sso_start_url".to_string(), url.clone());
                         }
@@ -1007,8 +1017,17 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     /// Returns `Conflict { file: Config }` without writing if the section was
     /// modified externally between `open_edit_snapshot` and this call.
     ///
-    /// Fields written: `sso_start_url`, `sso_account_id`, `sso_region`,
-    /// `sso_role_name`, `sso_session`, `region`, `output`.
+    /// When the profile references an `[sso-session NAME]` block (the
+    /// `sso_session_ref` form field is set, surfaced here as
+    /// `sso_session_ref_name` after ref expansion), the written section uses
+    /// the `sso_session = NAME` indirection and omits `sso_start_url` /
+    /// `sso_region`, which belong to the session block. Otherwise those keys
+    /// are written inline.
+    ///
+    /// Fields written (inline form): `sso_start_url`, `sso_account_id`,
+    /// `sso_region`, `sso_role_name`, `region`, `output`.
+    /// Fields written (session-ref form): `sso_session`, `sso_account_id`,
+    /// `sso_role_name`, `region`, `output`.
     fn save_edit(
         &self,
         name: &str,
@@ -1020,18 +1039,39 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             cache.config_path().to_path_buf()
         };
 
-        let config_fields: Vec<(String, String)> = [
-            "sso_start_url",
-            "sso_account_id",
-            "sso_region",
-            "sso_role_name",
-            "sso_session",
-            "region",
-            "output",
-        ]
-        .iter()
-        .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
-        .collect();
+        let session_ref_name = fields
+            .get("sso_session_ref_name")
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+
+        // `sso_session` and inline `sso_start_url` / `sso_region` are mutually
+        // exclusive in a `[profile]` block: when a session is referenced the
+        // URL/region live in the `[sso-session]` block, and the AWS SDK rejects
+        // a profile that carries both. Because the block writer merges (keeps
+        // unmanaged on-disk keys), the opposite key must be removed explicitly.
+        let (config_fields, remove_keys): (Vec<(String, String)>, &[&str]) =
+            if let Some(session_name) = session_ref_name {
+                let mut collected = vec![("sso_session".to_string(), session_name.to_string())];
+                collected.extend(
+                    ["sso_account_id", "sso_role_name", "region", "output"]
+                        .iter()
+                        .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone()))),
+                );
+                (collected, &["sso_start_url", "sso_region"])
+            } else {
+                let collected = [
+                    "sso_start_url",
+                    "sso_account_id",
+                    "sso_region",
+                    "sso_role_name",
+                    "region",
+                    "output",
+                ]
+                .iter()
+                .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
+                .collect();
+                (collected, &["sso_session"])
+            };
 
         let snapshot_hash = snapshot.config_section.as_ref().map(|h| h.0);
 
@@ -1057,7 +1097,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
-            crate::config::replace_or_append_profile_block(existing, name, &borrowed)
+            crate::config::replace_or_append_profile_block(existing, name, &borrowed, remove_keys)
         });
 
         if result.is_err() {
@@ -1489,7 +1529,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
                     .iter()
                     .map(|(k, v)| (k.as_str(), v.as_str()))
                     .collect();
-                crate::config::replace_or_append_profile_block(existing, name, &borrowed)
+                crate::config::replace_or_append_profile_block(existing, name, &borrowed, &[])
             });
 
             if result.is_err() || conflict_detected.get() {
@@ -3288,6 +3328,49 @@ sso_region = us-east-1
             other_hash_before.map(|h| h.0),
             other_hash_after.map(|h| h.0),
             "other section must be byte-identical after surgical write"
+        );
+    }
+
+    /// A profile referencing a session writes `sso_session = NAME` and keeps
+    /// `sso_start_url` / `sso_region` out of the profile block (they belong to
+    /// the session block). The session name arrives via `sso_session_ref_name`,
+    /// stashed by ref expansion before save_edit is called.
+    #[test]
+    fn sso_save_edit_session_ref_persists_indirection_not_inline_url() {
+        // Pre-existing inline sso_start_url / sso_region must be removed when a
+        // session is referenced (the block writer merges, so omission alone
+        // would leave the invalid both-present combo the AWS SDK rejects).
+        let config = "[profile dev-sso]\nsso_start_url = https://stale.awsapps.com/start\nsso_region = us-west-2\nsso_account_id = 111111111111\n";
+        let (provider, config_path, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
+
+        let snapshot = provider.open_edit_snapshot("dev-sso");
+
+        let mut fields = HashMap::new();
+        fields.insert("sso_session_ref_name".to_string(), "my-org".to_string());
+        // A folded URL is present on the form but must NOT be written inline.
+        fields.insert(
+            "sso_start_url".to_string(),
+            "https://example.awsapps.com/start".to_string(),
+        );
+        fields.insert("sso_account_id".to_string(), "222222222222".to_string());
+
+        let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
+        assert!(matches!(outcome, AuthSaveOutcome::Saved));
+
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        let section = crate::config::parse_aws_config_str(&after)
+            .into_iter()
+            .find(|p| p.name == "dev-sso")
+            .expect("dev-sso section must exist");
+
+        assert_eq!(
+            section.sso_session.as_deref(),
+            Some("my-org"),
+            "sso_session indirection must be persisted"
+        );
+        assert!(
+            !after.contains("sso_start_url"),
+            "sso_start_url must not be written inline when a session is referenced"
         );
     }
 

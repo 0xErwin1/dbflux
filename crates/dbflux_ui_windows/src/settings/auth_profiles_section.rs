@@ -837,26 +837,38 @@ impl AuthProfilesSection {
             let dep_hash = Self::hash_deps(&deps);
             let cache_key = (provider_id, field_id.clone(), dep_hash);
 
-            if let Some(cached) = self.options_cache.get(&cache_key) {
-                let current_value = self
-                    .form_inputs
-                    .get(&field_id)
-                    .map(|input| input.read(cx).value().to_string())
-                    .unwrap_or_default();
+            let current_value = self
+                .form_inputs
+                .get(&field_id)
+                .map(|input| input.read(cx).value().to_string())
+                .unwrap_or_default();
 
-                let items: Vec<DropdownItem> = cached
+            // Always re-sync the dropdown: the entity is reused across profiles
+            // (keyed by field id), so a cache miss must reset it rather than
+            // leave a stale label from a previously loaded profile. With no
+            // fetched options (cache cleared on load, or session expired), fall
+            // back to the profile's own stored value as a single item.
+            let items: Vec<DropdownItem> = match self.options_cache.get(&cache_key) {
+                Some(cached) => cached
                     .options
                     .iter()
                     .map(|opt| DropdownItem::with_value(opt.label.clone(), opt.value.clone()))
-                    .collect();
+                    .collect(),
+                None if !current_value.is_empty() => {
+                    vec![DropdownItem::with_value(
+                        current_value.clone(),
+                        current_value.clone(),
+                    )]
+                }
+                None => Vec::new(),
+            };
 
-                let selected_index = items.iter().position(|item| item.value == current_value);
+            let selected_index = items.iter().position(|item| item.value == current_value);
 
-                dropdown.update(cx, |d, cx| {
-                    d.set_items(items, cx);
-                    d.set_selected_index(selected_index, cx);
-                });
-            }
+            dropdown.update(cx, |d, cx| {
+                d.set_items(items, cx);
+                d.set_selected_index(selected_index, cx);
+            });
         }
 
         let login_hint = self.field_login_hint.get(&field_id).cloned();
@@ -905,14 +917,14 @@ impl AuthProfilesSection {
             "— None —".to_string(),
             String::new(),
         )];
-        // Stored-only access is intentional: ref-type dropdowns list only
-        // profiles that exist in storage (reflected profiles cannot be
-        // referenced across profiles since they have no writable UUID).
-        #[allow(deprecated)]
+        // Use the reflected union, not the stored-only slice: AWS sso-session
+        // profiles are reflected from ~/.aws/config and are absent from storage,
+        // while stale stored AWS rows are excluded by list_auth_profiles(). Their
+        // deterministic UUIDs match the expansion lookup, which reads the same seam.
         let referenced_profiles: Vec<(String, String)> = self
             .app_state
             .read(cx)
-            .auth_profiles()
+            .list_auth_profiles()
             .iter()
             .filter(|profile| profile.provider_id == *ref_provider_id && profile.enabled)
             .map(|profile| (profile.id.to_string(), profile.name.clone()))
@@ -1383,7 +1395,7 @@ impl AuthProfilesSection {
 
         // Build the edited fields map.  Blank WriteOnly fields are excluded so
         // the provider treats them as "preserve existing on-disk value".
-        let fields: HashMap<String, String> = self
+        let raw_fields: HashMap<String, String> = self
             .form_inputs
             .iter()
             .filter_map(|(field_id, input)| {
@@ -1398,6 +1410,32 @@ impl AuthProfilesSection {
             })
             .collect();
 
+        // Expand AuthProfileRef fields so save_edit() receives the referenced
+        // profile's name (e.g. `sso_session_ref_name`) and can persist the
+        // `sso_session = NAME` indirection. Mirrors the login path; a no-op for
+        // providers whose form declares no AuthProfileRef fields.
+        let registry_snapshot: Vec<AuthProfile> = self.app_state.read(cx).list_auth_profiles();
+        let raw_profile = AuthProfile {
+            id: self.editing_profile_id.unwrap_or_else(Uuid::new_v4),
+            name: name.clone(),
+            provider_id: provider_id.clone(),
+            fields: raw_fields,
+            enabled: self.profile_enabled,
+            read_only: false,
+            dangling_origin: None,
+        };
+        let fields = dbflux_core::auth::expand_auth_profile_refs(
+            &raw_profile,
+            provider.form_def(),
+            &|target_id| {
+                registry_snapshot
+                    .iter()
+                    .find(|p| p.id == *target_id)
+                    .cloned()
+            },
+        )
+        .fields;
+
         let outcome = provider.save_edit(&name, &fields, &snapshot);
 
         match outcome {
@@ -1409,14 +1447,17 @@ impl AuthProfilesSection {
                     cx.emit(AppStateChanged);
                 });
 
-                self.provider_login_status =
-                    Some(("Profile saved to ~/.aws/config.".to_string(), true));
-
                 // Reload the form to pick up the new values and a fresh snapshot.
+                // This must run before setting the status: load_profile_into_form
+                // resets provider_login_status, which would otherwise wipe the
+                // success message before it is ever rendered.
                 let profile_id = self.editing_profile_id;
                 if let Some(id) = profile_id {
                     self.load_profile_into_form(id, window, cx);
                 }
+
+                self.provider_login_status = Some(("Profile saved.".to_string(), true));
+                cx.notify();
             }
 
             AuthSaveOutcome::Conflict { file } => {
