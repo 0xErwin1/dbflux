@@ -23,6 +23,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::AsyncUpdateResultExt;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Task, Window};
 use gpui_component::ActiveTheme;
@@ -341,7 +342,7 @@ impl InspectorPanel {
             return;
         };
 
-        cx.spawn(async move |_this, _cx| {
+        cx.spawn(async move |_this, cx| {
             let catalog = conn.instance_catalog();
             let result = match catalog {
                 Some(cat) => {
@@ -362,8 +363,9 @@ impl InspectorPanel {
                 &result,
             );
 
-            if let Err(e) = result {
-                log::warn!("[inspector kill] row action '{}' failed: {}", action_id, e);
+            if let Err(ref e) = result {
+                let uf = kill_error_to_user_facing(&action_id, &action_label, &metric_id, e);
+                report_error_async(uf, cx);
             }
         })
         .detach();
@@ -606,6 +608,22 @@ fn build_inspector_request(metric_id: &str) -> QueryRequest {
     }
 }
 
+/// Converts a row-action failure to a `UserFacingError` suitable for display.
+///
+/// Constructs a `Driver`-kind error whose summary is the driver error message.
+/// The `action_label` and `metric_id` are embedded in the cause so the user
+/// knows which operation failed.
+pub(crate) fn kill_error_to_user_facing(
+    _action_id: &str,
+    action_label: &str,
+    metric_id: &str,
+    err: &dbflux_core::DbError,
+) -> UserFacingError {
+    UserFacingError::new(ErrorKind::Driver, err.to_string()).with_cause(format!(
+        "Action '{action_label}' on inspector '{metric_id}' failed"
+    ))
+}
+
 fn emit_kill_audit(
     audit_service: &dbflux_audit::AuditService,
     metric_id: &str,
@@ -661,7 +679,8 @@ fn emit_kill_audit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbflux_core::ExecutionSourceContext;
+    use dbflux_core::{DbError, ExecutionSourceContext};
+    use dbflux_ui_base::user_error::{ErrorKind, UserFacingError};
 
     /// REQ-DOC-3, REQ-UI-2: `build_inspector_context` must produce an
     /// `InstanceInspectorQuery` with exactly the given `metric_id` and no
@@ -699,6 +718,37 @@ mod tests {
         assert_eq!(
             metric_id, "pg.locks",
             "metric_id must match the constructed value"
+        );
+    }
+
+    /// BF9: a kill failure must be convertible to a `UserFacingError` of kind `Driver`
+    /// carrying the driver error message as its `summary`.
+    #[test]
+    fn kill_error_produces_driver_kind_user_facing_error() {
+        let err = DbError::QueryFailed(
+            "permission denied for function pg_terminate_backend"
+                .to_string()
+                .into(),
+        );
+        let uf = kill_error_to_user_facing("kill", "Terminate connection", "pg.activity", &err);
+        assert_eq!(uf.kind, ErrorKind::Driver);
+        assert!(
+            uf.summary.contains("permission denied"),
+            "summary must carry the driver error text; got: {:?}",
+            uf.summary
+        );
+    }
+
+    /// BF9: the summary includes context (metric_id and action label) so the user
+    /// knows which operation failed.
+    #[test]
+    fn kill_error_summary_includes_action_context() {
+        let err = DbError::NotSupported("driver does not support instance catalog".to_string());
+        let uf = kill_error_to_user_facing("kill", "Kill process", "mysql.processlist", &err);
+        assert_eq!(uf.kind, ErrorKind::Driver);
+        assert!(
+            !uf.summary.is_empty(),
+            "summary must not be empty even for NotSupported errors"
         );
     }
 

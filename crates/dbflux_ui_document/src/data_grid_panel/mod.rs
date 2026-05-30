@@ -326,8 +326,7 @@ enum SqlGenerateKind {
 }
 
 /// Callback type for providing row-level inspector actions (e.g. kill/cancel).
-type RowActionProvider =
-    Arc<dyn Fn(&str) -> Vec<dbflux_core::InspectorRowAction> + Send + Sync>;
+type RowActionProvider = Arc<dyn Fn(&str) -> Vec<dbflux_core::InspectorRowAction> + Send + Sync>;
 
 /// Reusable data grid panel with filter bar, grid, toolbar, and status bar.
 /// Used both embedded in ScriptDocument and as standalone DataDocument.
