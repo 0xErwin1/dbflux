@@ -10,8 +10,8 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbError, DbKind, DriverFormDef, DriverMetadata, FormValues,
 };
-use dbflux_ipc::driver_protocol::DriverResponseBody;
 use dbflux_ipc::ExternalAuditEmitter;
+use dbflux_ipc::driver_protocol::DriverResponseBody;
 use interprocess::local_socket::{GenericNamespaced, Name, Stream as IpcStream, prelude::*};
 
 use crate::connection::IpcConnection;
@@ -711,12 +711,9 @@ impl dbflux_core::DbDriver for IpcDriver {
 
         let name = Self::parse_socket_name(&self.socket_id)?;
 
-        let client = RpcClient::connect_with_audit(
-            name,
-            self.socket_id.clone(),
-            self.audit_emitter.clone(),
-        )
-        .map_err(DbError::from)?;
+        let client =
+            RpcClient::connect_with_audit(name, self.socket_id.clone(), self.audit_emitter.clone())
+                .map_err(DbError::from)?;
 
         let profile_json = serde_json::to_string(profile)
             .map_err(|e| DbError::InvalidProfile(format!("JSON serialization failed: {e}")))?;
@@ -762,12 +759,9 @@ impl dbflux_core::DbDriver for IpcDriver {
 
         let name = Self::parse_socket_name(&self.socket_id)?;
 
-        let client = RpcClient::connect_with_audit(
-            name,
-            self.socket_id.clone(),
-            self.audit_emitter.clone(),
-        )
-        .map_err(DbError::from)?;
+        let client =
+            RpcClient::connect_with_audit(name, self.socket_id.clone(), self.audit_emitter.clone())
+                .map_err(DbError::from)?;
 
         let profile_json = serde_json::to_string(profile)
             .map_err(|e| DbError::InvalidProfile(format!("JSON serialization failed: {e}")))?;

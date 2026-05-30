@@ -69,11 +69,11 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
+use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
 use crate::rpc_services::{
     AuthProviderServiceAdaptation, DriverServiceAdaptation, ExternalDriverDiagnostic,
     RpcServiceDiscovery, adapt_auth_provider_service, adapt_driver_service, discover_services,
 };
-use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
 
 #[cfg(test)]
 use crate::rpc_services::{
@@ -225,14 +225,13 @@ impl AppState {
             };
 
         let drop_counter = audit_service.external_audit_drop_counter();
-        let audit_emitter: Arc<dyn dbflux_ipc::ExternalAuditEmitter> = Arc::new(
-            ExternalAuditSink::new(
+        let audit_emitter: Arc<dyn dbflux_ipc::ExternalAuditEmitter> =
+            Arc::new(ExternalAuditSink::new(
                 Arc::new(audit_service.clone()) as Arc<dyn EventSink>,
                 drop_counter,
                 Arc::new(NoOpContextProvider),
                 crate::rpc_services::external_audit::ExternalAuditConfig::default(),
-            ),
-        );
+            ));
 
         if !services.is_empty() {
             Self::launch_rpc_services(

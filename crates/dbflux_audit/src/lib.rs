@@ -380,14 +380,10 @@ impl AuditService {
             }
             EventCategory::Connection => {
                 // ExternalAuthProvider events have no connection_id by design.
-                let is_external_auth = matches!(
-                    event.actor_type,
-                    EventActorType::ExternalAuthProvider
-                );
+                let is_external_auth =
+                    matches!(event.actor_type, EventActorType::ExternalAuthProvider);
 
-                if !is_external_auth
-                    && !Self::has_required_text(event.connection_id.as_deref())
-                {
+                if !is_external_auth && !Self::has_required_text(event.connection_id.as_deref()) {
                     return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
                         "connection_id",
                     )));

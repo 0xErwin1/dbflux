@@ -13,13 +13,13 @@ use dbflux_core::auth::{
 };
 use interprocess::local_socket::{Stream as IpcStream, prelude::*};
 
+use crate::audit::{ExternalAuditEmitter, ExternalAuditSource};
 use crate::auth::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV;
 use crate::auth_provider_protocol::{
     AuthProviderHelloRequest, AuthProviderRequestBody, AuthProviderRequestEnvelope,
     AuthProviderResponseBody, AuthProviderResponseEnvelope, FetchFieldOptionsError,
     FetchFieldOptionsRequest, LoginRequest, ResolveCredentialsRequest, ValidateSessionRequest,
 };
-use crate::audit::{ExternalAuditEmitter, ExternalAuditSource};
 use crate::envelope::{AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_V1_2, ProtocolVersion};
 use crate::framing;
 use crate::socket::auth_provider_socket_name;
@@ -153,8 +153,8 @@ impl RpcAuthProvider {
         audit_emit_opt_in: bool,
         audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
     ) -> Self {
-        use dbflux_core::auth::AuthProviderCapabilities;
         use crate::envelope::AUTH_PROVIDER_RPC_VERSION;
+        use dbflux_core::auth::AuthProviderCapabilities;
 
         Self {
             socket_id: socket_id.to_string(),
@@ -248,6 +248,7 @@ impl RpcAuthProvider {
         self.dispatch_request_loop(&mut stream, body)
     }
 
+    #[allow(clippy::result_large_err)]
     fn dispatch_request_loop<S: std::io::Read + std::io::Write>(
         &self,
         stream: &mut S,
@@ -273,17 +274,16 @@ impl RpcAuthProvider {
 
             match &response.body {
                 AuthProviderResponseBody::EmitAuditEvent(dto) if !done => {
-                    if self.audit_emit_opt_in {
-                        if let Some(sink) = &self.audit_emitter {
-                            let source = ExternalAuditSource::AuthProvider {
-                                socket_id: self.socket_id.clone(),
-                                provider_id: self.provider_id.clone(),
-                                correlation_id: correlation_id.clone(),
-                            };
-                            sink.emit(source, dto.clone());
-                        }
+                    if self.audit_emit_opt_in
+                        && let Some(sink) = &self.audit_emitter
+                    {
+                        let source = ExternalAuditSource::AuthProvider {
+                            socket_id: self.socket_id.clone(),
+                            provider_id: self.provider_id.clone(),
+                            correlation_id: correlation_id.clone(),
+                        };
+                        sink.emit(source, dto.clone());
                     }
-                    // else: silently drop — provider did not set audit_emit_opt_in
                     // Never push EmitAuditEvent frames to `responses` — keep it terminal-only.
                 }
                 _ => {
@@ -1105,8 +1105,11 @@ mod tests {
     // Layer C: dispatch_request_loop — audit frame interception
     // =========================================================================
 
+    use crate::audit::{
+        AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto,
+        ExternalAuditEmitter, ExternalAuditSource,
+    };
     use std::sync::{Arc, Mutex};
-    use crate::audit::{AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto, ExternalAuditEmitter, ExternalAuditSource};
 
     /// In-memory stream that supplies pre-encoded response bytes and absorbs writes.
     struct MockStream {
@@ -1180,7 +1183,6 @@ mod tests {
         buf
     }
 
-
     fn emit_audit_frame(request_id: u64, dto: AuditEventEmitDto) -> AuthProviderResponseEnvelope {
         AuthProviderResponseEnvelope {
             protocol_version: crate::AUTH_PROVIDER_RPC_VERSION,
@@ -1234,10 +1236,21 @@ mod tests {
             )
             .expect("dispatch should succeed");
 
-        assert_eq!(emitter.call_count(), 1, "emitter must be called once for the EmitAuditEvent frame");
-        assert_eq!(responses.len(), 1, "caller must receive only the terminal LoginResult");
+        assert_eq!(
+            emitter.call_count(),
+            1,
+            "emitter must be called once for the EmitAuditEvent frame"
+        );
+        assert_eq!(
+            responses.len(),
+            1,
+            "caller must receive only the terminal LoginResult"
+        );
         assert!(
-            matches!(responses[0].body, AuthProviderResponseBody::LoginResult { .. }),
+            matches!(
+                responses[0].body,
+                AuthProviderResponseBody::LoginResult { .. }
+            ),
             "terminal response must be LoginResult"
         );
     }
@@ -1274,9 +1287,16 @@ mod tests {
             0,
             "emitter must NOT be called when audit_emit_opt_in=false"
         );
-        assert_eq!(responses.len(), 1, "caller must still receive the terminal LoginResult");
+        assert_eq!(
+            responses.len(),
+            1,
+            "caller must still receive the terminal LoginResult"
+        );
         assert!(
-            matches!(responses[0].body, AuthProviderResponseBody::LoginResult { .. }),
+            matches!(
+                responses[0].body,
+                AuthProviderResponseBody::LoginResult { .. }
+            ),
             "terminal response must be LoginResult"
         );
     }

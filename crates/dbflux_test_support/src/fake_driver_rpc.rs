@@ -1,17 +1,16 @@
 use std::io;
 use std::thread;
 
-use dbflux_core::{
-    DatabaseCategory, DbKind, DriverFormDef, DriverMetadataBuilder, QueryLanguage,
-};
-use dbflux_ipc::{
-    DRIVER_RPC_VERSION, driver_rpc_supported_versions, driver_socket_name, framing,
-    driver_protocol::{
-        DriverCapability, DriverHelloResponse, DriverRequestEnvelope,
-        DriverResponseBody, DriverResponseEnvelope,
-    },
-};
+use dbflux_core::{DatabaseCategory, DbKind, DriverFormDef, DriverMetadataBuilder, QueryLanguage};
 use dbflux_ipc::audit::AuditEventEmitDto;
+use dbflux_ipc::{
+    DRIVER_RPC_VERSION,
+    driver_protocol::{
+        DriverCapability, DriverHelloResponse, DriverRequestEnvelope, DriverResponseBody,
+        DriverResponseEnvelope,
+    },
+    driver_rpc_supported_versions, driver_socket_name, framing,
+};
 use interprocess::local_socket::{ListenerNonblockingMode::Neither, ListenerOptions};
 
 /// Script of actions for the fake driver server to perform on each connection.
@@ -21,6 +20,9 @@ pub enum FakeDriverAction {
     Pong,
     /// Emit an audit event (intermediate, `done=false`) then pong.
     EmitAuditThenPong(AuditEventEmitDto),
+    /// Emit N audit frames (all `done=false`) then a pong.
+    /// Used to exercise the rate-limit drop path while verifying session continuity.
+    EmitNAuditThenPong(u32, AuditEventEmitDto),
 }
 
 #[derive(Clone, Debug)]
@@ -132,6 +134,27 @@ fn run_server(
                         body: DriverResponseBody::EmitAuditEvent(dto.clone()),
                     };
                     framing::send_msg(&mut stream, &audit_frame)?;
+
+                    let pong = DriverResponseEnvelope::ok(
+                        DRIVER_RPC_VERSION,
+                        request.request_id,
+                        request.session_id,
+                        DriverResponseBody::Pong,
+                    );
+                    framing::send_msg(&mut stream, &pong)?;
+                }
+
+                FakeDriverAction::EmitNAuditThenPong(n, dto) => {
+                    for _ in 0..*n {
+                        let audit_frame = DriverResponseEnvelope {
+                            protocol_version: DRIVER_RPC_VERSION,
+                            request_id: request.request_id,
+                            session_id: request.session_id,
+                            done: false,
+                            body: DriverResponseBody::EmitAuditEvent(dto.clone()),
+                        };
+                        framing::send_msg(&mut stream, &audit_frame)?;
+                    }
 
                     let pong = DriverResponseEnvelope::ok(
                         DRIVER_RPC_VERSION,

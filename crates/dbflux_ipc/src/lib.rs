@@ -9,8 +9,8 @@ pub mod protocol;
 pub mod socket;
 
 pub use audit::{
-    AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto,
-    ExternalAuditEmitter, ExternalAuditSource,
+    AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto, ExternalAuditEmitter,
+    ExternalAuditSource,
 };
 pub use auth::{
     APP_CONTROL_AUTH_TOKEN_ENV, AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_AUTH_TOKEN_ENV,
@@ -37,12 +37,11 @@ pub use driver_protocol::{
 };
 pub use envelope::{
     APP_CONTROL_VERSION, AUTH_PROVIDER_RPC_API_CONTRACT, AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS,
-    AUTH_PROVIDER_RPC_V1_0, AUTH_PROVIDER_RPC_V1_1, AUTH_PROVIDER_RPC_V1_2,
-    AUTH_PROVIDER_RPC_V1_3, AUTH_PROVIDER_RPC_VERSION, DRIVER_RPC_API_CONTRACT,
-    DRIVER_RPC_SUPPORTED_VERSIONS, DRIVER_RPC_V1_0, DRIVER_RPC_V1_1, DRIVER_RPC_V1_2,
-    DRIVER_RPC_VERSION, ProtocolVersion, RpcApiContract, RpcApiFamily,
-    auth_provider_rpc_supported_versions, driver_rpc_supported_versions,
-    negotiate_highest_mutual_version,
+    AUTH_PROVIDER_RPC_V1_0, AUTH_PROVIDER_RPC_V1_1, AUTH_PROVIDER_RPC_V1_2, AUTH_PROVIDER_RPC_V1_3,
+    AUTH_PROVIDER_RPC_VERSION, DRIVER_RPC_API_CONTRACT, DRIVER_RPC_SUPPORTED_VERSIONS,
+    DRIVER_RPC_V1_0, DRIVER_RPC_V1_1, DRIVER_RPC_V1_2, DRIVER_RPC_VERSION, ProtocolVersion,
+    RpcApiContract, RpcApiFamily, auth_provider_rpc_supported_versions,
+    driver_rpc_supported_versions, negotiate_highest_mutual_version,
 };
 pub use framing::{recv_msg, send_msg};
 pub use protocol::{AppControlRequest, AppControlResponse, IpcMessage, IpcResponse};

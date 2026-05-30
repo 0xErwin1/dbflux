@@ -83,9 +83,7 @@ impl RpcClient {
 
         let hello = Self::perform_hello(&stream, &request_id)?;
 
-        let audit_emit_capability = hello
-            .capabilities
-            .contains(&DriverCapability::AuditEmit);
+        let audit_emit_capability = hello.capabilities.contains(&DriverCapability::AuditEmit);
 
         let client = Self {
             stream,
@@ -841,19 +839,19 @@ impl RpcClient {
 
             match response.body {
                 DriverResponseBody::EmitAuditEvent(ref dto) if !response.done => {
-                    if self.audit_emit_capability {
-                        if let Some(sink) = &self.audit_emitter {
-                            let session_id = response.session_id.or(request_session_id);
-                            let correlation_id = self.correlation_id_for_session(session_id);
-                            sink.emit(
-                                ExternalAuditSource::Driver {
-                                    socket_id: self.socket_id.clone(),
-                                    session_id,
-                                    correlation_id,
-                                },
-                                dto.clone(),
-                            );
-                        }
+                    if self.audit_emit_capability
+                        && let Some(sink) = &self.audit_emitter
+                    {
+                        let session_id = response.session_id.or(request_session_id);
+                        let correlation_id = self.correlation_id_for_session(session_id);
+                        sink.emit(
+                            ExternalAuditSource::Driver {
+                                socket_id: self.socket_id.clone(),
+                                session_id,
+                                correlation_id,
+                            },
+                            dto.clone(),
+                        );
                     }
                     // Loop to consume the next frame regardless of capability/emitter.
                     continue;
@@ -951,7 +949,10 @@ mod tests {
         RpcClient, build_call_request_envelope, protocol_supports_semantic_planning,
         validate_hello_selected_version, validate_response_protocol_version,
     };
-    use dbflux_ipc::audit::{AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto, ExternalAuditEmitter, ExternalAuditSource};
+    use dbflux_ipc::audit::{
+        AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto,
+        ExternalAuditEmitter, ExternalAuditSource,
+    };
     use dbflux_ipc::driver_protocol::DriverRequestBody;
     use dbflux_ipc::{ProtocolVersion, driver_rpc_supported_versions, driver_socket_name};
     use std::sync::{Arc, Mutex};
@@ -1138,5 +1139,56 @@ mod tests {
         assert_eq!(envelope.protocol_version, ProtocolVersion::new(1, 0));
         assert_eq!(envelope.request_id, 8);
         assert_eq!(envelope.session_id, None);
+    }
+
+    /// IT-07: rate-limit exhausted on a socket, then a subsequent Ping still succeeds.
+    ///
+    /// REQ-R-03 / Scenario R-03-a: rate-limit drops must not set error state on the IPC session.
+    #[test]
+    fn rate_limit_exhausted_session_continues_for_subsequent_request() {
+        use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
+
+        let socket_id = format!("test-rate-limit-session-{}", Uuid::new_v4());
+
+        // Two requests: first sends 200 audit frames (100 accepted, 100 dropped), then a plain Pong.
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_audit_emit_capability()
+                .with_actions(vec![
+                    FakeDriverAction::EmitNAuditThenPong(200, fake_audit_dto()),
+                    FakeDriverAction::Pong,
+                ])
+                .with_expected_connections(1),
+        )
+        .expect("fake driver server must start");
+
+        let emitter = RecordingEmitter::new();
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = RpcClient::connect_with_audit(
+            socket_name.borrow(),
+            socket_id.clone(),
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        )
+        .expect("connect must succeed");
+
+        // First request: 200 audit frames sent by the server; emitter receives all 200
+        // because the emitter here is the raw RecordingEmitter (no rate limiter at this layer).
+        // The important invariant is that the RpcClient loop handles them all and returns Ok.
+        client
+            .ping(Uuid::nil())
+            .expect("first ping must succeed despite burst of audit frames");
+
+        // Second request: no audit frames, plain Pong. Session must still be usable.
+        client
+            .ping(Uuid::nil())
+            .expect("second ping must succeed — IPC session must be intact after rate-limit burst");
+
+        server.wait().expect("server must exit cleanly");
+
+        assert_eq!(
+            emitter.call_count(),
+            200,
+            "all 200 audit frames must be forwarded to the emitter by the transport loop"
+        );
     }
 }

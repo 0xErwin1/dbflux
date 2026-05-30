@@ -704,7 +704,10 @@ mod tests {
     fn test_event_actor_type_external_variants_round_trip() {
         for (variant, expected_str) in [
             (EventActorType::ExternalDriver, "external_driver"),
-            (EventActorType::ExternalAuthProvider, "external_auth_provider"),
+            (
+                EventActorType::ExternalAuthProvider,
+                "external_auth_provider",
+            ),
         ] {
             assert_eq!(variant.as_str(), expected_str);
 
@@ -713,8 +716,7 @@ mod tests {
             assert_eq!(round_tripped, variant);
 
             let json = serde_json::to_string(&variant).expect("serialize");
-            let deserialized: EventActorType =
-                serde_json::from_str(&json).expect("deserialize");
+            let deserialized: EventActorType = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(deserialized, variant);
         }
     }
@@ -723,7 +725,10 @@ mod tests {
     fn test_event_source_id_external_variants_round_trip() {
         for (variant, expected_str) in [
             (EventSourceId::ExternalDriver, "external_driver"),
-            (EventSourceId::ExternalAuthProvider, "external_auth_provider"),
+            (
+                EventSourceId::ExternalAuthProvider,
+                "external_auth_provider",
+            ),
         ] {
             assert_eq!(variant.as_str(), expected_str);
 
@@ -732,8 +737,7 @@ mod tests {
             assert_eq!(round_tripped, variant);
 
             let json = serde_json::to_string(&variant).expect("serialize");
-            let deserialized: EventSourceId =
-                serde_json::from_str(&json).expect("deserialize");
+            let deserialized: EventSourceId = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(deserialized, variant);
         }
     }

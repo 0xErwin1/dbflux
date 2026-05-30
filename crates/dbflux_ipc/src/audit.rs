@@ -204,10 +204,7 @@ mod tests {
         assert_eq!(restored.duration_ms, Some(42));
         assert!(restored.error_code.is_none());
         assert!(restored.error_message.is_none());
-        assert_eq!(
-            restored.details_json.as_deref(),
-            Some(r#"{"rows":10}"#)
-        );
+        assert_eq!(restored.details_json.as_deref(), Some(r#"{"rows":10}"#));
 
         // Identity fields must not be present on the type.
         // Asserting at compile time: there is no .actor_type, .actor_id, etc.
@@ -221,10 +218,7 @@ mod tests {
             !json.contains("connection_id"),
             "DTO must not carry connection_id"
         );
-        assert!(
-            !json.contains("driver_id"),
-            "DTO must not carry driver_id"
-        );
+        assert!(!json.contains("driver_id"), "DTO must not carry driver_id");
         assert!(
             !json.contains("correlation_id"),
             "DTO must not carry correlation_id"
