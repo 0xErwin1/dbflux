@@ -1493,10 +1493,35 @@ impl AuditDocument {
         self.focus_handle.focus(window);
     }
 
-    pub(self) fn filter_by_correlation(&mut self, correlation_id: String, cx: &mut Context<Self>) {
+    pub fn filter_by_correlation(&mut self, correlation_id: String, cx: &mut Context<Self>) {
         self.filters.correlation_id = Some(correlation_id);
         self.reset_pagination();
         self.load_events(cx);
+    }
+
+    /// Clears the correlation-id filter and reloads events.
+    pub fn clear_correlation_filter(&mut self, cx: &mut Context<Self>) {
+        if self.filters.correlation_id.is_none() {
+            return;
+        }
+        self.filters.correlation_id = None;
+        self.reset_pagination();
+        self.load_events(cx);
+    }
+
+    /// Creates a new audit document pre-filtered by correlation id.
+    ///
+    /// Mirrors the `new_with_category` constructor pattern.
+    pub fn new_with_correlation_id(
+        correlation_id: uuid::Uuid,
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut doc = Self::new(app_state, window, cx);
+        doc.filter_by_correlation(correlation_id.to_string(), cx);
+        doc.pending_initial_load = false;
+        doc
     }
 
     fn do_export(&mut self, format: String, cx: &mut Context<Self>) {

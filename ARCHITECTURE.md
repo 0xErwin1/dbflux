@@ -23,7 +23,7 @@ flowchart TB
 
     subgraph UI["Presentation — 6 UI crates"]
         uicomp["dbflux_components<br/>(theme, tokens, icons, primitives,<br/>composites, controls, data_table,<br/>document_tree, result_panel, charts,<br/>modals, saved_chart — no dbflux_app dep)"]
-        uibase["dbflux_ui_base<br/>(AppStateEntity, events, keymap helpers,<br/>toast, modal_frame, platform,<br/>sql_preview_modal, sso_wizard)"]
+        uibase["dbflux_ui_base<br/>(AppStateEntity, events, keymap helpers,<br/>toast + throttle, user_error,<br/>modal_frame, platform,<br/>sql_preview_modal, sso_wizard)"]
         uidoc["dbflux_ui_document<br/>(tab/pane system, documents,<br/>data_grid_panel, governance)"]
         uisidebar["dbflux_ui_sidebar<br/>(connections + scripts sidebar tree)"]
         uiwindows["dbflux_ui_windows<br/>(connection_manager + settings windows)"]
@@ -166,10 +166,13 @@ crates/
       typography.rs
   dbflux_ui_base/           # AppStateEntity + events, keymap helpers, platform utilities
     src/
-      app_state_entity.rs   # AppStateEntity wrapper (Deref + EventEmitter)
+      app_state_entity.rs   # AppStateEntity wrapper (Deref + EventEmitter), AppStateGlobal,
+                            # UserErrorReported + OpenAuditRequested events, unread_error_count
       keymap.rs             # default_keymap, key_chord_from_gpui
       async_ext.rs          # AsyncUpdateResultExt
-      toast.rs              # Custom toast notification system
+      toast.rs              # Toast + ToastHost with severity-aware token-bucket throttle
+      user_error/           # Centralized user-facing error reporting (UserFacingError,
+                            # ErrorKind, report_error, report_error_async) + throttle
       modal_frame.rs        # Reusable modal chrome/frame
       platform.rs           # X11/Wayland detection, window options
       sql_preview_modal.rs  # SQL/query preview modal (dual-mode: SQL and generic)
@@ -523,6 +526,18 @@ crates/
 - CLI and single-instance: `crates/dbflux/src/cli.rs` parses arguments; `crates/dbflux_ui/src/ipc_server.rs` runs the app-control IPC server for `Focus` and `OpenScript` commands.
 - Assets: `crates/dbflux_ui/src/assets.rs` implements GPUI's `AssetSource` to serve embedded SVG icons.
 - Workspace UI shell: `crates/dbflux_ui/src/ui/views/workspace/` wires panes (sidebar/dock, document area, bottom dock), command palette, and focus routing. Split across `mod.rs`, `actions.rs`, `dispatch.rs`, and `render.rs`. This module stays in `dbflux_ui`.
+
+### User-facing error reporting
+
+User-triggered failures route through a single seam in `crates/dbflux_ui_base/src/user_error/mod.rs` so every actionable error produces a toast, an audit row, and a status-bar badge increment — all keyed by the same UUID v7 correlation id.
+
+- **Entry points**: `report_error(UserFacingError, &mut App)` (foreground) and `report_error_async(UserFacingError, &AsyncApp)` (background / `cx.spawn` / `background_executor`). The sync variant must NOT be called from a background context — it requires `&mut App`.
+- **Taxonomy**: `ErrorKind { Storage, Network, Auth, Hook, Driver, User, Config }` drives badge/toast styling and the audit `action` discriminator. Severity reuses `dbflux_core::observability::EventSeverity`; `report_error` does not add a parallel enum.
+- **Driver feed**: `UserFacingError::from_formatted(kind, FormattedError)` consumes the existing driver `ErrorFormatter` output. UI code never branches on driver id.
+- **Audit bridge**: the seam emits `tracing::error!(target = "dbflux_ui::user_error", correlation_id = %id, kind, action = "user_error", outcome = "failure", ...)`. `AuditFieldVisitor` (`crates/dbflux_core/src/observability/tracing_bridge/layer.rs`) routes both `record_str` and `record_debug` through `record_string_by_name` so the typed `EventRecord.correlation_id` slot is populated regardless of whether the field is recorded via the `%` (Display) or `?` (Debug) sigil.
+- **Toast throttle**: `ToastHost` keeps a per-severity token bucket (capacity 5, refill 1 token / 2 s) for Info and Warn so connection-loss storms do not bury the screen. Error and Fatal bypass the throttle. The bucket's clock is injectable for deterministic tests.
+- **Badge + navigation**: `AppStateEntity::note_user_error` increments `unread_error_count` and emits `UserErrorReported`. The status-bar badge subscribes and, on click, calls `AppStateEntity::request_open_audit(None, cx)` which emits `OpenAuditRequested`. The toast "View in Audit" action emits the same event with `Some(correlation_id)`. The workspace subscribes once to `OpenAuditRequested` and steers `AuditDocument` via `set_correlation_filter` or `new_with_correlation_id`.
+- **Convention**: only the first catch site reports. Propagators above must NOT re-report — there is no runtime deduplication, double-toasts are a code-review concern (see AGENTS.md § Error Handling).
 
 ### Document System
 

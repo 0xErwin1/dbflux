@@ -357,6 +357,36 @@ The bridge recognizes these named fields on tracing events and maps them to `Eve
 
 Unknown fields accumulate in `details_json` as a JSON object. If the message exceeds 512 characters it is truncated with `…` and the full message is stored in `details_json["message"]`.
 
+The bridge also maps `correlation_id` directly to `EventRecord.correlation_id` (not into `details_json`), enabling cross-component correlation between user-facing error toasts and their corresponding audit records.
+
+### User-Facing Error Events
+
+User-facing errors (storage failures, driver errors, network problems, config persistence failures) are reported through `report_error` / `report_error_async` from `dbflux_ui_base::user_error`. Each call emits a tracing event that flows through the bridge and also pushes a toast notification.
+
+The tracing event shape:
+
+| Tracing field | Value |
+|---------------|-------|
+| `target` | `dbflux_ui::user_error` |
+| `action` | `user_error` |
+| `outcome` | `failure` |
+| `kind` | `ErrorKind` as string (`storage`, `network`, `auth`, `hook`, `driver`, `user`, `config`) |
+| `correlation_id` | UUID v7 linking the toast to the audit record |
+| `message` | The human-readable summary shown in the toast |
+
+The `correlation_id` field is extracted by `AuditFieldVisitor` into `EventRecord.correlation_id`. Note that the visitor routes both `record_str` (Display sigil `%val`) and `record_debug` (Debug sigil `?val`) through the same `record_string_by_name` dispatcher, so new typed slots added in the future are picked up regardless of which sigil the caller uses.
+
+There are two paths from the UI back into the audit document:
+
+- **Per-toast "View in Audit" action** — emits `OpenAuditRequested(Some(correlation_id))`. The workspace opens (or focuses) the Audit document and applies the matching correlation filter so the user sees exactly the one event tied to the toast.
+- **Status-bar error badge click** — emits `OpenAuditRequested(None)`. The workspace opens the Audit document with the default user-error filter (`target = dbflux_ui::user_error` over a recent time window) so the user can browse every recent user-facing failure.
+
+Both events flow through `AppStateEntity::request_open_audit` so the workspace subscribes once.
+
+Severity mapping from `EventSeverity`:
+- `EventSeverity::Info` and `EventSeverity::Warn` — emitted at `WARN` level; throttled (5-token bucket, 1 refill per 2 seconds, per severity)
+- `EventSeverity::Error` and `EventSeverity::Fatal` — emitted at `ERROR` level; bypass throttle
+
 ### Enabling the Bridge
 
 The bridge is enabled by building `dbflux_core` with the `tracing-bridge` feature (on by default for `dbflux`, `dbflux_mcp_server`). Call `init_tracing(BridgeConfig { .. })` once at process start:

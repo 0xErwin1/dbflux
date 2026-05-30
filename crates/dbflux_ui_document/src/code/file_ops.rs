@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 
 fn build_file_content_for_language(
     editor_content: &str,
@@ -45,7 +46,13 @@ impl CodeDocument {
                     .ok();
                 }
                 Err(e) => {
-                    log::error!("Failed to save file: {}", e);
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            format!("Failed to save file: {e}"),
+                        ),
+                        cx,
+                    );
                 }
             }
         }));
@@ -96,17 +103,15 @@ impl CodeDocument {
                         true,
                     )),
                     Err(err) => {
-                        let err_text = format!(
-                            "Save failed — file dialog unavailable and fallback directory could not be created: {}",
-                            err
+                        report_error_async(
+                            UserFacingError::new(
+                                ErrorKind::Storage,
+                                format!(
+                                    "Save failed — file dialog unavailable and fallback directory could not be created: {err}"
+                                ),
+                            ),
+                            cx,
                         );
-                        log::error!("{}", err_text);
-                        cx.update(|cx| {
-                            dbflux_ui_base::toast::Toast::error(err_text)
-                                .meta_right(dbflux_ui_base::toast::now_hms())
-                                .push(cx);
-                        })
-                        .ok();
                         return;
                     }
                 }
@@ -149,14 +154,10 @@ impl CodeDocument {
                     .ok();
                 }
                 Err(e) => {
-                    let err_text = format!("Failed to save script: {}", e);
-                    log::error!("{}", err_text);
-                    cx.update(|cx| {
-                        dbflux_ui_base::toast::Toast::error(err_text)
-                            .meta_right(dbflux_ui_base::toast::now_hms())
-                            .push(cx);
-                    })
-                    .ok();
+                    report_error_async(
+                        UserFacingError::new(ErrorKind::Storage, format!("Failed to save script: {e}")),
+                        cx,
+                    );
                 }
             }
         }));

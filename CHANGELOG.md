@@ -6,7 +6,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
-* **External RPC drivers and auth providers can emit audit events (#157)** —
+* **External RPC drivers and auth providers can emit audit events (#157)**
   RPC-backed drivers (driver protocol v1.2, capability `AuditEmit`) and
   auth providers (auth-provider protocol v1.3, hello flag
   `audit_emit_opt_in`) can now write to the audit log over IPC by sending
@@ -22,6 +22,12 @@ All notable changes to DBFlux will be documented in this file.
   is never blocked or errored — and counted on
   `AuditService::external_audit_dropped`. Older RPC peers that don't
   advertise the capability/flag remain silent.
+- Centralized user-facing error reporting (`report_error` / `report_error_async` in `dbflux_ui_base`). Failures across mutations, file save, settings, and workspace actions now surface as a styled toast with a "View in Audit" action, increment a status-bar error badge, and emit a tracing event correlated with the audit row (#156).
+- `EventRecord.correlation_id` is now populated from the `correlation_id` tracing field across all `dbflux` targets, regardless of whether the field is recorded via `%` (Display) or `?` (Debug) sigil (#156).
+
+### Changed
+
+- Toast host applies a severity-aware throttle (capacity 5, refill 1 token / 2 s) to Warning and Info toasts so connection-storm noise does not bury the UI; Error and Fatal toasts bypass the throttle (#156).
 
 ## [0.6.0-dev.10] - 2026-05-29
 
