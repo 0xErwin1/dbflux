@@ -305,6 +305,99 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
+    /// Open a `ChartDocument` for an instance metric leaf clicked in the sidebar.
+    ///
+    /// Deduplicates by `(profile_id, metric_id)` using `DocumentKey::InstanceMetricChart`
+    /// so clicking the same metric a second time focuses the existing tab rather
+    /// than opening a duplicate.
+    pub(super) fn open_instance_metric(
+        &mut self,
+        profile_id: uuid::Uuid,
+        metric_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::{ChartDocument, DocumentKey};
+        use dbflux_components::chart::InstanceMetricSource;
+        use dbflux_components::saved_chart::SavedChartSource;
+
+        let key = DocumentKey::InstanceMetricChart {
+            profile_id,
+            metric_id: metric_id.clone(),
+        };
+
+        if let Some(existing_id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(existing_id, cx);
+            });
+            self.set_focus(FocusTarget::Document, window, cx);
+            return;
+        }
+
+        let source = InstanceMetricSource {
+            metric_id: metric_id.clone(),
+        };
+
+        let title = metric_id.clone();
+        let metric_id_for_identity = metric_id.clone();
+        let doc = cx.new(|cx| {
+            let mut chart = ChartDocument::new_with_source(
+                Some(profile_id),
+                title,
+                Box::new(source),
+                self.app_state.clone(),
+                window,
+                cx,
+            );
+            chart.set_instance_metric_identity(metric_id_for_identity);
+            chart
+        });
+
+        let pane = ChartDocument::into_pane(doc, cx);
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
+    /// Open an `InspectorPanel` for an instance inspector leaf clicked in the sidebar.
+    ///
+    /// Deduplicates by `(profile_id, metric_id)` using `DocumentKey::InspectorPanel`
+    /// so clicking the same inspector a second time focuses the existing tab rather
+    /// than opening a duplicate.
+    pub(super) fn open_instance_inspector(
+        &mut self,
+        profile_id: uuid::Uuid,
+        metric_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::document::{DocumentKey, InspectorPanel};
+
+        let key = DocumentKey::InspectorPanel {
+            profile_id,
+            metric_id: metric_id.clone(),
+        };
+
+        if let Some(existing_id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
+            self.tab_manager.update(cx, |mgr, cx| {
+                mgr.activate(existing_id, cx);
+            });
+            self.set_focus(FocusTarget::Document, window, cx);
+            return;
+        }
+
+        let doc = cx.new(|cx| {
+            InspectorPanel::new(profile_id, metric_id, self.app_state.clone(), cx)
+        });
+
+        let pane = InspectorPanel::into_pane(doc, cx);
+        self.tab_manager.update(cx, |mgr, cx| {
+            mgr.open(Tab::Pane(Box::new(pane)), cx);
+        });
+        self.set_focus(FocusTarget::Document, window, cx);
+    }
+
     #[cfg(feature = "mcp")]
     pub(super) fn open_mcp_approvals(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.mcp_approvals_view.update(cx, |view, cx| {

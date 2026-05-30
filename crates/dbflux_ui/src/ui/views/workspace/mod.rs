@@ -937,6 +937,28 @@ impl Workspace {
                 SidebarEvent::RequestDuplicateSavedChart { chart_id } => {
                     this.duplicate_saved_chart(*chart_id, cx);
                 }
+                SidebarEvent::OpenInstanceMetric {
+                    profile_id,
+                    metric_id,
+                } => {
+                    this.open_instance_metric(
+                        *profile_id,
+                        metric_id.clone(),
+                        window,
+                        cx,
+                    );
+                }
+                SidebarEvent::OpenInstanceInspector {
+                    profile_id,
+                    metric_id,
+                } => {
+                    this.open_instance_inspector(
+                        *profile_id,
+                        metric_id.clone(),
+                        window,
+                        cx,
+                    );
+                }
                 SidebarEvent::RequestTunnelAuth {
                     tunnel_id,
                     tunnel_name,

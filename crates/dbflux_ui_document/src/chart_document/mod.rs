@@ -118,6 +118,11 @@ pub struct ChartDocument {
     // refines dimensions/period/statistic via the Apply button.
     initial_metric_identity: Option<(String, String)>,
 
+    /// Stable identity for instance metric charts opened from the
+    /// `InstanceMetricsFolder` sidebar node. Used by `matches_instance_metric_chart`
+    /// for `DocumentKey::InstanceMetricChart` dedup.
+    initial_instance_metric_id: Option<String>,
+
     // Save flow
     saved_chart_id: Option<Uuid>,
     name_prompt: Option<NamePromptState>,
@@ -253,6 +258,7 @@ impl ChartDocument {
             pending_chart_reexecute: false,
             pending_data_source: None,
             initial_metric_identity: None,
+            initial_instance_metric_id: None,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
@@ -461,6 +467,7 @@ impl ChartDocument {
             pending_chart_reexecute: false,
             pending_data_source: None,
             initial_metric_identity,
+            initial_instance_metric_id: None,
             saved_chart_id: None,
             name_prompt: None,
             pending_toast: None,
@@ -560,6 +567,25 @@ impl ChartDocument {
         self.initial_metric_identity
             .as_ref()
             .is_some_and(|(ns, mn)| ns == namespace && mn == metric_name)
+    }
+
+    /// Set the stable instance-metric identity for this document.
+    ///
+    /// Called after construction when the chart is opened from the sidebar's
+    /// `InstanceMetricsFolder`. Enables `DocumentKey::InstanceMetricChart` dedup.
+    pub fn set_instance_metric_identity(&mut self, metric_id: String) {
+        self.initial_instance_metric_id = Some(metric_id);
+    }
+
+    /// Returns `true` when this document was opened for the given
+    /// `(profile_id, metric_id)` via the instance-metrics sidebar folder.
+    pub fn matches_instance_metric_chart(&self, profile_id: Uuid, metric_id: &str) -> bool {
+        if self.profile_id != Some(profile_id) {
+            return false;
+        }
+        self.initial_instance_metric_id
+            .as_deref()
+            .is_some_and(|id| id == metric_id)
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {

@@ -189,6 +189,22 @@ pub enum SidebarEvent {
         chart_id: Uuid,
     },
 
+    /// Open or focus an instance metric chart for the given profile and metric.
+    ///
+    /// Emitted when the user clicks an `InstanceMetricLeaf` node in the sidebar.
+    OpenInstanceMetric {
+        profile_id: Uuid,
+        metric_id: String,
+    },
+
+    /// Open or focus an instance inspector panel for the given profile and metric.
+    ///
+    /// Emitted when the user clicks an `InstanceInspectorLeaf` node in the sidebar.
+    OpenInstanceInspector {
+        profile_id: Uuid,
+        metric_id: String,
+    },
+
     /// Request to prompt the user for an SSH tunnel passphrase.
     ///
     /// Emitted when a connection attempt fails with a passphrase-required error
@@ -1264,6 +1280,24 @@ impl Sidebar {
                     profile_id,
                     namespace,
                     metric_name,
+                });
+            }
+            SchemaNodeId::InstanceMetricLeaf {
+                profile_id,
+                metric_id,
+            } => {
+                cx.emit(SidebarEvent::OpenInstanceMetric {
+                    profile_id,
+                    metric_id,
+                });
+            }
+            SchemaNodeId::InstanceInspectorLeaf {
+                profile_id,
+                metric_id,
+            } => {
+                cx.emit(SidebarEvent::OpenInstanceInspector {
+                    profile_id,
+                    metric_id,
                 });
             }
             SchemaNodeId::Database { .. } => {

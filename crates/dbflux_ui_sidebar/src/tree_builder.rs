@@ -254,6 +254,19 @@ impl Sidebar {
                     metric_fetch_errors,
                 ));
             }
+
+            // Instance metrics folder — only for drivers that expose chartable
+            // operational series. Capability-gated; no driver_id branching.
+            if conn_capabilities.contains(DriverCapabilities::INSTANCE_METRICS) {
+                profile_children.push(Self::build_instance_metrics_folder_item(profile_id));
+            }
+
+            // Instance inspector folder — only for drivers that expose live
+            // tabular inspector views (process lists, active sessions, etc.).
+            if conn_capabilities.contains(DriverCapabilities::INSTANCE_INSPECTOR) {
+                profile_children.push(Self::build_instance_inspectors_folder_item(profile_id));
+            }
+
             let conn_category = conn_metadata.category;
             let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
             let metric_cache = state.metric_catalog_cache().clone();
@@ -632,6 +645,32 @@ impl Sidebar {
         )
         .expanded(false)
         .children(children)
+    }
+
+    /// Build the `InstanceMetricsFolder` folder item for a connected profile.
+    ///
+    /// Children are loaded lazily on first expansion by the expansion handler;
+    /// the folder is initially collapsed with no pre-fetched children. Only
+    /// called when the driver advertises `INSTANCE_METRICS`.
+    pub(crate) fn build_instance_metrics_folder_item(profile_id: Uuid) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::InstanceMetricsFolder { profile_id }.to_string(),
+            "Instance Metrics".to_string(),
+        )
+        .expanded(false)
+    }
+
+    /// Build the `InstanceInspectorsFolder` folder item for a connected profile.
+    ///
+    /// Children are loaded lazily on first expansion by the expansion handler;
+    /// the folder is initially collapsed with no pre-fetched children. Only
+    /// called when the driver advertises `INSTANCE_INSPECTOR`.
+    pub(crate) fn build_instance_inspectors_folder_item(profile_id: Uuid) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::InstanceInspectorsFolder { profile_id }.to_string(),
+            "Instance Inspectors".to_string(),
+        )
+        .expanded(false)
     }
 
     /// Build the `DashboardItem` children for the `DashboardsFolder`.
@@ -2973,6 +3012,117 @@ mod tests {
         assert!(
             !label.contains("import"),
             "hint must not mention 'import' without DASHBOARD_IMPORT: {label:?}"
+        );
+    }
+
+    // ---- T24: capability-gate tests for InstanceMetricsFolder / InstanceInspectorsFolder ----
+    //
+    // The tests below reference `build_instance_metrics_folder_item` and
+    // `build_instance_inspectors_folder_item` — functions that do not exist yet.
+    // This causes a compile failure (RED) until T25 adds them.
+
+    /// REQ-UI-1, REQ-UI-5: A driver with `INSTANCE_METRICS` must produce an
+    /// `InstanceMetricsFolder` node when `build_instance_metrics_folder_item` is called.
+    ///
+    /// Fails to compile (RED) until T25 adds `build_instance_metrics_folder_item`.
+    #[test]
+    fn instance_metrics_folder_item_produces_correct_node_id() {
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let item = Sidebar::build_instance_metrics_folder_item(profile_id);
+
+        let node_id: SchemaNodeId = item
+            .id
+            .as_ref()
+            .parse()
+            .expect("folder item must have a valid SchemaNodeId");
+
+        assert!(
+            matches!(
+                node_id,
+                SchemaNodeId::InstanceMetricsFolder {
+                    profile_id: pid,
+                } if pid == profile_id
+            ),
+            "folder item must carry InstanceMetricsFolder node ID: {node_id:?}"
+        );
+    }
+
+    /// REQ-UI-1, REQ-UI-5: A driver with `INSTANCE_INSPECTOR` must produce an
+    /// `InstanceInspectorsFolder` node when `build_instance_inspectors_folder_item` is called.
+    ///
+    /// Fails to compile (RED) until T25 adds `build_instance_inspectors_folder_item`.
+    #[test]
+    fn instance_inspectors_folder_item_produces_correct_node_id() {
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let item = Sidebar::build_instance_inspectors_folder_item(profile_id);
+
+        let node_id: SchemaNodeId = item
+            .id
+            .as_ref()
+            .parse()
+            .expect("folder item must have a valid SchemaNodeId");
+
+        assert!(
+            matches!(
+                node_id,
+                SchemaNodeId::InstanceInspectorsFolder {
+                    profile_id: pid,
+                } if pid == profile_id
+            ),
+            "folder item must carry InstanceInspectorsFolder node ID: {node_id:?}"
+        );
+    }
+
+    /// REQ-UI-5: A driver with `INSTANCE_METRICS` capability must include the
+    /// `InstanceMetricsFolder` in the profile's child list. A driver without
+    /// this capability must not include it.
+    ///
+    /// Tests the capability-gate predicate in isolation using a mock that mirrors
+    /// `build_profile_item_with_errors` capability check pattern.
+    #[test]
+    fn capability_gate_controls_instance_metrics_folder_inclusion() {
+        use dbflux_core::DriverCapabilities;
+
+        let caps_with = DriverCapabilities::INSTANCE_METRICS;
+        let caps_without = DriverCapabilities::empty();
+
+        let should_show_with = caps_with.contains(DriverCapabilities::INSTANCE_METRICS);
+        let should_show_without = caps_without.contains(DriverCapabilities::INSTANCE_METRICS);
+
+        assert!(
+            should_show_with,
+            "INSTANCE_METRICS capability must enable the folder"
+        );
+        assert!(
+            !should_show_without,
+            "missing INSTANCE_METRICS capability must suppress the folder"
+        );
+    }
+
+    /// REQ-UI-5: A driver with `INSTANCE_INSPECTOR` capability must include the
+    /// `InstanceInspectorsFolder` in the profile's child list. A driver without
+    /// this capability must not include it.
+    #[test]
+    fn capability_gate_controls_instance_inspectors_folder_inclusion() {
+        use dbflux_core::DriverCapabilities;
+
+        let caps_with = DriverCapabilities::INSTANCE_INSPECTOR;
+        let caps_without = DriverCapabilities::empty();
+
+        let should_show_with = caps_with.contains(DriverCapabilities::INSTANCE_INSPECTOR);
+        let should_show_without = caps_without.contains(DriverCapabilities::INSTANCE_INSPECTOR);
+
+        assert!(
+            should_show_with,
+            "INSTANCE_INSPECTOR capability must enable the folder"
+        );
+        assert!(
+            !should_show_without,
+            "missing INSTANCE_INSPECTOR capability must suppress the folder"
         );
     }
 }
