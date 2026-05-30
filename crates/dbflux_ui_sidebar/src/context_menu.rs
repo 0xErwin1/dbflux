@@ -761,6 +761,62 @@ impl Sidebar {
                 items
             }
 
+            SchemaNodeKind::DatabasesFolder => {
+                vec![ContextMenuItem::item("Refresh", ContextMenuAction::Refresh)]
+            }
+
+            SchemaNodeKind::InstanceMetricsFolder => {
+                vec![ContextMenuItem::item(
+                    "Refresh",
+                    ContextMenuAction::RefreshInstanceCatalog,
+                )]
+            }
+
+            SchemaNodeKind::InstanceInspectorsFolder => {
+                vec![ContextMenuItem::item(
+                    "Refresh",
+                    ContextMenuAction::RefreshInstanceCatalog,
+                )]
+            }
+
+            SchemaNodeKind::InstanceMetricLeaf => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Copy Metric ID",
+                        ContextMenuAction::CopyItemId,
+                    )],
+                );
+
+                items
+            }
+
+            SchemaNodeKind::InstanceInspectorLeaf => {
+                let mut items = Vec::new();
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                );
+
+                Self::append_menu_section(
+                    &mut items,
+                    [ContextMenuItem::item(
+                        "Copy Inspector ID",
+                        ContextMenuAction::CopyItemId,
+                    )],
+                );
+
+                items
+            }
+
             _ => vec![],
         }
     }
@@ -1174,7 +1230,12 @@ impl Sidebar {
                 }
             }
             ContextMenuAction::Refresh => {
-                if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
+                let profile_id = match parse_node_id(&item_id) {
+                    Some(SchemaNodeId::Profile { profile_id }) => Some(profile_id),
+                    Some(SchemaNodeId::DatabasesFolder { profile_id }) => Some(profile_id),
+                    _ => None,
+                };
+                if let Some(profile_id) = profile_id {
                     self.refresh_connection(profile_id, cx);
                 }
             }
@@ -1346,6 +1407,23 @@ impl Sidebar {
                 if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) = parse_node_id(&item_id)
                 {
                     cx.emit(SidebarEvent::RequestDuplicateSavedChart { chart_id });
+                }
+            }
+            ContextMenuAction::RefreshInstanceCatalog => {
+                if let Some(profile_id) = parse_node_id(&item_id).and_then(|n| n.profile_id()) {
+                    self.clear_instance_catalog_cache(profile_id);
+                    self.spawn_fetch_instance_catalog(profile_id, cx);
+                    self.rebuild_tree_with_overrides(cx);
+                }
+            }
+            ContextMenuAction::CopyItemId => {
+                if let Some(node_id) = parse_node_id(&item_id) {
+                    let id_str = match &node_id {
+                        SchemaNodeId::InstanceMetricLeaf { metric_id, .. } => metric_id.clone(),
+                        SchemaNodeId::InstanceInspectorLeaf { metric_id, .. } => metric_id.clone(),
+                        other => other.to_string(),
+                    };
+                    cx.write_to_clipboard(ClipboardItem::new_string(id_str));
                 }
             }
         }

@@ -388,6 +388,11 @@ pub enum ContextMenuAction {
     RenameSavedChart,
     DeleteSavedChart,
     DuplicateSavedChart,
+    // Instance catalog actions
+    /// Invalidate the cached instance catalog for a profile and re-fetch it.
+    RefreshInstanceCatalog,
+    /// Copy the string ID of the selected node to the clipboard.
+    CopyItemId,
 }
 
 #[derive(Clone)]
@@ -470,6 +475,9 @@ impl ContextMenuAction {
             Self::RenameSavedChart => Some(AppIcon::Pencil),
             Self::DeleteSavedChart => Some(AppIcon::Delete),
             Self::DuplicateSavedChart => Some(AppIcon::Copy),
+            // Instance catalog actions
+            Self::RefreshInstanceCatalog => Some(AppIcon::RefreshCcw),
+            Self::CopyItemId => Some(AppIcon::Copy),
         }
     }
 }

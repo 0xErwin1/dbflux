@@ -19,6 +19,11 @@ pub enum SchemaNodeId {
     Profile {
         profile_id: Uuid,
     },
+    /// Top-level grouping folder that contains all `Database` children under a
+    /// connected profile. Expanded by default on first profile expansion.
+    DatabasesFolder {
+        profile_id: Uuid,
+    },
     Database {
         profile_id: Uuid,
         name: String,
@@ -333,6 +338,7 @@ pub enum SchemaNodeId {
 pub enum SchemaNodeKind {
     ConnectionFolder,
     Profile,
+    DatabasesFolder,
     Database,
     Loading,
     Schema,
@@ -396,6 +402,7 @@ impl SchemaNodeId {
         match self {
             Self::ConnectionFolder { .. } => SchemaNodeKind::ConnectionFolder,
             Self::Profile { .. } => SchemaNodeKind::Profile,
+            Self::DatabasesFolder { .. } => SchemaNodeKind::DatabasesFolder,
             Self::Database { .. } => SchemaNodeKind::Database,
             Self::Loading { .. } => SchemaNodeKind::Loading,
             Self::Schema { .. } => SchemaNodeKind::Schema,
@@ -463,6 +470,7 @@ impl SchemaNodeId {
             | Self::ScriptsFolder { .. }
             | Self::ScriptFile { .. } => None,
             Self::Profile { profile_id, .. }
+            | Self::DatabasesFolder { profile_id, .. }
             | Self::Database { profile_id, .. }
             | Self::Loading { profile_id, .. }
             | Self::Schema { profile_id, .. }
@@ -525,6 +533,7 @@ impl SchemaNodeId {
 // Keep them short to minimize string allocation overhead.
 const P_CONN_FOLDER: &str = "CF";
 const P_PROFILE: &str = "P";
+const P_DATABASES_FOLDER: &str = "DBSF";
 const P_DATABASE: &str = "DB";
 const P_LOADING: &str = "LD";
 const P_SCHEMA: &str = "S";
@@ -594,6 +603,9 @@ impl fmt::Display for SchemaNodeId {
             }
             Self::Profile { profile_id } => {
                 write!(f, "{}|{}", P_PROFILE, profile_id)
+            }
+            Self::DatabasesFolder { profile_id } => {
+                write!(f, "{}|{}", P_DATABASES_FOLDER, profile_id)
             }
             Self::Database { profile_id, name } => {
                 write!(f, "{}|{}|{}", P_DATABASE, profile_id, name)
@@ -1083,6 +1095,12 @@ impl FromStr for SchemaNodeId {
                 let profile_id =
                     Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
                 Ok(Self::Profile { profile_id })
+            }
+
+            P_DATABASES_FOLDER => {
+                let profile_id =
+                    Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+                Ok(Self::DatabasesFolder { profile_id })
             }
 
             P_DATABASE => {
@@ -1699,6 +1717,7 @@ impl SchemaNodeKind {
         matches!(
             self,
             Self::Profile
+                | Self::DatabasesFolder
                 | Self::Database
                 | Self::Table
                 | Self::View
@@ -1744,6 +1763,7 @@ impl SchemaNodeKind {
         matches!(
             self,
             Self::ConnectionFolder
+                | Self::DatabasesFolder
                 | Self::Schema
                 | Self::TablesFolder
                 | Self::ViewsFolder
@@ -1809,6 +1829,7 @@ mod tests {
 
         roundtrip(SchemaNodeId::ConnectionFolder { node_id: uuid });
         roundtrip(SchemaNodeId::Profile { profile_id: uuid });
+        roundtrip(SchemaNodeId::DatabasesFolder { profile_id: uuid });
         roundtrip(SchemaNodeId::Database {
             profile_id: uuid,
             name: "mydb".into(),

@@ -138,7 +138,8 @@ pub(super) fn render_tree_item(
     ) || (is_folder
         && matches!(
             node_kind,
-            SchemaNodeKind::ConnectionFolder
+            SchemaNodeKind::DatabasesFolder
+                | SchemaNodeKind::ConnectionFolder
                 | SchemaNodeKind::Table
                 | SchemaNodeKind::View
                 | SchemaNodeKind::Schema
@@ -166,6 +167,8 @@ pub(super) fn render_tree_item(
                 | SchemaNodeKind::DashboardsFolder
                 | SchemaNodeKind::RemoteDashboardsFolder
                 | SchemaNodeKind::SavedChartsFolder
+                | SchemaNodeKind::InstanceMetricsFolder
+                | SchemaNodeKind::InstanceInspectorsFolder
         ));
 
     let chevron_icon: Option<AppIcon> = if needs_chevron {
@@ -949,6 +952,7 @@ pub(crate) fn icon_for_node_kind(
     match node_kind {
         SchemaNodeKind::ConnectionFolder => Some(AppIcon::Folder),
         SchemaNodeKind::Profile => None, // icon comes from the driver's Icon, handled separately
+        SchemaNodeKind::DatabasesFolder => Some(AppIcon::Database),
         SchemaNodeKind::Database => Some(AppIcon::Database),
         SchemaNodeKind::Schema => Some(AppIcon::Layers),
         SchemaNodeKind::TablesFolder => Some(AppIcon::Table),
@@ -1002,6 +1006,10 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::RemoteDashboardItem => Some(AppIcon::ChartColumnBig),
         SchemaNodeKind::SavedChartsFolder => Some(AppIcon::ChartArea),
         SchemaNodeKind::SavedChartItem => Some(AppIcon::ChartArea),
+        SchemaNodeKind::InstanceMetricsFolder => Some(AppIcon::ChartSpline),
+        SchemaNodeKind::InstanceMetricLeaf => Some(AppIcon::ChartSpline),
+        SchemaNodeKind::InstanceInspectorsFolder => Some(AppIcon::Server),
+        SchemaNodeKind::InstanceInspectorLeaf => Some(AppIcon::Server),
         _ => None,
     }
 }
@@ -1017,6 +1025,7 @@ fn resolve_node_icon(
 ) -> (Option<AppIcon>, &'static str, Hsla) {
     match node_kind {
         SchemaNodeKind::ConnectionFolder => (Some(AppIcon::Folder), "", theme.muted_foreground),
+        SchemaNodeKind::DatabasesFolder => (Some(AppIcon::Database), "", params.color_orange),
         SchemaNodeKind::Profile => {
             let icon = parsed_id
                 .as_ref()
@@ -1111,6 +1120,14 @@ fn resolve_node_icon(
         }
         SchemaNodeKind::SavedChartsFolder => (Some(AppIcon::ChartArea), "", params.color_orange),
         SchemaNodeKind::SavedChartItem => (Some(AppIcon::ChartArea), "", theme.muted_foreground),
+        SchemaNodeKind::InstanceMetricsFolder => {
+            (Some(AppIcon::ChartSpline), "", params.color_orange)
+        }
+        SchemaNodeKind::InstanceMetricLeaf => (Some(AppIcon::ChartSpline), "", params.color_teal),
+        SchemaNodeKind::InstanceInspectorsFolder => {
+            (Some(AppIcon::Server), "", params.color_orange)
+        }
+        SchemaNodeKind::InstanceInspectorLeaf => (Some(AppIcon::Server), "", params.color_teal),
         _ => (None, "", theme.muted_foreground),
     }
 }
@@ -1323,6 +1340,46 @@ mod tests {
         assert!(
             icon.is_some(),
             "SavedChartItem must have a dedicated icon (was None)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Icon resolver — instance metrics / inspectors node kinds (UX1)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn instance_metrics_folder_icon_is_some() {
+        let icon = icon_for_node_kind(SchemaNodeKind::InstanceMetricsFolder, "", &None);
+        assert!(
+            icon.is_some(),
+            "InstanceMetricsFolder must have a dedicated icon (was None)"
+        );
+    }
+
+    #[test]
+    fn instance_metric_leaf_icon_is_some() {
+        let icon = icon_for_node_kind(SchemaNodeKind::InstanceMetricLeaf, "", &None);
+        assert!(
+            icon.is_some(),
+            "InstanceMetricLeaf must have a dedicated icon (was None)"
+        );
+    }
+
+    #[test]
+    fn instance_inspectors_folder_icon_is_some() {
+        let icon = icon_for_node_kind(SchemaNodeKind::InstanceInspectorsFolder, "", &None);
+        assert!(
+            icon.is_some(),
+            "InstanceInspectorsFolder must have a dedicated icon (was None)"
+        );
+    }
+
+    #[test]
+    fn instance_inspector_leaf_icon_is_some() {
+        let icon = icon_for_node_kind(SchemaNodeKind::InstanceInspectorLeaf, "", &None);
+        assert!(
+            icon.is_some(),
+            "InstanceInspectorLeaf must have a dedicated icon (was None)"
         );
     }
 }

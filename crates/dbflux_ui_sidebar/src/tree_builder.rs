@@ -275,30 +275,6 @@ impl Sidebar {
                 ));
             }
 
-            // Instance metrics folder — only for drivers that expose chartable
-            // operational series. Capability-gated; no driver_id branching.
-            if conn_capabilities.contains(DriverCapabilities::INSTANCE_METRICS) {
-                let metric_children =
-                    Self::build_instance_metric_leaf_children(profile_id, instance_metrics_cache);
-                profile_children.push(Self::build_instance_metrics_folder_item(
-                    profile_id,
-                    metric_children,
-                ));
-            }
-
-            // Instance inspector folder — only for drivers that expose live
-            // tabular inspector views (process lists, active sessions, etc.).
-            if conn_capabilities.contains(DriverCapabilities::INSTANCE_INSPECTOR) {
-                let inspector_children = Self::build_instance_inspector_leaf_children(
-                    profile_id,
-                    instance_inspectors_cache,
-                );
-                profile_children.push(Self::build_instance_inspectors_folder_item(
-                    profile_id,
-                    inspector_children,
-                ));
-            }
-
             let conn_category = conn_metadata.category;
             let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
             let metric_cache = state.metric_catalog_cache().clone();
@@ -317,6 +293,8 @@ impl Sidebar {
                         database_names.push("db0".to_string());
                     }
                 }
+
+                let mut kv_db_items: Vec<TreeItem> = Vec::new();
 
                 for database_name in database_names {
                     let is_pending = state.is_operation_pending(profile_id, Some(&database_name));
@@ -341,7 +319,7 @@ impl Sidebar {
                         database_name.clone()
                     };
 
-                    profile_children.push(
+                    kv_db_items.push(
                         TreeItem::new(
                             SchemaNodeId::Database {
                                 profile_id,
@@ -354,6 +332,8 @@ impl Sidebar {
                         .children(db_children),
                     );
                 }
+
+                profile_children.push(Self::build_databases_folder_item(profile_id, kv_db_items));
             } else if !schema.databases().is_empty() {
                 // See `should_collapse_database_wrapper`: when the connection
                 // exposes a single trivial database (CloudWatch, DynamoDB,
@@ -362,6 +342,7 @@ impl Sidebar {
                 // already embed `database` in their node IDs so routing is
                 // unaffected by the missing intermediate.
                 let collapse_single_db = should_collapse_database_wrapper(schema.databases());
+                let mut named_db_items: Vec<TreeItem> = Vec::new();
                 for db in schema.databases() {
                     let is_pending = state.is_operation_pending(profile_id, Some(&db.name));
                     let is_active_db = connected.active_database.as_deref() == Some(&db.name);
@@ -519,7 +500,7 @@ impl Sidebar {
                             db.is_current || has_per_db_conn
                         };
 
-                        profile_children.push(
+                        named_db_items.push(
                             TreeItem::new(
                                 SchemaNodeId::Database {
                                     profile_id,
@@ -532,6 +513,13 @@ impl Sidebar {
                             .children(db_children),
                         );
                     }
+                }
+
+                if !named_db_items.is_empty() {
+                    profile_children.push(Self::build_databases_folder_item(
+                        profile_id,
+                        named_db_items,
+                    ));
                 }
             } else {
                 // No databases defined - use active_database or first schema as fallback
@@ -554,6 +542,29 @@ impl Sidebar {
                     supports_routines,
                     &connected.dependents_cache,
                 );
+            }
+
+            // Instance metrics folder — appended after databases so the
+            // sidebar order is: Databases, Instance Metrics, Instance Inspectors.
+            // Capability-gated; no driver_id branching.
+            if conn_capabilities.contains(DriverCapabilities::INSTANCE_METRICS) {
+                let metric_children =
+                    Self::build_instance_metric_leaf_children(profile_id, instance_metrics_cache);
+                profile_children.push(Self::build_instance_metrics_folder_item(
+                    profile_id,
+                    metric_children,
+                ));
+            }
+
+            if conn_capabilities.contains(DriverCapabilities::INSTANCE_INSPECTOR) {
+                let inspector_children = Self::build_instance_inspector_leaf_children(
+                    profile_id,
+                    instance_inspectors_cache,
+                );
+                profile_children.push(Self::build_instance_inspectors_folder_item(
+                    profile_id,
+                    inspector_children,
+                ));
             }
 
             profile_item = profile_item.expanded(is_active).children(profile_children);
@@ -677,6 +688,28 @@ impl Sidebar {
         )
         .expanded(false)
         .children(children)
+    }
+
+    /// Build the `DatabasesFolder` tree node for a connected profile.
+    ///
+    /// The folder is expanded by default so databases are immediately visible
+    /// after connecting — matching the behaviour users had before the grouping
+    /// folder was introduced.
+    fn build_databases_folder_item(profile_id: Uuid, children: Vec<TreeItem>) -> TreeItem {
+        TreeItem::new(
+            SchemaNodeId::DatabasesFolder { profile_id }.to_string(),
+            "Databases".to_string(),
+        )
+        .expanded(true)
+        .children(children)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn build_databases_folder_item_for_test(
+        profile_id: Uuid,
+        children: Vec<TreeItem>,
+    ) -> TreeItem {
+        Self::build_databases_folder_item(profile_id, children)
     }
 
     /// Build the `InstanceMetricsFolder` folder item for a connected profile.
@@ -3353,6 +3386,53 @@ mod tests {
                     if *pid == profile_id && metric_id == "pg.activity"
             ),
             "leaf must carry InstanceInspectorLeaf with correct ids; got {node_id:?}"
+        );
+    }
+
+    // ---- UX3: DatabasesFolder tests ----
+
+    /// `build_databases_folder_item` produces a node with `DatabasesFolder` ID and
+    /// expands by default.
+    #[test]
+    fn databases_folder_item_produces_correct_node_id_and_is_expanded() {
+        use dbflux_core::SchemaNodeId;
+        use gpui_component::tree::TreeItem;
+
+        let profile_id = Uuid::new_v4();
+        let child = TreeItem::new(
+            SchemaNodeId::Database {
+                profile_id,
+                name: "mydb".to_string(),
+            }
+            .to_string(),
+            "mydb".to_string(),
+        );
+
+        let item = Sidebar::build_databases_folder_item_for_test(profile_id, vec![child]);
+
+        let node_id: SchemaNodeId = item
+            .id
+            .as_ref()
+            .parse()
+            .expect("DatabasesFolder item must have a valid SchemaNodeId");
+
+        assert!(
+            matches!(
+                node_id,
+                SchemaNodeId::DatabasesFolder {
+                    profile_id: pid,
+                } if pid == profile_id
+            ),
+            "item must carry DatabasesFolder node ID: {node_id:?}"
+        );
+        assert!(
+            item.is_expanded(),
+            "DatabasesFolder must be expanded by default"
+        );
+        assert_eq!(
+            item.children.len(),
+            1,
+            "DatabasesFolder must pass through its children"
         );
     }
 }

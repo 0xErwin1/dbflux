@@ -725,6 +725,14 @@ impl Sidebar {
             .insert(profile_id, task);
     }
 
+    /// Remove the cached instance catalog entries for a profile so the next
+    /// fetch (triggered separately) retrieves fresh data.
+    pub(super) fn clear_instance_catalog_cache(&mut self, profile_id: Uuid) {
+        self.instance_metrics_cache.remove(&profile_id);
+        self.instance_inspectors_cache.remove(&profile_id);
+        self.pending_instance_catalog_fetches.remove(&profile_id);
+    }
+
     fn collection_node_is_event_stream(
         &self,
         profile_id: Uuid,
