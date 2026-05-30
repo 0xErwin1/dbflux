@@ -12,8 +12,8 @@ use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::{
-    AccessKind, AuthProfile, AuthSaveOutcome, AwsEditFile, AwsEditSnapshot, FetchOptionsError,
-    FetchOptionsRequest, FormFieldKind, RefreshTrigger,
+    AccessKind, AuthEditCapabilities, AuthEditSnapshot, AuthProfile, AuthSaveOutcome,
+    DanglingMessage, FetchOptionsError, FetchOptionsRequest, FormFieldKind, RefreshTrigger,
 };
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -53,21 +53,21 @@ pub(super) struct AuthProfilesSection {
     /// `true` the form is rendered in mirror mode: no editable inputs, no
     /// Save/Delete buttons.
     ///
-    /// Non-dangling reflected AWS profiles have `read_only = false` and are
-    /// editable — their edits are written directly to `~/.aws/config` /
-    /// `~/.aws/credentials` via `save_edit` (design §13, §14).
+    /// Non-dangling reflected profiles have `read_only = false` and are
+    /// editable — their edits are written directly to external configuration
+    /// files via `save_edit` (design §13, §14).
     profile_is_read_only: bool,
     /// Why the currently-displayed profile is dangling, if it is.
     /// Known values: `"keyring-only"`, `"file-gone"`. `None` for healthy profiles.
     profile_dangling_origin: Option<String>,
 
-    /// Opaque snapshot token captured when an editable reflected AWS profile is
+    /// Opaque snapshot token captured when an editable reflected profile is
     /// loaded for editing. Passed back to `save_edit` at save time for the
     /// optimistic-concurrency check (spec R9.3.1, design §10).
     ///
     /// `None` for stored (non-reflected) profiles — those use the standard
     /// SQLite save path which has no snapshot concept.
-    edit_snapshot: Option<AwsEditSnapshot>,
+    edit_snapshot: Option<AuthEditSnapshot>,
     /// Non-`None` when a `save_edit` call returned `Conflict` or `PartialSaved`.
     /// Contains a human-readable message to display, plus `true` if a Reload
     /// button should be shown.
@@ -211,13 +211,64 @@ fn build_auth_profile_from_form(
     })
 }
 
-/// Returns a human-readable label for an `AwsEditFile` variant, used in
-/// conflict and partial-save messages shown in the Settings UI.
-fn file_label(file: AwsEditFile) -> &'static str {
-    match file {
-        AwsEditFile::Config => "~/.aws/config",
-        AwsEditFile::Credentials => "~/.aws/credentials",
+const MIRROR_LABEL_FALLBACK: &str = "Read-only — managed externally";
+const SUCCESS_WRITTEN_FALLBACK: &str = "Profile saved.";
+const NAME_HINT_FALLBACK: &str = "";
+
+fn dangling_fallback() -> DanglingMessage {
+    DanglingMessage {
+        title: "Profile reference invalid".to_string(),
+        body: "This profile cannot be loaded.".to_string(),
     }
+}
+
+fn resolve_mirror_label(edit_caps: Option<&AuthEditCapabilities>) -> String {
+    edit_caps
+        .map(|e| e.mirror_label.clone())
+        .unwrap_or_else(|| MIRROR_LABEL_FALLBACK.to_string())
+}
+
+fn resolve_success_text(edit_caps: Option<&AuthEditCapabilities>) -> String {
+    edit_caps
+        .map(|e| e.success_written.clone())
+        .unwrap_or_else(|| SUCCESS_WRITTEN_FALLBACK.to_string())
+}
+
+fn resolve_dangling(edit_caps: Option<&AuthEditCapabilities>, origin: &str) -> DanglingMessage {
+    edit_caps
+        .and_then(|e| e.dangling_messages.get(origin))
+        .cloned()
+        .unwrap_or_else(dangling_fallback)
+}
+
+/// Build the user-visible conflict message for a `Conflict` save outcome.
+///
+/// The message names the target's label and instructs the user to reload
+/// before saving again.
+fn resolve_conflict_message(target: &dbflux_core::AuthEditTarget) -> String {
+    let label = &target.label;
+    format!(
+        "This profile was modified on disk ({label}) since you opened it. \
+         Reload to see the current values before saving."
+    )
+}
+
+/// Build the user-visible message for a `PartialSaved` save outcome.
+///
+/// The message names both the written and conflicted targets. The phrasing
+/// is provider-neutral — it does not reference any provider-specific
+/// directory structure.
+fn resolve_partial_saved_message(
+    written: &dbflux_core::AuthEditTarget,
+    conflicted: &dbflux_core::AuthEditTarget,
+) -> String {
+    let written_label = &written.label;
+    let conflicted_label = &conflicted.label;
+    format!(
+        "{written_label} was saved successfully, but {conflicted_label} was \
+         modified on disk since you opened the form. Reload to refresh and \
+         re-apply your changes."
+    )
 }
 
 /// Update `field_login_hint` and `provider_login_status` for a
@@ -917,10 +968,10 @@ impl AuthProfilesSection {
             "— None —".to_string(),
             String::new(),
         )];
-        // Use the reflected union, not the stored-only slice: AWS sso-session
-        // profiles are reflected from ~/.aws/config and are absent from storage,
-        // while stale stored AWS rows are excluded by list_auth_profiles(). Their
-        // deterministic UUIDs match the expansion lookup, which reads the same seam.
+        // Use the reflected union, not the stored-only slice: some reflected
+        // profiles are absent from storage, while stale stored rows are excluded
+        // by list_auth_profiles(). Their deterministic UUIDs match the expansion
+        // lookup, which reads the same seam.
         let referenced_profiles: Vec<(String, String)> = self
             .app_state
             .read(cx)
@@ -1271,7 +1322,7 @@ impl AuthProfilesSection {
             return;
         };
 
-        // When an edit snapshot is present, this is a reflected AWS profile.
+        // When an edit snapshot is present, this is a reflected (file-backed) profile.
         // Route through save_edit rather than SQLite.
         if let Some(snapshot) = self.edit_snapshot.clone() {
             self.save_edit_profile(name, provider_id, snapshot, window, cx);
@@ -1295,10 +1346,10 @@ impl AuthProfilesSection {
             dangling_origin: None,
         };
 
-        // For file-backed providers (e.g. AWS), write to the external config
-        // file instead of DBFlux's SQLite store. The provider returns
-        // `Some(result)` when it handles the write. Reflection will surface
-        // the new profile on the next `list_auth_profiles()` call.
+        // For file-backed providers, write to the external configuration file
+        // instead of DBFlux's SQLite store. The provider returns `Some(result)`
+        // when it handles the write. Reflection will surface the new profile on
+        // the next `list_auth_profiles()` call.
         let is_new = self.editing_profile_id.is_none();
         if is_new
             && let Some(provider) = self
@@ -1318,8 +1369,14 @@ impl AuthProfilesSection {
                     self.profile_is_read_only = false;
                     self.profile_dangling_origin = None;
 
-                    self.provider_login_status =
-                        Some(("Profile written to ~/.aws/config.".to_string(), true));
+                    let success_text = resolve_success_text(
+                        self.app_state
+                            .read(cx)
+                            .auth_provider_by_id(&profile.provider_id)
+                            .and_then(|p| p.capabilities().edit.clone())
+                            .as_ref(),
+                    );
+                    self.provider_login_status = Some((success_text, true));
                     cx.notify();
                     return;
                 }
@@ -1361,7 +1418,7 @@ impl AuthProfilesSection {
         self.load_profile_into_form(profile_id, window, cx);
     }
 
-    /// Save path for reflected AWS profiles: calls `save_edit` with the
+    /// Save path for reflected (file-backed) profiles: calls `save_edit` with the
     /// optimistic-concurrency snapshot and handles `Conflict` / `PartialSaved`
     /// outcomes (spec R9.3.4, R9.3.6, S29, S35, design §14).
     ///
@@ -1374,7 +1431,7 @@ impl AuthProfilesSection {
         &mut self,
         name: String,
         provider_id: String,
-        snapshot: AwsEditSnapshot,
+        snapshot: AuthEditSnapshot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1456,20 +1513,20 @@ impl AuthProfilesSection {
                     self.load_profile_into_form(id, window, cx);
                 }
 
-                self.provider_login_status = Some(("Profile saved.".to_string(), true));
+                let success_text = resolve_success_text(
+                    self.app_state
+                        .read(cx)
+                        .auth_provider_by_id(&provider_id)
+                        .and_then(|p| p.capabilities().edit.clone())
+                        .as_ref(),
+                );
+                self.provider_login_status = Some((success_text, true));
                 cx.notify();
             }
 
-            AuthSaveOutcome::Conflict { file } => {
+            AuthSaveOutcome::Conflict { target } => {
                 // Section changed on disk since the form was opened — block save.
-                let file_label = file_label(file);
-                self.edit_conflict_msg = Some((
-                    format!(
-                        "This profile was modified on disk ({file_label}) since you opened it. \
-                         Reload to see the current values before saving."
-                    ),
-                    true,
-                ));
+                self.edit_conflict_msg = Some((resolve_conflict_message(&target), true));
                 cx.notify();
             }
 
@@ -1477,17 +1534,9 @@ impl AuthProfilesSection {
                 written,
                 conflicted,
             } => {
-                // One file succeeded; the other conflicted.
-                let written_label = file_label(written);
-                let conflicted_label = file_label(conflicted);
-                self.edit_conflict_msg = Some((
-                    format!(
-                        "{written_label} was saved successfully, but {conflicted_label} was \
-                         modified on disk since you opened the form. Reload to refresh the \
-                         credentials section and re-apply your changes."
-                    ),
-                    true,
-                ));
+                // One resource succeeded; the other conflicted.
+                self.edit_conflict_msg =
+                    Some((resolve_partial_saved_message(&written, &conflicted), true));
                 cx.notify();
             }
         }
@@ -1549,10 +1598,10 @@ impl AuthProfilesSection {
         let profile_name_for_url = profile.name.clone();
 
         // The verification URL arrives via `UrlCallback` from a background
-        // thread *before* `provider.login()` completes (the AWS provider
-        // blocks waiting for the user to finish in the browser). We forward
-        // the URL through a channel so the modal can open immediately —
-        // independently of when the login future resolves.
+        // thread *before* `provider.login()` completes (the provider blocks
+        // waiting for the user to finish in the browser). We forward the URL
+        // through a channel so the modal can open immediately — independently
+        // of when the login future resolves.
         let (url_tx, url_rx) = std::sync::mpsc::sync_channel::<Option<String>>(1);
         let url_callback: dbflux_core::auth::UrlCallback = Box::new(move |url| {
             let _ = url_tx.try_send(url);
@@ -2028,10 +2077,10 @@ impl AuthProfilesSection {
             )
     }
 
-    /// Renders a read-only info panel for profiles that are reflected from an
-    /// external config (e.g. `~/.aws/config`). No editable inputs are shown;
-    /// all field values are displayed as plain text. A dangling-profile banner
-    /// is shown when `profile_dangling_origin` is set.
+    /// Renders a read-only info panel for profiles that are reflected from
+    /// external configuration files. No editable inputs are shown; all field
+    /// values are displayed as plain text. A dangling-profile banner is shown
+    /// when `profile_dangling_origin` is set.
     fn render_read_only_mirror(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
 
@@ -2061,6 +2110,12 @@ impl AuthProfilesSection {
 
         let dangling_origin = self.profile_dangling_origin.clone();
 
+        let edit_caps: Option<AuthEditCapabilities> = self
+            .selected_provider_id
+            .as_deref()
+            .and_then(|id| self.app_state.read(cx).auth_provider_by_id(id))
+            .and_then(|p| p.capabilities().edit.clone());
+
         layout::sticky_form_shell(
             div()
                 .child(Label::new(profile_name))
@@ -2070,20 +2125,9 @@ impl AuthProfilesSection {
                 .flex_col()
                 .gap_3()
                 .when_some(dangling_origin, |content, origin| {
-                    let (banner_text, hint_text) = if origin == "keyring-only" {
-                        (
-                            "Profile reference not found in ~/.aws/config",
-                            "This profile no longer exists in ~/.aws/config. \
-                             Its credentials entry may still be in ~/.aws/credentials. \
-                             You can re-add the profile manually or remove this connection binding.",
-                        )
-                    } else {
-                        (
-                            "Profile config file is missing",
-                            "The AWS config file for this profile could not be located. \
-                             Check ~/.aws/config and re-add the profile if needed.",
-                        )
-                    };
+                    let dangling = resolve_dangling(edit_caps.as_ref(), &origin);
+                    let banner_text = dangling.title;
+                    let hint_text = dangling.body;
 
                     content.child(
                         div()
@@ -2116,7 +2160,7 @@ impl AuthProfilesSection {
                         .flex_col()
                         .gap_1()
                         .child(Label::new("Source"))
-                        .child(Text::body("Reflected from ~/.aws/config — read-only")),
+                        .child(Text::body(resolve_mirror_label(edit_caps.as_ref()))),
                 )
                 .children(field_rows.into_iter().map(|(label, value)| {
                     div()
@@ -2140,6 +2184,12 @@ impl AuthProfilesSection {
 
         let theme = cx.theme().clone();
         let is_editing = self.editing_profile_id.is_some();
+
+        let edit_caps: Option<AuthEditCapabilities> = self
+            .selected_provider_id
+            .as_deref()
+            .and_then(|id| self.app_state.read(cx).auth_provider_by_id(id))
+            .and_then(|p| p.capabilities().edit.clone());
 
         // Drive DynamicSelect fetches for the current provider's fields.
         // `fetch_dynamic_options_if_needed` is a no-op for fields already
@@ -2335,19 +2385,26 @@ impl AuthProfilesSection {
                         && self.auth_focus == AuthFocus::Form
                         && self.content_focused;
                     let is_reflected = self.edit_snapshot.is_some();
-                    // Reflected profiles: name is the section key in ~/.aws/config
-                    // and cannot be renamed from the DBFlux edit form (spec non-req).
+                    let name_hint = if is_reflected {
+                        let hint = edit_caps
+                            .as_ref()
+                            .map(|e| e.name_field_hint.as_str())
+                            .unwrap_or(NAME_HINT_FALLBACK);
+                        if hint.is_empty() {
+                            None
+                        } else {
+                            Some(hint.to_string())
+                        }
+                    } else {
+                        None
+                    };
                     self.render_input_row_disabled(
                         "Name",
                         &self.input_name,
                         AuthFormField::Name,
                         is_focused,
                         is_reflected,
-                        if is_reflected {
-                            Some("Profile name is read from ~/.aws/config and cannot be renamed here.".to_string())
-                        } else {
-                            None
-                        },
+                        name_hint,
                         None,
                         cx,
                     )
@@ -2420,8 +2477,8 @@ impl AuthProfilesSection {
                 })
                 .when(self.edit_snapshot.is_none(), |content| {
                     // The enabled toggle only applies to stored (SQLite-backed)
-                    // profiles. Reflected AWS profiles are always enabled and
-                    // managed by the ~/.aws/config file.
+                    // profiles. Reflected (externally-managed) profiles are
+                    // always enabled and managed by the provider's config file.
                     content.child(
                         div()
                             .flex()
@@ -3184,7 +3241,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // WU-E4: Editable form state-transition logic (non-GPUI-render parts)
+    // Editable form state-transition logic (non-GPUI-render parts)
     // -----------------------------------------------------------------------
 
     /// E4: Reflected profiles (non-dangling) must NOT produce a Delete button
@@ -3316,27 +3373,32 @@ mod tests {
         );
     }
 
-    /// E4: `Conflict` outcome produces a conflict message that names the file
-    /// and offers a Reload affordance (spec R9.3.4, S29). The state-transition
-    /// logic in `save_edit_profile` is tested indirectly through the helpers
-    /// that compute the conflict message — the GPUI state mutation itself
-    /// is render-only and cannot be unit-tested here.
+    /// E4: `Conflict` outcome produces a conflict message that names the target
+    /// label and offers a Reload affordance (spec R9.3.4, S29). The test calls
+    /// `resolve_conflict_message` directly with a sentinel label to verify the
+    /// production dispatch path, not a format!() reconstruction.
     #[::core::prelude::v1::test]
     fn conflict_message_references_file_and_suggests_reload() {
-        // Simulate what `save_edit_profile` produces on Conflict { Config }.
-        let file = AwsEditFile::Config;
-        let file_name = file_label(file);
-        let msg = format!(
-            "This profile was modified on disk ({file_name}) since you opened it. \
-             Reload to see the current values before saving."
-        );
+        use dbflux_core::AuthEditTarget;
+
+        let target = AuthEditTarget {
+            id: "cfg".to_string(),
+            label: "FAKE_TARGET_A".to_string(),
+        };
+
+        let msg = resolve_conflict_message(&target);
+
         assert!(
-            msg.contains("~/.aws/config"),
-            "conflict message must name the affected file"
+            msg.contains("FAKE_TARGET_A"),
+            "conflict message must name the affected target"
         );
         assert!(
             msg.to_lowercase().contains("reload"),
             "conflict message must mention the Reload action"
+        );
+        assert!(
+            msg.to_lowercase().contains("modified"),
+            "conflict message must indicate the resource was modified"
         );
         assert!(
             !msg.contains("AKIA"),
@@ -3344,34 +3406,45 @@ mod tests {
         );
     }
 
-    /// E4: `PartialSaved` outcome produces a message that names BOTH files
-    /// (written and conflicted) and offers a Reload affordance (spec S35).
+    /// E4: `PartialSaved` outcome produces a message that names BOTH targets
+    /// (written and conflicted) and offers a Reload affordance (spec S35). The
+    /// test calls `resolve_partial_saved_message` with sentinel labels to verify
+    /// the production dispatch path.
     #[::core::prelude::v1::test]
     fn partial_saved_message_names_both_files() {
-        let written = AwsEditFile::Config;
-        let conflicted = AwsEditFile::Credentials;
-        let msg = format!(
-            "{} was saved successfully, but {} was modified on disk since you opened \
-             the form. Reload to refresh the credentials section and re-apply your changes.",
-            file_label(written),
-            file_label(conflicted),
+        use dbflux_core::AuthEditTarget;
+
+        let written = AuthEditTarget {
+            id: "cfg".to_string(),
+            label: "FAKE_TARGET_A".to_string(),
+        };
+        let conflicted = AuthEditTarget {
+            id: "creds".to_string(),
+            label: "FAKE_TARGET_B".to_string(),
+        };
+
+        let msg = resolve_partial_saved_message(&written, &conflicted);
+
+        assert!(
+            msg.contains("FAKE_TARGET_A"),
+            "partial-saved message must name the written target"
         );
         assert!(
-            msg.contains("~/.aws/config"),
-            "partial-saved message must name the written file"
-        );
-        assert!(
-            msg.contains("~/.aws/credentials"),
-            "partial-saved message must name the conflicted file"
+            msg.contains("FAKE_TARGET_B"),
+            "partial-saved message must name the conflicted target"
         );
         assert!(
             msg.to_lowercase().contains("reload"),
             "partial-saved message must mention the Reload action"
         );
+        assert!(
+            msg.to_lowercase().contains("saved successfully"),
+            "partial-saved message must confirm the successful write"
+        );
     }
 
     // -----------------------------------------------------------------------
-    // WU-E5: Security audit — outcomes and types carry no secrets
+    // Security: outcomes and types carry no secrets
     // -----------------------------------------------------------------------
 
     /// E5.1: `AuthSaveOutcome` Debug representation contains no secret patterns.
@@ -3379,16 +3452,25 @@ mod tests {
     /// where the type is matched and messages are constructed.
     #[::core::prelude::v1::test]
     fn auth_save_outcome_debug_has_no_secrets() {
-        use dbflux_core::AuthSaveOutcome;
+        use dbflux_core::{AuthEditTarget, AuthSaveOutcome};
+
+        let config_target = AuthEditTarget {
+            id: "config".to_string(),
+            label: "~/.aws/config".to_string(),
+        };
+        let credentials_target = AuthEditTarget {
+            id: "credentials".to_string(),
+            label: "~/.aws/credentials".to_string(),
+        };
 
         let outcomes = [
             AuthSaveOutcome::Saved,
             AuthSaveOutcome::Conflict {
-                file: AwsEditFile::Config,
+                target: config_target.clone(),
             },
             AuthSaveOutcome::PartialSaved {
-                written: AwsEditFile::Config,
-                conflicted: AwsEditFile::Credentials,
+                written: config_target,
+                conflicted: credentials_target,
             },
         ];
 
@@ -3405,28 +3487,184 @@ mod tests {
         }
     }
 
-    /// E5.2: `file_label` returns the correct file path strings.
+    // -----------------------------------------------------------------------
+    // W1 — S7: Provider without edit capabilities uses fallback strings
+    // -----------------------------------------------------------------------
+
+    /// When `capabilities().edit` is `None`, `resolve_mirror_label` returns
+    /// the fallback constant and the result contains no AWS-specific strings.
     #[::core::prelude::v1::test]
-    fn file_label_returns_correct_paths() {
-        assert_eq!(file_label(AwsEditFile::Config), "~/.aws/config");
-        assert_eq!(file_label(AwsEditFile::Credentials), "~/.aws/credentials");
+    fn no_edit_caps_mirror_label_returns_fallback() {
+        let result = resolve_mirror_label(None);
+        assert_eq!(
+            result, MIRROR_LABEL_FALLBACK,
+            "resolve_mirror_label must return the fallback when edit caps are absent"
+        );
+        assert!(
+            !result.contains("~/.aws/"),
+            "fallback mirror label must not contain AWS path"
+        );
     }
 
-    /// E5.3: `AwsEditFile` variants are distinct and `file_label` output
-    /// contains no credential values.
+    /// When `capabilities().edit` is `None`, `resolve_success_text` returns
+    /// the fallback constant and the result contains no AWS-specific strings.
     #[::core::prelude::v1::test]
-    fn file_label_contains_no_credential_material() {
-        for file in [AwsEditFile::Config, AwsEditFile::Credentials] {
-            let label = file_label(file);
-            assert!(
-                !label.contains("AKIA"),
-                "file label must not contain access key patterns"
-            );
-            assert!(
-                !label.contains("secret"),
-                "file label must not contain 'secret'"
-            );
-        }
+    fn no_edit_caps_success_text_returns_fallback() {
+        let result = resolve_success_text(None);
+        assert_eq!(
+            result, SUCCESS_WRITTEN_FALLBACK,
+            "resolve_success_text must return the fallback when edit caps are absent"
+        );
+        assert!(
+            !result.contains("~/.aws/"),
+            "fallback success text must not contain AWS path"
+        );
+    }
+
+    /// When `capabilities().edit` is `None`, `resolve_dangling` returns the
+    /// generic fallback message and does not panic.
+    #[::core::prelude::v1::test]
+    fn no_edit_caps_dangling_returns_fallback() {
+        let msg = resolve_dangling(None, "keyring-only");
+        let expected = dangling_fallback();
+        assert_eq!(
+            msg.title, expected.title,
+            "resolve_dangling must return fallback title when edit caps are absent"
+        );
+        assert_eq!(
+            msg.body, expected.body,
+            "resolve_dangling must return fallback body when edit caps are absent"
+        );
+        assert!(
+            !msg.title.contains("~/.aws/") && !msg.body.contains("~/.aws/"),
+            "fallback dangling message must not contain AWS path"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // W2 — S1: resolve_success_text reads capabilities.edit.success_written
+    // -----------------------------------------------------------------------
+
+    /// `resolve_success_text` returns the provider's `success_written` string
+    /// when `edit` capabilities are present, and falls back to the constant
+    /// when they are absent.
+    #[::core::prelude::v1::test]
+    fn resolve_success_text_reads_from_edit_caps() {
+        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use std::collections::HashMap;
+
+        let caps = AuthEditCapabilities {
+            mirror_label: "irrelevant".to_string(),
+            success_written: "TEST_SUCCESS_MARKER".to_string(),
+            name_field_hint: String::new(),
+            dangling_messages: HashMap::new(),
+        };
+
+        let with_caps = resolve_success_text(Some(&caps));
+        assert_eq!(
+            with_caps, "TEST_SUCCESS_MARKER",
+            "resolve_success_text must return capabilities.edit.success_written"
+        );
+
+        let without_caps = resolve_success_text(None);
+        assert_eq!(
+            without_caps, SUCCESS_WRITTEN_FALLBACK,
+            "resolve_success_text must return SUCCESS_WRITTEN_FALLBACK when edit is None"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // W3 — S4: resolve_mirror_label reads capabilities.edit.mirror_label
+    // -----------------------------------------------------------------------
+
+    /// `resolve_mirror_label` returns the provider's `mirror_label` string
+    /// when `edit` capabilities are present, and falls back to the constant
+    /// when they are absent.
+    #[::core::prelude::v1::test]
+    fn resolve_mirror_label_reads_from_edit_caps() {
+        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use std::collections::HashMap;
+
+        let caps = AuthEditCapabilities {
+            mirror_label: "TEST_MIRROR_MARKER".to_string(),
+            success_written: "irrelevant".to_string(),
+            name_field_hint: String::new(),
+            dangling_messages: HashMap::new(),
+        };
+
+        let with_caps = resolve_mirror_label(Some(&caps));
+        assert_eq!(
+            with_caps, "TEST_MIRROR_MARKER",
+            "resolve_mirror_label must return capabilities.edit.mirror_label"
+        );
+
+        let without_caps = resolve_mirror_label(None);
+        assert_eq!(
+            without_caps, MIRROR_LABEL_FALLBACK,
+            "resolve_mirror_label must return MIRROR_LABEL_FALLBACK when edit is None"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // W4 — S5 + S6: resolve_dangling dispatches through capabilities
+    // -----------------------------------------------------------------------
+
+    /// S5: `resolve_dangling` returns the provider's message for a known origin.
+    #[::core::prelude::v1::test]
+    fn resolve_dangling_returns_caps_message_for_known_origin() {
+        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use std::collections::HashMap;
+
+        let mut dangling_messages = HashMap::new();
+        dangling_messages.insert(
+            "keyring-only".to_string(),
+            DanglingMessage {
+                title: "TEST_KEYRING_TITLE".to_string(),
+                body: "TEST_KEYRING_BODY".to_string(),
+            },
+        );
+        let caps = AuthEditCapabilities {
+            mirror_label: String::new(),
+            success_written: String::new(),
+            name_field_hint: String::new(),
+            dangling_messages,
+        };
+
+        let msg = resolve_dangling(Some(&caps), "keyring-only");
+        assert_eq!(
+            msg.title, "TEST_KEYRING_TITLE",
+            "resolve_dangling must return title from capabilities for known origin"
+        );
+        assert_eq!(
+            msg.body, "TEST_KEYRING_BODY",
+            "resolve_dangling must return body from capabilities for known origin"
+        );
+    }
+
+    /// S6: `resolve_dangling` falls back to `dangling_fallback()` when the
+    /// origin key is absent from `capabilities.edit.dangling_messages`.
+    #[::core::prelude::v1::test]
+    fn resolve_dangling_falls_back_for_unknown_origin() {
+        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use std::collections::HashMap;
+
+        let caps = AuthEditCapabilities {
+            mirror_label: String::new(),
+            success_written: String::new(),
+            name_field_hint: String::new(),
+            dangling_messages: HashMap::new(),
+        };
+
+        let msg = resolve_dangling(Some(&caps), "unknown-foo-origin");
+        let expected = dangling_fallback();
+        assert_eq!(
+            msg.title, expected.title,
+            "resolve_dangling must return fallback title for unknown origin"
+        );
+        assert_eq!(
+            msg.body, expected.body,
+            "resolve_dangling must return fallback body for unknown origin"
+        );
     }
 
     /// E5.4: `build_form_rows` for a reflected profile never exposes the

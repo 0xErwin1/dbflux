@@ -414,6 +414,16 @@ impl SqliteAuditStore {
             .delete_older_than(cutoff_ms, limit)
             .map_err(to_audit_error)
     }
+
+    /// Persists the tracing bridge capture threshold to `cfg_audit_settings`.
+    ///
+    /// This table lives in the same `dbflux.db` file as the audit events, so
+    /// the write goes through the same connection pool without extra dependencies.
+    pub fn update_log_capture_min_level(&self, level: &str) -> Result<(), AuditError> {
+        self.repo
+            .update_log_capture_min_level(level)
+            .map_err(to_audit_error)
+    }
 }
 
 #[cfg(test)]

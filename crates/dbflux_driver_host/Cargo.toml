@@ -13,14 +13,13 @@ name = "dbflux-driver-host"
 path = "src/main.rs"
 
 [dependencies]
-dbflux_core = { path = "../dbflux_core" }
+dbflux_core = { path = "../dbflux_core", features = ["tracing-bridge"] }
 dbflux_ipc = { path = "../dbflux_ipc" }
 interprocess.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 log.workspace = true
-env_logger.workspace = true
 
 [features]
 sqlite = ["dbflux_driver_sqlite"]

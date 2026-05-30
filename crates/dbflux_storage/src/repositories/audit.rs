@@ -605,6 +605,24 @@ impl AuditRepository {
         Ok(deleted as i64)
     }
 
+    /// Updates the `log_capture_min_level` column on the singleton `cfg_audit_settings` row.
+    ///
+    /// This method lives on the audit repository because both tables share the
+    /// same `dbflux.db` connection pool, so no additional connection is needed.
+    pub fn update_log_capture_min_level(&self, level: &str) -> Result<(), RepositoryError> {
+        let conn = self.conn.lock().map_err(|e| RepositoryError::Sqlite {
+            source: rusqlite::Error::InvalidParameterName(e.to_string()),
+        })?;
+
+        conn.execute(
+            "UPDATE cfg_audit_settings SET log_capture_min_level = ?1, updated_at = datetime('now') WHERE id = 1",
+            rusqlite::params![level],
+        )
+        .map_err(|source| RepositoryError::Sqlite { source })?;
+
+        Ok(())
+    }
+
     /// Finds an audit event by ID.
     pub fn find_by_id(&self, id: i64) -> Result<Option<AuditEventDto>, RepositoryError> {
         let filter = AuditQueryFilter {

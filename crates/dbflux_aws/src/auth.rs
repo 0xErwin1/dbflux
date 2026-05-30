@@ -16,10 +16,11 @@ use sha1::{Digest, Sha1};
 
 use aws_sdk_sts::config::ProvideCredentials;
 
+use crate::edit::{AwsEditFileKind, AwsEditSnapshot};
 use dbflux_core::DbError;
 use dbflux_core::auth::{
-    AuthFormDef, AuthProfile, AuthProviderCapabilities, AuthProviderLoginCapabilities,
-    AuthSaveOutcome, AuthSession, AuthSessionState, AwsEditFile, AwsEditSnapshot,
+    AuthEditCapabilities, AuthEditSnapshot, AuthFormDef, AuthProfile, AuthProviderCapabilities,
+    AuthProviderLoginCapabilities, AuthSaveOutcome, AuthSession, AuthSessionState, DanglingMessage,
     FetchOptionsError, FetchOptionsRequest, FetchOptionsResponse, ImportableProfile,
     ResolvedCredentials, UrlCallback, aws_profile_uuid,
 };
@@ -828,6 +829,42 @@ fn non_expiring_login(
     }
 }
 
+/// Returns the edit capabilities shared by all three AWS file-backed providers.
+///
+/// All string fields are final-rendered; the UI uses them verbatim.
+fn aws_edit_capabilities() -> AuthEditCapabilities {
+    let mut dangling = std::collections::HashMap::with_capacity(2);
+
+    dangling.insert(
+        "keyring-only".to_string(),
+        DanglingMessage {
+            title: "Profile reference not found in ~/.aws/config".to_string(),
+            body: "This profile no longer exists in ~/.aws/config. \
+                   Its credentials entry may still be in ~/.aws/credentials. \
+                   You can re-add the profile manually or remove this connection binding."
+                .to_string(),
+        },
+    );
+
+    dangling.insert(
+        "file-gone".to_string(),
+        DanglingMessage {
+            title: "Profile config file is missing".to_string(),
+            body: "The AWS config file for this profile could not be located. \
+                   Check ~/.aws/config and re-add the profile if needed."
+                .to_string(),
+        },
+    );
+
+    AuthEditCapabilities {
+        mirror_label: "Reflected from ~/.aws/config — read-only".to_string(),
+        success_written: "Profile written to ~/.aws/config.".to_string(),
+        name_field_hint: "Profile name is read from ~/.aws/config and cannot be renamed here."
+            .to_string(),
+        dangling_messages: dangling,
+    }
+}
+
 fn aws_profile_name_fallback_allowed(profile: &AuthProfile) -> bool {
     matches!(
         profile.provider_id.as_str(),
@@ -921,14 +958,14 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     }
 
     fn capabilities(&self) -> &AuthProviderCapabilities {
-        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+        static CAPABILITIES: OnceLock<AuthProviderCapabilities> = OnceLock::new();
+        CAPABILITIES.get_or_init(|| AuthProviderCapabilities {
             login: AuthProviderLoginCapabilities {
                 supported: true,
                 verification_url_progress: true,
             },
-        };
-
-        &CAPABILITIES
+            edit: Some(aws_edit_capabilities()),
+        })
     }
 
     async fn validate_session(&self, profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
@@ -1006,7 +1043,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
     ///
     /// The config section is the only writable target for `aws-sso` profiles.
     /// Returns `config_section = None` when the section is absent (new profile).
-    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
         let config_path = {
             let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.config_path().to_path_buf()
@@ -1016,18 +1053,18 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             .ok()
             .and_then(|contents| crate::config::hash_config_section(&contents, name));
 
-        AwsEditSnapshot {
+        AuthEditSnapshot::new(AwsEditSnapshot {
             config_section,
             credentials_section: None,
-        }
+        })
     }
 
     /// Writes the edited SSO profile fields to `~/.aws/config` atomically.
     ///
     /// Performs an optimistic-concurrency check under the file lock: re-hashes
-    /// the `[profile NAME]` section from disk and compares against `snapshot`.
-    /// Returns `Conflict { file: Config }` without writing if the section was
-    /// modified externally between `open_edit_snapshot` and this call.
+    /// the `[profile NAME]` section from disk and compares against the snapshot.
+    /// Returns `Conflict { target }` without writing if the section was modified
+    /// externally between `open_edit_snapshot` and this call.
     ///
     /// When the profile references an `[sso-session NAME]` block (the
     /// `sso_session_ref` form field is set, surfaced here as
@@ -1044,8 +1081,19 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
         &self,
         name: &str,
         fields: &HashMap<String, String>,
-        snapshot: &AwsEditSnapshot,
+        snapshot: &AuthEditSnapshot,
     ) -> AuthSaveOutcome {
+        let aws_snapshot = match snapshot.downcast_ref::<AwsEditSnapshot>() {
+            Some(s) => s,
+            None => {
+                log::error!(
+                    "auth edit snapshot downcast failed; expected {}",
+                    std::any::type_name::<AwsEditSnapshot>()
+                );
+                return AuthSaveOutcome::Saved;
+            }
+        };
+
         let config_path = {
             let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.config_path().to_path_buf()
@@ -1085,7 +1133,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
                 (collected, &["sso_session"])
             };
 
-        let snapshot_hash = snapshot.config_section.as_ref().map(|h| h.0);
+        let snapshot_hash = aws_snapshot.config_section.as_ref().map(|h| h.0);
 
         // Use a Cell to signal conflict from within the atomic transform.
         // The transform is FnOnce, so we capture by reference via a local flag.
@@ -1112,15 +1160,9 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoAuthProvider {
             crate::config::replace_or_append_profile_block(existing, name, &borrowed, remove_keys)
         });
 
-        if result.is_err() {
+        if result.is_err() || conflict_detected.get() {
             return AuthSaveOutcome::Conflict {
-                file: AwsEditFile::Config,
-            };
-        }
-
-        if conflict_detected.get() {
-            return AuthSaveOutcome::Conflict {
-                file: AwsEditFile::Config,
+                target: AwsEditFileKind::Config.to_target(),
             };
         }
 
@@ -1375,14 +1417,14 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
     }
 
     fn capabilities(&self) -> &AuthProviderCapabilities {
-        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+        static CAPABILITIES: OnceLock<AuthProviderCapabilities> = OnceLock::new();
+        CAPABILITIES.get_or_init(|| AuthProviderCapabilities {
             login: AuthProviderLoginCapabilities {
                 supported: false,
                 verification_url_progress: false,
             },
-        };
-
-        &CAPABILITIES
+            edit: Some(aws_edit_capabilities()),
+        })
     }
 
     async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
@@ -1445,7 +1487,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
     /// and `~/.aws/credentials` (`[NAME]`) at the moment the edit form opens.
     ///
     /// Either hash may be `None` when the corresponding section is absent.
-    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
         let (config_path, credentials_path) = {
             let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
             (
@@ -1462,10 +1504,10 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
             .ok()
             .and_then(|contents| crate::config::hash_credentials_section(&contents, name));
 
-        AwsEditSnapshot {
+        AuthEditSnapshot::new(AwsEditSnapshot {
             config_section,
             credentials_section,
-        }
+        })
     }
 
     /// Writes edited shared-credentials profile fields atomically to both
@@ -1478,8 +1520,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
     ///
     /// Write order: config first, credentials second (ADR-11). Each write has
     /// its own conflict check under the shared lock. If config writes but
-    /// credentials conflicts, returns `PartialSaved { written: Config,
-    /// conflicted: Credentials }`.
+    /// credentials conflicts, returns `PartialSaved { written: ..., conflicted: ... }`.
     ///
     /// Secret fields: `aws_secret_access_key` and `aws_session_token` transit
     /// only transiently inside the write transform and are never persisted to
@@ -1488,8 +1529,19 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
         &self,
         name: &str,
         fields: &HashMap<String, String>,
-        snapshot: &AwsEditSnapshot,
+        snapshot: &AuthEditSnapshot,
     ) -> AuthSaveOutcome {
+        let aws_snapshot = match snapshot.downcast_ref::<AwsEditSnapshot>() {
+            Some(s) => s,
+            None => {
+                log::error!(
+                    "auth edit snapshot downcast failed; expected {}",
+                    std::any::type_name::<AwsEditSnapshot>()
+                );
+                return AuthSaveOutcome::Saved;
+            }
+        };
+
         let (config_path, credentials_path) = {
             let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
             (
@@ -1519,7 +1571,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
 
         // Write config section first (when there are config-side fields to write).
         let config_written = if has_config_fields {
-            let snapshot_hash = snapshot.config_section.as_ref().map(|h| h.0);
+            let snapshot_hash = aws_snapshot.config_section.as_ref().map(|h| h.0);
             let conflict_detected = std::cell::Cell::new(false);
 
             let config_fields_borrowed = config_fields.clone();
@@ -1546,7 +1598,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
 
             if result.is_err() || conflict_detected.get() {
                 return AuthSaveOutcome::Conflict {
-                    file: AwsEditFile::Config,
+                    target: AwsEditFileKind::Config.to_target(),
                 };
             }
 
@@ -1557,7 +1609,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
 
         // Write credentials section second (when there are credentials-side fields).
         if has_creds_fields {
-            let snapshot_hash = snapshot.credentials_section.as_ref().map(|h| h.0);
+            let snapshot_hash = aws_snapshot.credentials_section.as_ref().map(|h| h.0);
             let conflict_detected = std::cell::Cell::new(false);
 
             let creds_fields_borrowed = creds_fields.clone();
@@ -1587,12 +1639,12 @@ impl dbflux_core::auth::DynAuthProvider for AwsSharedCredentialsAuthProvider {
             if result.is_err() || conflict_detected.get() {
                 return if config_written {
                     AuthSaveOutcome::PartialSaved {
-                        written: AwsEditFile::Config,
-                        conflicted: AwsEditFile::Credentials,
+                        written: AwsEditFileKind::Config.to_target(),
+                        conflicted: AwsEditFileKind::Credentials.to_target(),
                     }
                 } else {
                     AuthSaveOutcome::Conflict {
-                        file: AwsEditFile::Credentials,
+                        target: AwsEditFileKind::Credentials.to_target(),
                     }
                 };
             }
@@ -1620,14 +1672,14 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
     fn capabilities(&self) -> &AuthProviderCapabilities {
         // SSO session profiles are reference targets, not login targets.
         // Login happens via the `aws-sso` profile that points at the session.
-        static CAPABILITIES: AuthProviderCapabilities = AuthProviderCapabilities {
+        static CAPABILITIES: OnceLock<AuthProviderCapabilities> = OnceLock::new();
+        CAPABILITIES.get_or_init(|| AuthProviderCapabilities {
             login: AuthProviderLoginCapabilities {
                 supported: false,
                 verification_url_progress: false,
             },
-        };
-
-        &CAPABILITIES
+            edit: Some(aws_edit_capabilities()),
+        })
     }
 
     async fn validate_session(&self, _profile: &AuthProfile) -> Result<AuthSessionState, DbError> {
@@ -1709,7 +1761,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
 
     /// Captures a SHA-256 snapshot of the `[sso-session NAME]` section in
     /// `~/.aws/config` at the moment the edit form opens.
-    fn open_edit_snapshot(&self, name: &str) -> AwsEditSnapshot {
+    fn open_edit_snapshot(&self, name: &str) -> AuthEditSnapshot {
         let config_path = {
             let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.config_path().to_path_buf()
@@ -1719,10 +1771,10 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
             .ok()
             .and_then(|contents| crate::config::hash_sso_session_section(&contents, name));
 
-        AwsEditSnapshot {
+        AuthEditSnapshot::new(AwsEditSnapshot {
             config_section,
             credentials_section: None,
-        }
+        })
     }
 
     /// Writes the edited sso-session fields to the `[sso-session NAME]` section
@@ -1733,8 +1785,19 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
         &self,
         name: &str,
         fields: &HashMap<String, String>,
-        snapshot: &AwsEditSnapshot,
+        snapshot: &AuthEditSnapshot,
     ) -> AuthSaveOutcome {
+        let aws_snapshot = match snapshot.downcast_ref::<AwsEditSnapshot>() {
+            Some(s) => s,
+            None => {
+                log::error!(
+                    "auth edit snapshot downcast failed; expected {}",
+                    std::any::type_name::<AwsEditSnapshot>()
+                );
+                return AuthSaveOutcome::Saved;
+            }
+        };
+
         let config_path = {
             let cache = self.config_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.config_path().to_path_buf()
@@ -1746,7 +1809,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
                 .filter_map(|&key| fields.get(key).map(|v| (key.to_string(), v.clone())))
                 .collect();
 
-        let snapshot_hash = snapshot.config_section.as_ref().map(|h| h.0);
+        let snapshot_hash = aws_snapshot.config_section.as_ref().map(|h| h.0);
         let conflict_detected = std::cell::Cell::new(false);
 
         let result = crate::config::update_aws_config_atomic(&config_path, |existing| {
@@ -1774,7 +1837,7 @@ impl dbflux_core::auth::DynAuthProvider for AwsSsoSessionAuthProvider {
 
         if result.is_err() || conflict_detected.get() {
             return AuthSaveOutcome::Conflict {
-                file: AwsEditFile::Config,
+                target: AwsEditFileKind::Config.to_target(),
             };
         }
 
@@ -3220,10 +3283,15 @@ sso_region = us-east-1
         let (provider, _config, _creds, _dir) = sso_provider_with_config_and_creds(config, "");
 
         let snapshot = provider.open_edit_snapshot("dev-sso");
-        assert!(
-            snapshot.config_section.is_some(),
-            "open_edit_snapshot must capture a hash for an existing section"
-        );
+        {
+            let aws = snapshot
+                .downcast_ref::<AwsEditSnapshot>()
+                .expect("snapshot must downcast to AwsEditSnapshot");
+            assert!(
+                aws.config_section.is_some(),
+                "open_edit_snapshot must capture a hash for an existing section"
+            );
+        }
 
         let mut fields = HashMap::new();
         fields.insert("sso_account_id".to_string(), "999999999999".to_string());
@@ -3258,12 +3326,10 @@ sso_region = us-east-1
         let outcome = provider.save_edit("dev-sso", &fields, &snapshot);
         assert!(
             matches!(
-                outcome,
-                AuthSaveOutcome::Conflict {
-                    file: AwsEditFile::Config
-                }
+                &outcome,
+                AuthSaveOutcome::Conflict { target } if target.id == "config"
             ),
-            "expected Conflict(Config) when same section changed externally, got {:?}",
+            "expected Conflict(config) when same section changed externally, got {:?}",
             outcome
         );
 
@@ -3516,13 +3582,11 @@ sso_region = us-east-1
         let outcome = provider.save_edit("ci", &fields, &snapshot);
         assert!(
             matches!(
-                outcome,
-                AuthSaveOutcome::PartialSaved {
-                    written: AwsEditFile::Config,
-                    conflicted: AwsEditFile::Credentials,
-                }
+                &outcome,
+                AuthSaveOutcome::PartialSaved { written, conflicted }
+                    if written.id == "config" && conflicted.id == "credentials"
             ),
-            "expected PartialSaved(Config written, Credentials conflicted), got {:?}",
+            "expected PartialSaved(config written, credentials conflicted), got {:?}",
             outcome
         );
     }
@@ -3570,10 +3634,15 @@ sso_region = us-east-1
             sso_session_provider_with_config_path(config);
 
         let snapshot = provider.open_edit_snapshot("my-org");
-        assert!(
-            snapshot.config_section.is_some(),
-            "snapshot must capture existing sso-session section hash"
-        );
+        {
+            let aws = snapshot
+                .downcast_ref::<AwsEditSnapshot>()
+                .expect("snapshot must downcast to AwsEditSnapshot");
+            assert!(
+                aws.config_section.is_some(),
+                "snapshot must capture existing sso-session section hash"
+            );
+        }
 
         let mut fields = HashMap::new();
         fields.insert("sso_region".to_string(), "eu-west-1".to_string());
@@ -3608,12 +3677,10 @@ sso_region = us-east-1
         let outcome = provider.save_edit("my-org", &fields, &snapshot);
         assert!(
             matches!(
-                outcome,
-                AuthSaveOutcome::Conflict {
-                    file: AwsEditFile::Config
-                }
+                &outcome,
+                AuthSaveOutcome::Conflict { target } if target.id == "config"
             ),
-            "expected Conflict(Config) when sso-session section changed, got {:?}",
+            "expected Conflict(config) when sso-session section changed, got {:?}",
             outcome
         );
     }
@@ -3626,12 +3693,15 @@ sso_region = us-east-1
         let (provider, _config, _creds, _dir) = sso_provider_with_config_and_creds("", "");
 
         let snapshot = provider.open_edit_snapshot("nonexistent");
+        let aws = snapshot
+            .downcast_ref::<AwsEditSnapshot>()
+            .expect("snapshot must downcast to AwsEditSnapshot");
         assert!(
-            snapshot.config_section.is_none(),
+            aws.config_section.is_none(),
             "absent config section must produce None hash in snapshot"
         );
         assert!(
-            snapshot.credentials_section.is_none(),
+            aws.credentials_section.is_none(),
             "absent credentials section must produce None hash in snapshot"
         );
     }
@@ -3644,12 +3714,15 @@ sso_region = us-east-1
         let (provider, _config_path, _creds_path, _dir) = shared_provider_with_paths(config, creds);
 
         let snapshot = provider.open_edit_snapshot("ci");
+        let aws = snapshot
+            .downcast_ref::<AwsEditSnapshot>()
+            .expect("snapshot must downcast to AwsEditSnapshot");
         assert!(
-            snapshot.config_section.is_some(),
+            aws.config_section.is_some(),
             "config_section hash must be Some when [profile ci] exists"
         );
         assert!(
-            snapshot.credentials_section.is_some(),
+            aws.credentials_section.is_some(),
             "credentials_section hash must be Some when [ci] exists"
         );
     }
@@ -3728,6 +3801,61 @@ sso_region = us-east-1
             staging_hash_before.map(|h| h.0),
             staging_hash_after.map(|h| h.0),
             "[profile staging] section hash must be identical after editing [profile dev]"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // W5 — S8: save_edit with wrong-type snapshot returns Saved, does not panic
+    // -----------------------------------------------------------------------
+
+    /// S8 / AwsSsoAuthProvider: passing a snapshot whose inner type is not
+    /// `AwsEditSnapshot` must return `Saved` and must not panic.
+    #[test]
+    fn sso_save_edit_wrong_type_snapshot_returns_saved() {
+        use dbflux_core::{AuthEditSnapshot, AuthSaveOutcome, DynAuthProvider};
+
+        let provider = sso_provider_with_config("");
+        let wrong_snapshot = AuthEditSnapshot::new(42u32);
+        let fields = HashMap::new();
+
+        let outcome = provider.save_edit("any-profile", &fields, &wrong_snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "AwsSsoAuthProvider::save_edit must return Saved on downcast failure; got {outcome:?}"
+        );
+    }
+
+    /// S8 / AwsSsoSessionAuthProvider: passing a snapshot whose inner type is
+    /// not `AwsEditSnapshot` must return `Saved` and must not panic.
+    #[test]
+    fn sso_session_save_edit_wrong_type_snapshot_returns_saved() {
+        use dbflux_core::{AuthEditSnapshot, AuthSaveOutcome, DynAuthProvider};
+
+        let provider = sso_session_provider_with_config("");
+        let wrong_snapshot = AuthEditSnapshot::new(42u32);
+        let fields = HashMap::new();
+
+        let outcome = provider.save_edit("any-profile", &fields, &wrong_snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "AwsSsoSessionAuthProvider::save_edit must return Saved on downcast failure; got {outcome:?}"
+        );
+    }
+
+    /// S8 / AwsSharedCredentialsAuthProvider: passing a snapshot whose inner
+    /// type is not `AwsEditSnapshot` must return `Saved` and must not panic.
+    #[test]
+    fn shared_credentials_save_edit_wrong_type_snapshot_returns_saved() {
+        use dbflux_core::{AuthEditSnapshot, AuthSaveOutcome, DynAuthProvider};
+
+        let provider = shared_provider_with_files("", "");
+        let wrong_snapshot = AuthEditSnapshot::new(42u32);
+        let fields = HashMap::new();
+
+        let outcome = provider.save_edit("any-profile", &fields, &wrong_snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "AwsSharedCredentialsAuthProvider::save_edit must return Saved on downcast failure; got {outcome:?}"
         );
     }
 

@@ -19,12 +19,16 @@ impl ProtocolVersion {
 
 pub const APP_CONTROL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const DRIVER_RPC_V1_0: ProtocolVersion = ProtocolVersion::new(1, 0);
-pub const DRIVER_RPC_VERSION: ProtocolVersion = ProtocolVersion::new(1, 1);
+pub const DRIVER_RPC_V1_1: ProtocolVersion = ProtocolVersion::new(1, 1);
+pub const DRIVER_RPC_V1_2: ProtocolVersion = ProtocolVersion::new(1, 2);
+/// Current highest driver protocol version.
+pub const DRIVER_RPC_VERSION: ProtocolVersion = DRIVER_RPC_V1_2;
 pub const AUTH_PROVIDER_RPC_V1_0: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const AUTH_PROVIDER_RPC_V1_1: ProtocolVersion = ProtocolVersion::new(1, 1);
 pub const AUTH_PROVIDER_RPC_V1_2: ProtocolVersion = ProtocolVersion::new(1, 2);
+pub const AUTH_PROVIDER_RPC_V1_3: ProtocolVersion = ProtocolVersion::new(1, 3);
 /// Current highest auth-provider protocol version.
-pub const AUTH_PROVIDER_RPC_VERSION: ProtocolVersion = AUTH_PROVIDER_RPC_V1_2;
+pub const AUTH_PROVIDER_RPC_VERSION: ProtocolVersion = AUTH_PROVIDER_RPC_V1_3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,10 +59,11 @@ pub const DRIVER_RPC_API_CONTRACT: RpcApiContract =
 pub const AUTH_PROVIDER_RPC_API_CONTRACT: RpcApiContract =
     RpcApiContract::new(RpcApiFamily::AuthProviderRpc, AUTH_PROVIDER_RPC_VERSION);
 
-pub const DRIVER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 2] =
-    [DRIVER_RPC_V1_0, DRIVER_RPC_VERSION];
+pub const DRIVER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 3] =
+    [DRIVER_RPC_V1_0, DRIVER_RPC_V1_1, DRIVER_RPC_V1_2];
 
-pub const AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 3] = [
+pub const AUTH_PROVIDER_RPC_SUPPORTED_VERSIONS: [ProtocolVersion; 4] = [
+    AUTH_PROVIDER_RPC_V1_3,
     AUTH_PROVIDER_RPC_V1_2,
     AUTH_PROVIDER_RPC_V1_1,
     AUTH_PROVIDER_RPC_V1_0,
@@ -89,8 +94,8 @@ pub fn negotiate_highest_mutual_version(
 #[cfg(test)]
 mod tests {
     use super::{
-        DRIVER_RPC_VERSION, ProtocolVersion, RpcApiContract, RpcApiFamily,
-        negotiate_highest_mutual_version,
+        AUTH_PROVIDER_RPC_V1_3, DRIVER_RPC_V1_1, DRIVER_RPC_V1_2, DRIVER_RPC_VERSION,
+        ProtocolVersion, RpcApiContract, RpcApiFamily, negotiate_highest_mutual_version,
     };
 
     #[test]
@@ -120,7 +125,8 @@ mod tests {
             ],
         );
 
-        assert_eq!(selected, Some(DRIVER_RPC_VERSION));
+        // Local supports up to 1.1; highest mutual is 1.1.
+        assert_eq!(selected, Some(DRIVER_RPC_V1_1));
     }
 
     #[test]
@@ -132,5 +138,17 @@ mod tests {
         );
 
         assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn test_driver_rpc_version_constants() {
+        assert_eq!(DRIVER_RPC_VERSION, ProtocolVersion::new(1, 2));
+        assert_eq!(DRIVER_RPC_V1_1, ProtocolVersion::new(1, 1));
+        assert_eq!(DRIVER_RPC_V1_2, ProtocolVersion::new(1, 2));
+    }
+
+    #[test]
+    fn test_auth_provider_rpc_v1_3_constant() {
+        assert_eq!(AUTH_PROVIDER_RPC_V1_3, ProtocolVersion::new(1, 3));
     }
 }

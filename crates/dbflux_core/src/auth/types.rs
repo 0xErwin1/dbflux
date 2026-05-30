@@ -6,10 +6,53 @@ use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Capabilities advertised by an auth provider that supports file-backed editing.
+///
+/// All string fields carry the final-rendered text; the UI uses them verbatim
+/// without further substitution.  `dangling_messages` is keyed by the
+/// `dangling_origin` token stored on the profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthEditCapabilities {
+    /// Full banner text shown when a profile is reflected from an external
+    /// source and is therefore read-only. Providers supply the destination
+    /// description verbatim.
+    pub mirror_label: String,
+
+    /// Status text displayed after a successful clean write of a new profile.
+    pub success_written: String,
+
+    /// Hint shown next to the disabled name field on a reflected profile.
+    /// Empty string means the hint element is suppressed entirely.
+    pub name_field_hint: String,
+
+    /// Messages keyed by `dangling_origin` token.  The UI looks up the
+    /// active profile's `dangling_origin` and falls back to
+    /// `dangling_fallback()` when the key is absent.
+    #[serde(default)]
+    pub dangling_messages: HashMap<String, DanglingMessage>,
+}
+
+/// Title and body for a dangling-profile banner, sourced from the provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DanglingMessage {
+    pub title: String,
+    pub body: String,
+}
+
+/// Top-level capability descriptor for an auth provider.
+///
+/// `Copy` was intentionally removed when `edit: Option<AuthEditCapabilities>`
+/// was added — `String` fields inside `AuthEditCapabilities` are not `Copy`.
+/// All previous consumers that implicitly copied the struct now clone or borrow.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthProviderCapabilities {
     #[serde(default)]
     pub login: AuthProviderLoginCapabilities,
+
+    /// Present when the provider supports file-backed profile editing.
+    /// `None` means the edit UI affordances are hidden for this provider.
+    #[serde(default)]
+    pub edit: Option<AuthEditCapabilities>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,11 +85,10 @@ pub struct AuthProfile {
     pub read_only: bool,
     /// Why this stored profile is dangling, if it is.
     ///
-    /// Set by the one-time migration when a stored AWS profile can no longer be
-    /// matched to a file section. Known values:
-    /// - `"keyring-only"`: the credentials live only in the DBFlux keyring with no
-    ///   matching `~/.aws/credentials` entry.
-    /// - `"file-gone"`: the profile section disappeared from `~/.aws/config`.
+    /// Opaque provider-defined token. The human-readable description for each
+    /// token value is supplied by the owning provider via
+    /// `AuthEditCapabilities.dangling_messages`. DBFlux core does not interpret
+    /// or enumerate the possible values.
     ///
     /// `None` for healthy stored profiles and for all reflected (virtual) profiles.
     /// This field is never persisted by serialization; it is populated at load time

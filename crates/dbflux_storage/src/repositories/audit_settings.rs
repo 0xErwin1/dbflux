@@ -34,7 +34,7 @@ impl AuditSettingsRepository {
                 SELECT id, enabled, retention_days, capture_user_actions,
                        capture_system_events, capture_query_text, capture_hook_output_metadata,
                        redact_sensitive_values, max_detail_bytes, purge_on_startup,
-                       background_purge_interval_minutes, updated_at
+                       background_purge_interval_minutes, updated_at, log_capture_min_level
                 FROM cfg_audit_settings WHERE id = 1
                 "#,
             )
@@ -57,6 +57,9 @@ impl AuditSettingsRepository {
                 purge_on_startup: row.get::<_, i32>(9)? != 0,
                 background_purge_interval_minutes: row.get::<_, i32>(10)? as u32,
                 updated_at: row.get(11)?,
+                log_capture_min_level: row
+                    .get::<_, Option<String>>(12)?
+                    .unwrap_or_else(|| "info".to_owned()),
             })
         });
 
@@ -79,8 +82,8 @@ impl AuditSettingsRepository {
                     id, enabled, retention_days, capture_user_actions,
                     capture_system_events, capture_query_text, capture_hook_output_metadata,
                     redact_sensitive_values, max_detail_bytes, purge_on_startup,
-                    background_purge_interval_minutes, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))
+                    background_purge_interval_minutes, log_capture_min_level, updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     enabled = excluded.enabled,
                     retention_days = excluded.retention_days,
@@ -92,6 +95,7 @@ impl AuditSettingsRepository {
                     max_detail_bytes = excluded.max_detail_bytes,
                     purge_on_startup = excluded.purge_on_startup,
                     background_purge_interval_minutes = excluded.background_purge_interval_minutes,
+                    log_capture_min_level = excluded.log_capture_min_level,
                     updated_at = datetime('now')
                 "#,
                 rusqlite::params![
@@ -105,7 +109,23 @@ impl AuditSettingsRepository {
                     settings.max_detail_bytes as i32,
                     settings.purge_on_startup as i32,
                     settings.background_purge_interval_minutes as i32,
+                    settings.log_capture_min_level,
                 ],
+            )
+            .map_err(|source| StorageError::Sqlite {
+                path: "dbflux.db".into(),
+                source,
+            })?;
+
+        Ok(())
+    }
+
+    /// Updates only the `log_capture_min_level` column for the singleton row.
+    pub fn update_log_capture_min_level(&self, level: &str) -> Result<(), StorageError> {
+        self.conn()
+            .execute(
+                "UPDATE cfg_audit_settings SET log_capture_min_level = ?1, updated_at = datetime('now') WHERE id = 1",
+                rusqlite::params![level],
             )
             .map_err(|source| StorageError::Sqlite {
                 path: "dbflux.db".into(),
@@ -131,6 +151,10 @@ pub struct AuditSettingsDto {
     pub purge_on_startup: bool,
     pub background_purge_interval_minutes: u32,
     pub updated_at: String,
+    /// Minimum severity for the tracing bridge to route events to `aud_audit_events`.
+    ///
+    /// Valid values: `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`, `"fatal"`.
+    pub log_capture_min_level: String,
 }
 
 impl Default for AuditSettingsDto {
@@ -148,6 +172,7 @@ impl Default for AuditSettingsDto {
             purge_on_startup: false,
             background_purge_interval_minutes: 360,
             updated_at: String::new(),
+            log_capture_min_level: "info".to_owned(),
         }
     }
 }

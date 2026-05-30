@@ -134,6 +134,16 @@ impl AuditDocument {
             ))
         };
 
+        // set_correlation_filter — applied by the workspace when the user clicks
+        // "View in Audit" from a toast, or when clicking the error badge.
+        pane.set_correlation_filter = {
+            let e = entity.clone();
+            Some(Box::new(move |id: Option<String>, cx: &mut App| match id {
+                Some(s) => e.update(cx, |d, cx| d.filter_by_correlation(s, cx)),
+                None => e.update(cx, |d, cx| d.clear_correlation_filter(cx)),
+            }))
+        };
+
         pane
     }
 }

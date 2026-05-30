@@ -322,10 +322,7 @@ impl TabBar {
                         .size_full(),
                     )
             })
-            .when(!is_active, |el| {
-                el.bg(cx.theme().background)
-                    .hover(|el| el.bg(cx.theme().secondary))
-            })
+            .when(!is_active, |el| el.hover(|el| el.bg(cx.theme().secondary)))
             .when(is_drop_target, |el| {
                 el.border_l_2().border_color(cx.theme().accent)
             })

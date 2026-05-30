@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::user_error::throttle::TokenBucket;
+
 use dbflux_components::controls::Button;
 use dbflux_components::icon::IconSource;
 use dbflux_components::primitives::{Icon, IconButton, Text};
@@ -285,6 +287,8 @@ pub struct ToastHost {
     /// Set of toast ids whose collapsible block is currently collapsed.
     collapsed: HashSet<u64>,
     next_id: u64,
+    /// Token bucket for Warning/Info toasts. Error toasts bypass this entirely.
+    warn_info_bucket: TokenBucket,
 }
 
 impl ToastHost {
@@ -293,10 +297,22 @@ impl ToastHost {
             toasts: Vec::new(),
             collapsed: HashSet::new(),
             next_id: 1,
+            warn_info_bucket: TokenBucket::new(),
         }
     }
 
     pub fn push_rich(&mut self, toast: Toast, cx: &mut Context<Self>) {
+        if matches!(toast.kind, ToastKind::Warning | ToastKind::Info)
+            && !self.warn_info_bucket.try_consume()
+        {
+            log::debug!(
+                target: "dbflux_ui::toast",
+                "toast dropped by throttle: kind={:?} title={}",
+                toast.kind, toast.title
+            );
+            return;
+        }
+
         let id = self.next_id;
         self.next_id += 1;
 

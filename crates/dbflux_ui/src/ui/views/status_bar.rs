@@ -1,7 +1,8 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::theme::ghost_border_color;
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant};
-use dbflux_components::tokens::{Anim, ChromeColors, FontSizes};
+use dbflux_components::semantic::BannerColors as SemBannerColors;
+use dbflux_components::tokens::{Anim, ChromeColors, FontSizes, Heights};
 use dbflux_components::typography::{MonoCaption, MonoMeta};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -212,6 +213,7 @@ impl Render for StatusBar {
         };
 
         let divider_color = ChromeColors::ghost_border();
+        let unread = app_state.unread_error_count;
 
         div()
             .flex()
@@ -277,12 +279,37 @@ impl Render for StatusBar {
                         )
                     }),
             )
-            // Right section: tasks toggle
+            // Right section: error badge (when present) + tasks toggle
             .child(
                 div()
                     .flex()
                     .flex_shrink_0()
                     .items_center()
+                    .when(unread > 0, |this| {
+                        this.child(Self::vertical_divider(divider_color)).child(
+                            div()
+                                .id("error-badge")
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px(px(10.0))
+                                .h(px(22.0))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(cx.theme().secondary))
+                                .child(
+                                    Icon::new(crate::ui::icons::AppIcon::CircleAlert)
+                                        .size(Heights::ICON_SM)
+                                        .color(SemBannerColors::for_current(cx).error_fg),
+                                )
+                                .child(Self::metadata_text(unread.to_string()))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.app_state.update(cx, |s, cx| {
+                                        s.clear_unread_errors(cx);
+                                        s.request_open_audit(None, cx);
+                                    });
+                                })),
+                        )
+                    })
                     .child(Self::vertical_divider(divider_color))
                     .child(
                         div()

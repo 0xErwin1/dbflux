@@ -3,10 +3,13 @@ use super::SettingsSectionId;
 use super::section_trait::SectionFocusEvent;
 use crate::settings::layout;
 use dbflux_app::keymap::Modifiers;
-use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
+use dbflux_components::controls::{
+    Dropdown, DropdownItem, DropdownSelectionChanged, GpuiInput as Input, InputEvent, InputState,
+};
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Radii;
-use dbflux_components::typography::SubSectionLabel;
+use dbflux_components::typography::{FieldLabel, SubSectionLabel};
+use dbflux_core::observability::EventSeverity;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
@@ -30,6 +33,7 @@ pub(super) enum AuditFormRow {
     MaxDetailBytes,
     PurgeOnStartup,
     BackgroundPurgeInterval,
+    LogCaptureMinLevel,
     SaveButton,
 }
 
@@ -43,6 +47,7 @@ pub(super) struct AuditSection {
     pub(super) input_retention_days: Entity<InputState>,
     pub(super) input_max_detail_bytes: Entity<InputState>,
     pub(super) input_background_purge_interval: Entity<InputState>,
+    pub(super) dropdown_log_level: Entity<Dropdown>,
     pub(super) content_focused: bool,
     pub(super) switching_input: bool,
     pub(super) event_count: Option<u64>,
@@ -79,6 +84,14 @@ impl AuditSection {
             InputState::new(window, cx)
                 .placeholder("360")
                 .default_value(background_purge_interval.clone())
+        });
+
+        let log_level_index = Self::log_level_index(&settings.log_capture_min_level);
+        let dropdown_log_level = cx.new(move |_cx| {
+            Dropdown::new("audit-log-capture-level")
+                .placeholder("Level")
+                .items(Self::log_level_items())
+                .selected_index(Some(log_level_index))
         });
 
         let subscription = cx.subscribe(
@@ -127,6 +140,15 @@ impl AuditSection {
             },
         );
 
+        let log_level_subscription = cx.subscribe(
+            &dropdown_log_level,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.settings.log_capture_min_level =
+                    Self::log_level_for_index(event.index).to_owned();
+                cx.notify();
+            },
+        );
+
         Self {
             app_state,
             settings,
@@ -136,6 +158,7 @@ impl AuditSection {
             input_retention_days,
             input_max_detail_bytes,
             input_background_purge_interval,
+            dropdown_log_level,
             content_focused: false,
             switching_input: false,
             event_count: None,
@@ -145,6 +168,7 @@ impl AuditSection {
                 blur_retention,
                 blur_max_detail,
                 blur_purge_interval,
+                log_level_subscription,
             ],
         }
     }
@@ -171,6 +195,7 @@ impl AuditSection {
             AuditFormRow::MaxDetailBytes,
             AuditFormRow::PurgeOnStartup,
             AuditFormRow::BackgroundPurgeInterval,
+            AuditFormRow::LogCaptureMinLevel,
             AuditFormRow::SaveButton,
         ]
     }
@@ -240,6 +265,9 @@ impl AuditSection {
             Some(AuditFormRow::BackgroundPurgeInterval) => {
                 self.audit_focus_current_input(window, cx);
             }
+            Some(AuditFormRow::LogCaptureMinLevel) => {
+                // Dropdown is self-contained; keyboard activation is a no-op here.
+            }
             Some(AuditFormRow::SaveButton) => {
                 self.save_audit_settings(window, cx);
             }
@@ -283,6 +311,7 @@ impl AuditSection {
             || self.settings.purge_on_startup != self.original_settings.purge_on_startup
             || self.settings.background_purge_interval_minutes
                 != self.original_settings.background_purge_interval_minutes
+            || self.settings.log_capture_min_level != self.original_settings.log_capture_min_level
     }
 
     pub(super) fn save_audit_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -378,6 +407,12 @@ impl AuditSection {
         audit_service.set_redact_sensitive(self.settings.redact_sensitive_values);
         audit_service.set_capture_query_text(self.settings.capture_query_text);
         audit_service.set_max_detail_bytes(self.settings.max_detail_bytes);
+
+        if let Some(level) = EventSeverity::from_str_repr(&self.settings.log_capture_min_level)
+            && let Err(e) = audit_service.set_log_capture_min_level(level)
+        {
+            log::warn!("Failed to apply log capture min level: {e}");
+        }
 
         self.original_settings = self.settings.clone();
 
@@ -614,6 +649,15 @@ impl AuditSection {
                         primary,
                         AuditFormRow::BackgroundPurgeInterval,
                         cx,
+                    ))
+                    .child(self.render_audit_group_header("Log Capture", border, muted_fg))
+                    .child(self.render_audit_dropdown(
+                        "Minimum log level captured to audit",
+                        &self.dropdown_log_level,
+                        is_at(AuditFormRow::LogCaptureMinLevel),
+                        primary,
+                        AuditFormRow::LogCaptureMinLevel,
+                        cx,
                     )),
             )
     }
@@ -645,6 +689,78 @@ impl AuditSection {
                     })),
             ))
             .into_any_element()
+    }
+
+    fn log_level_items() -> Vec<DropdownItem> {
+        vec![
+            DropdownItem::new("trace"),
+            DropdownItem::new("debug"),
+            DropdownItem::new("info"),
+            DropdownItem::new("warn"),
+            DropdownItem::new("error"),
+        ]
+    }
+
+    fn log_level_index(level: &str) -> usize {
+        match level {
+            "trace" => 0,
+            "debug" => 1,
+            "info" => 2,
+            "warn" => 3,
+            "error" | "fatal" => 4,
+            _ => 2,
+        }
+    }
+
+    fn log_level_for_index(index: usize) -> &'static str {
+        match index {
+            0 => "trace",
+            1 => "debug",
+            2 => "info",
+            3 => "warn",
+            4 => "error",
+            _ => "info",
+        }
+    }
+
+    fn render_audit_dropdown(
+        &self,
+        label: &str,
+        dropdown: &Entity<Dropdown>,
+        is_focused: bool,
+        primary: Hsla,
+        row: AuditFormRow,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px_2()
+            .py_1()
+            .rounded(Radii::SM)
+            .border_1()
+            .border_color(if is_focused {
+                primary
+            } else {
+                gpui::transparent_black()
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.content_focused = true;
+                    if let Some(position) = this
+                        .audit_form_rows()
+                        .iter()
+                        .position(|candidate| *candidate == row)
+                    {
+                        this.audit_form_cursor = position;
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(FieldLabel::new(label.to_string()))
+            .child(div().min_w(px(120.0)).child(dropdown.clone()))
     }
 
     fn render_audit_group_header(

@@ -66,11 +66,23 @@ manager. Windows and macOS use their default linker and are unaffected.
 
 - Avoid `unwrap()` and functions that panic; use `?` to propagate errors
 - Be careful with indexing operations that may panic on out-of-bounds
-- Never silently discard errors with `let _ =` on fallible operations:
-  - Propagate with `?` when the caller should handle them
-  - Use `.log_err()` when ignoring but wanting visibility
-  - Use `match` or `if let Err(...)` for custom logic
-- Ensure async errors propagate to UI so users get meaningful feedback
+- **Never use `let _ =` on a fallible expression.** Silently discarding `Result` / `Option` errors hides real failures from users, logs, and the audit trail. This rule has no exceptions for "fire and forget" — pick one of the alternatives below instead:
+  - **Propagate** with `?` when the caller should handle it.
+  - **Log** with `.log_err()` (from `dbflux_core`) when ignoring but wanting at least one stderr/audit trace.
+  - **Branch explicitly** with `match` / `if let Err(e) = ...` when you need custom logic.
+  - **Surface to the user** with `report_error` / `report_error_async` (`dbflux_ui_base::user_error`) when the failure is something the user just triggered. Producing a toast + audit row is preferred over `log::error!` for any user-facing operation; this also drives the status-bar error badge.
+  - If you genuinely want to drop a value — not an error — bind it to `_name` instead of `_`. Reserve the bare `let _ =` pattern for that intent only.
+- Ensure async errors propagate to the UI so users get meaningful feedback. Background tasks that fail without a path to the foreground are a bug, not a feature.
+
+#### User-facing error reporting (`dbflux_ui_base::user_error`)
+
+When a user-triggered operation fails (storage, network, driver, config, hook, auth), route it through the centralized seam instead of `log::error!` + manual `Toast::error(...)`. The seam attaches a UUID v7 correlation id to the toast and the audit row, drives the status-bar error badge, and provides a "View in Audit" action wired to that correlation id.
+
+- Foreground (`&mut App` / `&mut Context<T>`): `report_error(UserFacingError::new(ErrorKind::Storage, msg), cx)`
+- Background (`cx.spawn(async ...)` / `background_executor`): `report_error_async(UserFacingError::new(ErrorKind::Network, msg), &cx)`
+- Driver errors: prefer `UserFacingError::from_formatted(ErrorKind::Driver, fe)` so the driver's `ErrorFormatter` output feeds `cause` directly — keeps the UI driver-agnostic.
+- `ErrorKind` variants: `Storage`, `Network`, `Auth`, `Hook`, `Driver`, `User`, `Config`.
+- Convention: only the **first catch site** reports. Propagators above must NOT re-report — there is no runtime deduplication, double-toasts are a code-review concern.
 
 ### File Organization
 

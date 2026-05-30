@@ -3,6 +3,8 @@ use auth_profiles_section::AuthProfilesSectionEvent;
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::components::tree_nav::TreeNavAction;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
+#[cfg(feature = "mcp")]
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use section_trait::SectionFocusEvent;
 
 impl SettingsCoordinator {
@@ -242,7 +244,13 @@ impl SettingsCoordinator {
         #[cfg(feature = "mcp")]
         self.app_state.update(cx, |state, cx| {
             if let Err(e) = state.persist_mcp_governance() {
-                log::error!("Failed to persist MCP governance: {}", e);
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Config,
+                        format!("Failed to persist MCP governance: {e}"),
+                    ),
+                    cx,
+                );
             }
             cx.emit(dbflux_ui_base::McpRuntimeEventRaised {
                 event: dbflux_mcp::McpRuntimeEvent::TrustedClientsUpdated,

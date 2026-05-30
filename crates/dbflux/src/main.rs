@@ -7,6 +7,9 @@ use dbflux_app::mcp_command::run_mcp_command;
 use dbflux_audit::AuditService;
 use dbflux_core::ShutdownPhase;
 use dbflux_core::observability::actions::{SYSTEM_SHUTDOWN, SYSTEM_STARTUP};
+use dbflux_core::observability::tracing_bridge::{
+    BridgeConfig, BridgeHandle, FmtWriter, ShutdownError,
+};
 use dbflux_core::observability::{EventCategory, EventOutcome, EventRecord, EventSeverity};
 use dbflux_driver_ipc::shutdown_managed_hosts;
 use dbflux_ipc::{
@@ -28,44 +31,19 @@ use interprocess::local_socket::{
     prelude::*,
 };
 use log::info;
-use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Initialise the global logger early — before any code that calls `log::*!`
-/// macros, otherwise those records are silently dropped.
-///
-/// When `DBFLUX_LOG_FILE` is set, log lines are appended to that file (created
-/// if missing) instead of stderr. Useful on Windows where the GUI subsystem
-/// makes stderr invisible.
-fn init_logging() {
-    let mut builder =
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
-    builder.format_timestamp_millis();
-
-    if let Some(path) = std::env::var_os("DBFLUX_LOG_FILE").map(PathBuf::from) {
-        match OpenOptions::new().create(true).append(true).open(&path) {
-            Ok(file) => {
-                builder.target(env_logger::Target::Pipe(Box::new(file)));
-            }
-            Err(err) => {
-                eprintln!(
-                    "Failed to open DBFLUX_LOG_FILE={:?}: {} — falling back to stderr",
-                    path, err
-                );
-            }
-        }
-    }
-
-    builder.init();
-}
-
 /// Global holder for the audit service, used by the panic hook.
-/// The panic hook needs access to the audit service, which is created
-/// inside GPUI's closure. We store it here so the panic hook can access it.
 static AUDIT_SERVICE_FOR_PANIC: Mutex<Option<AuditService>> = Mutex::new(None);
+
+/// Global holder for the tracing bridge handle.
+///
+/// Kept here so the shutdown sequence can call `BridgeHandle::shutdown()` even
+/// though `BridgeHandle` is created in `run_gui` before the GPUI closure runs.
+static BRIDGE_HANDLE: Mutex<Option<BridgeHandle>> = Mutex::new(None);
 
 /// Previous panic hook, chained after our hook.
 #[allow(clippy::type_complexity)]
@@ -242,7 +220,27 @@ fn send_focus_request<S: Read + Write>(stream: &mut S, request_id: u64) -> io::R
 }
 
 fn run_gui() {
-    init_logging();
+    let fmt_writer = if let Some(path) = std::env::var_os("DBFLUX_LOG_FILE").map(PathBuf::from) {
+        FmtWriter::NonBlockingFile(path)
+    } else {
+        FmtWriter::Stderr
+    };
+
+    let bridge_config = BridgeConfig {
+        include_audit_layer: true,
+        fmt_writer,
+        env_filter_default: "info,hyper=warn,tokio=warn",
+        ..BridgeConfig::default()
+    };
+
+    match dbflux_core::observability::tracing_bridge::init_tracing(bridge_config) {
+        Ok(handle) => {
+            *BRIDGE_HANDLE.lock().unwrap() = Some(handle);
+        }
+        Err(err) => {
+            eprintln!("Failed to initialize tracing: {err}");
+        }
+    }
 
     let auth_token = match init_process_auth_tokens() {
         Ok(token) => token,
@@ -265,6 +263,26 @@ fn run_gui() {
         dbflux_ui::ui::components::document_tree::init(cx);
 
         let app_state = cx.new(|_cx| AppStateEntity::new());
+
+        // Wire the bridge into the audit service before cloning it out.
+        // `attach_tracing_bridge` must be called on the owned `AppState`
+        // because `AuditService.bridge_min_level` is not shared across clones.
+        let persisted_min_level = app_state.read(cx).log_capture_min_level_setting();
+        if let Some(handle) = BRIDGE_HANDLE.lock().unwrap().as_ref() {
+            app_state.update(cx, |state, _| {
+                state.attach_tracing_bridge(handle.min_level.clone(), handle.drop_counter.clone());
+            });
+
+            let seeded_level =
+                dbflux_core::observability::EventSeverity::from_str_repr(&persisted_min_level)
+                    .unwrap_or(dbflux_core::observability::EventSeverity::Info);
+            handle.set_min_level(seeded_level);
+
+            let audit_service_arc = Arc::new(app_state.read(cx).audit_service().clone());
+            if let Err(err) = handle.install_sink(audit_service_arc) {
+                log::warn!("Failed to install audit bridge sink: {err}");
+            }
+        }
 
         let audit_service = app_state.read(cx).audit_service().clone();
         *AUDIT_SERVICE_FOR_PANIC.lock().unwrap() = Some(audit_service.clone());
@@ -436,6 +454,23 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
             );
         });
     });
+
+    if let Some(handle) = BRIDGE_HANDLE.lock().unwrap().take() {
+        match handle.shutdown() {
+            Ok(()) => {}
+            Err(ShutdownError::DrainTimeout {
+                remaining_in_flight,
+            }) => {
+                eprintln!(
+                    "dbflux: audit bridge shutdown timed out, dropped {} in-flight events",
+                    remaining_in_flight
+                );
+            }
+            Err(ShutdownError::JoinPanic) => {
+                eprintln!("dbflux: audit bridge drain thread panicked during shutdown");
+            }
+        }
+    }
 
     cx.background_executor()
         .timer(Duration::from_millis(100))

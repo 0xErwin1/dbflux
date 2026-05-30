@@ -265,6 +265,208 @@ println!("Deleted {} events in {} batches", stats.deleted_count, stats.batches);
 
 The purge is batched to avoid long write transactions. It is not run automatically — add it to a scheduled background task or operator runbook.
 
+## Tracing to Audit Bridge
+
+The tracing bridge captures structured events emitted by `log::*!` and `tracing::*!` macros across all DBFlux crates and writes them into the same `aud_audit_events` table without requiring call-site migration.
+
+### Event Flow
+
+```
+log::warn!("…")  ──►  LogTracer (tracing-log)  ──►  tracing event
+tracing::info!("…")  ──────────────────────────────►  tracing event
+                                                          │
+                                                    AuditLayer::on_event
+                                                          │ level gate + recursion guard
+                                                          │
+                                                    bounded mpsc::sync_channel (1024)
+                                                          │
+                                                    drain thread
+                                                          │ AuditService::record()
+                                                          ▼
+                                               aud_audit_events (SQLite)
+```
+
+### Bridge-Allowed Category
+
+All events captured through the bridge are assigned category `System`. This is the V1 resolution: free-form log events do not carry the structured fields (`connection_id`, `object_type`, `object_id`) that other categories require, so routing them to `Connection` or `Config` would cause `validate_event` to reject them. The `PREFIX_CATEGORY_MAP` in `dbflux_core/src/observability/tracing_bridge/category.rs` maps module prefixes to intended categories for documentation purposes, but all resolved categories coerce to `System` at runtime.
+
+### Capture Threshold
+
+Only events at or above the configured `log_capture_min_level` are written to the audit store. `TRACE` and `DEBUG` are hard-filtered — they are never written regardless of the configured threshold.
+
+The threshold is stored as a `u8` ordinal in an `Arc<AtomicU8>` and updated without subscriber reinit. The mapping is:
+
+| Severity | Ordinal |
+|----------|---------|
+| Trace    | 0       |
+| Debug    | 1       |
+| Info     | 2       |
+| Warn     | 3       |
+| Error    | 4       |
+
+The default threshold is `Info` (ordinal 2).
+
+### Setting the Threshold
+
+In the DBFlux UI: **Settings → Audit → Log Capture → Minimum Level** dropdown. Selecting a level and pressing Save persists it to `cfg_audit_settings.log_capture_min_level` (column added by migration 014) and applies it to the bridge atomically — no restart required.
+
+In SQLite directly:
+
+```sql
+UPDATE cfg_audit_settings SET log_capture_min_level = 'warn';
+```
+
+Valid values: `trace`, `debug`, `info`, `warn`, `error`.
+
+### Drop Counter
+
+When the bounded channel is full (1024 events), the bridge drops the incoming event rather than blocking and increments an `Arc<AtomicU64>` drop counter. This prevents the audit path from introducing backpressure into application code. The current drop count is accessible via `BridgeHandle::drop_count()` and is exposed through `AppState::bridge_drop_counter()` for observability, but is not persisted or surfaced in the UI in V1.
+
+### Startup Window
+
+There is a brief gap between process start and sink installation during which events are captured into the drain channel but not yet flushed to SQLite — the sink is installed after `AppState` is constructed and the first audit settings read completes. Events in-flight during this window are held in the bounded channel and delivered once the sink is installed. If the channel fills during the startup window, events are dropped and counted.
+
+### Recursion Guard
+
+Events emitted from `dbflux_core::observability::tracing_bridge` are excluded from the bridge to prevent feedback loops where bridge diagnostics feed back into themselves. This is enforced by the `BRIDGE_INTERNAL_TARGET` constant checked in `AuditLayer::on_event`.
+
+### Target Allowlist
+
+Only events whose `target` starts with `dbflux` are mirrored to the audit store. Upstream dependencies such as `gpui`, `blade_graphics`, `naga`, `wgpu`, `hyper`, and `tokio` emit verbose `INFO`-level traces (render-loop texture and buffer lifecycle, surface present mode, HTTP request lifecycle, etc.) that would otherwise drown the audit log in operational noise without any value for after-the-fact diagnosis.
+
+These events still flow through the fmt layer and remain visible in stderr (or the log file) per `RUST_LOG`. The gate lives in `passes_target_gate` in `layer.rs` and runs before record construction.
+
+To audit an event from a non-`dbflux` source, wrap the emission in a dbflux module and re-emit with a dbflux target — the bridge intentionally does not let upstream targets through.
+
+### Named Tracing Fields
+
+The bridge recognizes these named fields on tracing events and maps them to `EventRecord` fields:
+
+| Tracing field | `EventRecord` field |
+|---------------|---------------------|
+| `message` | `summary` |
+| `category` | `category` (coerced to `System`) |
+| `actor_type` | `actor_type` |
+| `actor_id` | `actor_id` |
+| `connection_id` | `connection_id` |
+| `database_name` | `database_name` |
+| `driver_id` | `driver_id` |
+| `action` | `action` |
+| `outcome` | `outcome` |
+| `details_json` | `details_json` |
+
+Unknown fields accumulate in `details_json` as a JSON object. If the message exceeds 512 characters it is truncated with `…` and the full message is stored in `details_json["message"]`.
+
+The bridge also maps `correlation_id` directly to `EventRecord.correlation_id` (not into `details_json`), enabling cross-component correlation between user-facing error toasts and their corresponding audit records.
+
+### User-Facing Error Events
+
+User-facing errors (storage failures, driver errors, network problems, config persistence failures) are reported through `report_error` / `report_error_async` from `dbflux_ui_base::user_error`. Each call emits a tracing event that flows through the bridge and also pushes a toast notification.
+
+The tracing event shape:
+
+| Tracing field | Value |
+|---------------|-------|
+| `target` | `dbflux_ui::user_error` |
+| `action` | `user_error` |
+| `outcome` | `failure` |
+| `kind` | `ErrorKind` as string (`storage`, `network`, `auth`, `hook`, `driver`, `user`, `config`) |
+| `correlation_id` | UUID v7 linking the toast to the audit record |
+| `message` | The human-readable summary shown in the toast |
+
+The `correlation_id` field is extracted by `AuditFieldVisitor` into `EventRecord.correlation_id`. Note that the visitor routes both `record_str` (Display sigil `%val`) and `record_debug` (Debug sigil `?val`) through the same `record_string_by_name` dispatcher, so new typed slots added in the future are picked up regardless of which sigil the caller uses.
+
+There are two paths from the UI back into the audit document:
+
+- **Per-toast "View in Audit" action** — emits `OpenAuditRequested(Some(correlation_id))`. The workspace opens (or focuses) the Audit document and applies the matching correlation filter so the user sees exactly the one event tied to the toast.
+- **Status-bar error badge click** — emits `OpenAuditRequested(None)`. The workspace opens the Audit document with the default user-error filter (`target = dbflux_ui::user_error` over a recent time window) so the user can browse every recent user-facing failure.
+
+Both events flow through `AppStateEntity::request_open_audit` so the workspace subscribes once.
+
+Severity mapping from `EventSeverity`:
+- `EventSeverity::Info` and `EventSeverity::Warn` — emitted at `WARN` level; throttled (5-token bucket, 1 refill per 2 seconds, per severity)
+- `EventSeverity::Error` and `EventSeverity::Fatal` — emitted at `ERROR` level; bypass throttle
+
+### Enabling the Bridge
+
+The bridge is enabled by building `dbflux_core` with the `tracing-bridge` feature (on by default for `dbflux`, `dbflux_mcp_server`). Call `init_tracing(BridgeConfig { .. })` once at process start:
+
+```rust
+use dbflux_core::observability::tracing_bridge::{init_tracing, BridgeConfig, FmtWriter};
+
+let handle = init_tracing(BridgeConfig {
+    include_audit_layer: true,
+    fmt_writer: FmtWriter::Stderr,
+    env_filter_default: "info",
+    ..BridgeConfig::default()
+})?;
+
+// Later, after AuditService is ready:
+handle.install_sink(Arc::new(audit_service));
+```
+
+`dbflux_driver_host` uses `include_audit_layer: false` because driver host processes are ephemeral and do not have access to the audit SQLite database.
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `crates/dbflux_core/src/observability/tracing_bridge/mod.rs` | `init_tracing`, `BridgeHandle`, `BridgeConfig`, `LevelCode` |
+| `crates/dbflux_core/src/observability/tracing_bridge/layer.rs` | `AuditLayer`, `AuditFieldVisitor`, level gate |
+| `crates/dbflux_core/src/observability/tracing_bridge/category.rs` | `PREFIX_CATEGORY_MAP`, `resolve_category`, `BRIDGE_INTERNAL_TARGET` |
+| `crates/dbflux_storage/src/migrations/014_*.sql` | Adds `log_capture_min_level` column to `cfg_audit_settings` |
+
+## External Audit Emission (RPC drivers and auth providers)
+
+External RPC drivers (protocol v1.2+) and auth providers (protocol v1.3+) may emit audit events back to the host as intermediate response frames. The host applies strict sanitization before writing to `aud_audit_events`.
+
+### Host-authoritative policy
+
+The host owns all identity, correlation, and rate-limiting fields. An external service can never forge its own identity or claim an audit category it is not permitted to use.
+
+| Field | Source |
+|-------|--------|
+| `actor_type` | Always `ExternalDriver` or `ExternalAuthProvider` |
+| `source_id` | Always `ExternalDriver` / `ExternalAuthProvider` with the registered `socket_id` |
+| `actor_id` | Always `rpc:<socket_id>` |
+| `connection_id` | Host-supplied from session context (may be `None`) |
+| `database_name` | Host-supplied from session context (may be `None`) |
+| `driver_id` | Always `rpc:<socket_id>` |
+| `correlation_id` | Host-generated; one per session for drivers, one per request for auth providers |
+| `ts_ms` | Service-supplied but clamped if drift from host wall clock exceeds five minutes |
+
+`correlation_id` is structurally guaranteed to be host-generated because `AuditEventEmitDto` (the IPC payload type) has no `correlation_id` field. External services cannot supply one — the field was intentionally omitted from the DTO at design time (ADR-3) rather than accepted and validated away. As a result, the scenario "driver DTO carries a forged correlation_id and the host overrides it at runtime" is impossible at the type level; the stored value is always produced by the host's correlation-id allocation logic.
+
+### Category whitelist
+
+Drivers may emit `Connection`, `Query`, and `System` events. Auth providers may emit only `Connection` events. Any frame with a disallowed category is silently dropped.
+
+### Rate limiting
+
+Each external service (by `socket_id`) is limited to 100 events per 60 seconds via a token-bucket. Frames that exceed the budget are dropped and counted in `AuditService::external_audit_dropped_count()`.
+
+### Opt-in flags
+
+- **Drivers**: The driver must include `DriverCapability::AuditEmit` in its hello response (protocol v1.2+). Frames sent by drivers that did not advertise this capability are silently discarded.
+- **Auth providers**: The provider must set `audit_emit_opt_in: true` in its hello response (protocol v1.3+). Frames from providers that did not opt in are silently discarded.
+
+### Required fields on every emitted frame
+
+An emitted `AuditEventEmitDto` must have non-empty `action` and `summary`. Frames failing this check are dropped silently.
+
+### Transport mechanism
+
+Emitted frames arrive as `done=false` intermediate frames inside a normal response sequence. The transport layer (`RpcClient` in `dbflux_driver_ipc`, `RpcAuthProvider::dispatch_request_loop` in `dbflux_ipc`) intercepts them before they reach the caller. The caller only ever sees the terminal frame.
+
+### Key files
+
+| File | Role |
+|------|------|
+| `crates/dbflux_ipc/src/audit.rs` | `AuditEventEmitDto`, `ExternalAuditEmitter` trait, `ExternalAuditSource` |
+| `crates/dbflux_app/src/rpc_services/external_audit.rs` | `ExternalAuditSink`, token-bucket rate limiter, sanitization pipeline |
+| `crates/dbflux_driver_ipc/src/transport.rs` | `RpcClient::send_raw` intercepts driver emit frames |
+| `crates/dbflux_ipc/src/auth_provider_client.rs` | `dispatch_request_loop` intercepts auth-provider emit frames |
+
 ## Architecture
 
 ```

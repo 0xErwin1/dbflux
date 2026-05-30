@@ -3,6 +3,7 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{ProxyAuth, ProxyKind, ProxyProfile};
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 use uuid::Uuid;
 
@@ -274,7 +275,13 @@ impl ProxiesSection {
             runtime,
             self.app_state.read(cx).proxies(),
         ) {
-            log::error!("Failed to save proxy profiles: {}", e);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    format!("Failed to save proxy profiles: {e}"),
+                ),
+                cx,
+            );
         }
 
         self.proxy_selected_idx = self

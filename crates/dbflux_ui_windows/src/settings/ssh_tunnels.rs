@@ -4,6 +4,7 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{SshAuthMethod, SshTunnelProfile};
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 use uuid::Uuid;
 
@@ -268,7 +269,13 @@ impl SshTunnelsSection {
             runtime,
             self.app_state.read(cx).ssh_tunnels(),
         ) {
-            log::error!("Failed to save SSH tunnel profiles: {}", e);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    format!("Failed to save SSH tunnel profiles: {e}"),
+                ),
+                cx,
+            );
         }
 
         self.ssh_selected_idx = self

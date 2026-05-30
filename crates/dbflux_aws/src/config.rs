@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
-use dbflux_core::auth::AwsSectionHash;
+use crate::edit::AwsSectionHash;
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]

@@ -10,6 +10,7 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::audit::AuditEventEmitDto;
 use crate::envelope::ProtocolVersion;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +61,30 @@ pub struct AuthProviderHelloResponseV1_2 {
     /// target field's `depends_on` list.  Defaults to `false`.
     #[serde(default)]
     pub secret_dependency_opt_in: bool,
+}
+
+/// Hello response for protocol v1.3.
+///
+/// Adds `audit_emit_opt_in` which declares whether the provider will emit audit
+/// events as intermediate response frames.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthProviderHelloResponseV1_3 {
+    pub server_name: String,
+    pub server_version: String,
+    pub selected_version: ProtocolVersion,
+    pub provider_id: String,
+    pub display_name: String,
+    pub form_definition: AuthFormDef,
+    pub capabilities: AuthProviderCapabilities,
+    /// When `true`, the host MAY include values for `Password`-kind fields in
+    /// `FetchFieldOptions` requests, provided those fields appear in the
+    /// target field's `depends_on` list.  Defaults to `false`.
+    #[serde(default)]
+    pub secret_dependency_opt_in: bool,
+    /// When `true`, the provider may emit `EmitAuditEvent` intermediate frames
+    /// and the host will route them through the audit sanitizer.
+    #[serde(default)]
+    pub audit_emit_opt_in: bool,
 }
 
 /// Request to fetch the available options for a `DynamicSelect` field.
@@ -272,6 +297,8 @@ pub enum AuthProviderResponseBody {
     HelloV1_1(AuthProviderHelloResponseV1_1),
     /// Hello response for protocol v1.2, carrying `secret_dependency_opt_in`.
     HelloV1_2(AuthProviderHelloResponseV1_2),
+    /// Hello response for protocol v1.3, adding `audit_emit_opt_in`.
+    HelloV1_3(AuthProviderHelloResponseV1_3),
     SessionState {
         state: AuthSessionStateDto,
     },
@@ -284,6 +311,10 @@ pub enum AuthProviderResponseBody {
     },
     /// Successful response to `FetchDynamicOptions` (protocol v1.2+).
     DynamicOptions(FetchFieldOptionsResponse),
+    /// Emitted by auth providers that set `audit_emit_opt_in=true` in their v1.3 hello.
+    /// Always arrives with `done=false`; the host intercepts it and never forwards
+    /// it to the caller of `send_request`.
+    EmitAuditEvent(AuditEventEmitDto),
     Error(AuthProviderRpcError),
 }
 
@@ -489,6 +520,7 @@ mod tests {
                     supported: true,
                     verification_url_progress: true,
                 },
+                edit: None,
             },
         };
 
@@ -575,6 +607,21 @@ mod tests {
         assert_eq!(
             *restored_json, original_data,
             "JSON value must be bit-for-bit equal after round-trip"
+        );
+    }
+
+    /// S-CAP-1: `AuthProviderCapabilities` JSON without an `edit` key
+    /// deserializes with `edit == None`. This validates the backward-compat
+    /// `#[serde(default)]` annotation on the `edit` field (older providers
+    /// that do not advertise edit capabilities must not fail deserialization).
+    #[test]
+    fn capabilities_without_edit_key_deserializes_edit_as_none() {
+        let json = r#"{"login":{"supported":true,"verification_url_progress":false}}"#;
+        let caps: AuthProviderCapabilities =
+            serde_json::from_str(json).expect("must deserialize without edit key");
+        assert!(
+            caps.edit.is_none(),
+            "edit must be None when the key is absent from the JSON payload"
         );
     }
 }

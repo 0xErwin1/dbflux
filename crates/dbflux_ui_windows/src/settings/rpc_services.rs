@@ -6,6 +6,7 @@ use dbflux_components::typography::{Body, MonoCaption, MonoLabel, MonoMeta, Pane
 use dbflux_core::{RpcServiceKind, ServiceConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -369,16 +370,13 @@ impl ServicesSection {
 
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) = dbflux_app::config_loader::save_services(runtime, &self.svc_services) {
-            log::error!("Failed to save services to SQLite: {}", e);
-            let toast_body = e.to_string();
-            Toast::error("Failed to save config")
-                .meta_right(now_hms())
-                .body(toast_body.clone())
-                .action(copy_action(format!(
-                    "Failed to save config: {}",
-                    toast_body
-                )))
-                .push(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    format!("Failed to save RPC service config: {e}"),
+                ),
+                cx,
+            );
             return;
         }
         Toast::info("RPC service saved. Restart required to apply changes.")
@@ -428,13 +426,13 @@ impl ServicesSection {
 
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) = dbflux_app::config_loader::save_services(runtime, &self.svc_services) {
-            log::error!("Failed to save services to SQLite: {}", e);
-            let body = e.to_string();
-            Toast::error("Failed to save config")
-                .meta_right(now_hms())
-                .body(body.clone())
-                .action(copy_action(format!("Failed to save config: {}", body)))
-                .push(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    format!("Failed to save RPC service config: {e}"),
+                ),
+                cx,
+            );
             return;
         }
         Toast::info("RPC service deleted. Restart required to apply changes.")
