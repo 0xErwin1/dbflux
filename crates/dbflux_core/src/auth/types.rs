@@ -14,7 +14,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthEditCapabilities {
     /// Full banner text shown when a profile is reflected from an external
-    /// source and is therefore read-only (e.g. "Reflected from ~/.aws/config — read-only").
+    /// source and is therefore read-only. Providers supply the destination
+    /// description verbatim.
     pub mirror_label: String,
 
     /// Status text displayed after a successful clean write of a new profile.

@@ -197,7 +197,7 @@ pub trait DynAuthProvider: Send + Sync {
     /// Capture a provider-internal snapshot at the moment the edit form opens.
     ///
     /// The returned `AuthEditSnapshot` wraps an opaque provider-specific token
-    /// (e.g. section hashes for AWS file-backed providers).  The UI passes it
+    /// (e.g. section hashes for file-backed providers).  The UI passes it
     /// back to `save_edit` unchanged.
     ///
     /// The default returns a unit snapshot, meaning the provider does not
