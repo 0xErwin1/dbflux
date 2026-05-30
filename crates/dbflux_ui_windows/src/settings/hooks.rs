@@ -11,6 +11,7 @@ use dbflux_core::{
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -290,11 +291,13 @@ impl HooksSection {
         };
 
         if let Err(error) = open::that(&path) {
-            let toast_msg = (format!("Failed to open script: {error}")).to_string();
-            Toast::error(toast_msg.clone())
-                .meta_right(now_hms())
-                .action(copy_action(toast_msg))
-                .push(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    format!("Failed to open script: {error}"),
+                ),
+                cx,
+            );
         }
     }
 

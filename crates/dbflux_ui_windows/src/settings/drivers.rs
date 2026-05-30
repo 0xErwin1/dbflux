@@ -17,6 +17,7 @@ use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -612,13 +613,13 @@ impl DriversSection {
             &self.drv_overrides,
             &self.drv_settings,
         ) {
-            log::error!("Failed to save driver settings to SQLite: {}", e);
-            let toast_body = e.to_string();
-            Toast::error("Failed to save")
-                .meta_right(now_hms())
-                .body(toast_body.clone())
-                .action(copy_action(format!("Failed to save: {}", toast_body)))
-                .push(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    format!("Failed to save driver settings: {e}"),
+                ),
+                cx,
+            );
             return;
         }
 
