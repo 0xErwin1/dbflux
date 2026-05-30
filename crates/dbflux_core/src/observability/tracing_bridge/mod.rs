@@ -28,6 +28,13 @@ use self::queue::BridgeQueue;
 const DEFAULT_QUEUE_CAPACITY: usize = 512;
 const SHUTDOWN_BUDGET: Duration = Duration::from_secs(2);
 
+/// Guards against double-initialization of the global tracing subscriber.
+///
+/// `tracing_log::LogTracer::init()` panics on second call, and the subscriber
+/// can only be installed once per process — flipping this flag first lets us
+/// return a typed error instead of crashing.
+static INIT_GUARD: AtomicBool = AtomicBool::new(false);
+
 // ============================================================================
 // LevelCode
 // ============================================================================
@@ -167,6 +174,7 @@ pub enum InitError {
     LogTracerInit(tracing_log::log_tracer::SetLoggerError),
     SubscriberInstall(tracing_subscriber::util::TryInitError),
     WriterIo(io::Error),
+    DrainThreadSpawn(io::Error),
 }
 
 impl std::fmt::Display for InitError {
@@ -176,6 +184,7 @@ impl std::fmt::Display for InitError {
             InitError::LogTracerInit(e) => write!(f, "log tracer init failed: {e}"),
             InitError::SubscriberInstall(e) => write!(f, "subscriber install failed: {e}"),
             InitError::WriterIo(e) => write!(f, "writer io error: {e}"),
+            InitError::DrainThreadSpawn(e) => write!(f, "drain thread spawn failed: {e}"),
         }
     }
 }
@@ -223,6 +232,17 @@ impl std::error::Error for AlreadySetError {}
 /// Must be called exactly once per process, before any `log::*!` or
 /// `tracing::*!` calls. A second call returns `Err(InitError::AlreadyInitialized)`.
 pub fn init_tracing(config: BridgeConfig) -> Result<BridgeHandle, InitError> {
+    if INIT_GUARD
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        debug_assert!(
+            false,
+            "init_tracing called more than once — each binary main must call it exactly once"
+        );
+        return Err(InitError::AlreadyInitialized);
+    }
+
     let min_level_arc = Arc::new(AtomicU8::new(LevelCode::from(config.min_level) as u8));
     let drop_counter_arc = Arc::new(AtomicU64::new(0));
     let in_flight_arc = Arc::new(AtomicUsize::new(0));
@@ -250,13 +270,16 @@ pub fn init_tracing(config: BridgeConfig) -> Result<BridgeHandle, InitError> {
                     queue_tx: bridge_queue.sender.clone(),
                     in_flight: in_flight_arc.clone(),
                 };
-                drain_thread = Some(queue::spawn_drain_thread(
-                    rx,
-                    audit_slot.clone(),
-                    drop_counter_arc.clone(),
-                    in_flight_arc.clone(),
-                    drain_stop.clone(),
-                ));
+                drain_thread = Some(
+                    queue::spawn_drain_thread(
+                        rx,
+                        audit_slot.clone(),
+                        drop_counter_arc.clone(),
+                        in_flight_arc.clone(),
+                        drain_stop.clone(),
+                    )
+                    .map_err(InitError::DrainThreadSpawn)?,
+                );
                 Registry::default()
                     .with(env_filter)
                     .with(fmt_layer)
@@ -293,13 +316,16 @@ pub fn init_tracing(config: BridgeConfig) -> Result<BridgeHandle, InitError> {
                     queue_tx: bridge_queue.sender.clone(),
                     in_flight: in_flight_arc.clone(),
                 };
-                drain_thread = Some(queue::spawn_drain_thread(
-                    rx,
-                    audit_slot.clone(),
-                    drop_counter_arc.clone(),
-                    in_flight_arc.clone(),
-                    drain_stop.clone(),
-                ));
+                drain_thread = Some(
+                    queue::spawn_drain_thread(
+                        rx,
+                        audit_slot.clone(),
+                        drop_counter_arc.clone(),
+                        in_flight_arc.clone(),
+                        drain_stop.clone(),
+                    )
+                    .map_err(InitError::DrainThreadSpawn)?,
+                );
                 Registry::default()
                     .with(env_filter)
                     .with(fmt_layer)
@@ -333,13 +359,16 @@ pub fn init_tracing(config: BridgeConfig) -> Result<BridgeHandle, InitError> {
                     queue_tx: bridge_queue.sender.clone(),
                     in_flight: in_flight_arc.clone(),
                 };
-                drain_thread = Some(queue::spawn_drain_thread(
-                    rx,
-                    audit_slot.clone(),
-                    drop_counter_arc.clone(),
-                    in_flight_arc.clone(),
-                    drain_stop.clone(),
-                ));
+                drain_thread = Some(
+                    queue::spawn_drain_thread(
+                        rx,
+                        audit_slot.clone(),
+                        drop_counter_arc.clone(),
+                        in_flight_arc.clone(),
+                        drain_stop.clone(),
+                    )
+                    .map_err(InitError::DrainThreadSpawn)?,
+                );
                 Registry::default()
                     .with(env_filter)
                     .with(fmt_layer)

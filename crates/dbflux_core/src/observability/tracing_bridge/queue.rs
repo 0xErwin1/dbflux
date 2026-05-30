@@ -1,3 +1,4 @@
+use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -42,13 +43,12 @@ pub(crate) fn spawn_drain_thread(
     drop_counter: Arc<AtomicU64>,
     in_flight: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
-) -> JoinHandle<()> {
+) -> io::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("dbflux-audit-drain".to_string())
         .spawn(move || {
             drain_loop(rx, sink_slot, drop_counter, in_flight, stop);
         })
-        .expect("failed to spawn audit drain thread")
 }
 
 fn drain_loop(
@@ -65,7 +65,9 @@ fn drain_loop(
 
                 match sink_slot.get() {
                     Some(sink) => {
-                        let _ = sink.record(record);
+                        if sink.record(record).is_err() {
+                            drop_counter.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                     None => {
                         drop_counter.fetch_add(1, Ordering::Relaxed);
@@ -92,6 +94,17 @@ mod tests {
     use std::sync::OnceLock;
     use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
+
+    fn spawn_drain_thread_for_test(
+        rx: Receiver<EventRecord>,
+        sink_slot: Arc<OnceLock<Arc<dyn EventSink>>>,
+        drop_counter: Arc<AtomicU64>,
+        in_flight: Arc<AtomicUsize>,
+        stop: Arc<AtomicBool>,
+    ) -> JoinHandle<()> {
+        spawn_drain_thread(rx, sink_slot, drop_counter, in_flight, stop)
+            .expect("test drain thread spawn")
+    }
 
     fn minimal_record() -> EventRecord {
         let now_ms = 1_000_000i64;
@@ -125,7 +138,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let sink_slot: Arc<OnceLock<Arc<dyn EventSink>>> = Arc::new(OnceLock::new());
 
-        let handle = spawn_drain_thread(
+        let handle = spawn_drain_thread_for_test(
             rx,
             sink_slot.clone(),
             queue.drop_counter.clone(),
@@ -164,7 +177,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let sink_slot: Arc<OnceLock<Arc<dyn EventSink>>> = Arc::new(OnceLock::new());
 
-        let handle = spawn_drain_thread(
+        let handle = spawn_drain_thread_for_test(
             rx,
             sink_slot,
             queue.drop_counter.clone(),
@@ -203,7 +216,7 @@ mod tests {
         };
         sink_slot.set(Arc::new(sink)).ok();
 
-        let handle = spawn_drain_thread(
+        let handle = spawn_drain_thread_for_test(
             rx,
             sink_slot,
             queue.drop_counter.clone(),
