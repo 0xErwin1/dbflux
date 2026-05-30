@@ -120,7 +120,7 @@ pub struct ChartDocument {
 
     /// Stable identity for instance metric charts opened from the
     /// `InstanceMetricsFolder` sidebar node. Used by `matches_instance_metric_chart`
-    /// for `DocumentKey::InstanceMetricChart` dedup.
+    /// for `DocumentKey::InstanceMetric` dedup.
     initial_instance_metric_id: Option<String>,
 
     // Save flow
@@ -572,7 +572,7 @@ impl ChartDocument {
     /// Set the stable instance-metric identity for this document.
     ///
     /// Called after construction when the chart is opened from the sidebar's
-    /// `InstanceMetricsFolder`. Enables `DocumentKey::InstanceMetricChart` dedup.
+    /// `InstanceMetricsFolder`. Enables `DocumentKey::InstanceMetric` dedup.
     pub fn set_instance_metric_identity(&mut self, metric_id: String) {
         self.initial_instance_metric_id = Some(metric_id);
     }
@@ -2093,5 +2093,132 @@ mod tests {
             pending_chart_reexecute,
             pending_time_window,
         }
+    }
+
+    // ---- REQ-DOC-2: runtime drop-cancel test ----
+
+    fn init_test_runtime(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| dbflux_ui_base::toast::ToastHost::new());
+            cx.set_global(dbflux_ui_base::toast::ToastGlobal { host });
+        });
+    }
+
+    fn isolated_test_app_state(cx: &mut gpui::TestAppContext) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+            })
+        })
+    }
+
+    /// Thin harness entity that optionally holds a `ChartDocument`.
+    ///
+    /// Used by `refresh_timer_is_cancelled_on_entity_drop` so the
+    /// `ChartDocument` is not rooted directly as the window view (which
+    /// would keep a strong reference alive in the window's view hierarchy).
+    struct ChartDocHarness {
+        doc: Option<Entity<ChartDocument>>,
+    }
+
+    impl Render for ChartDocHarness {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    /// REQ-DOC-2 — runtime evidence that dropping a `ChartDocument` entity cancels
+    /// its `_refresh_timer` loop.
+    ///
+    /// The test installs a `cx.observe` counter on the entity, sets an interval
+    /// refresh policy, advances the fake clock past one tick to confirm the timer
+    /// fires, then drops the entity (by releasing both the test-side holder and the
+    /// harness's `Option`). A second clock advance confirms the count is frozen —
+    /// the `Task<()>` was cancelled when `ChartDocument` was freed, stopping the loop.
+    ///
+    /// This is the spec gate against timer leaks. `Task<()>` stored in a struct field
+    /// is cancelled when that struct is freed; the test makes this property observable
+    /// at runtime.
+    #[gpui::test]
+    fn refresh_timer_is_cancelled_on_entity_drop(cx: &mut gpui::TestAppContext) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use std::time::Duration;
+
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let notify_count = Rc::new(Cell::new(0u32));
+        let doc_holder: Rc<std::cell::RefCell<Option<Entity<ChartDocument>>>> =
+            Rc::new(std::cell::RefCell::new(None));
+        let harness_holder: Rc<std::cell::RefCell<Option<Entity<ChartDocHarness>>>> =
+            Rc::new(std::cell::RefCell::new(None));
+
+        cx.add_window_view({
+            let app_state = app_state.clone();
+            let doc_holder = doc_holder.clone();
+            let harness_holder = harness_holder.clone();
+            move |window, cx| {
+                let doc =
+                    cx.new(|cx| ChartDocument::new(None, String::new(), app_state, window, cx));
+                doc_holder.replace(Some(doc.clone()));
+
+                let harness = cx.new(|_cx| ChartDocHarness { doc: Some(doc) });
+                harness_holder.replace(Some(harness.clone()));
+                gpui_component::Root::new(harness, window, cx)
+            }
+        });
+
+        let doc = doc_holder.borrow().clone().expect("entity created");
+
+        cx.update(|cx| {
+            doc.update(cx, |d, cx| {
+                d.set_refresh_policy(RefreshPolicy::Interval { every_secs: 10 }, cx);
+            });
+        });
+
+        let counter = notify_count.clone();
+        let _observe_sub = cx.update(|cx| {
+            cx.observe(&doc, move |_, _| {
+                counter.set(counter.get() + 1);
+            })
+        });
+
+        cx.executor().advance_clock(Duration::from_secs(15));
+        cx.run_until_parked();
+
+        let count_after_first_tick = notify_count.get();
+        assert!(
+            count_after_first_tick >= 1,
+            "timer must have fired at least once after 15 s; count = {count_after_first_tick}"
+        );
+
+        // Release all strong references so the ChartDocument entity is freed,
+        // which drops _refresh_timer and cancels the timer task.
+        doc_holder.borrow_mut().take();
+        if let Some(harness) = harness_holder.borrow().clone() {
+            cx.update(|cx| {
+                harness.update(cx, |h, _| h.doc = None);
+            });
+        }
+        harness_holder.borrow_mut().take();
+        drop(doc);
+
+        cx.executor().advance_clock(Duration::from_secs(60));
+        cx.run_until_parked();
+
+        let count_after_drop = notify_count.get();
+        assert_eq!(
+            count_after_drop, count_after_first_tick,
+            "notify count must not increase after entity drop — timer loop must be cancelled"
+        );
     }
 }
