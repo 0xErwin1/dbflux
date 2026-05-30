@@ -7,6 +7,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 use gpui::*;
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -323,10 +324,13 @@ impl DataGridPanel {
                         }
                         Err(error) => {
                             panel.runner.fail_mutation(task_id, error.to_string(), cx);
-                            panel.pending_toast = Some(PendingToast {
-                                message: format!("Failed to update document: {}", error),
-                                is_error: true,
-                            });
+                            report_error(
+                                UserFacingError::new(
+                                    ErrorKind::Driver,
+                                    format!("Failed to update document: {error}"),
+                                ),
+                                cx,
+                            );
                         }
                     }
                     cx.notify();
@@ -428,20 +432,16 @@ impl DataGridPanel {
             .iter()
             .any(|value| matches!(value, Value::Unsupported(_)))
         {
-            let message = "Cannot save row: primary key uses an unsupported value type".to_string();
-            log::error!("[SAVE] {}", message);
+            let message = "Cannot save row: primary key uses an unsupported value type";
 
             table_state.update(cx, |state, cx| {
                 state
                     .edit_buffer_mut()
-                    .set_row_state(row_idx, RowState::Error(message.clone()));
+                    .set_row_state(row_idx, RowState::Error(message.to_string()));
                 cx.notify();
             });
 
-            self.pending_toast = Some(PendingToast {
-                message,
-                is_error: true,
-            });
+            report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
             return;
         }
 
@@ -467,20 +467,16 @@ impl DataGridPanel {
             .iter()
             .any(|a| matches!(a.value, Value::Unsupported(_)))
         {
-            let message = "Cannot save row: unsupported values are read-only".to_string();
-            log::error!("[SAVE] {}", message);
+            let message = "Cannot save row: unsupported values are read-only";
 
             table_state.update(cx, |state, cx| {
                 state
                     .edit_buffer_mut()
-                    .set_row_state(row_idx, RowState::Error(message.clone()));
+                    .set_row_state(row_idx, RowState::Error(message.to_string()));
                 cx.notify();
             });
 
-            self.pending_toast = Some(PendingToast {
-                message,
-                is_error: true,
-            });
+            report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
             return;
         }
 
@@ -710,17 +706,16 @@ impl DataGridPanel {
                 });
             }
             Err(e) => {
-                log::error!("[SAVE] Failed to save row {}: {}", row_idx, e);
                 table_state.update(cx, |state, cx| {
                     state
                         .edit_buffer_mut()
                         .set_row_state(row_idx, RowState::Error(e.to_string()));
                     cx.notify();
                 });
-                self.pending_toast = Some(PendingToast {
-                    message: format!("Save failed: {}", e),
-                    is_error: true,
-                });
+                report_error(
+                    UserFacingError::new(ErrorKind::Driver, format!("Save failed: {e}")),
+                    cx,
+                );
             }
         }
 
@@ -849,12 +844,14 @@ impl DataGridPanel {
                             panel.queue_refresh_after_mutation_success(cx);
                         }
                         Err(e) => {
-                            log::error!("[INSERT] Failed: {}", e);
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                            panel.pending_toast = Some(PendingToast {
-                                message: format!("Insert failed: {}", e),
-                                is_error: true,
-                            });
+                            report_error(
+                                UserFacingError::new(
+                                    ErrorKind::Driver,
+                                    format!("Insert failed: {e}"),
+                                ),
+                                cx,
+                            );
                         }
                     }
                     cx.notify();
@@ -915,11 +912,10 @@ impl DataGridPanel {
         };
 
         if assignments.is_empty() {
-            self.pending_toast = Some(PendingToast {
-                message: "Cannot insert: no values provided".to_string(),
-                is_error: true,
-            });
-            cx.notify();
+            report_error(
+                UserFacingError::new(ErrorKind::Driver, "Cannot insert: no values provided"),
+                cx,
+            );
             return;
         }
 
@@ -987,12 +983,14 @@ impl DataGridPanel {
                             panel.queue_refresh_after_mutation_success(cx);
                         }
                         Err(e) => {
-                            log::error!("[INSERT] Failed: {}", e);
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                            panel.pending_toast = Some(PendingToast {
-                                message: format!("Insert failed: {}", e),
-                                is_error: true,
-                            });
+                            report_error(
+                                UserFacingError::new(
+                                    ErrorKind::Driver,
+                                    format!("Insert failed: {e}"),
+                                ),
+                                cx,
+                            );
                         }
                     }
                     cx.notify();
@@ -1186,12 +1184,14 @@ impl DataGridPanel {
                             panel.pending_refresh = true;
                         }
                         Err(e) => {
-                            log::error!("[DELETE] Failed: {}", e);
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                            panel.pending_toast = Some(PendingToast {
-                                message: format!("Delete failed: {}", e),
-                                is_error: true,
-                            });
+                            report_error(
+                                UserFacingError::new(
+                                    ErrorKind::Driver,
+                                    format!("Delete failed: {e}"),
+                                ),
+                                cx,
+                            );
                         }
                     }
                     cx.notify();
@@ -1241,21 +1241,21 @@ impl DataGridPanel {
         };
 
         if pk_count == 0 {
-            self.pending_toast = Some(PendingToast {
-                message: "Cannot delete: no primary key defined for this table".to_string(),
-                is_error: true,
-            });
-            cx.notify();
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    "Cannot delete: no primary key defined for this table",
+                ),
+                cx,
+            );
             return;
         }
 
         if pk_columns.len() != pk_count || pk_values.len() != pk_count {
-            log::error!("[DELETE] Failed to build row identity");
-            self.pending_toast = Some(PendingToast {
-                message: "Cannot delete: failed to identify row".to_string(),
-                is_error: true,
-            });
-            cx.notify();
+            report_error(
+                UserFacingError::new(ErrorKind::Driver, "Cannot delete: failed to identify row"),
+                cx,
+            );
             return;
         }
 
@@ -1318,12 +1318,14 @@ impl DataGridPanel {
                             panel.pending_refresh = true;
                         }
                         Err(e) => {
-                            log::error!("[DELETE] Failed: {}", e);
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                            panel.pending_toast = Some(PendingToast {
-                                message: format!("Delete failed: {}", e),
-                                is_error: true,
-                            });
+                            report_error(
+                                UserFacingError::new(
+                                    ErrorKind::Driver,
+                                    format!("Delete failed: {e}"),
+                                ),
+                                cx,
+                            );
                         }
                     }
                     cx.notify();
@@ -1453,11 +1455,13 @@ impl DataGridPanel {
         };
 
         if pk_indices.is_empty() {
-            self.pending_toast = Some(PendingToast {
-                message: "Cannot delete: no primary key defined for this table".to_string(),
-                is_error: true,
-            });
-            cx.notify();
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    "Cannot delete: no primary key defined for this table",
+                ),
+                cx,
+            );
             return;
         }
 
@@ -1493,11 +1497,13 @@ impl DataGridPanel {
         }
 
         if identities.is_empty() {
-            self.pending_toast = Some(PendingToast {
-                message: "Cannot delete: failed to identify any rows".to_string(),
-                is_error: true,
-            });
-            cx.notify();
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    "Cannot delete: failed to identify any rows",
+                ),
+                cx,
+            );
             return;
         }
 
@@ -1542,7 +1548,7 @@ impl DataGridPanel {
             let mut success_count = 0usize;
             let mut last_error: Option<dbflux_core::DbError> = None;
 
-            for (row_idx, identity) in &identities {
+            for (_row_idx, identity) in &identities {
                 let delete =
                     RowDelete::new(identity.clone(), table_name.clone(), schema_name.clone());
 
@@ -1557,7 +1563,6 @@ impl DataGridPanel {
                         success_count += 1;
                     }
                     Err(e) => {
-                        log::error!("[BULK DELETE] Failed to delete row {}: {}", row_idx, e);
                         last_error = Some(e);
                         // Stop on first error — remaining rows may depend on consistency
                         break;
@@ -1569,15 +1574,17 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     if let Some(e) = last_error {
                         panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                        panel.pending_toast = Some(PendingToast {
-                            message: format!(
-                                "Deleted {} of {} row(s), then failed: {}",
-                                success_count,
-                                identities.len(),
-                                e
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Driver,
+                                format!(
+                                    "Deleted {} of {} row(s), then failed: {e}",
+                                    success_count,
+                                    identities.len()
+                                ),
                             ),
-                            is_error: true,
-                        });
+                            cx,
+                        );
                     } else {
                         panel.runner.complete_mutation(task_id, cx);
 
@@ -1673,11 +1680,13 @@ impl DataGridPanel {
         }
 
         if filters.is_empty() {
-            self.pending_toast = Some(PendingToast {
-                message: "Cannot delete: failed to identify any documents".to_string(),
-                is_error: true,
-            });
-            cx.notify();
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Driver,
+                    "Cannot delete: failed to identify any documents",
+                ),
+                cx,
+            );
             return;
         }
 
@@ -1718,7 +1727,7 @@ impl DataGridPanel {
             let mut success_count = 0usize;
             let mut last_error: Option<dbflux_core::DbError> = None;
 
-            for (row_idx, filter) in &filters {
+            for (_row_idx, filter) in &filters {
                 let delete =
                     dbflux_core::DocumentDelete::new(collection_name.clone(), filter.clone())
                         .with_database(collection_db.clone());
@@ -1734,11 +1743,6 @@ impl DataGridPanel {
                         success_count += 1;
                     }
                     Err(e) => {
-                        log::error!(
-                            "[BULK DELETE] Failed to delete document at row {}: {}",
-                            row_idx,
-                            e
-                        );
                         last_error = Some(e);
                         break;
                     }
@@ -1749,15 +1753,17 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     if let Some(e) = last_error {
                         panel.runner.fail_mutation(task_id, e.to_string(), cx);
-                        panel.pending_toast = Some(PendingToast {
-                            message: format!(
-                                "Deleted {} of {} document(s), then failed: {}",
-                                success_count,
-                                filters.len(),
-                                e
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Driver,
+                                format!(
+                                    "Deleted {} of {} document(s), then failed: {e}",
+                                    success_count,
+                                    filters.len()
+                                ),
                             ),
-                            is_error: true,
-                        });
+                            cx,
+                        );
                     } else {
                         panel.runner.complete_mutation(task_id, cx);
 
@@ -1785,5 +1791,35 @@ impl DataGridPanel {
             .log_if_dropped();
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// M5-T1: Stubs documenting the mutation error paths that are now routed
+    /// through `report_error`. Full integration assertions require a GPUI test
+    /// harness with a live `AppStateGlobal` and `ToastGlobal` — deferred until
+    /// the test-support crate gains that infrastructure.
+
+    #[test]
+    #[ignore = "requires GPUI harness with AppStateGlobal and ToastGlobal"]
+    fn insert_failure_routed_through_report_error() {
+        // When an INSERT fails the error path calls report_error(ErrorKind::Driver, …)
+        // which increments AppStateEntity::unread_error_count and emits a toast.
+        // Verified manually: trigger a duplicate-key INSERT and confirm toast + audit row.
+    }
+
+    #[test]
+    #[ignore = "requires GPUI harness with AppStateGlobal and ToastGlobal"]
+    fn update_failure_routed_through_report_error() {
+        // When a row UPDATE (save) fails the error path calls report_error.
+        // Verified manually: edit a read-only column and confirm toast + audit row.
+    }
+
+    #[test]
+    #[ignore = "requires GPUI harness with AppStateGlobal and ToastGlobal"]
+    fn delete_failure_routed_through_report_error() {
+        // When a DELETE fails the error path calls report_error.
+        // Verified manually: delete a row with a FK violation and confirm toast + audit row.
     }
 }

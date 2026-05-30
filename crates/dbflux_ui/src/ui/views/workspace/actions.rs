@@ -1,6 +1,7 @@
 use super::*;
 use crate::platform;
 use dbflux_core::{DriverCapabilities, DriverMetadata};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 
 /// Returns `true` when the given driver metadata advertises the `METRIC_SERIES`
 /// capability, meaning the driver can execute `MetricQuery` requests.
@@ -275,12 +276,7 @@ impl Workspace {
         match correlation_id {
             Some(id) => {
                 let doc = cx.new(|cx| {
-                    AuditDocument::new_with_correlation_id(
-                        id,
-                        self.app_state.clone(),
-                        window,
-                        cx,
-                    )
+                    AuditDocument::new_with_correlation_id(id, self.app_state.clone(), window, cx)
                 });
                 let pane = AuditDocument::into_pane(doc, cx);
                 self.tab_manager.update(cx, |mgr, cx| {
@@ -381,7 +377,13 @@ impl Workspace {
     pub(super) fn refresh_mcp_governance(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.app_state.update(cx, |state, cx| {
             if let Err(e) = state.persist_mcp_governance() {
-                log::error!("Failed to persist MCP governance: {}", e);
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Config,
+                        format!("Failed to persist MCP governance: {e}"),
+                    ),
+                    cx,
+                );
                 return;
             }
 
@@ -447,7 +449,13 @@ impl Workspace {
                     });
                 }
                 Err(e) => {
-                    log::error!("Failed to refresh schema: {:?}", e);
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::Driver,
+                            format!("Failed to refresh schema: {e}"),
+                        ),
+                        cx,
+                    );
                 }
             }) {
                 log::warn!(
@@ -920,7 +928,13 @@ impl Workspace {
             let content = match content {
                 Ok(c) => c,
                 Err(e) => {
-                    log::error!("Failed to read file {}: {}", path.display(), e);
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            format!("Failed to read file {}: {e}", path.display()),
+                        ),
+                        cx,
+                    );
                     return;
                 }
             };
@@ -972,7 +986,13 @@ impl Workspace {
             let content = match content {
                 Ok(c) => c,
                 Err(e) => {
-                    log::error!("Failed to read file {}: {}", path.display(), e);
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            format!("Failed to read file {}: {e}", path.display()),
+                        ),
+                        cx,
+                    );
                     return;
                 }
             };
@@ -1329,7 +1349,13 @@ impl Workspace {
         if let Some(path) = script_path {
             let content = doc.read(cx).build_file_content(cx);
             if let Err(e) = std::fs::write(&path, &content) {
-                log::error!("Failed to write initial script content: {}", e);
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        format!("Failed to write initial script content: {e}"),
+                    ),
+                    cx,
+                );
             }
         }
 
@@ -1757,10 +1783,10 @@ impl Workspace {
                 // Validate before allocating an entity — from_saved checks the source variant.
                 let validation = crate::ui::document::ChartDocument::validate_saved_source(&chart);
                 if let Err(e) = validation {
-                    log::error!("Failed to open saved chart: {e}");
-                    Toast::error(format!("Cannot open chart: {e}"))
-                        .meta_right(now_hms())
-                        .push(cx);
+                    report_error(
+                        UserFacingError::new(ErrorKind::Storage, format!("Cannot open chart: {e}")),
+                        cx,
+                    );
                     return;
                 }
 
@@ -2065,7 +2091,7 @@ impl Workspace {
         let (profile_id, specs) = match import_result {
             Ok(v) => v,
             Err(e) => {
-                Toast::error(e).meta_right(now_hms()).push(cx);
+                report_error(UserFacingError::new(ErrorKind::Driver, e), cx);
                 return;
             }
         };
@@ -2245,9 +2271,13 @@ impl Workspace {
             });
 
         if let Err((name, message)) = persist_result {
-            Toast::error(format!("Failed to save dashboard '{name}': {message}"))
-                .meta_right(now_hms())
-                .push(cx);
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    format!("Failed to save dashboard '{name}': {message}"),
+                ),
+                cx,
+            );
             return;
         }
 
@@ -2335,7 +2365,8 @@ impl Workspace {
                 let specs = match result {
                     Ok((_body, specs)) => specs,
                     Err(message) => {
-                        return Toast::error(message).meta_right(now_hms()).push(cx);
+                        report_error(UserFacingError::new(ErrorKind::Network, message), cx);
+                        return;
                     }
                 };
 
@@ -2607,10 +2638,13 @@ impl Workspace {
                 self.open_dashboard(dashboard_id, window, cx);
             }
             Err(e) => {
-                log::error!("Failed to create dashboard: {e}");
-                Toast::error(format!("Failed to create dashboard: {e}"))
-                    .meta_right(now_hms())
-                    .push(cx);
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        format!("Failed to create dashboard: {e}"),
+                    ),
+                    cx,
+                );
             }
         }
     }
@@ -2717,10 +2751,13 @@ impl Workspace {
                 });
             }
             Err(e) => {
-                log::error!("Failed to delete dashboard: {e}");
-                Toast::error(format!("Failed to delete dashboard: {e}"))
-                    .meta_right(now_hms())
-                    .push(cx);
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        format!("Failed to delete dashboard: {e}"),
+                    ),
+                    cx,
+                );
             }
         }
     }
@@ -2738,10 +2775,13 @@ impl Workspace {
                 });
             }
             Err(e) => {
-                log::error!("Failed to duplicate dashboard: {e}");
-                Toast::error(format!("Failed to duplicate dashboard: {e}"))
-                    .meta_right(now_hms())
-                    .push(cx);
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        format!("Failed to duplicate dashboard: {e}"),
+                    ),
+                    cx,
+                );
             }
         }
     }
@@ -2807,10 +2847,10 @@ impl Workspace {
                 });
             }
             Err(e) => {
-                log::error!("Failed to rename item: {e}");
-                Toast::error(format!("Failed to rename: {e}"))
-                    .meta_right(now_hms())
-                    .push(cx);
+                report_error(
+                    UserFacingError::new(ErrorKind::Storage, format!("Failed to rename: {e}")),
+                    cx,
+                );
             }
         }
     }
@@ -2885,10 +2925,13 @@ impl Workspace {
                 });
             }
             Err(e) => {
-                log::error!("Failed to delete saved chart: {e}");
-                Toast::error(format!("Failed to delete saved chart: {e}"))
-                    .meta_right(now_hms())
-                    .push(cx);
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        format!("Failed to delete saved chart: {e}"),
+                    ),
+                    cx,
+                );
             }
         }
     }
@@ -2906,10 +2949,13 @@ impl Workspace {
                 });
             }
             Err(e) => {
-                log::error!("Failed to duplicate saved chart: {e}");
-                Toast::error(format!("Failed to duplicate saved chart: {e}"))
-                    .meta_right(now_hms())
-                    .push(cx);
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        format!("Failed to duplicate saved chart: {e}"),
+                    ),
+                    cx,
+                );
             }
         }
     }
@@ -3015,9 +3061,13 @@ impl Workspace {
                     Err(err) => {
                         let msg = err.to_string();
                         app_state.update(cx, |state, _| state.fail_task(task_id, msg.clone()));
-                        Toast::error(format!("Failed to load metric namespaces: {msg}"))
-                            .meta_right(now_hms())
-                            .push(cx);
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Network,
+                                format!("Failed to load metric namespaces: {msg}"),
+                            ),
+                            cx,
+                        );
                         modal.update(cx, |m, cx| m.set_metric_namespaces(Vec::new(), cx));
                     }
                 });
@@ -3085,9 +3135,13 @@ impl Workspace {
                 Err(err) => {
                     let msg = err.to_string();
                     app_state.update(cx, |state, _| state.fail_task(task_id, msg.clone()));
-                    Toast::error(format!("Failed to load metrics: {msg}"))
-                        .meta_right(now_hms())
-                        .push(cx);
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::Network,
+                            format!("Failed to load metrics: {msg}"),
+                        ),
+                        cx,
+                    );
                     modal.update(cx, |m, cx| {
                         m.set_metrics_for_namespace(namespace, Vec::new(), cx);
                     });
@@ -3165,9 +3219,10 @@ impl Workspace {
                 });
             }
             Err(e) => {
-                Toast::error(format!("Failed to add panel: {e}"))
-                    .meta_right(now_hms())
-                    .push(cx);
+                report_error(
+                    UserFacingError::new(ErrorKind::Storage, format!("Failed to add panel: {e}")),
+                    cx,
+                );
             }
         }
     }
@@ -3299,9 +3354,10 @@ impl Workspace {
                 });
             }
             Err(e) => {
-                Toast::error(format!("Failed to add panel: {e}"))
-                    .meta_right(now_hms())
-                    .push(cx);
+                report_error(
+                    UserFacingError::new(ErrorKind::Storage, format!("Failed to add panel: {e}")),
+                    cx,
+                );
             }
         }
     }
@@ -3332,10 +3388,10 @@ impl Workspace {
                 });
             }
             Err(e) => {
-                log::error!("Failed to add panels: {e}");
-                Toast::error(format!("Failed to add panels: {e}"))
-                    .meta_right(now_hms())
-                    .push(cx);
+                report_error(
+                    UserFacingError::new(ErrorKind::Storage, format!("Failed to add panels: {e}")),
+                    cx,
+                );
             }
         }
     }
