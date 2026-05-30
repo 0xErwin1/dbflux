@@ -2412,6 +2412,7 @@ name = "dbflux_app"
 version = "0.6.0-dev.10"
 dependencies = [
  "async-trait",
+ "chrono",
  "dbflux_audit",
  "dbflux_aws",
  "dbflux_core",
