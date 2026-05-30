@@ -499,4 +499,44 @@ mod tests {
             "SQL Server METADATA must include INSTANCE_METRICS and INSTANCE_INSPECTOR bits"
         );
     }
+
+    /// REQ-DRIVER-MSSQL-1 / WARN-2: when `view_server_state_available` is `false`,
+    /// both `list_metrics` and `list_inspectors` return empty vectors rather than
+    /// erroring. This exercises the permission-denied guard path without a live
+    /// SQL Server connection.
+    ///
+    /// Uses a dedicated tokio runtime so the test is synchronous and does not
+    /// conflict with any outer async executor. The `Runtime` is moved into
+    /// `MssqlConnectionInner` (as the driver normally does), and the catalog is
+    /// invoked via a separate single-thread runtime so dropping the inner runtime
+    /// does not occur inside its own async context.
+    #[test]
+    fn list_metrics_and_inspectors_return_empty_when_probe_fails() {
+        use crate::driver::MssqlConnectionInner;
+        use std::sync::{Arc, Mutex};
+        use tokio::runtime::Runtime;
+
+        let inner_rt = Runtime::new().expect("tokio runtime for dummy inner");
+        let inner = Arc::new(Mutex::new(MssqlConnectionInner {
+            client: None,
+            runtime: inner_rt,
+        }));
+        let catalog = MssqlInstanceCatalog::new(inner, false);
+
+        let exec_rt = Runtime::new().expect("tokio runtime for test execution");
+        let (metrics, inspectors) = exec_rt.block_on(async {
+            let metrics = catalog.list_metrics().await.expect("must not error");
+            let inspectors = catalog.list_inspectors().await.expect("must not error");
+            (metrics, inspectors)
+        });
+
+        assert!(
+            metrics.is_empty(),
+            "metrics must be empty when VIEW SERVER STATE permission is absent"
+        );
+        assert!(
+            inspectors.is_empty(),
+            "inspectors must be empty when VIEW SERVER STATE permission is absent"
+        );
+    }
 }
