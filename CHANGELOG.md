@@ -4,6 +4,25 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **External RPC drivers and auth providers can emit audit events (#157)** —
+  RPC-backed drivers (driver protocol v1.2, capability `AuditEmit`) and
+  auth providers (auth-provider protocol v1.3, hello flag
+  `audit_emit_opt_in`) can now write to the audit log over IPC by sending
+  `EmitAuditEvent` frames as intermediate `done=false` responses. The host
+  sanitizes every event: forces `actor_type`/`source_id` to new
+  `ExternalDriver` / `ExternalAuthProvider` variants, fills `actor_id`
+  with the registered RPC service ID, overrides connection context from
+  `AppState`, enforces a per-source category whitelist (drivers:
+  `Connection`/`Query`/`System`; auth providers: `Connection` only), and
+  truncates `details_json` to the configured `max_detail_bytes`. A
+  per-`socket_id` token-bucket rate limiter (100 events/minute, configurable)
+  caps emission; overflow events are dropped silently — the IPC session
+  is never blocked or errored — and counted on
+  `AuditService::external_audit_dropped`. Older RPC peers that don't
+  advertise the capability/flag remain silent.
+
 ## [0.6.0-dev.10] - 2026-05-29
 
 ### Added
