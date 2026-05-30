@@ -20,16 +20,16 @@ mod governance;
 
 mod handle;
 pub mod history_modal;
+pub mod instance_inspector;
 mod key_value;
 mod new_key_modal;
 pub mod pane;
+pub mod refresh;
 mod result_view;
 pub mod tab_bar;
 mod tab_manager;
 mod task_runner;
 mod types;
-pub mod instance_inspector;
-pub mod refresh;
 
 pub use instance_inspector::InspectorPanel;
 

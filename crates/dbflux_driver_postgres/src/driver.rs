@@ -14,21 +14,21 @@ use dbflux_core::{
     CreateTypeRequest, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory, DatabaseInfo,
     DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DeploymentClass,
     DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef, DriverLimits,
-    ExecutionSourceContext, InstanceCatalog,
     DriverMetadata, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest, ErrorLocation,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab,
-    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required, field_use_uri,
-    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
-    sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
+    ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
+    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog,
+    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest, RelationalConnection,
+    RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
+    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
+    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
+    TableInfo, TransactionCapabilities, TypeDefinition, Value, ViewInfo, WhereOperator,
+    field_password, field_required, field_use_uri, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked,
+    when_unchecked, with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
 use native_tls::TlsConnector;
@@ -1438,9 +1438,9 @@ impl Connection for PostgresConnection {
     }
 
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
-        Some(Box::new(
-            crate::instance_catalog::PgInstanceCatalog::new(Arc::clone(&self.client)),
-        ))
+        Some(Box::new(crate::instance_catalog::PgInstanceCatalog::new(
+            Arc::clone(&self.client),
+        )))
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
@@ -1456,10 +1456,7 @@ impl Connection for PostgresConnection {
                     let mut client = self.client.lock().map_err(|_| {
                         DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
                     })?;
-                    return crate::instance_catalog::dispatch_metric_series(
-                        &mut client,
-                        metric_id,
-                    );
+                    return crate::instance_catalog::dispatch_metric_series(&mut client, metric_id);
                 }
                 ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
                     let mut client = self.client.lock().map_err(|_| {

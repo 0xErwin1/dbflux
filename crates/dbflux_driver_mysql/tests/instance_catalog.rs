@@ -62,9 +62,11 @@ fn metric_req(metric_id: &str) -> QueryRequest {
 fn inspector_req(metric_id: &str) -> QueryRequest {
     QueryRequest {
         execution_context: Some(dbflux_core::ExecutionContext {
-            source: Some(dbflux_core::ExecutionSourceContext::InstanceInspectorQuery {
-                metric_id: metric_id.to_string(),
-            }),
+            source: Some(
+                dbflux_core::ExecutionSourceContext::InstanceInspectorQuery {
+                    metric_id: metric_id.to_string(),
+                },
+            ),
             ..Default::default()
         }),
         ..Default::default()
@@ -79,8 +81,16 @@ fn fetch_mysql_queries_metric_column_shape() {
         let result = conn.execute(&metric_req("mysql.queries_per_sec"))?;
 
         assert!(!result.columns.is_empty(), "must have columns");
-        assert_eq!(result.columns[0].kind, ColumnKind::Timestamp, "first column must be Timestamp");
-        assert_eq!(result.columns[1].kind, ColumnKind::Float, "second column must be Float");
+        assert_eq!(
+            result.columns[0].kind,
+            ColumnKind::Timestamp,
+            "first column must be Timestamp"
+        );
+        assert_eq!(
+            result.columns[1].kind,
+            ColumnKind::Float,
+            "second column must be Float"
+        );
         assert!(!result.rows.is_empty(), "must have at least one data point");
 
         Ok(())

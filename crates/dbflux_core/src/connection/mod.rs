@@ -1,8 +1,8 @@
 pub(crate) mod context;
 pub mod dashboard_import;
 pub mod dashboard_source;
-pub mod instance_catalog;
 pub(crate) mod hook;
+pub mod instance_catalog;
 pub(crate) mod item_manager;
 pub mod manager;
 pub mod metric_catalog;
@@ -36,9 +36,6 @@ pub trait TreeStore {
 }
 
 pub use context::{ExecutionContext, ExecutionSourceContext, MetricQuerySeries};
-pub use instance_catalog::{
-    InstanceCatalog, InstanceInspectorDef, InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,
-};
 pub use hook::{
     ConnectionHook, ConnectionHookBindings, ConnectionHooks, DetachedProcessHandle,
     DetachedProcessReceiver, DetachedProcessSender, HookContext, HookExecution, HookExecutionMode,
@@ -46,6 +43,9 @@ pub use hook::{
     LuaCapabilities, OutputEvent, OutputReceiver, OutputSender, OutputStreamKind,
     ProcessExecutionError, ProcessExecutor, ScriptLanguage, ScriptSource, detached_process_channel,
     execute_streaming_process, output_channel,
+};
+pub use instance_catalog::{
+    InstanceCatalog, InstanceInspectorDef, InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,
 };
 pub use item_manager::{AuthProfileManager, Identifiable, ItemManager};
 pub use manager::{

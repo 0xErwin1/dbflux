@@ -93,6 +93,7 @@ pub const PIVOTED_COUNTERS: &[(&str, &str, &str, &str, InstanceMetricUnit)] = &[
 
 pub struct MysqlInstanceCatalog {
     conn: Arc<Mutex<Conn>>,
+    #[allow(dead_code)]
     performance_schema_available: bool,
 }
 
@@ -215,20 +216,19 @@ impl InstanceCatalog for MysqlInstanceCatalog {
         _start_ms: i64,
         _end_ms: i64,
     ) -> Result<QueryResult, DbError> {
-        let mut conn = self.conn.lock().map_err(|_| {
-            DbError::QueryFailed("mysql conn mutex poisoned".to_string().into())
-        })?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| DbError::QueryFailed("mysql conn mutex poisoned".to_string().into()))?;
 
         dispatch_metric_series(&mut conn, metric_id)
     }
 
-    async fn fetch_inspector_snapshot(
-        &self,
-        metric_id: &str,
-    ) -> Result<QueryResult, DbError> {
-        let mut conn = self.conn.lock().map_err(|_| {
-            DbError::QueryFailed("mysql conn mutex poisoned".to_string().into())
-        })?;
+    async fn fetch_inspector_snapshot(&self, metric_id: &str) -> Result<QueryResult, DbError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| DbError::QueryFailed("mysql conn mutex poisoned".to_string().into()))?;
 
         dispatch_inspector_snapshot(&mut conn, metric_id)
     }
@@ -246,9 +246,9 @@ pub(crate) fn dispatch_metric_series(
         Some((var_name, _, display_name, _, _)) => {
             fetch_global_status_value(conn, var_name, display_name)
         }
-        None => Err(DbError::NotSupported(
-            format!("unknown instance metric: {metric_id}").into(),
-        )),
+        None => Err(DbError::NotSupported(format!(
+            "unknown instance metric: {metric_id}"
+        ))),
     }
 }
 
@@ -258,9 +258,7 @@ pub(crate) fn dispatch_inspector_snapshot(
 ) -> Result<QueryResult, DbError> {
     match metric_id {
         "mysql.processlist" => fetch_processlist(conn),
-        other => Err(DbError::NotSupported(
-            format!("unknown inspector: {other}").into(),
-        )),
+        other => Err(DbError::NotSupported(format!("unknown inspector: {other}"))),
     }
 }
 
@@ -270,10 +268,7 @@ fn fetch_global_status_value(
     display_name: &str,
 ) -> Result<QueryResult, DbError> {
     let row: Option<(String, String)> = conn
-        .query_first(format!(
-            "SHOW GLOBAL STATUS LIKE '{}'",
-            var_name
-        ))
+        .query_first(format!("SHOW GLOBAL STATUS LIKE '{}'", var_name))
         .map_err(mysql_error)?;
 
     let value = match row {
@@ -282,10 +277,7 @@ fn fetch_global_status_value(
     };
 
     Ok(single_sample_result(
-        vec![
-            timestamp_col("timestamp_ms"),
-            float_col(display_name),
-        ],
+        vec![timestamp_col("timestamp_ms"), float_col(display_name)],
         vec![Value::Float(value)],
     ))
 }
@@ -401,7 +393,11 @@ mod tests {
 
         for m in &metrics {
             let valid = !m.id.is_empty()
-                && m.id.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false)
+                && m.id
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_lowercase())
+                    .unwrap_or(false)
                 && m.id
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_');
@@ -414,10 +410,7 @@ mod tests {
     fn pivot_produces_float_kind_for_each_counter() {
         let metrics = MysqlInstanceCatalog::static_metrics();
         for m in &metrics {
-            assert_eq!(
-                m.default_refresh_secs, 15,
-                "default refresh must be 15s"
-            );
+            assert_eq!(m.default_refresh_secs, 15, "default refresh must be 15s");
         }
     }
 
@@ -437,10 +430,7 @@ mod tests {
     #[test]
     fn static_inspectors_list_is_non_empty() {
         let inspectors = MysqlInstanceCatalog::static_inspectors();
-        assert!(
-            !inspectors.is_empty(),
-            "must expose at least one inspector"
-        );
+        assert!(!inspectors.is_empty(), "must expose at least one inspector");
     }
 
     #[test]

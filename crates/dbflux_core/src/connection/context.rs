@@ -43,9 +43,7 @@ pub enum ExecutionSourceContext {
     ///
     /// Dispatches to `InstanceCatalog::fetch_inspector_snapshot`. Carries no
     /// time-window fields — inspectors always return a live snapshot.
-    InstanceInspectorQuery {
-        metric_id: String,
-    },
+    InstanceInspectorQuery { metric_id: String },
 }
 
 /// A single series inside a multi-series CloudWatch GetMetricData request.

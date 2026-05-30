@@ -1405,9 +1405,9 @@ fn clamp_refresh_secs(every_secs: u32) -> u32 {
 fn refresh_timer_duration(policy: RefreshPolicy) -> Option<std::time::Duration> {
     match policy {
         RefreshPolicy::Manual => None,
-        RefreshPolicy::Interval { every_secs } => {
-            Some(std::time::Duration::from_secs(clamp_refresh_secs(every_secs) as u64))
-        }
+        RefreshPolicy::Interval { every_secs } => Some(std::time::Duration::from_secs(
+            clamp_refresh_secs(every_secs) as u64,
+        )),
     }
 }
 

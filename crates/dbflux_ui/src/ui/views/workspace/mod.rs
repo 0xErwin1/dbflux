@@ -941,23 +941,13 @@ impl Workspace {
                     profile_id,
                     metric_id,
                 } => {
-                    this.open_instance_metric(
-                        *profile_id,
-                        metric_id.clone(),
-                        window,
-                        cx,
-                    );
+                    this.open_instance_metric(*profile_id, metric_id.clone(), window, cx);
                 }
                 SidebarEvent::OpenInstanceInspector {
                     profile_id,
                     metric_id,
                 } => {
-                    this.open_instance_inspector(
-                        *profile_id,
-                        metric_id.clone(),
-                        window,
-                        cx,
-                    );
+                    this.open_instance_inspector(*profile_id, metric_id.clone(), window, cx);
                 }
                 SidebarEvent::RequestTunnelAuth {
                     tunnel_id,

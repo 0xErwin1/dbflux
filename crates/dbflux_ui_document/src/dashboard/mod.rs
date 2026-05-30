@@ -3018,12 +3018,7 @@ mod tests {
         // refresh signal (Inspector and Loaded, not Orphan or Divider).
         let dispatch_count = slots
             .iter()
-            .filter(|s| {
-                matches!(
-                    s,
-                    DashboardPanelSlot::Inspector { .. }
-                )
-            })
+            .filter(|s| matches!(s, DashboardPanelSlot::Inspector { .. }))
             .count();
 
         assert_eq!(

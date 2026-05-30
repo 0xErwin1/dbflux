@@ -124,18 +124,19 @@ impl MongoInstanceCatalog {
     /// Traverses nested documents using `.`-separated path segments.
     /// Returns `None` if any segment is missing or the leaf is not numeric.
     pub fn extract_path(doc: &Document, path: &str) -> Option<f64> {
-        let segments: Vec<&str> = path.splitn(2, '.').collect();
+        let (key, rest) = match path.split_once('.') {
+            Some((k, r)) => (k, Some(r)),
+            None => (path, None),
+        };
 
-        let key = segments[0];
         let value = doc.get(key)?;
 
-        if segments.len() == 1 {
-            bson_to_f64(value)
-        } else {
-            match value {
-                Bson::Document(nested) => Self::extract_path(nested, segments[1]),
+        match rest {
+            None => bson_to_f64(value),
+            Some(remainder) => match value {
+                Bson::Document(nested) => Self::extract_path(nested, remainder),
                 _ => None,
-            }
+            },
         }
     }
 }
@@ -207,20 +208,19 @@ impl InstanceCatalog for MongoInstanceCatalog {
         _start_ms: i64,
         _end_ms: i64,
     ) -> Result<QueryResult, DbError> {
-        let client = self.client.lock().map_err(|_| {
-            DbError::QueryFailed("mongo client mutex poisoned".to_string().into())
-        })?;
+        let client = self
+            .client
+            .lock()
+            .map_err(|_| DbError::QueryFailed("mongo client mutex poisoned".to_string().into()))?;
 
         dispatch_metric_series(&client, metric_id)
     }
 
-    async fn fetch_inspector_snapshot(
-        &self,
-        metric_id: &str,
-    ) -> Result<QueryResult, DbError> {
-        let client = self.client.lock().map_err(|_| {
-            DbError::QueryFailed("mongo client mutex poisoned".to_string().into())
-        })?;
+    async fn fetch_inspector_snapshot(&self, metric_id: &str) -> Result<QueryResult, DbError> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|_| DbError::QueryFailed("mongo client mutex poisoned".to_string().into()))?;
 
         dispatch_inspector_snapshot(&client, metric_id)
     }
@@ -239,10 +239,7 @@ pub(crate) fn dispatch_metric_series(
             let status = run_server_status(client)?;
             let value = MongoInstanceCatalog::extract_path(&status, path).unwrap_or(0.0);
 
-            let columns = vec![
-                timestamp_col("timestamp_ms"),
-                float_col(display_name),
-            ];
+            let columns = vec![timestamp_col("timestamp_ms"), float_col(display_name)];
 
             let row: Row = vec![Value::Int(now_epoch_ms()), Value::Float(value)];
 
@@ -260,9 +257,9 @@ pub(crate) fn dispatch_metric_series(
                 additional_results: Vec::new(),
             })
         }
-        None => Err(DbError::NotSupported(
-            format!("unknown instance metric: {metric_id}").into(),
-        )),
+        None => Err(DbError::NotSupported(format!(
+            "unknown instance metric: {metric_id}"
+        ))),
     }
 }
 
@@ -272,9 +269,7 @@ pub(crate) fn dispatch_inspector_snapshot(
 ) -> Result<QueryResult, DbError> {
     match metric_id {
         "mongo.current_op" => fetch_current_op(client),
-        other => Err(DbError::NotSupported(
-            format!("unknown inspector: {other}").into(),
-        )),
+        other => Err(DbError::NotSupported(format!("unknown inspector: {other}"))),
     }
 }
 
@@ -297,19 +292,58 @@ fn fetch_current_op(client: &Client) -> Result<QueryResult, DbError> {
         bson::doc! { "$limit": 100 },
     ];
 
-    let cursor = db
-        .aggregate(pipeline)
-        .run()
-        .map_err(mongo_error)?;
+    let cursor = db.aggregate(pipeline).run().map_err(mongo_error)?;
 
     let columns = vec![
-        ColumnMeta { name: "opid".to_string(), kind: ColumnKind::Text, type_name: "string".to_string(), nullable: true, is_primary_key: false },
-        ColumnMeta { name: "type".to_string(), kind: ColumnKind::Text, type_name: "string".to_string(), nullable: true, is_primary_key: false },
-        ColumnMeta { name: "ns".to_string(), kind: ColumnKind::Text, type_name: "string".to_string(), nullable: true, is_primary_key: false },
-        ColumnMeta { name: "op".to_string(), kind: ColumnKind::Text, type_name: "string".to_string(), nullable: true, is_primary_key: false },
-        ColumnMeta { name: "secs_running".to_string(), kind: ColumnKind::Float, type_name: "double".to_string(), nullable: true, is_primary_key: false },
-        ColumnMeta { name: "desc".to_string(), kind: ColumnKind::Text, type_name: "string".to_string(), nullable: true, is_primary_key: false },
-        ColumnMeta { name: "client".to_string(), kind: ColumnKind::Text, type_name: "string".to_string(), nullable: true, is_primary_key: false },
+        ColumnMeta {
+            name: "opid".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "type".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "ns".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "op".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "secs_running".to_string(),
+            kind: ColumnKind::Float,
+            type_name: "double".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "desc".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
+        ColumnMeta {
+            name: "client".to_string(),
+            kind: ColumnKind::Text,
+            type_name: "string".to_string(),
+            nullable: true,
+            is_primary_key: false,
+        },
     ];
 
     let mut rows: Vec<Row> = Vec::new();
@@ -320,14 +354,30 @@ fn fetch_current_op(client: &Client) -> Result<QueryResult, DbError> {
         let row: Row = vec![
             doc.get("opid")
                 .and_then(|v| v.as_i64().map(|i| Value::Text(i.to_string())))
-                .or_else(|| doc.get("opid").and_then(|v| v.as_str().map(|s| Value::Text(s.to_string()))))
+                .or_else(|| {
+                    doc.get("opid")
+                        .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                })
                 .unwrap_or(Value::Null),
-            doc.get("type").and_then(|v| v.as_str().map(|s| Value::Text(s.to_string()))).unwrap_or(Value::Null),
-            doc.get("ns").and_then(|v| v.as_str().map(|s| Value::Text(s.to_string()))).unwrap_or(Value::Null),
-            doc.get("op").and_then(|v| v.as_str().map(|s| Value::Text(s.to_string()))).unwrap_or(Value::Null),
-            doc.get("secs_running").and_then(bson_to_f64).map(Value::Float).unwrap_or(Value::Null),
-            doc.get("desc").and_then(|v| v.as_str().map(|s| Value::Text(s.to_string()))).unwrap_or(Value::Null),
-            doc.get("client").and_then(|v| v.as_str().map(|s| Value::Text(s.to_string()))).unwrap_or(Value::Null),
+            doc.get("type")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
+            doc.get("ns")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
+            doc.get("op")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
+            doc.get("secs_running")
+                .and_then(bson_to_f64)
+                .map(Value::Float)
+                .unwrap_or(Value::Null),
+            doc.get("desc")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
+            doc.get("client")
+                .and_then(|v| v.as_str().map(|s| Value::Text(s.to_string())))
+                .unwrap_or(Value::Null),
         ];
 
         rows.push(row);
@@ -372,7 +422,11 @@ mod tests {
         let metrics = MongoInstanceCatalog::static_metrics();
         for m in &metrics {
             let valid = !m.id.is_empty()
-                && m.id.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false)
+                && m.id
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_lowercase())
+                    .unwrap_or(false)
                 && m.id
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_');
@@ -388,11 +442,14 @@ mod tests {
 
         let mut status = Document::new();
         status.insert("opcounters", Bson::Document(inner));
-        status.insert("mem", Bson::Document({
-            let mut d = Document::new();
-            d.insert("resident", Bson::Int32(256));
-            d
-        }));
+        status.insert(
+            "mem",
+            Bson::Document({
+                let mut d = Document::new();
+                d.insert("resident", Bson::Int32(256));
+                d
+            }),
+        );
 
         assert_eq!(
             MongoInstanceCatalog::extract_path(&status, "opcounters.query"),

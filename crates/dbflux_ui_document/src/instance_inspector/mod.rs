@@ -13,7 +13,9 @@ use super::types::{DocumentId, DocumentState};
 use crate::refresh::MIN_REFRESH_FLOOR_SECS;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::result_panel::ResultPanel;
-use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryRequest, QueryResult, RefreshPolicy};
+use dbflux_core::{
+    ExecutionContext, ExecutionSourceContext, QueryRequest, QueryResult, RefreshPolicy,
+};
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Task, Window};
@@ -50,6 +52,7 @@ pub struct InspectorPanel {
 
     focus_handle: FocusHandle,
 
+    #[allow(dead_code)]
     pub(super) result_panel: Option<Entity<ResultPanel>>,
 }
 
@@ -178,7 +181,9 @@ impl InspectorPanel {
         cx.notify();
 
         let conn_cleanup = conn.clone();
-        let task = cx.background_executor().spawn(async move { conn.execute(&request) });
+        let task = cx
+            .background_executor()
+            .spawn(async move { conn.execute(&request) });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -306,18 +311,13 @@ mod tests {
         let ctx = super::build_inspector_context(&metric_id);
 
         match ctx {
-            ExecutionSourceContext::InstanceInspectorQuery {
-                metric_id: ref id,
-            } => {
+            ExecutionSourceContext::InstanceInspectorQuery { metric_id: ref id } => {
                 assert_eq!(
                     id, &metric_id,
                     "metric_id must round-trip through the context"
                 );
             }
-            other => panic!(
-                "expected InstanceInspectorQuery, got {:?}",
-                other
-            ),
+            other => panic!("expected InstanceInspectorQuery, got {:?}", other),
         }
     }
 

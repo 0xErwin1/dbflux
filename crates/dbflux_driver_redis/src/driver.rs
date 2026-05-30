@@ -13,20 +13,19 @@ use dbflux_core::{
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DefaultSqlDialect, DeploymentClass, DiagnosticSeverity, DocumentConnection,
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
-    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError,
-    HashDeleteRequest, HashSetRequest, Icon, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry,
-    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
-    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
-    KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema, LanguageService,
-    ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationCapabilities,
-    OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
-    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection, SchemaDropTarget,
-    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, SetAddRequest,
-    SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
+    ExecutionSourceContext, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
+    FormattedError, HashDeleteRequest, HashSetRequest, Icon, InstanceCatalog, KeyBulkGetRequest,
+    KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
+    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo,
+    KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema,
+    LanguageService, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest,
+    MutationCapabilities, OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest,
+    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
     StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
     Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, field, field_password, field_required,
     field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
-    ExecutionSourceContext, InstanceCatalog,
 };
 use dbflux_ssh::SshTunnel;
 
@@ -931,18 +930,14 @@ impl Connection for RedisConnection {
                     let mut conn = self.connection.lock().map_err(|_| {
                         DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
                     })?;
-                    return crate::instance_catalog::dispatch_metric_series(
-                        &mut conn,
-                        metric_id,
-                    );
+                    return crate::instance_catalog::dispatch_metric_series(&mut conn, metric_id);
                 }
                 ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
                     let mut conn = self.connection.lock().map_err(|_| {
                         DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
                     })?;
                     return crate::instance_catalog::dispatch_inspector_snapshot(
-                        &mut conn,
-                        metric_id,
+                        &mut conn, metric_id,
                     );
                 }
                 _ => {}

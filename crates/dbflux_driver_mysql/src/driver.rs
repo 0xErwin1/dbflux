@@ -11,21 +11,20 @@ use dbflux_core::{
     ConnectionProfile, ConstraintInfo, ConstraintKind, CreateIndexRequest, CrudResult,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
-    ExecutionSourceContext, InstanceCatalog,
     DriverFormDef, DriverLimits, DriverMetadata, DropForeignKeyRequest, DropIndexRequest,
-    ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab,
-    FormValues, FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
-    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
-    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities, Value,
-    ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
-    when_checked, when_unchecked, with_default,
+    ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
+    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog,
+    IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
+    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest,
+    SortDirection, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo,
+    TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, field, field_password,
+    field_required, field_use_uri, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    render_semantic_filter_sql, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -1741,10 +1740,12 @@ impl Connection for MysqlConnection {
         let ps_available =
             crate::instance_catalog::MysqlInstanceCatalog::probe_performance_schema(&mut conn);
 
-        Some(Box::new(crate::instance_catalog::MysqlInstanceCatalog::new(
-            Arc::clone(&self.catalog_conn),
-            ps_available,
-        )))
+        Some(Box::new(
+            crate::instance_catalog::MysqlInstanceCatalog::new(
+                Arc::clone(&self.catalog_conn),
+                ps_available,
+            ),
+        ))
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {

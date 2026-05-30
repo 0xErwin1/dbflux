@@ -23,3 +23,37 @@ pub const REFRESH_POLICY_OPTIONS: &[(SavedChartRefreshPolicy, &str)] = &[
     (SavedChartRefreshPolicy::Interval { every_secs: 60 }, "1m"),
     (SavedChartRefreshPolicy::Interval { every_secs: 300 }, "5m"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_policy_options_minimum_interval_is_at_least_10s() {
+        for (policy, label) in REFRESH_POLICY_OPTIONS {
+            if let SavedChartRefreshPolicy::Interval { every_secs } = policy {
+                assert!(
+                    u64::from(*every_secs) >= MIN_REFRESH_FLOOR_SECS,
+                    "Refresh option {:?} ({}s) is below the 10s floor",
+                    label,
+                    every_secs
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn refresh_policy_options_has_no_sub_10s_interval() {
+        let sub_10_count = REFRESH_POLICY_OPTIONS
+            .iter()
+            .filter(|(policy, _)| {
+                matches!(policy, SavedChartRefreshPolicy::Interval { every_secs } if *every_secs < 10)
+            })
+            .count();
+
+        assert_eq!(
+            sub_10_count, 0,
+            "No sub-10s refresh interval option should be offered to users"
+        );
+    }
+}

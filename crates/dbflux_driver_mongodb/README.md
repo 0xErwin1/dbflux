@@ -18,9 +18,36 @@ MongoDB document driver for DBFlux.
 - DDL: drop database, drop collection, create index, and drop index.
 - JSON export of results (`EXPORT_JSON`).
 
+### Instance Metrics
+
+Exposes a curated set of live server metrics sourced from the MongoDB `serverStatus` command. Metrics are extracted via BSON dotted-path traversal:
+
+- `mongo.connections_current` — current open connections
+- `mongo.connections_available` — available connection slots
+- `mongo.opcounters_insert` — insert operations since startup
+- `mongo.opcounters_query` — query operations since startup
+- `mongo.opcounters_update` — update operations since startup
+- `mongo.opcounters_delete` — delete operations since startup
+- `mongo.opcounters_getmore` — getMore operations since startup
+- `mongo.mem_resident` — resident memory in MB
+- `mongo.mem_virtual` — virtual memory in MB
+- `mongo.network_bytes_in` — bytes received since startup
+
+Each metric is returned as a single `(timestamp_ms, value)` row for live charting.
+
+### Instance Inspector
+
+Exposes tabular snapshots of running server state:
+
+- `mongo.current_op` — in-progress operations from `$currentOp` aggregation pipeline (opid, type, ns, op, secs_running, wait_for_lock)
+
 ## Limitations
 
 - SQL is not supported; queries must use MongoDB shell-style syntax (or the JSON fallback).
+
+- Instance metrics return a single data point per call (current snapshot from `serverStatus`), not a historical time series. Operations counters (e.g. `mongo.opcounters_insert`) grow monotonically — interpret them as deltas between samples rather than absolute rates.
+
+- `$currentOp` requires the `inprog` privilege or `clusterMonitor` role on Atlas clusters. Without sufficient privileges, `fetch_inspector_snapshot("mongo.current_op")` returns an empty result set.
 - Query cancellation is not supported (`QUERY_CANCELLATION` is not set).
 - `RETURNING` is not supported; mutation capabilities also report no batch, no bulk update, and no bulk delete at the capability level (`supports_batch`, `supports_bulk_update`, `supports_bulk_delete` are all `false`), even though the generator can emit `updateMany`/`deleteMany` text.
 - Parser coverage is intentionally scoped to the supported method set above, not the full interactive shell language; `distinct` is not surfaced as a query capability (`supports_distinct: false`).

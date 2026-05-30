@@ -18,17 +18,17 @@ use dbflux_core::{
     Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult,
     DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
     DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DocumentDelete,
-    ExecutionSourceContext, InstanceCatalog,
     DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, FieldInfo, FormFieldDef, FormFieldKind, FormSection, FormTab,
-    FormValues, FormattedError, Icon, IndexData, IndexDirection, KeyValueConnection,
-    LanguageService, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
-    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
-    QueryLanguage, QueryRequest, QueryResult, RelationalConnection, Row, SchemaDropTarget,
-    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot, SemanticFieldRef, SemanticFilter,
-    SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo,
-    TransactionCapabilities, Value, ViewInfo, WhereOperator, field, field_password, field_required,
-    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    DriverLimits, DriverMetadata, ExecutionSourceContext, FieldInfo, FormFieldDef, FormFieldKind,
+    FormSection, FormTab, FormValues, FormattedError, Icon, IndexData, IndexDirection,
+    InstanceCatalog, KeyValueConnection, LanguageService, MutationCapabilities, OrderByColumn,
+    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
+    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
+    Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshot,
+    SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticRequest, SqlDialect,
+    SshTunnelConfig, TableInfo, TransactionCapabilities, Value, ViewInfo, WhereOperator, field,
+    field_password, field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked,
+    when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mongodb::sync::{Client, Database};
@@ -1704,8 +1704,7 @@ impl Connection for MongoConnection {
                         DbError::QueryFailed("mongo client mutex poisoned".to_string().into())
                     })?;
                     return crate::instance_catalog::dispatch_inspector_snapshot(
-                        &client,
-                        metric_id,
+                        &client, metric_id,
                     );
                 }
                 _ => {}

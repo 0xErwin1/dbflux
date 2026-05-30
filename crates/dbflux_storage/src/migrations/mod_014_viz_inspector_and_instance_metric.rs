@@ -181,10 +181,11 @@ mod tests {
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='viz_saved_chart_source_instance_metric'",
             )
             .unwrap();
-        let found: bool = stmt
-            .exists([])
-            .unwrap();
-        assert!(found, "viz_saved_chart_source_instance_metric table must exist");
+        let found: bool = stmt.exists([]).unwrap();
+        assert!(
+            found,
+            "viz_saved_chart_source_instance_metric table must exist"
+        );
     }
 
     #[test]

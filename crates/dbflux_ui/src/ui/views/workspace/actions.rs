@@ -319,7 +319,6 @@ impl Workspace {
     ) {
         use crate::ui::document::{ChartDocument, DocumentKey};
         use dbflux_components::chart::InstanceMetricSource;
-        use dbflux_components::saved_chart::SavedChartSource;
 
         let key = DocumentKey::InstanceMetricChart {
             profile_id,
@@ -387,9 +386,8 @@ impl Workspace {
             return;
         }
 
-        let doc = cx.new(|cx| {
-            InspectorPanel::new(profile_id, metric_id, self.app_state.clone(), cx)
-        });
+        let doc =
+            cx.new(|cx| InspectorPanel::new(profile_id, metric_id, self.app_state.clone(), cx));
 
         let pane = InspectorPanel::into_pane(doc, cx);
         self.tab_manager.update(cx, |mgr, cx| {

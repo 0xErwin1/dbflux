@@ -21,10 +21,12 @@ fn connect(uri: String) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
             host: String::new(),
             port: 6379,
             user: None,
-            password: None,
             database: None,
+            tls: false,
             ssl_mode: None,
             ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
         },
@@ -59,9 +61,11 @@ fn metric_req(metric_id: &str) -> QueryRequest {
 fn inspector_req(metric_id: &str) -> QueryRequest {
     QueryRequest {
         execution_context: Some(dbflux_core::ExecutionContext {
-            source: Some(dbflux_core::ExecutionSourceContext::InstanceInspectorQuery {
-                metric_id: metric_id.to_string(),
-            }),
+            source: Some(
+                dbflux_core::ExecutionSourceContext::InstanceInspectorQuery {
+                    metric_id: metric_id.to_string(),
+                },
+            ),
             ..Default::default()
         }),
         ..Default::default()

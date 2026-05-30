@@ -143,4 +143,21 @@ mod style_guardrails {
             violations.join("\n")
         );
     }
+
+    /// Document code must not branch on driver IDs. Use `DriverCapabilities` or
+    /// `DatabaseCategory` instead.
+    ///
+    /// Heuristic patterns checked:
+    /// - `driver_id ==` or `driver_id !=` — string equality on driver ID
+    /// - `match driver_id` — match arm switching on driver ID string
+    #[test]
+    fn document_has_no_driver_id_branching() {
+        let forbidden: &[&str] = &["driver_id ==", "driver_id !=", "match driver_id"];
+        let violations = check_violations(forbidden);
+        assert!(
+            violations.is_empty(),
+            "Document code must not branch on driver_id strings (use DriverCapabilities or DatabaseCategory instead):\n{}",
+            violations.join("\n")
+        );
+    }
 }

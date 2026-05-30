@@ -10,9 +10,33 @@
 - Includes PostgreSQL-specific SQL/code generation for CRUD, indexes, reindex, foreign keys, and type operations.
 - Multi-statement scripts (several `;`-separated statements) run as a batch via the simple query protocol, returning one result set per statement.
 
+### Instance Metrics
+
+Exposes a curated set of live server metrics sourced from PostgreSQL system views:
+
+- `pg.tps` — transactions per second (from `pg_stat_database`)
+- `pg.cache_hit_ratio` — buffer cache hit ratio (from `pg_statio_user_tables`)
+- `pg.active_connections` — connections in state `'active'`
+- `pg.idle_connections` — connections in state `'idle'`
+- `pg.blocks_read` — blocks read from disk (from `pg_statio_user_tables`)
+- `pg.stat_statements.mean_exec_ms` — mean execution time per query (requires `pg_stat_statements` extension)
+
+Each metric is returned as a single `(timestamp_ms, value)` row for live charting.
+
+### Instance Inspector
+
+Exposes tabular snapshots of running server state:
+
+- `pg.activity` — current sessions from `pg_stat_activity` (query text, state, wait event, duration)
+- `pg.locks` — active locks from `pg_locks` joined with `pg_class`
+
 ## Limitations
 
 - Batched (multi-statement) result columns carry no type metadata; values are returned as text and chart auto-detection is disabled for them. Run a single statement to get fully typed columns.
+
+- `pg.stat_statements.mean_exec_ms` is only available when the `pg_stat_statements` extension is installed and loaded. The driver probes for its presence at catalog construction time; when absent the metric is omitted from `list_metrics()`.
+
+- Instance metrics return a single data point per call (current snapshot), not a historical time series. The UI polls at the configured refresh interval to build the live chart.
 
 - SQL-only driver; it does not expose document or key-value APIs.
 - Routine definitions for aggregate and window functions are synthesized from catalog metadata because `pg_get_functiondef` does not support them.

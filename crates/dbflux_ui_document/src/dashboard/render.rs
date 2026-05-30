@@ -298,18 +298,16 @@ impl Render for DashboardDocument {
                             .child(Text::heading(label))
                             .into_any_element()
                     }
-                    DashboardPanelSlot::Inspector { metric_id, .. } => {
-                        div()
-                            .id(("panel-card", panel_index))
-                            .size_full()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .text_sm()
-                            .child(format!("Inspector: {metric_id}"))
-                            .into_any_element()
-                    }
+                    DashboardPanelSlot::Inspector { metric_id, .. } => div()
+                        .id(("panel-card", panel_index))
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .text_sm()
+                        .child(format!("Inspector: {metric_id}"))
+                        .into_any_element(),
                 };
 
                 // Position the panel absolutely on the 12-column grid.

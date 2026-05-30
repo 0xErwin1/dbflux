@@ -110,8 +110,7 @@ impl PgInstanceCatalog {
                 id: "pg.activity".to_string(),
                 display_name: "Active sessions".to_string(),
                 description: Some(
-                    "Live snapshot of pg_stat_activity — one row per backend process."
-                        .to_string(),
+                    "Live snapshot of pg_stat_activity — one row per backend process.".to_string(),
                 ),
                 default_refresh_secs: 10,
             },
@@ -250,16 +249,13 @@ impl InstanceCatalog for PgInstanceCatalog {
             "pg.idle_connections" => fetch_connection_count(&mut client, "idle"),
             "pg.blocks_read" => fetch_blocks_read(&mut client),
             "pg.stat_statements.mean_exec_ms" => fetch_stat_statements_mean_exec(&mut client),
-            other => Err(DbError::NotSupported(
-                format!("unknown instance metric: {other}").into(),
-            )),
+            other => Err(DbError::NotSupported(format!(
+                "unknown instance metric: {other}"
+            ))),
         }
     }
 
-    async fn fetch_inspector_snapshot(
-        &self,
-        metric_id: &str,
-    ) -> Result<QueryResult, DbError> {
+    async fn fetch_inspector_snapshot(&self, metric_id: &str) -> Result<QueryResult, DbError> {
         let mut client = self.client.lock().map_err(|_| {
             DbError::QueryFailed("postgres client mutex poisoned".to_string().into())
         })?;
@@ -267,9 +263,7 @@ impl InstanceCatalog for PgInstanceCatalog {
         match metric_id {
             "pg.activity" => fetch_activity_snapshot(&mut client),
             "pg.locks" => fetch_locks_snapshot(&mut client),
-            other => Err(DbError::NotSupported(
-                format!("unknown inspector: {other}").into(),
-            )),
+            other => Err(DbError::NotSupported(format!("unknown inspector: {other}"))),
         }
     }
 }
@@ -310,7 +304,10 @@ fn fetch_cache_hit_ratio(client: &mut Client) -> Result<QueryResult, DbError> {
     let ratio: f64 = row.get(0);
 
     Ok(single_sample_result(
-        vec![timestamp_col("timestamp_ms"), float_col("cache_hit_ratio_pct")],
+        vec![
+            timestamp_col("timestamp_ms"),
+            float_col("cache_hit_ratio_pct"),
+        ],
         vec![Value::Float(ratio)],
     ))
 }
@@ -498,9 +495,9 @@ pub(crate) fn dispatch_metric_series(
         "pg.idle_connections" => fetch_connection_count(client, "idle"),
         "pg.blocks_read" => fetch_blocks_read(client),
         "pg.stat_statements.mean_exec_ms" => fetch_stat_statements_mean_exec(client),
-        other => Err(DbError::NotSupported(
-            format!("unknown instance metric: {other}").into(),
-        )),
+        other => Err(DbError::NotSupported(format!(
+            "unknown instance metric: {other}"
+        ))),
     }
 }
 
@@ -512,9 +509,7 @@ pub(crate) fn dispatch_inspector_snapshot(
     match metric_id {
         "pg.activity" => fetch_activity_snapshot(client),
         "pg.locks" => fetch_locks_snapshot(client),
-        other => Err(DbError::NotSupported(
-            format!("unknown inspector: {other}").into(),
-        )),
+        other => Err(DbError::NotSupported(format!("unknown inspector: {other}"))),
     }
 }
 
@@ -545,7 +540,11 @@ mod tests {
 
         for m in &metrics {
             let valid = !m.id.is_empty()
-                && m.id.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false)
+                && m.id
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_lowercase())
+                    .unwrap_or(false)
                 && m.id
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_');

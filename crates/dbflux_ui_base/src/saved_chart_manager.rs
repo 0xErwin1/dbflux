@@ -209,11 +209,12 @@ fn chart_to_dto(
     let mut metric_series: Vec<MetricSeriesDto> = Vec::new();
     let mut metric_dimensions: Vec<MetricDimensionDto> = Vec::new();
 
-    let instance_metric_id: Option<String> = if let SavedChartSource::InstanceMetric { metric_id } = &chart.source {
-        Some(metric_id.clone())
-    } else {
-        None
-    };
+    let instance_metric_id: Option<String> =
+        if let SavedChartSource::InstanceMetric { metric_id } = &chart.source {
+            Some(metric_id.clone())
+        } else {
+            None
+        };
 
     let (
         source_kind,
@@ -1113,7 +1114,10 @@ mod tests {
         if let SavedChartSource::InstanceMetric { metric_id } = &loaded.source {
             assert_eq!(metric_id, "pg.cache_hit_ratio");
         } else {
-            panic!("expected InstanceMetric variant after reload, got: {:?}", loaded.source);
+            panic!(
+                "expected InstanceMetric variant after reload, got: {:?}",
+                loaded.source
+            );
         }
     }
 }

@@ -84,10 +84,7 @@ pub trait InstanceCatalog: Send + Sync {
     /// Fetches a single inspector snapshot. Returns a `QueryResult` with
     /// arbitrary columns (driver-defined). Always reflects the current moment;
     /// no time window applies.
-    async fn fetch_inspector_snapshot(
-        &self,
-        metric_id: &str,
-    ) -> Result<QueryResult, DbError>;
+    async fn fetch_inspector_snapshot(&self, metric_id: &str) -> Result<QueryResult, DbError>;
 }
 
 #[cfg(test)]

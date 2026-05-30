@@ -1023,11 +1023,7 @@ impl fmt::Display for SchemaNodeId {
                 profile_id,
                 metric_id,
             } => {
-                write!(
-                    f,
-                    "{}|{}|{}",
-                    P_INST_INSPECTOR_LEAF, profile_id, metric_id
-                )
+                write!(f, "{}|{}|{}", P_INST_INSPECTOR_LEAF, profile_id, metric_id)
             }
         }
     }

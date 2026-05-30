@@ -7,8 +7,6 @@ use dbflux_core::{
     ColumnKind, ColumnMeta, DbError, DriverCapabilities, InstanceCatalog, InstanceInspectorDef,
     InstanceMetricDef, InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
 };
-use redis::Commands;
-
 /// Curated list of Redis INFO section field names mapped to chartable metrics.
 ///
 /// Each entry: `(section_field, metric_id, display_name, group, unit)`.
@@ -233,10 +231,7 @@ impl InstanceCatalog for RedisInstanceCatalog {
         dispatch_metric_series(&mut conn, metric_id)
     }
 
-    async fn fetch_inspector_snapshot(
-        &self,
-        metric_id: &str,
-    ) -> Result<QueryResult, DbError> {
+    async fn fetch_inspector_snapshot(&self, metric_id: &str) -> Result<QueryResult, DbError> {
         let mut conn = self.connection.lock().map_err(|_| {
             DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
         })?;
@@ -253,9 +248,7 @@ pub(crate) fn dispatch_metric_series(
 
     match entry {
         Some((field_name, _, display_name, _, _)) => {
-            let info: String = redis::cmd("INFO")
-                .query(conn)
-                .map_err(redis_error)?;
+            let info: String = redis::cmd("INFO").query(conn).map_err(redis_error)?;
 
             let fields = RedisInstanceCatalog::parse_info_output(&info);
             let value: f64 = fields
@@ -279,9 +272,9 @@ pub(crate) fn dispatch_metric_series(
                 additional_results: Vec::new(),
             })
         }
-        None => Err(DbError::NotSupported(
-            format!("unknown instance metric: {metric_id}").into(),
-        )),
+        None => Err(DbError::NotSupported(format!(
+            "unknown instance metric: {metric_id}"
+        ))),
     }
 }
 
@@ -291,9 +284,7 @@ pub(crate) fn dispatch_inspector_snapshot(
 ) -> Result<QueryResult, DbError> {
     match metric_id {
         "redis.client_list" => fetch_client_list(conn),
-        other => Err(DbError::NotSupported(
-            format!("unknown inspector: {other}").into(),
-        )),
+        other => Err(DbError::NotSupported(format!("unknown inspector: {other}"))),
     }
 }
 
@@ -335,14 +326,38 @@ fn fetch_client_list(conn: &mut redis::Connection) -> Result<QueryResult, DbErro
         }
 
         let row: Row = vec![
-            fields.get("id").map(|v| Value::Text(v.clone())).unwrap_or(Value::Null),
-            fields.get("cmd").map(|v| Value::Text(v.clone())).unwrap_or(Value::Null),
-            fields.get("age").map(|v| Value::Text(v.clone())).unwrap_or(Value::Null),
-            fields.get("idle").map(|v| Value::Text(v.clone())).unwrap_or(Value::Null),
-            fields.get("flags").map(|v| Value::Text(v.clone())).unwrap_or(Value::Null),
-            fields.get("db").map(|v| Value::Text(v.clone())).unwrap_or(Value::Null),
-            fields.get("sub").map(|v| Value::Text(v.clone())).unwrap_or(Value::Null),
-            fields.get("multi").map(|v| Value::Text(v.clone())).unwrap_or(Value::Null),
+            fields
+                .get("id")
+                .map(|v| Value::Text(v.clone()))
+                .unwrap_or(Value::Null),
+            fields
+                .get("cmd")
+                .map(|v| Value::Text(v.clone()))
+                .unwrap_or(Value::Null),
+            fields
+                .get("age")
+                .map(|v| Value::Text(v.clone()))
+                .unwrap_or(Value::Null),
+            fields
+                .get("idle")
+                .map(|v| Value::Text(v.clone()))
+                .unwrap_or(Value::Null),
+            fields
+                .get("flags")
+                .map(|v| Value::Text(v.clone()))
+                .unwrap_or(Value::Null),
+            fields
+                .get("db")
+                .map(|v| Value::Text(v.clone()))
+                .unwrap_or(Value::Null),
+            fields
+                .get("sub")
+                .map(|v| Value::Text(v.clone()))
+                .unwrap_or(Value::Null),
+            fields
+                .get("multi")
+                .map(|v| Value::Text(v.clone()))
+                .unwrap_or(Value::Null),
         ];
 
         rows.push(row);
@@ -434,8 +449,8 @@ instantaneous_output_kbps:20.3
     #[test]
     fn parse_info_fixture_contains_replication_metric() {
         let fields = RedisInstanceCatalog::parse_info_output(FIXTURE_INFO);
-        let has_replication = fields.contains_key("connected_slaves")
-            || fields.contains_key("repl_backlog_size");
+        let has_replication =
+            fields.contains_key("connected_slaves") || fields.contains_key("repl_backlog_size");
         assert!(has_replication, "must have at least one replication metric");
     }
 

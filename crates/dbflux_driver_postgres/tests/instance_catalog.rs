@@ -60,9 +60,11 @@ fn metric_req(metric_id: &str) -> QueryRequest {
 fn inspector_req(metric_id: &str) -> QueryRequest {
     QueryRequest {
         execution_context: Some(dbflux_core::ExecutionContext {
-            source: Some(dbflux_core::ExecutionSourceContext::InstanceInspectorQuery {
-                metric_id: metric_id.to_string(),
-            }),
+            source: Some(
+                dbflux_core::ExecutionSourceContext::InstanceInspectorQuery {
+                    metric_id: metric_id.to_string(),
+                },
+            ),
             ..Default::default()
         }),
         ..Default::default()
@@ -94,9 +96,17 @@ fn fetch_pg_tps_column_shape_is_timestamp_then_float() {
             "first column must be Timestamp"
         );
         for col in &result.columns[1..] {
-            assert_eq!(col.kind, ColumnKind::Float, "column {:?} must be Float", col.name);
+            assert_eq!(
+                col.kind,
+                ColumnKind::Float,
+                "column {:?} must be Float",
+                col.name
+            );
         }
-        assert!(!result.rows.is_empty(), "must return at least one data point");
+        assert!(
+            !result.rows.is_empty(),
+            "must return at least one data point"
+        );
 
         Ok(())
     })
@@ -168,11 +178,15 @@ fn pg_stat_statements_gating_logic() {
         "pg_stat_statements probe must add metrics"
     );
     assert!(
-        metrics_with.iter().any(|m| m.id.contains("stat_statements")),
+        metrics_with
+            .iter()
+            .any(|m| m.id.contains("stat_statements")),
         "pg_stat_statements metric must appear when probe is true"
     );
     assert!(
-        !metrics_without.iter().any(|m| m.id.contains("stat_statements")),
+        !metrics_without
+            .iter()
+            .any(|m| m.id.contains("stat_statements")),
         "pg_stat_statements metric must be absent when probe is false"
     );
 }
