@@ -84,11 +84,10 @@ pub struct AuthProfile {
     pub read_only: bool,
     /// Why this stored profile is dangling, if it is.
     ///
-    /// Set by the one-time migration when a stored AWS profile can no longer be
-    /// matched to a file section. Known values:
-    /// - `"keyring-only"`: the credentials live only in the DBFlux keyring with no
-    ///   matching `~/.aws/credentials` entry.
-    /// - `"file-gone"`: the profile section disappeared from `~/.aws/config`.
+    /// Opaque provider-defined token. The human-readable description for each
+    /// token value is supplied by the owning provider via
+    /// `AuthEditCapabilities.dangling_messages`. DBFlux core does not interpret
+    /// or enumerate the possible values.
     ///
     /// `None` for healthy stored profiles and for all reflected (virtual) profiles.
     /// This field is never persisted by serialization; it is populated at load time

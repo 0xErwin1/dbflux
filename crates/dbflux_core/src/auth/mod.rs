@@ -149,7 +149,7 @@ pub trait DynAuthProvider: Send + Sync {
         Ok(())
     }
 
-    /// Return profiles discovered from external sources (e.g., `~/.aws/config`)
+    /// Return profiles discovered from external configuration files
     /// that have not yet been imported into DBFlux.
     ///
     /// The default returns an empty list.
@@ -159,30 +159,29 @@ pub trait DynAuthProvider: Send + Sync {
 
     /// Called after a profile using this provider is saved.
     ///
-    /// Providers can use this hook to write back data to external config files
-    /// (e.g., appending an AWS profile entry to `~/.aws/config`).
-    /// The default is a no-op.
+    /// File-backed providers can use this hook to write back data to external
+    /// configuration files. The default is a no-op.
     fn after_profile_saved(&self, _profile: &AuthProfile) {}
 
-    /// Synthesize virtual `AuthProfile` records by reading external config files
-    /// (e.g., `~/.aws/config` and `~/.aws/credentials`) without storing anything.
+    /// Synthesize virtual `AuthProfile` records by reading external configuration
+    /// files without storing anything.
     ///
-    /// Returned profiles carry `read_only = true`. The default returns an empty list;
-    /// AWS providers override this to enumerate their respective profile types.
+    /// Returned profiles carry `read_only = true`. The default returns an empty
+    /// list; file-backed providers override this to enumerate their profile types.
     fn reflect_profiles(&self) -> Vec<AuthProfile> {
         vec![]
     }
 
-    /// Write a newly created profile to an external config file instead of
-    /// DBFlux's SQLite store.
+    /// Write a newly created profile to an external configuration file instead
+    /// of DBFlux's SQLite store.
     ///
     /// Returns `Some(Ok(()))` on a successful file write. Returns `Some(Err(msg))`
     /// when the write failed. Returns `None` for providers that store profiles
     /// normally in DBFlux (the UI then falls back to `add_auth_profile`).
     ///
-    /// Only AWS file-backed providers override this. The Settings UI calls this
-    /// before `add_auth_profile` so it can skip SQLite storage for file-backed
-    /// providers and let reflection pick up the new profile on the next read.
+    /// File-backed providers override this. The Settings UI calls this before
+    /// `add_auth_profile` so it can skip SQLite storage for file-backed providers
+    /// and let reflection pick up the new profile on the next read.
     fn write_new_profile_to_config(&self, _profile: &AuthProfile) -> Option<Result<(), String>> {
         None
     }

@@ -2,8 +2,8 @@
 //!
 //! The `AuthEditSnapshot` / `AuthEditTarget` / `AuthSaveOutcome` triad is the
 //! provider-neutral edit seam shared between the Settings UI and any auth
-//! provider that supports file-backed editing.  AWS-specific internals
-//! (`AwsEditSnapshot`, `AwsSectionHash`) have moved to `dbflux_aws::edit`.
+//! provider that supports file-backed editing.  Provider-specific internals
+//! live in each provider's own crate.
 //!
 //! # Security invariant
 //!
@@ -57,7 +57,7 @@ impl fmt::Debug for AuthEditSnapshot {
 ///
 /// `id` is a stable token for provider-internal logic (e.g. `"config"`,
 /// `"credentials"`). `label` is the human-readable path shown in the UI
-/// (e.g. `"~/.aws/config"`).
+/// (e.g. `"<provider-config-path>"`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthEditTarget {
     pub id: String,
@@ -121,10 +121,10 @@ mod tests {
     fn auth_edit_target_fields() {
         let target = AuthEditTarget {
             id: "config".to_string(),
-            label: "~/.aws/config".to_string(),
+            label: "path/to/config".to_string(),
         };
         assert_eq!(target.id, "config");
-        assert_eq!(target.label, "~/.aws/config");
+        assert_eq!(target.label, "path/to/config");
     }
 
     // AuthSaveOutcome variant construction and matches! pattern.
@@ -139,14 +139,14 @@ mod tests {
         let outcome = AuthSaveOutcome::Conflict {
             target: AuthEditTarget {
                 id: "config".to_string(),
-                label: "~/.aws/config".to_string(),
+                label: "path/to/config".to_string(),
             },
         };
         let AuthSaveOutcome::Conflict { target } = outcome else {
             panic!("expected Conflict variant");
         };
         assert_eq!(target.id, "config");
-        assert_eq!(target.label, "~/.aws/config");
+        assert_eq!(target.label, "path/to/config");
     }
 
     #[test]
@@ -154,11 +154,11 @@ mod tests {
         let outcome = AuthSaveOutcome::PartialSaved {
             written: AuthEditTarget {
                 id: "config".to_string(),
-                label: "~/.aws/config".to_string(),
+                label: "path/to/config".to_string(),
             },
             conflicted: AuthEditTarget {
                 id: "credentials".to_string(),
-                label: "~/.aws/credentials".to_string(),
+                label: "path/to/secondary".to_string(),
             },
         };
         let AuthSaveOutcome::PartialSaved {
@@ -176,7 +176,7 @@ mod tests {
     fn auth_save_outcome_debug_contains_no_secret_material() {
         let target = AuthEditTarget {
             id: "config".to_string(),
-            label: "~/.aws/config".to_string(),
+            label: "path/to/config".to_string(),
         };
         let outcomes: &[AuthSaveOutcome] = &[
             AuthSaveOutcome::Saved,
@@ -187,7 +187,7 @@ mod tests {
                 written: target.clone(),
                 conflicted: AuthEditTarget {
                     id: "credentials".to_string(),
-                    label: "~/.aws/credentials".to_string(),
+                    label: "path/to/secondary".to_string(),
                 },
             },
         ];
