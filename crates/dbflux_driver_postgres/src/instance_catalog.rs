@@ -17,11 +17,26 @@ use postgres::Client;
 /// the `InstanceCatalog` trait boundary.
 pub struct PgInstanceCatalog {
     client: Arc<Mutex<Client>>,
+    pg_signal_backend: bool,
 }
 
 impl PgInstanceCatalog {
     pub fn new(client: Arc<Mutex<Client>>) -> Self {
-        Self { client }
+        Self {
+            client,
+            pg_signal_backend: true,
+        }
+    }
+
+    /// Constructs a catalog with pre-probed privilege flags.
+    ///
+    /// Called once at connection time so that `row_actions` (a sync fn) can
+    /// return the correctly filtered list without re-querying the database.
+    pub fn new_probed(client: Arc<Mutex<Client>>, pg_signal_backend: bool) -> Self {
+        Self {
+            client,
+            pg_signal_backend,
+        }
     }
 
     /// Baseline metrics always available on any PostgreSQL connection.
@@ -84,8 +99,27 @@ impl PgInstanceCatalog {
     }
 
     /// Returns metrics available given the probe result for `pg_stat_statements`.
+    ///
+    /// This variant is kept for backward compatibility in existing tests.
     pub fn metrics_with_probe(pg_stat_statements_available: bool) -> Vec<InstanceMetricDef> {
-        let mut metrics = Self::static_metrics();
+        Self::metrics_with_probes(true, pg_stat_statements_available)
+    }
+
+    /// Returns metrics filtered by the combined probe results.
+    ///
+    /// `pg_monitor` — whether the user has the `pg_monitor` role or is superuser.
+    /// When absent, cluster-wide statistics (e.g. `pg.tps` from `pg_stat_database`)
+    /// are hidden because reading cross-database rows requires the role.
+    ///
+    /// `pg_stat_statements` — whether the `pg_stat_statements` extension is installed.
+    pub fn metrics_with_probes(
+        pg_monitor: bool,
+        pg_stat_statements_available: bool,
+    ) -> Vec<InstanceMetricDef> {
+        let mut metrics: Vec<InstanceMetricDef> = Self::static_metrics()
+            .into_iter()
+            .filter(|m| if m.id == "pg.tps" { pg_monitor } else { true })
+            .collect();
 
         if pg_stat_statements_available {
             metrics.push(InstanceMetricDef {
@@ -102,6 +136,22 @@ impl PgInstanceCatalog {
         }
 
         metrics
+    }
+
+    /// Returns row actions for the given inspector, gated by the
+    /// `pg_signal_backend` privilege probe.
+    ///
+    /// The kill action requires `pg_signal_backend` membership (or superuser).
+    /// When absent, the action is omitted so the UI never shows it.
+    pub fn row_actions_with_probes(
+        metric_id: &str,
+        pg_signal_backend: bool,
+    ) -> Vec<dbflux_core::InspectorRowAction> {
+        if metric_id == "pg.activity" && pg_signal_backend {
+            Self::static_row_actions(metric_id)
+        } else {
+            Vec::new()
+        }
     }
 
     /// Inspector definitions always available on any PostgreSQL connection.
@@ -209,6 +259,34 @@ impl PgInstanceCatalog {
             )
             .is_ok()
     }
+
+    /// Returns `true` if the current user has `pg_monitor` role membership or
+    /// is a superuser. Required for cluster-wide `pg_stat_database` reads.
+    pub(crate) fn probe_pg_monitor_role(client: &mut Client) -> bool {
+        client
+            .query_one(
+                "SELECT pg_has_role(current_user, 'pg_monitor', 'MEMBER') \
+                 OR (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)",
+                &[],
+            )
+            .and_then(|row| row.try_get::<_, Option<bool>>(0))
+            .map(|opt| opt.unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    /// Returns `true` if the current user has `pg_signal_backend` role
+    /// membership or is a superuser. Required for `pg_terminate_backend`.
+    pub(crate) fn probe_pg_signal_backend(client: &mut Client) -> bool {
+        client
+            .query_one(
+                "SELECT pg_has_role(current_user, 'pg_signal_backend', 'MEMBER') \
+                 OR (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)",
+                &[],
+            )
+            .and_then(|row| row.try_get::<_, Option<bool>>(0))
+            .map(|opt| opt.unwrap_or(false))
+            .unwrap_or(false)
+    }
 }
 
 fn now_epoch_ms() -> i64 {
@@ -312,8 +390,12 @@ impl InstanceCatalog for PgInstanceCatalog {
         })?;
 
         let has_stat_statements = Self::probe_pg_stat_statements(&mut client);
+        let has_pg_monitor = Self::probe_pg_monitor_role(&mut client);
 
-        Ok(Self::metrics_with_probe(has_stat_statements))
+        Ok(Self::metrics_with_probes(
+            has_pg_monitor,
+            has_stat_statements,
+        ))
     }
 
     async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
@@ -325,7 +407,7 @@ impl InstanceCatalog for PgInstanceCatalog {
     }
 
     fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
-        Self::static_row_actions(metric_id)
+        Self::row_actions_with_probes(metric_id, self.pg_signal_backend)
     }
 
     async fn execute_row_action(
@@ -662,6 +744,51 @@ pub fn postgres_advertises_instance_capabilities() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BF10: when pg_monitor probe returns false, pg.tps is absent from the
+    /// metric list (it requires cluster-wide pg_stat_database read access).
+    #[test]
+    fn metrics_without_pg_monitor_role_exclude_tps() {
+        let metrics = PgInstanceCatalog::metrics_with_probes(false, false);
+        assert!(
+            !metrics.iter().any(|m| m.id == "pg.tps"),
+            "pg.tps must be absent when pg_monitor role probe fails"
+        );
+    }
+
+    /// BF10: when pg_monitor probe returns true, full metric list is returned
+    /// including pg.tps.
+    #[test]
+    fn metrics_with_pg_monitor_role_include_tps() {
+        let metrics = PgInstanceCatalog::metrics_with_probes(true, false);
+        assert!(
+            metrics.iter().any(|m| m.id == "pg.tps"),
+            "pg.tps must be present when pg_monitor role probe succeeds"
+        );
+    }
+
+    /// BF10: when pg_signal_backend probe returns false, the kill row action
+    /// must be absent from pg.activity.
+    #[test]
+    fn row_actions_without_signal_backend_omit_kill() {
+        let actions = PgInstanceCatalog::row_actions_with_probes("pg.activity", false);
+        assert!(
+            actions.is_empty(),
+            "pg.activity must have no row actions when pg_signal_backend probe fails"
+        );
+    }
+
+    /// BF10: when pg_signal_backend probe returns true, the kill row action is present.
+    #[test]
+    fn row_actions_with_signal_backend_include_kill() {
+        let actions = PgInstanceCatalog::row_actions_with_probes("pg.activity", true);
+        assert_eq!(
+            actions.len(),
+            1,
+            "pg.activity must have one kill action when pg_signal_backend probe succeeds"
+        );
+        assert_eq!(actions[0].id, "kill");
+    }
 
     #[test]
     fn static_metrics_list_is_non_empty() {

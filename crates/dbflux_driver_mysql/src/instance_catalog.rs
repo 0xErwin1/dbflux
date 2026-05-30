@@ -96,6 +96,8 @@ pub struct MysqlInstanceCatalog {
     conn: Arc<Mutex<Conn>>,
     #[allow(dead_code)]
     performance_schema_available: bool,
+    process_privilege: bool,
+    connection_admin: bool,
 }
 
 impl MysqlInstanceCatalog {
@@ -103,6 +105,23 @@ impl MysqlInstanceCatalog {
         Self {
             conn,
             performance_schema_available,
+            process_privilege: true,
+            connection_admin: true,
+        }
+    }
+
+    /// Constructs a catalog with pre-probed privilege flags.
+    pub fn new_probed(
+        conn: Arc<Mutex<Conn>>,
+        performance_schema_available: bool,
+        process_privilege: bool,
+        connection_admin: bool,
+    ) -> Self {
+        Self {
+            conn,
+            performance_schema_available,
+            process_privilege,
+            connection_admin,
         }
     }
 
@@ -210,6 +229,58 @@ impl MysqlInstanceCatalog {
         .unwrap_or(None)
         .is_some()
     }
+
+    /// Returns `true` if the current user has the `PROCESS` privilege or equivalent.
+    ///
+    /// Without it, `INFORMATION_SCHEMA.PROCESSLIST` only shows the user's own
+    /// threads, making the inspector misleading for monitoring. We hide it entirely.
+    pub(crate) fn probe_process_privilege(conn: &mut Conn) -> bool {
+        let grants: Vec<String> = conn
+            .query("SHOW GRANTS FOR CURRENT_USER()")
+            .unwrap_or_default();
+
+        grants.iter().any(|g| {
+            let upper = g.to_uppercase();
+            upper.contains("ALL PRIVILEGES") || upper.contains("PROCESS")
+        })
+    }
+
+    /// Returns `true` if the current user has `CONNECTION_ADMIN`, `SUPER`, or
+    /// equivalent privileges required to execute `KILL`.
+    pub(crate) fn probe_connection_admin(conn: &mut Conn) -> bool {
+        let grants: Vec<String> = conn
+            .query("SHOW GRANTS FOR CURRENT_USER()")
+            .unwrap_or_default();
+
+        grants.iter().any(|g| {
+            let upper = g.to_uppercase();
+            upper.contains("ALL PRIVILEGES")
+                || upper.contains("CONNECTION_ADMIN")
+                || upper.contains("SUPER")
+        })
+    }
+
+    /// Returns inspectors filtered by the process_privilege probe result.
+    pub fn inspectors_with_probes(process_privilege: bool) -> Vec<InstanceInspectorDef> {
+        if process_privilege {
+            Self::static_inspectors()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Returns row actions for the given inspector, gated by the
+    /// connection_admin privilege probe.
+    pub fn row_actions_with_probes(
+        metric_id: &str,
+        connection_admin: bool,
+    ) -> Vec<dbflux_core::InspectorRowAction> {
+        if metric_id == "mysql.processlist" && connection_admin {
+            Self::static_row_actions(metric_id)
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 fn now_epoch_ms() -> i64 {
@@ -279,7 +350,7 @@ impl InstanceCatalog for MysqlInstanceCatalog {
     }
 
     async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
-        Ok(Self::static_inspectors())
+        Ok(Self::inspectors_with_probes(self.process_privilege))
     }
 
     fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
@@ -310,7 +381,7 @@ impl InstanceCatalog for MysqlInstanceCatalog {
     }
 
     fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
-        Self::static_row_actions(metric_id)
+        Self::row_actions_with_probes(metric_id, self.connection_admin)
     }
 
     async fn execute_row_action(
@@ -558,6 +629,45 @@ mod tests {
             mysql_advertises_instance_capabilities(),
             "MySQL METADATA must include INSTANCE_METRICS and INSTANCE_INSPECTOR bits"
         );
+    }
+
+    /// BF10: when process_privilege probe returns false, processlist inspector
+    /// must be absent from the list.
+    #[test]
+    fn inspectors_without_process_privilege_exclude_processlist() {
+        let inspectors = MysqlInstanceCatalog::inspectors_with_probes(false);
+        assert!(
+            !inspectors.iter().any(|i| i.id == "mysql.processlist"),
+            "mysql.processlist must be absent when PROCESS privilege probe fails"
+        );
+    }
+
+    /// BF10: when process_privilege probe returns true, processlist is present.
+    #[test]
+    fn inspectors_with_process_privilege_include_processlist() {
+        let inspectors = MysqlInstanceCatalog::inspectors_with_probes(true);
+        assert!(
+            inspectors.iter().any(|i| i.id == "mysql.processlist"),
+            "mysql.processlist must be present when PROCESS privilege probe succeeds"
+        );
+    }
+
+    /// BF10: when connection_admin probe returns false, kill row action is absent.
+    #[test]
+    fn row_actions_without_connection_admin_omit_kill() {
+        let actions = MysqlInstanceCatalog::row_actions_with_probes("mysql.processlist", false);
+        assert!(
+            actions.is_empty(),
+            "mysql.processlist kill must be absent when CONNECTION_ADMIN probe fails"
+        );
+    }
+
+    /// BF10: when connection_admin probe returns true, kill row action is present.
+    #[test]
+    fn row_actions_with_connection_admin_include_kill() {
+        let actions = MysqlInstanceCatalog::row_actions_with_probes("mysql.processlist", true);
+        assert_eq!(actions.len(), 1, "must have one kill action");
+        assert_eq!(actions[0].id, "kill");
     }
 
     /// BF8: MysqlInstanceCatalog must return a kill action for mysql.processlist.

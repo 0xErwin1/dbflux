@@ -88,11 +88,34 @@ pub const SERVER_STATUS_PATHS: &[(&str, &str, &str, &str, InstanceMetricUnit)] =
 
 pub struct MongoInstanceCatalog {
     client: Arc<Mutex<Client>>,
+    cluster_monitor: bool,
+    inprog: bool,
+    killop: bool,
 }
 
 impl MongoInstanceCatalog {
     pub fn new(client: Arc<Mutex<Client>>) -> Self {
-        Self { client }
+        Self {
+            client,
+            cluster_monitor: true,
+            inprog: true,
+            killop: true,
+        }
+    }
+
+    /// Constructs a catalog with pre-probed privilege flags.
+    pub fn new_probed(
+        client: Arc<Mutex<Client>>,
+        cluster_monitor: bool,
+        inprog: bool,
+        killop: bool,
+    ) -> Self {
+        Self {
+            client,
+            cluster_monitor,
+            inprog,
+            killop,
+        }
     }
 
     pub fn static_metrics() -> Vec<InstanceMetricDef> {
@@ -192,6 +215,83 @@ impl MongoInstanceCatalog {
         })
     }
 
+    /// Returns metrics filtered by the cluster_monitor privilege probe.
+    ///
+    /// All serverStatus metrics require the `clusterMonitor` role or equivalent.
+    pub fn metrics_with_probes(cluster_monitor: bool) -> Vec<InstanceMetricDef> {
+        if cluster_monitor {
+            Self::static_metrics()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Returns inspectors filtered by the inprog privilege probe.
+    pub fn inspectors_with_probes(inprog: bool) -> Vec<InstanceInspectorDef> {
+        if inprog {
+            Self::static_inspectors()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Returns row actions for the given inspector, gated by the killop probe.
+    pub fn row_actions_with_probes(
+        metric_id: &str,
+        killop: bool,
+    ) -> Vec<dbflux_core::InspectorRowAction> {
+        if metric_id == "mongo.current_op" && killop {
+            Self::static_row_actions(metric_id)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Returns `true` if the current user has privileges to call `serverStatus`.
+    ///
+    /// Inspects the `connectionStatus` privilege list for `serverStatus`-granting
+    /// actions or the `clusterMonitor` role. Falls back to false on any error.
+    pub(crate) fn probe_cluster_monitor(client: &Client) -> bool {
+        let db = get_admin_db(client);
+        let doc = match db
+            .run_command(bson::doc! { "connectionStatus": 1, "showPrivileges": true })
+            .run()
+        {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+
+        has_privilege_or_role(&doc, &["serverStatus"], &["clusterMonitor", "root"])
+    }
+
+    /// Returns `true` if the current user has `inprog` action privilege.
+    pub(crate) fn probe_inprog(client: &Client) -> bool {
+        let db = get_admin_db(client);
+        let doc = match db
+            .run_command(bson::doc! { "connectionStatus": 1, "showPrivileges": true })
+            .run()
+        {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+
+        has_privilege_or_role(&doc, &["inprog"], &["clusterMonitor", "root"])
+    }
+
+    /// Returns `true` if the current user has `killop` action privilege.
+    pub(crate) fn probe_killop(client: &Client) -> bool {
+        let db = get_admin_db(client);
+        let doc = match db
+            .run_command(bson::doc! { "connectionStatus": 1, "showPrivileges": true })
+            .run()
+        {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+
+        has_privilege_or_role(&doc, &["killop"], &["clusterManager", "root"])
+    }
+
     /// Extracts a numeric value from a BSON document at a dotted path.
     ///
     /// Traverses nested documents using `.`-separated path segments.
@@ -221,6 +321,63 @@ fn bson_to_f64(bson: &Bson) -> Option<f64> {
         Bson::Int64(v) => Some(*v as f64),
         _ => None,
     }
+}
+
+/// Checks a `connectionStatus` response document for the given privilege actions
+/// or role names.
+///
+/// Returns `true` when either:
+/// - `authInfo.authenticatedUserPrivileges` contains an entry with one of the
+///   given `actions`, OR
+/// - `authInfo.authenticatedUserRoles` contains one of the given `roles`.
+fn bson_action_matches(entry: &Bson, actions: &[&str]) -> bool {
+    let priv_doc = match entry.as_document() {
+        Some(d) => d,
+        None => return false,
+    };
+    let priv_actions = match priv_doc.get("actions") {
+        Some(Bson::Array(a)) => a,
+        _ => return false,
+    };
+    priv_actions
+        .iter()
+        .any(|a| a.as_str().is_some_and(|s| actions.contains(&s)))
+}
+
+/// Checks a `connectionStatus` response document for the given privilege actions
+/// or role names.
+///
+/// Returns `true` when either:
+/// - `authInfo.authenticatedUserPrivileges` contains an entry with one of the
+///   given `actions`, OR
+/// - `authInfo.authenticatedUserRoles` contains one of the given `roles`.
+fn has_privilege_or_role(doc: &Document, actions: &[&str], roles: &[&str]) -> bool {
+    let auth_info = match doc.get("authInfo").and_then(|v| v.as_document()) {
+        Some(d) => d,
+        None => return false,
+    };
+
+    let has_matching_action = matches!(
+        auth_info.get("authenticatedUserPrivileges"),
+        Some(Bson::Array(privs)) if privs.iter().any(|e| bson_action_matches(e, actions))
+    );
+    if has_matching_action {
+        return true;
+    }
+
+    if let Some(Bson::Array(user_roles)) = auth_info.get("authenticatedUserRoles") {
+        for role_entry in user_roles {
+            let role_name = role_entry
+                .as_document()
+                .and_then(|d| d.get("role"))
+                .and_then(|v| v.as_str());
+            if role_name.is_some_and(|r| roles.contains(&r)) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 fn now_epoch_ms() -> i64 {
@@ -268,11 +425,11 @@ fn run_server_status(client: &Client) -> Result<Document, DbError> {
 #[async_trait]
 impl InstanceCatalog for MongoInstanceCatalog {
     async fn list_metrics(&self) -> Result<Vec<InstanceMetricDef>, DbError> {
-        Ok(Self::static_metrics())
+        Ok(Self::metrics_with_probes(self.cluster_monitor))
     }
 
     async fn list_inspectors(&self) -> Result<Vec<InstanceInspectorDef>, DbError> {
-        Ok(Self::static_inspectors())
+        Ok(Self::inspectors_with_probes(self.inprog))
     }
 
     fn default_dashboard(&self) -> Option<DefaultInstanceDashboard> {
@@ -303,7 +460,7 @@ impl InstanceCatalog for MongoInstanceCatalog {
     }
 
     fn row_actions(&self, metric_id: &str) -> Vec<dbflux_core::InspectorRowAction> {
-        Self::static_row_actions(metric_id)
+        Self::row_actions_with_probes(metric_id, self.killop)
     }
 
     async fn execute_row_action(
@@ -615,6 +772,65 @@ mod tests {
             mongo_advertises_instance_capabilities(),
             "MongoDB METADATA must include INSTANCE_METRICS and INSTANCE_INSPECTOR bits"
         );
+    }
+
+    /// BF10: when cluster_monitor probe returns false, serverStatus-based
+    /// metrics must be absent from list_metrics.
+    #[test]
+    fn metrics_without_cluster_monitor_are_empty() {
+        let metrics = MongoInstanceCatalog::metrics_with_probes(false);
+        assert!(
+            metrics.is_empty(),
+            "all serverStatus metrics must be hidden when cluster_monitor probe fails"
+        );
+    }
+
+    /// BF10: when cluster_monitor probe returns true, metrics are returned.
+    #[test]
+    fn metrics_with_cluster_monitor_are_non_empty() {
+        let metrics = MongoInstanceCatalog::metrics_with_probes(true);
+        assert!(
+            !metrics.is_empty(),
+            "serverStatus metrics must be present when cluster_monitor probe succeeds"
+        );
+    }
+
+    /// BF10: when inprog probe returns false, current_op inspector is absent.
+    #[test]
+    fn inspectors_without_inprog_exclude_current_op() {
+        let inspectors = MongoInstanceCatalog::inspectors_with_probes(false);
+        assert!(
+            inspectors.is_empty(),
+            "mongo.current_op must be absent when inprog probe fails"
+        );
+    }
+
+    /// BF10: when inprog probe returns true, current_op inspector is present.
+    #[test]
+    fn inspectors_with_inprog_include_current_op() {
+        let inspectors = MongoInstanceCatalog::inspectors_with_probes(true);
+        assert!(
+            inspectors.iter().any(|i| i.id == "mongo.current_op"),
+            "mongo.current_op must be present when inprog probe succeeds"
+        );
+    }
+
+    /// BF10: when killop probe returns false, kill row action is absent.
+    #[test]
+    fn row_actions_without_killop_omit_kill() {
+        let actions = MongoInstanceCatalog::row_actions_with_probes("mongo.current_op", false);
+        assert!(
+            actions.is_empty(),
+            "kill must be absent when killop probe fails"
+        );
+    }
+
+    /// BF10: when killop probe returns true, kill row action is present.
+    #[test]
+    fn row_actions_with_killop_include_kill() {
+        let actions = MongoInstanceCatalog::row_actions_with_probes("mongo.current_op", true);
+        assert_eq!(actions.len(), 1, "must have one kill action");
+        assert_eq!(actions[0].id, "kill");
     }
 
     /// BF8: mongo.current_op inspector must advertise exactly one kill action.

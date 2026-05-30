@@ -1438,9 +1438,21 @@ impl Connection for PostgresConnection {
     }
 
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
-        Some(Box::new(crate::instance_catalog::PgInstanceCatalog::new(
-            Arc::clone(&self.client),
-        )))
+        let pg_signal_backend = self
+            .client
+            .lock()
+            .ok()
+            .map(|mut c| {
+                crate::instance_catalog::PgInstanceCatalog::probe_pg_signal_backend(&mut c)
+            })
+            .unwrap_or(false);
+
+        Some(Box::new(
+            crate::instance_catalog::PgInstanceCatalog::new_probed(
+                Arc::clone(&self.client),
+                pg_signal_backend,
+            ),
+        ))
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {

@@ -1679,8 +1679,19 @@ impl Connection for MongoConnection {
     }
 
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let client_guard = self.client.lock().ok()?;
+        let cluster_monitor =
+            crate::instance_catalog::MongoInstanceCatalog::probe_cluster_monitor(&client_guard);
+        let inprog = crate::instance_catalog::MongoInstanceCatalog::probe_inprog(&client_guard);
+        let killop = crate::instance_catalog::MongoInstanceCatalog::probe_killop(&client_guard);
+
         Some(Box::new(
-            crate::instance_catalog::MongoInstanceCatalog::new(Arc::clone(&self.client)),
+            crate::instance_catalog::MongoInstanceCatalog::new_probed(
+                Arc::clone(&self.client),
+                cluster_monitor,
+                inprog,
+                killop,
+            ),
         ))
     }
 

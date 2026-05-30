@@ -1739,11 +1739,17 @@ impl Connection for MysqlConnection {
         let mut conn = self.catalog_conn.lock().ok()?;
         let ps_available =
             crate::instance_catalog::MysqlInstanceCatalog::probe_performance_schema(&mut conn);
+        let process_privilege =
+            crate::instance_catalog::MysqlInstanceCatalog::probe_process_privilege(&mut conn);
+        let connection_admin =
+            crate::instance_catalog::MysqlInstanceCatalog::probe_connection_admin(&mut conn);
 
         Some(Box::new(
-            crate::instance_catalog::MysqlInstanceCatalog::new(
+            crate::instance_catalog::MysqlInstanceCatalog::new_probed(
                 Arc::clone(&self.catalog_conn),
                 ps_available,
+                process_privilege,
+                connection_admin,
             ),
         ))
     }
