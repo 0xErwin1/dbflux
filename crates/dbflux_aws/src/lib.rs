@@ -1,6 +1,7 @@
 mod accounts;
 mod auth;
 mod config;
+mod edit;
 mod parameters;
 mod secrets;
 
