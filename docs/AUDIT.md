@@ -416,6 +416,57 @@ handle.install_sink(Arc::new(audit_service));
 | `crates/dbflux_core/src/observability/tracing_bridge/category.rs` | `PREFIX_CATEGORY_MAP`, `resolve_category`, `BRIDGE_INTERNAL_TARGET` |
 | `crates/dbflux_storage/src/migrations/014_*.sql` | Adds `log_capture_min_level` column to `cfg_audit_settings` |
 
+## External Audit Emission (RPC drivers and auth providers)
+
+External RPC drivers (protocol v1.2+) and auth providers (protocol v1.3+) may emit audit events back to the host as intermediate response frames. The host applies strict sanitization before writing to `aud_audit_events`.
+
+### Host-authoritative policy
+
+The host owns all identity, correlation, and rate-limiting fields. An external service can never forge its own identity or claim an audit category it is not permitted to use.
+
+| Field | Source |
+|-------|--------|
+| `actor_type` | Always `ExternalDriver` or `ExternalAuthProvider` |
+| `source_id` | Always `ExternalDriver` / `ExternalAuthProvider` with the registered `socket_id` |
+| `actor_id` | Always `rpc:<socket_id>` |
+| `connection_id` | Host-supplied from session context (may be `None`) |
+| `database_name` | Host-supplied from session context (may be `None`) |
+| `driver_id` | Always `rpc:<socket_id>` |
+| `correlation_id` | Host-generated; one per session for drivers, one per request for auth providers |
+| `ts_ms` | Service-supplied but clamped if drift from host wall clock exceeds five minutes |
+
+`correlation_id` is structurally guaranteed to be host-generated because `AuditEventEmitDto` (the IPC payload type) has no `correlation_id` field. External services cannot supply one — the field was intentionally omitted from the DTO at design time (ADR-3) rather than accepted and validated away. As a result, the scenario "driver DTO carries a forged correlation_id and the host overrides it at runtime" is impossible at the type level; the stored value is always produced by the host's correlation-id allocation logic.
+
+### Category whitelist
+
+Drivers may emit `Connection`, `Query`, and `System` events. Auth providers may emit only `Connection` events. Any frame with a disallowed category is silently dropped.
+
+### Rate limiting
+
+Each external service (by `socket_id`) is limited to 100 events per 60 seconds via a token-bucket. Frames that exceed the budget are dropped and counted in `AuditService::external_audit_dropped_count()`.
+
+### Opt-in flags
+
+- **Drivers**: The driver must include `DriverCapability::AuditEmit` in its hello response (protocol v1.2+). Frames sent by drivers that did not advertise this capability are silently discarded.
+- **Auth providers**: The provider must set `audit_emit_opt_in: true` in its hello response (protocol v1.3+). Frames from providers that did not opt in are silently discarded.
+
+### Required fields on every emitted frame
+
+An emitted `AuditEventEmitDto` must have non-empty `action` and `summary`. Frames failing this check are dropped silently.
+
+### Transport mechanism
+
+Emitted frames arrive as `done=false` intermediate frames inside a normal response sequence. The transport layer (`RpcClient` in `dbflux_driver_ipc`, `RpcAuthProvider::dispatch_request_loop` in `dbflux_ipc`) intercepts them before they reach the caller. The caller only ever sees the terminal frame.
+
+### Key files
+
+| File | Role |
+|------|------|
+| `crates/dbflux_ipc/src/audit.rs` | `AuditEventEmitDto`, `ExternalAuditEmitter` trait, `ExternalAuditSource` |
+| `crates/dbflux_app/src/rpc_services/external_audit.rs` | `ExternalAuditSink`, token-bucket rate limiter, sanitization pipeline |
+| `crates/dbflux_driver_ipc/src/transport.rs` | `RpcClient::send_raw` intercepts driver emit frames |
+| `crates/dbflux_ipc/src/auth_provider_client.rs` | `dispatch_request_loop` intercepts auth-provider emit frames |
+
 ## Architecture
 
 ```

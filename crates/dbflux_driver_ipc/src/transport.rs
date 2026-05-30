@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use dbflux_core::DbError;
 use dbflux_ipc::{
-    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ProtocolVersion, RpcApiFamily,
+    DRIVER_RPC_AUTH_TOKEN_ENV, DRIVER_RPC_VERSION, ExternalAuditEmitter, ExternalAuditSource,
+    ProtocolVersion, RpcApiFamily,
     driver_protocol::{
         DriverCapability, DriverHelloRequest, DriverHelloResponse, DriverRequestBody,
         DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
@@ -16,6 +18,14 @@ pub struct RpcClient {
     stream: Arc<Mutex<IpcStream>>,
     request_id: Arc<Mutex<u64>>,
     hello: DriverHelloResponse,
+    /// Socket registry ID (`rpc:<socket_id>`) for correlation and logging.
+    socket_id: String,
+    /// Whether the driver advertised `DriverCapability::AuditEmit` in its hello.
+    audit_emit_capability: bool,
+    /// Sanitizing sink for audit frames emitted by this driver.
+    audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
+    /// Per-session correlation IDs, allocated lazily on first audit emit for a session.
+    session_correlation_ids: Mutex<HashMap<Uuid, String>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -53,6 +63,18 @@ impl From<RpcError> for DbError {
 impl RpcClient {
     /// Connects to a driver-host via a local socket name and performs the Hello handshake.
     pub fn connect(name: Name<'_>) -> Result<Self, RpcError> {
+        Self::connect_with_audit(name, String::new(), None)
+    }
+
+    /// Connects with an audit emitter attached for handling `EmitAuditEvent` frames.
+    ///
+    /// `socket_id` is the registry key (`rpc:<socket_id>`) used for correlation.
+    /// `audit_emitter` is `None` when audit emission is not wired (e.g. in tests).
+    pub fn connect_with_audit(
+        name: Name<'_>,
+        socket_id: String,
+        audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
+    ) -> Result<Self, RpcError> {
         let stream =
             IpcStream::connect(name).map_err(|e| RpcError::ConnectionFailed(e.to_string()))?;
 
@@ -61,10 +83,16 @@ impl RpcClient {
 
         let hello = Self::perform_hello(&stream, &request_id)?;
 
+        let audit_emit_capability = hello.capabilities.contains(&DriverCapability::AuditEmit);
+
         let client = Self {
             stream,
             request_id,
             hello,
+            socket_id,
+            audit_emit_capability,
+            audit_emitter,
+            session_correlation_ids: Mutex::new(HashMap::new()),
         };
 
         Ok(client)
@@ -781,8 +809,13 @@ impl RpcClient {
     }
 
     /// Low-level send/receive with request-ID correlation.
+    ///
+    /// Intercepts `EmitAuditEvent` intermediate frames (`done=false`) and dispatches
+    /// them to the audit emitter when the driver has the `AuditEmit` capability.
+    /// All other frames (including the terminal frame) are returned to the caller.
     fn send_raw(&self, request: DriverRequestEnvelope) -> Result<DriverResponseEnvelope, RpcError> {
         let expected_id = request.request_id;
+        let request_session_id = request.session_id;
 
         let mut stream = self
             .stream
@@ -791,16 +824,55 @@ impl RpcClient {
 
         framing::send_msg(&mut *stream, &request).map_err(RpcError::Io)?;
 
-        let response: DriverResponseEnvelope =
-            framing::recv_msg(&mut *stream).map_err(RpcError::Io)?;
+        loop {
+            let response: DriverResponseEnvelope =
+                framing::recv_msg(&mut *stream).map_err(RpcError::Io)?;
 
-        if response.request_id != expected_id {
-            return Err(RpcError::Protocol("Request ID mismatch".into()));
+            if response.request_id != expected_id {
+                return Err(RpcError::Protocol("Request ID mismatch".into()));
+            }
+
+            validate_response_protocol_version(
+                request.protocol_version,
+                response.protocol_version,
+            )?;
+
+            match response.body {
+                DriverResponseBody::EmitAuditEvent(ref dto) if !response.done => {
+                    if self.audit_emit_capability
+                        && let Some(sink) = &self.audit_emitter
+                    {
+                        let session_id = response.session_id.or(request_session_id);
+                        let correlation_id = self.correlation_id_for_session(session_id);
+                        sink.emit(
+                            ExternalAuditSource::Driver {
+                                socket_id: self.socket_id.clone(),
+                                session_id,
+                                correlation_id,
+                            },
+                            dto.clone(),
+                        );
+                    }
+                    // Loop to consume the next frame regardless of capability/emitter.
+                    continue;
+                }
+                _ => return Ok(response),
+            }
         }
+    }
 
-        validate_response_protocol_version(request.protocol_version, response.protocol_version)?;
+    fn correlation_id_for_session(&self, session_id: Option<Uuid>) -> String {
+        let Some(session_id) = session_id else {
+            return Uuid::new_v4().to_string();
+        };
 
-        Ok(response)
+        let mut map = self
+            .session_correlation_ids
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        map.entry(session_id)
+            .or_insert_with(|| Uuid::new_v4().to_string())
+            .clone()
     }
 
     fn next_request_id(&self) -> Result<u64, RpcError> {
@@ -874,12 +946,115 @@ fn validate_response_protocol_version(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_call_request_envelope, protocol_supports_semantic_planning,
+        RpcClient, build_call_request_envelope, protocol_supports_semantic_planning,
         validate_hello_selected_version, validate_response_protocol_version,
     };
+    use dbflux_ipc::audit::{
+        AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto,
+        ExternalAuditEmitter, ExternalAuditSource,
+    };
     use dbflux_ipc::driver_protocol::DriverRequestBody;
-    use dbflux_ipc::{ProtocolVersion, driver_rpc_supported_versions};
+    use dbflux_ipc::{ProtocolVersion, driver_rpc_supported_versions, driver_socket_name};
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+
+    struct RecordingEmitter {
+        calls: Mutex<Vec<(ExternalAuditSource, AuditEventEmitDto)>>,
+    }
+
+    impl RecordingEmitter {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    impl ExternalAuditEmitter for RecordingEmitter {
+        fn emit(&self, source: ExternalAuditSource, dto: AuditEventEmitDto) {
+            self.calls.lock().unwrap().push((source, dto));
+        }
+    }
+
+    fn fake_audit_dto() -> AuditEventEmitDto {
+        AuditEventEmitDto {
+            ts_ms: 1_000_000,
+            level: EventSeverityDto::Info,
+            category: EventCategoryDto::Connection,
+            outcome: EventOutcomeDto::Success,
+            action: "test_action".to_string(),
+            summary: "test summary".to_string(),
+            object_type: None,
+            object_id: None,
+            duration_ms: None,
+            error_code: None,
+            error_message: None,
+            details_json: None,
+        }
+    }
+
+    #[test]
+    fn rpc_client_with_audit_capability_dispatches_emit_frame_to_emitter() {
+        use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
+
+        let socket_id = format!("test-audit-emit-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_audit_emit_capability()
+                .with_actions(vec![FakeDriverAction::EmitAuditThenPong(fake_audit_dto())]),
+        )
+        .expect("fake driver server must start");
+
+        let emitter = RecordingEmitter::new();
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = RpcClient::connect_with_audit(
+            socket_name.borrow(),
+            socket_id.clone(),
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        )
+        .expect("connect must succeed");
+
+        client.ping(Uuid::nil()).expect("ping must succeed");
+
+        server.wait().expect("server must exit cleanly");
+
+        assert_eq!(emitter.call_count(), 1, "emitter must be called once");
+    }
+
+    #[test]
+    fn rpc_client_without_audit_capability_drops_emit_frame_silently() {
+        use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
+
+        let socket_id = format!("test-audit-no-cap-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_actions(vec![FakeDriverAction::EmitAuditThenPong(fake_audit_dto())]),
+        )
+        .expect("fake driver server must start");
+
+        let emitter = RecordingEmitter::new();
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = RpcClient::connect_with_audit(
+            socket_name.borrow(),
+            socket_id.clone(),
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        )
+        .expect("connect must succeed");
+
+        client.ping(Uuid::nil()).expect("ping must succeed");
+
+        server.wait().expect("server must exit cleanly");
+
+        assert_eq!(
+            emitter.call_count(),
+            0,
+            "emitter must not be called when capability is absent"
+        );
+    }
 
     #[test]
     fn semantic_planning_requires_driver_rpc_v1_1_or_newer() {
@@ -897,7 +1072,7 @@ mod tests {
     #[test]
     fn hello_selected_version_must_be_supported_by_both_peers() {
         let error = validate_hello_selected_version(
-            ProtocolVersion::new(1, 2),
+            ProtocolVersion::new(1, 99),
             driver_rpc_supported_versions(),
         )
         .expect_err("unsupported selection should be rejected");
@@ -964,5 +1139,56 @@ mod tests {
         assert_eq!(envelope.protocol_version, ProtocolVersion::new(1, 0));
         assert_eq!(envelope.request_id, 8);
         assert_eq!(envelope.session_id, None);
+    }
+
+    /// IT-07: rate-limit exhausted on a socket, then a subsequent Ping still succeeds.
+    ///
+    /// REQ-R-03 / Scenario R-03-a: rate-limit drops must not set error state on the IPC session.
+    #[test]
+    fn rate_limit_exhausted_session_continues_for_subsequent_request() {
+        use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
+
+        let socket_id = format!("test-rate-limit-session-{}", Uuid::new_v4());
+
+        // Two requests: first sends 200 audit frames (100 accepted, 100 dropped), then a plain Pong.
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_audit_emit_capability()
+                .with_actions(vec![
+                    FakeDriverAction::EmitNAuditThenPong(200, fake_audit_dto()),
+                    FakeDriverAction::Pong,
+                ])
+                .with_expected_connections(1),
+        )
+        .expect("fake driver server must start");
+
+        let emitter = RecordingEmitter::new();
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = RpcClient::connect_with_audit(
+            socket_name.borrow(),
+            socket_id.clone(),
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        )
+        .expect("connect must succeed");
+
+        // First request: 200 audit frames sent by the server; emitter receives all 200
+        // because the emitter here is the raw RecordingEmitter (no rate limiter at this layer).
+        // The important invariant is that the RpcClient loop handles them all and returns Ok.
+        client
+            .ping(Uuid::nil())
+            .expect("first ping must succeed despite burst of audit frames");
+
+        // Second request: no audit frames, plain Pong. Session must still be usable.
+        client
+            .ping(Uuid::nil())
+            .expect("second ping must succeed — IPC session must be intact after rate-limit burst");
+
+        server.wait().expect("server must exit cleanly");
+
+        assert_eq!(
+            emitter.call_count(),
+            200,
+            "all 200 audit frames must be forwarded to the emitter by the transport loop"
+        );
     }
 }

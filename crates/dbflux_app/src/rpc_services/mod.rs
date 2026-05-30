@@ -1,9 +1,13 @@
+pub(crate) mod external_audit;
+
 use dbflux_core::{
     DbDriver, DbError, DbKind, DriverFormDef, DriverMetadata, RpcServiceKind, ServiceConfig,
     ServiceRpcApiContract,
 };
 use dbflux_driver_ipc::{IpcDriver, driver::IpcDriverLaunchConfig};
-use dbflux_ipc::{AUTH_PROVIDER_RPC_API_CONTRACT, IpcServiceLaunchConfig, RpcAuthProvider};
+use dbflux_ipc::{
+    AUTH_PROVIDER_RPC_API_CONTRACT, ExternalAuditEmitter, IpcServiceLaunchConfig, RpcAuthProvider,
+};
 use std::sync::Arc;
 
 use dbflux_core::auth::DynAuthProvider;
@@ -143,6 +147,7 @@ pub(crate) fn discover_services(services: Vec<ServiceConfig>) -> Vec<RpcServiceD
 pub(crate) fn adapt_driver_service(
     descriptor: RpcServiceDescriptor,
     driver_exists: impl FnOnce(&str) -> bool,
+    audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
 ) -> DriverServiceAdaptation<Arc<dyn DbDriver>> {
     adapt_driver_service_with(
         descriptor,
@@ -153,6 +158,10 @@ pub(crate) fn adapt_driver_service(
                 IpcDriver::new(socket_id, kind, metadata, form_definition, settings_schema);
             let driver = match launch {
                 Some(launch) => driver.with_launch_config(launch),
+                None => driver,
+            };
+            let driver = match audit_emitter {
+                Some(ref emitter) => driver.with_audit_emitter(emitter.clone()),
                 None => driver,
             };
 
@@ -215,10 +224,17 @@ where
 pub(crate) fn adapt_auth_provider_service(
     descriptor: RpcServiceDescriptor,
     provider_exists: impl FnOnce(&str) -> bool,
+    audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
 ) -> AuthProviderServiceAdaptation<Arc<dyn DynAuthProvider>> {
     adapt_auth_provider_service_with(descriptor, provider_exists, |socket_id, launch| {
         RpcAuthProvider::probe(socket_id, launch.cloned())
-            .map(|provider| Arc::new(provider) as Arc<dyn DynAuthProvider>)
+            .map(|provider| {
+                let provider = match audit_emitter {
+                    Some(ref emitter) => provider.with_audit_emitter(emitter.clone()),
+                    None => provider,
+                };
+                Arc::new(provider) as Arc<dyn DynAuthProvider>
+            })
             .map_err(Box::new)
     })
 }

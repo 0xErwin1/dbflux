@@ -7,7 +7,7 @@ use dbflux_core::observability::actions::{
     CONFIG_CHANGE, CONFIG_CREATE, CONFIG_DELETE, CONFIG_UPDATE,
 };
 use dbflux_core::observability::{
-    EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
+    EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity, EventSink,
 };
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
@@ -69,6 +69,7 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::auth_provider_registry::{AuthProviderRegistry, RegistryAuthProviderWrapper};
+use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
 use crate::rpc_services::{
     AuthProviderServiceAdaptation, DriverServiceAdaptation, ExternalDriverDiagnostic,
     RpcServiceDiscovery, adapt_auth_provider_service, adapt_driver_service, discover_services,
@@ -189,8 +190,8 @@ impl AppState {
 
     #[allow(clippy::too_many_arguments)]
     fn new_with_drivers_and_settings(
-        drivers: HashMap<String, Arc<dyn DbDriver>>,
-        external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
+        mut drivers: HashMap<String, Arc<dyn DbDriver>>,
+        mut external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
         general_settings: GeneralSettings,
         driver_overrides: HashMap<DriverKey, GlobalOverrides>,
         driver_settings: HashMap<DriverKey, FormValues>,
@@ -205,6 +206,58 @@ impl AppState {
         let scripts_directory = ScriptsDirectory::new()
             .inspect_err(|e| log::warn!("Failed to initialize scripts directory: {}", e))
             .ok();
+
+        let (audit_service, audit_degraded) =
+            match dbflux_audit::AuditService::new_sqlite(storage_runtime.dbflux_db_path()) {
+                Ok(service) => (service, false),
+                Err(e) => {
+                    log::error!(
+                        "Failed to initialize audit service at {:?}: {}",
+                        storage_runtime.dbflux_db_path(),
+                        e
+                    );
+                    let store = dbflux_audit::store::sqlite::SqliteAuditStore::new(":memory:")
+                        .expect("in-memory audit store must work: rusqlite :memory: unavailable");
+                    let svc = dbflux_audit::AuditService::new(store);
+                    svc.set_enabled(false);
+                    (svc, true)
+                }
+            };
+
+        let drop_counter = audit_service.external_audit_drop_counter();
+        let audit_emitter: Arc<dyn dbflux_ipc::ExternalAuditEmitter> =
+            Arc::new(ExternalAuditSink::new(
+                Arc::new(audit_service.clone()) as Arc<dyn EventSink>,
+                drop_counter,
+                Arc::new(NoOpContextProvider),
+                crate::rpc_services::external_audit::ExternalAuditConfig::default(),
+            ));
+
+        if !services.is_empty() {
+            Self::launch_rpc_services(
+                &mut drivers,
+                &mut external_driver_diagnostics,
+                services.clone(),
+                Some(audit_emitter.clone()),
+            );
+        }
+
+        let mut auth_provider_registry = AuthProviderRegistry::new();
+        #[cfg(feature = "aws")]
+        {
+            auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoSessionAuthProvider::new()));
+            auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoAuthProvider::new()));
+            auth_provider_registry
+                .register(Arc::new(dbflux_aws::AwsSharedCredentialsAuthProvider::new()));
+        }
+
+        if !services.is_empty() {
+            Self::launch_rpc_auth_providers(
+                &mut auth_provider_registry,
+                services,
+                Some(audit_emitter),
+            );
+        }
 
         let profile_manager = ProfileManager::with_profiles(profiles, None);
         let ssh_manager =
@@ -232,36 +285,6 @@ impl AppState {
         let mut history_manager =
             crate::history_manager_sqlite::HistoryManager::new(&storage_runtime);
         history_manager.set_max_entries(general_settings.max_history_entries);
-
-        let mut auth_provider_registry = AuthProviderRegistry::new();
-        #[cfg(feature = "aws")]
-        {
-            auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoSessionAuthProvider::new()));
-            auth_provider_registry.register(Arc::new(dbflux_aws::AwsSsoAuthProvider::new()));
-            auth_provider_registry
-                .register(Arc::new(dbflux_aws::AwsSharedCredentialsAuthProvider::new()));
-        }
-
-        if !services.is_empty() {
-            Self::launch_rpc_auth_providers(&mut auth_provider_registry, services);
-        }
-
-        let (audit_service, audit_degraded) =
-            match dbflux_audit::AuditService::new_sqlite(storage_runtime.dbflux_db_path()) {
-                Ok(service) => (service, false),
-                Err(e) => {
-                    log::error!(
-                        "Failed to initialize audit service at {:?}: {}",
-                        storage_runtime.dbflux_db_path(),
-                        e
-                    );
-                    let store = dbflux_audit::store::sqlite::SqliteAuditStore::new(":memory:")
-                        .expect("in-memory audit store must work: rusqlite :memory: unavailable");
-                    let svc = dbflux_audit::AuditService::new(store);
-                    svc.set_enabled(false);
-                    (svc, true)
-                }
-            };
 
         #[cfg(feature = "mcp")]
         let mcp_runtime = McpRuntime::new(audit_service.clone());
@@ -644,8 +667,8 @@ impl AppState {
         Vec<ProxyProfile>,
         Vec<SshTunnelProfile>,
     ) {
-        let mut drivers = Self::build_builtin_drivers();
-        let mut external_driver_diagnostics = HashMap::new();
+        let drivers = Self::build_builtin_drivers();
+        let external_driver_diagnostics = HashMap::new();
 
         let (
             general_settings,
@@ -655,14 +678,6 @@ impl AppState {
             services,
             runtime,
         ) = Self::load_app_config_from_runtime(runtime);
-
-        if !services.is_empty() {
-            Self::launch_rpc_services(
-                &mut drivers,
-                &mut external_driver_diagnostics,
-                services.clone(),
-            );
-        }
 
         let loaded = crate::config_loader::load_config(&runtime);
 
@@ -711,6 +726,7 @@ impl AppState {
         drivers: &mut HashMap<String, Arc<dyn DbDriver>>,
         diagnostics: &mut HashMap<String, ExternalDriverDiagnostic>,
         services: Vec<ServiceConfig>,
+        audit_emitter: Option<Arc<dyn dbflux_ipc::ExternalAuditEmitter>>,
     ) {
         for discovery in discover_services(services) {
             let descriptor = match discovery {
@@ -726,7 +742,11 @@ impl AppState {
                 }
             };
 
-            match adapt_driver_service(descriptor, |driver_id| drivers.contains_key(driver_id)) {
+            match adapt_driver_service(
+                descriptor,
+                |driver_id| drivers.contains_key(driver_id),
+                audit_emitter.clone(),
+            ) {
                 DriverServiceAdaptation::Registered { driver_id, service } => {
                     if let Some(socket_id) = driver_id.strip_prefix("rpc:") {
                         diagnostics.remove(socket_id);
@@ -764,6 +784,7 @@ impl AppState {
     fn launch_rpc_auth_providers(
         registry: &mut AuthProviderRegistry,
         services: Vec<ServiceConfig>,
+        audit_emitter: Option<Arc<dyn dbflux_ipc::ExternalAuditEmitter>>,
     ) {
         for discovery in discover_services(services) {
             let descriptor = match discovery {
@@ -778,9 +799,11 @@ impl AppState {
                 }
             };
 
-            match adapt_auth_provider_service(descriptor, |provider_id| {
-                registry.get(provider_id).is_some()
-            }) {
+            match adapt_auth_provider_service(
+                descriptor,
+                |provider_id| registry.get(provider_id).is_some(),
+                audit_emitter.clone(),
+            ) {
                 AuthProviderServiceAdaptation::Registered {
                     provider_id,
                     service,

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::process::{Child, Command};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,7 @@ use dbflux_core::auth::{
 };
 use interprocess::local_socket::{Stream as IpcStream, prelude::*};
 
+use crate::audit::{ExternalAuditEmitter, ExternalAuditSource};
 use crate::auth::AUTH_PROVIDER_RPC_AUTH_TOKEN_ENV;
 use crate::auth_provider_protocol::{
     AuthProviderHelloRequest, AuthProviderRequestBody, AuthProviderRequestEnvelope,
@@ -45,6 +46,10 @@ pub struct RpcAuthProvider {
     /// Whether the provider has opted in to receiving `Password`-kind field
     /// values in `FetchFieldOptions` requests (v1.2+ only).
     secret_dependency_opt_in: bool,
+    /// Whether the provider will emit `EmitAuditEvent` intermediate frames (v1.3+ only).
+    audit_emit_opt_in: bool,
+    /// Sanitizing sink for audit frames emitted by this provider.
+    audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
     launch: Option<IpcServiceLaunchConfig>,
 }
 
@@ -56,6 +61,8 @@ struct NormalizedAuthProviderHelloResponse {
     capabilities: AuthProviderCapabilities,
     selected_version: ProtocolVersion,
     secret_dependency_opt_in: bool,
+    /// Whether the provider opted in to emitting audit events (v1.3+).
+    audit_emit_opt_in: bool,
 }
 
 impl RpcAuthProvider {
@@ -123,8 +130,44 @@ impl RpcAuthProvider {
             capabilities: hello.capabilities,
             selected_version: hello.selected_version,
             secret_dependency_opt_in: hello.secret_dependency_opt_in,
+            audit_emit_opt_in: hello.audit_emit_opt_in,
+            audit_emitter: None,
             launch,
         })
+    }
+
+    /// Attaches an audit emitter for routing `EmitAuditEvent` intermediate frames.
+    ///
+    /// Must be called after `probe` and before any `DynAuthProvider` method is invoked.
+    /// Has no effect unless the provider set `audit_emit_opt_in=true` in its hello.
+    pub fn with_audit_emitter(mut self, emitter: Arc<dyn ExternalAuditEmitter>) -> Self {
+        self.audit_emitter = Some(emitter);
+        self
+    }
+
+    /// Constructs a minimal provider for testing the dispatch loop without a real socket.
+    #[cfg(test)]
+    fn new_for_test(
+        socket_id: &str,
+        provider_id: &str,
+        audit_emit_opt_in: bool,
+        audit_emitter: Option<Arc<dyn ExternalAuditEmitter>>,
+    ) -> Self {
+        use crate::envelope::AUTH_PROVIDER_RPC_VERSION;
+        use dbflux_core::auth::AuthProviderCapabilities;
+
+        Self {
+            socket_id: socket_id.to_string(),
+            provider_id: provider_id.to_string(),
+            display_name: "Test Provider".to_string(),
+            form_definition: dbflux_core::auth::AuthFormDef { tabs: vec![] },
+            capabilities: AuthProviderCapabilities::default(),
+            selected_version: AUTH_PROVIDER_RPC_VERSION,
+            secret_dependency_opt_in: false,
+            audit_emit_opt_in,
+            audit_emitter,
+            launch: None,
+        }
     }
 
     #[allow(clippy::result_large_err)]
@@ -178,7 +221,8 @@ impl RpcAuthProvider {
         match response.body {
             AuthProviderResponseBody::Hello(_)
             | AuthProviderResponseBody::HelloV1_1(_)
-            | AuthProviderResponseBody::HelloV1_2(_) => {
+            | AuthProviderResponseBody::HelloV1_2(_)
+            | AuthProviderResponseBody::HelloV1_3(_) => {
                 let hello = normalize_hello_response(response.body)?;
 
                 validate_hello_selected_version(
@@ -201,13 +245,23 @@ impl RpcAuthProvider {
         body: AuthProviderRequestBody,
     ) -> Result<Vec<AuthProviderResponseEnvelope>, DbError> {
         let mut stream = self.connect_stream()?;
-        let request = AuthProviderRequestEnvelope::new(self.selected_version, 1, body);
+        self.dispatch_request_loop(&mut stream, body)
+    }
 
-        framing::send_msg(&mut stream, &request)?;
+    #[allow(clippy::result_large_err)]
+    fn dispatch_request_loop<S: std::io::Read + std::io::Write>(
+        &self,
+        stream: &mut S,
+        body: AuthProviderRequestBody,
+    ) -> Result<Vec<AuthProviderResponseEnvelope>, DbError> {
+        let request = AuthProviderRequestEnvelope::new(self.selected_version, 1, body);
+        let correlation_id = uuid::Uuid::new_v4().to_string();
+
+        framing::send_msg(&mut *stream, &request)?;
 
         let mut responses = Vec::new();
         loop {
-            let response: AuthProviderResponseEnvelope = framing::recv_msg(&mut stream)?;
+            let response: AuthProviderResponseEnvelope = framing::recv_msg(&mut *stream)?;
 
             if response.request_id != request.request_id {
                 return Err(DbError::connection_failed(format!(
@@ -217,7 +271,25 @@ impl RpcAuthProvider {
             }
 
             let done = response.done;
-            responses.push(response);
+
+            match &response.body {
+                AuthProviderResponseBody::EmitAuditEvent(dto) if !done => {
+                    if self.audit_emit_opt_in
+                        && let Some(sink) = &self.audit_emitter
+                    {
+                        let source = ExternalAuditSource::AuthProvider {
+                            socket_id: self.socket_id.clone(),
+                            provider_id: self.provider_id.clone(),
+                            correlation_id: correlation_id.clone(),
+                        };
+                        sink.emit(source, dto.clone());
+                    }
+                    // Never push EmitAuditEvent frames to `responses` — keep it terminal-only.
+                }
+                _ => {
+                    responses.push(response);
+                }
+            }
 
             if done {
                 return Ok(responses);
@@ -524,6 +596,7 @@ fn normalize_hello_response(
             capabilities: AuthProviderCapabilities::default(),
             selected_version: hello.selected_version,
             secret_dependency_opt_in: false,
+            audit_emit_opt_in: false,
         }),
         AuthProviderResponseBody::HelloV1_1(hello) => Ok(NormalizedAuthProviderHelloResponse {
             provider_id: hello.provider_id,
@@ -532,6 +605,7 @@ fn normalize_hello_response(
             capabilities: hello.capabilities,
             selected_version: hello.selected_version,
             secret_dependency_opt_in: false,
+            audit_emit_opt_in: false,
         }),
         AuthProviderResponseBody::HelloV1_2(hello) => Ok(NormalizedAuthProviderHelloResponse {
             provider_id: hello.provider_id,
@@ -540,6 +614,16 @@ fn normalize_hello_response(
             capabilities: hello.capabilities,
             selected_version: hello.selected_version,
             secret_dependency_opt_in: hello.secret_dependency_opt_in,
+            audit_emit_opt_in: false,
+        }),
+        AuthProviderResponseBody::HelloV1_3(hello) => Ok(NormalizedAuthProviderHelloResponse {
+            provider_id: hello.provider_id,
+            display_name: hello.display_name,
+            form_definition: hello.form_definition,
+            capabilities: hello.capabilities,
+            selected_version: hello.selected_version,
+            secret_dependency_opt_in: hello.secret_dependency_opt_in,
+            audit_emit_opt_in: hello.audit_emit_opt_in,
         }),
         _ => Err(DbError::connection_failed(
             "Unexpected response to auth-provider Hello".to_string(),
@@ -699,6 +783,7 @@ mod tests {
     use super::*;
     use crate::auth_provider_protocol::{
         AuthProviderHelloResponse, AuthProviderHelloResponseV1_1, AuthProviderHelloResponseV1_2,
+        AuthProviderHelloResponseV1_3,
     };
     use dbflux_core::auth::{AuthFormDef, AuthProviderCapabilities, AuthProviderLoginCapabilities};
     use dbflux_core::{FormFieldDef, FormFieldKind, FormSection, FormTab, RefreshTrigger};
@@ -949,6 +1034,270 @@ mod tests {
         assert!(
             !deps.contains_key("other_secret"),
             "other_secret is a Password field not in depends_on — must be stripped even when opted in"
+        );
+    }
+
+    #[test]
+    fn test_auth_provider_hello_v1_3_serde() {
+        let response = AuthProviderHelloResponseV1_3 {
+            server_name: "test-provider".to_string(),
+            server_version: "1.0.0".to_string(),
+            selected_version: crate::ProtocolVersion::new(1, 3),
+            provider_id: "test-auth".to_string(),
+            display_name: "Test Auth".to_string(),
+            form_definition: AuthFormDef { tabs: vec![] },
+            capabilities: AuthProviderCapabilities::default(),
+            secret_dependency_opt_in: false,
+            audit_emit_opt_in: true,
+        };
+
+        let json = serde_json::to_string(&response).expect("serialize v1.3 hello");
+        let restored: AuthProviderHelloResponseV1_3 =
+            serde_json::from_str(&json).expect("deserialize v1.3 hello");
+
+        assert!(restored.audit_emit_opt_in);
+        assert_eq!(restored.provider_id, "test-auth");
+    }
+
+    #[test]
+    fn test_normalize_hello_v1_3_has_audit_emit_opt_in() {
+        let normalized = normalize_hello_response(AuthProviderResponseBody::HelloV1_3(
+            AuthProviderHelloResponseV1_3 {
+                server_name: "test-provider".to_string(),
+                server_version: "1.0.0".to_string(),
+                selected_version: crate::ProtocolVersion::new(1, 3),
+                provider_id: "test-auth".to_string(),
+                display_name: "Test Auth".to_string(),
+                form_definition: AuthFormDef { tabs: vec![] },
+                capabilities: AuthProviderCapabilities::default(),
+                secret_dependency_opt_in: false,
+                audit_emit_opt_in: true,
+            },
+        ))
+        .expect("v1.3 hello should normalize");
+
+        assert!(normalized.audit_emit_opt_in);
+    }
+
+    #[test]
+    fn test_normalize_hello_v1_2_has_opt_in_false() {
+        let normalized = normalize_hello_response(AuthProviderResponseBody::HelloV1_2(
+            AuthProviderHelloResponseV1_2 {
+                server_name: "test-provider".to_string(),
+                server_version: "1.0.0".to_string(),
+                selected_version: crate::ProtocolVersion::new(1, 2),
+                provider_id: "test-auth".to_string(),
+                display_name: "Test Auth".to_string(),
+                form_definition: AuthFormDef { tabs: vec![] },
+                capabilities: AuthProviderCapabilities::default(),
+                secret_dependency_opt_in: false,
+            },
+        ))
+        .expect("v1.2 hello should normalize");
+
+        assert!(
+            !normalized.audit_emit_opt_in,
+            "v1.2 hello must have audit_emit_opt_in == false"
+        );
+    }
+
+    // =========================================================================
+    // Layer C: dispatch_request_loop — audit frame interception
+    // =========================================================================
+
+    use crate::audit::{
+        AuditEventEmitDto, EventCategoryDto, EventOutcomeDto, EventSeverityDto,
+        ExternalAuditEmitter, ExternalAuditSource,
+    };
+    use std::sync::{Arc, Mutex};
+
+    /// In-memory stream that supplies pre-encoded response bytes and absorbs writes.
+    struct MockStream {
+        reader: std::io::Cursor<Vec<u8>>,
+        writer: Vec<u8>,
+    }
+
+    impl MockStream {
+        fn new(response_bytes: Vec<u8>) -> Self {
+            Self {
+                reader: std::io::Cursor::new(response_bytes),
+                writer: Vec::new(),
+            }
+        }
+    }
+
+    impl std::io::Read for MockStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reader.read(buf)
+        }
+    }
+
+    impl std::io::Write for MockStream {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.writer.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.writer.flush()
+        }
+    }
+
+    /// Recording emitter that captures every `emit` call for test assertions.
+    #[derive(Default)]
+    struct RecordingEmitter {
+        calls: Arc<Mutex<Vec<ExternalAuditSource>>>,
+    }
+
+    impl RecordingEmitter {
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    impl ExternalAuditEmitter for RecordingEmitter {
+        fn emit(&self, source: ExternalAuditSource, _dto: AuditEventEmitDto) {
+            self.calls.lock().unwrap().push(source);
+        }
+    }
+
+    fn minimal_emit_dto() -> AuditEventEmitDto {
+        AuditEventEmitDto {
+            ts_ms: 1_700_000_000_000,
+            level: EventSeverityDto::Info,
+            category: EventCategoryDto::Connection,
+            action: "connect".to_string(),
+            outcome: EventOutcomeDto::Success,
+            summary: "provider connected".to_string(),
+            object_type: None,
+            object_id: None,
+            duration_ms: None,
+            error_code: None,
+            error_message: None,
+            details_json: None,
+        }
+    }
+
+    fn encode_response(envelope: &AuthProviderResponseEnvelope) -> Vec<u8> {
+        let mut buf = Vec::new();
+        framing::send_msg(&mut buf, envelope).expect("encode response");
+        buf
+    }
+
+    fn emit_audit_frame(request_id: u64, dto: AuditEventEmitDto) -> AuthProviderResponseEnvelope {
+        AuthProviderResponseEnvelope {
+            protocol_version: crate::AUTH_PROVIDER_RPC_VERSION,
+            request_id,
+            done: false,
+            body: AuthProviderResponseBody::EmitAuditEvent(dto),
+        }
+    }
+
+    fn login_result_frame(request_id: u64) -> AuthProviderResponseEnvelope {
+        use crate::auth_provider_protocol::AuthSessionDto;
+        AuthProviderResponseEnvelope {
+            protocol_version: crate::AUTH_PROVIDER_RPC_VERSION,
+            request_id,
+            done: true,
+            body: AuthProviderResponseBody::LoginResult {
+                session: AuthSessionDto {
+                    provider_id: "test-auth".to_string(),
+                    profile_id: uuid::Uuid::nil(),
+                    expires_at: None,
+                    session_data: None,
+                },
+            },
+        }
+    }
+
+    /// Scenario P-03-a: Provider has opt-in=true and emitter attached.
+    /// One EmitAuditEvent frame (done=false) followed by a terminal LoginResult (done=true).
+    /// Emitter should be called once; caller receives only the LoginResult.
+    #[test]
+    fn test_send_request_dispatches_emit_audit_frame() {
+        let emitter = Arc::new(RecordingEmitter::default());
+        let provider = RpcAuthProvider::new_for_test(
+            "test-sock",
+            "test-auth",
+            true,
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        );
+
+        let mut response_bytes = Vec::new();
+        response_bytes.extend(encode_response(&emit_audit_frame(1, minimal_emit_dto())));
+        response_bytes.extend(encode_response(&login_result_frame(1)));
+
+        let mut stream = MockStream::new(response_bytes);
+        let responses = provider
+            .dispatch_request_loop(
+                &mut stream,
+                AuthProviderRequestBody::Login(crate::auth_provider_protocol::LoginRequest {
+                    profile_json: "{}".to_string(),
+                }),
+            )
+            .expect("dispatch should succeed");
+
+        assert_eq!(
+            emitter.call_count(),
+            1,
+            "emitter must be called once for the EmitAuditEvent frame"
+        );
+        assert_eq!(
+            responses.len(),
+            1,
+            "caller must receive only the terminal LoginResult"
+        );
+        assert!(
+            matches!(
+                responses[0].body,
+                AuthProviderResponseBody::LoginResult { .. }
+            ),
+            "terminal response must be LoginResult"
+        );
+    }
+
+    /// Scenario B-04-a: Provider has opt-in=false.
+    /// EmitAuditEvent frame arrives; emitter must NOT be called.
+    /// Caller receives only the terminal LoginResult.
+    #[test]
+    fn test_send_request_opt_in_false_drops_emit_frame() {
+        let emitter = Arc::new(RecordingEmitter::default());
+        let provider = RpcAuthProvider::new_for_test(
+            "test-sock",
+            "test-auth",
+            false,
+            Some(emitter.clone() as Arc<dyn ExternalAuditEmitter>),
+        );
+
+        let mut response_bytes = Vec::new();
+        response_bytes.extend(encode_response(&emit_audit_frame(1, minimal_emit_dto())));
+        response_bytes.extend(encode_response(&login_result_frame(1)));
+
+        let mut stream = MockStream::new(response_bytes);
+        let responses = provider
+            .dispatch_request_loop(
+                &mut stream,
+                AuthProviderRequestBody::Login(crate::auth_provider_protocol::LoginRequest {
+                    profile_json: "{}".to_string(),
+                }),
+            )
+            .expect("dispatch should succeed even with opt-in=false");
+
+        assert_eq!(
+            emitter.call_count(),
+            0,
+            "emitter must NOT be called when audit_emit_opt_in=false"
+        );
+        assert_eq!(
+            responses.len(),
+            1,
+            "caller must still receive the terminal LoginResult"
+        );
+        assert!(
+            matches!(
+                responses[0].body,
+                AuthProviderResponseBody::LoginResult { .. }
+            ),
+            "terminal response must be LoginResult"
         );
     }
 }

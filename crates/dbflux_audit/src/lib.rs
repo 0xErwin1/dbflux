@@ -96,6 +96,10 @@ pub struct AuditService {
     bridge_min_level: Option<Arc<AtomicU8>>,
     /// Shared with the tracing bridge to expose drop count via `AuditService`.
     bridge_drop_counter: Option<Arc<AtomicU64>>,
+    /// Counts frames dropped by the external-audit sanitizer (rate-limit, category
+    /// filter, validation). Shared with `ExternalAuditSink` so it can increment
+    /// without holding a reference to `AuditService`.
+    external_audit_dropped: Arc<AtomicU64>,
 }
 
 const DEFAULT_MAX_DETAIL_BYTES: usize = 65_536;
@@ -111,7 +115,21 @@ impl AuditService {
             max_detail_bytes: Arc::new(AtomicUsize::new(DEFAULT_MAX_DETAIL_BYTES)),
             bridge_min_level: None,
             bridge_drop_counter: None,
+            external_audit_dropped: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Returns a clone of the shared drop counter for the external-audit sink.
+    ///
+    /// The returned `Arc` can be incremented by `ExternalAuditSink` without
+    /// holding a reference to `AuditService`.
+    pub fn external_audit_drop_counter(&self) -> Arc<AtomicU64> {
+        self.external_audit_dropped.clone()
+    }
+
+    /// Returns the cumulative count of frames dropped by the external-audit sanitizer.
+    pub fn external_audit_dropped_count(&self) -> u64 {
+        self.external_audit_dropped.load(Ordering::Relaxed)
     }
 
     /// Attaches the tracing bridge's shared atomics so level changes and drop counts
@@ -318,7 +336,7 @@ impl AuditService {
     ///
     /// Returns `EventSinkError::MissingRequiredField` if a required field is absent.
     pub fn validate_event(event: &EventRecord) -> Result<(), AuditError> {
-        use dbflux_core::observability::types::EventCategory;
+        use dbflux_core::observability::types::{EventActorType, EventCategory};
 
         // Universal required fields
         if !Self::has_required_text(Some(event.action.as_str())) {
@@ -335,12 +353,19 @@ impl AuditService {
         // Category-specific required fields
         match event.category {
             EventCategory::Query => {
-                if !Self::has_required_text(event.connection_id.as_deref()) {
+                // ExternalDriver events may have no connection context when the
+                // host cannot resolve the session to a connection profile.
+                let is_external = matches!(
+                    event.actor_type,
+                    EventActorType::ExternalDriver | EventActorType::ExternalAuthProvider
+                );
+
+                if !is_external && !Self::has_required_text(event.connection_id.as_deref()) {
                     return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
                         "connection_id",
                     )));
                 }
-                if !Self::has_required_text(event.driver_id.as_deref()) {
+                if !is_external && !Self::has_required_text(event.driver_id.as_deref()) {
                     return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
                         "driver_id",
                     )));
@@ -354,7 +379,11 @@ impl AuditService {
                 }
             }
             EventCategory::Connection => {
-                if !Self::has_required_text(event.connection_id.as_deref()) {
+                // ExternalAuthProvider events have no connection_id by design.
+                let is_external_auth =
+                    matches!(event.actor_type, EventActorType::ExternalAuthProvider);
+
+                if !is_external_auth && !Self::has_required_text(event.connection_id.as_deref()) {
                     return Err(AuditError::EventSink(EventSinkError::MissingRequiredField(
                         "connection_id",
                     )));
@@ -1043,5 +1072,86 @@ mod tests {
         );
         assert_eq!(result.columns[0].name, "bucket_ms");
         assert!(result.rows.is_empty(), "empty input must yield no rows");
+    }
+
+    #[test]
+    fn test_drop_counter_starts_at_zero() {
+        let service = make_service("drop_counter_zero");
+        assert_eq!(service.external_audit_dropped_count(), 0);
+    }
+
+    #[test]
+    fn test_drop_counter_shared_arc_increments_visible_via_service() {
+        let service = make_service("drop_counter_arc");
+        let counter = service.external_audit_drop_counter();
+        counter.fetch_add(3, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(service.external_audit_dropped_count(), 3);
+    }
+
+    #[test]
+    fn test_validate_event_accepts_external_driver() {
+        use dbflux_core::observability::{
+            EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+        };
+
+        let event = EventRecord {
+            id: None,
+            ts_ms: 1700000000000,
+            level: EventSeverity::Info,
+            category: EventCategory::System,
+            action: "driver_action".to_string(),
+            outcome: EventOutcome::Success,
+            actor_type: EventActorType::ExternalDriver,
+            actor_id: Some("rpc:test-driver".to_string()),
+            source_id: EventSourceId::ExternalDriver,
+            summary: "driver did something".to_string(),
+            connection_id: None,
+            database_name: None,
+            driver_id: Some("rpc:test-driver".to_string()),
+            object_type: None,
+            object_id: None,
+            details_json: None,
+            error_code: None,
+            error_message: None,
+            duration_ms: None,
+            session_id: None,
+            correlation_id: None,
+        };
+
+        AuditService::validate_event(&event).expect("ExternalDriver events must pass validation");
+    }
+
+    #[test]
+    fn test_validate_event_accepts_external_auth_provider() {
+        use dbflux_core::observability::{
+            EventActorType, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSourceId,
+        };
+
+        let event = EventRecord {
+            id: None,
+            ts_ms: 1700000000000,
+            level: EventSeverity::Info,
+            category: EventCategory::Connection,
+            action: "auth.login".to_string(),
+            outcome: EventOutcome::Success,
+            actor_type: EventActorType::ExternalAuthProvider,
+            actor_id: Some("my-provider".to_string()),
+            source_id: EventSourceId::ExternalAuthProvider,
+            summary: "provider login completed".to_string(),
+            connection_id: None,
+            database_name: None,
+            driver_id: None,
+            object_type: None,
+            object_id: None,
+            details_json: None,
+            error_code: None,
+            error_message: None,
+            duration_ms: None,
+            session_id: None,
+            correlation_id: None,
+        };
+
+        AuditService::validate_event(&event)
+            .expect("ExternalAuthProvider Connection events must pass validation");
     }
 }

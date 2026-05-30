@@ -19,6 +19,9 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 log = "0.4"
 thiserror = "2.0"
 
+[dev-dependencies]
+dbflux_test_support.workspace = true
+
 [lib]
 name = "dbflux_driver_ipc"
 path = "src/lib.rs"

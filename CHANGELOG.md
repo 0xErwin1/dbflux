@@ -6,6 +6,22 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **External RPC drivers and auth providers can emit audit events (#157)**
+  RPC-backed drivers (driver protocol v1.2, capability `AuditEmit`) and
+  auth providers (auth-provider protocol v1.3, hello flag
+  `audit_emit_opt_in`) can now write to the audit log over IPC by sending
+  `EmitAuditEvent` frames as intermediate `done=false` responses. The host
+  sanitizes every event: forces `actor_type`/`source_id` to new
+  `ExternalDriver` / `ExternalAuthProvider` variants, fills `actor_id`
+  with the registered RPC service ID, overrides connection context from
+  `AppState`, enforces a per-source category whitelist (drivers:
+  `Connection`/`Query`/`System`; auth providers: `Connection` only), and
+  truncates `details_json` to the configured `max_detail_bytes`. A
+  per-`socket_id` token-bucket rate limiter (100 events/minute, configurable)
+  caps emission; overflow events are dropped silently — the IPC session
+  is never blocked or errored — and counted on
+  `AuditService::external_audit_dropped`. Older RPC peers that don't
+  advertise the capability/flag remain silent.
 - Centralized user-facing error reporting (`report_error` / `report_error_async` in `dbflux_ui_base`). Failures across mutations, file save, settings, and workspace actions now surface as a styled toast with a "View in Audit" action, increment a status-bar error badge, and emit a tracing event correlated with the audit row (#156).
 - `EventRecord.correlation_id` is now populated from the `correlation_id` tracing field across all `dbflux` targets, regardless of whether the field is recorded via `%` (Display) or `?` (Debug) sigil (#156).
 

@@ -1,3 +1,4 @@
+use crate::audit::AuditEventEmitDto;
 use crate::envelope::ProtocolVersion;
 use dbflux_core::{
     CodeGenCapabilities, CodeGeneratorInfo, CollectionBrowseRequest, CollectionCountRequest,
@@ -26,6 +27,9 @@ pub enum DriverCapability {
     ChunkedResults,
     SchemaIntrospection,
     MultiDatabase,
+    /// Driver supports emitting audit events as intermediate response frames.
+    /// Requires protocol version >= 1.2.
+    AuditEmit,
 }
 
 /// Well-known error categories for driver RPC responses.
@@ -509,6 +513,11 @@ pub enum DriverResponseBody {
     GenerateCodeResult {
         code: String,
     },
+    // === Audit emission (intermediate frame, done=false) ===
+    /// Emitted by drivers that advertise `DriverCapability::AuditEmit`.
+    /// Always arrives with `done=false`; the host intercepts it and never
+    /// forwards it to the caller of `RpcClient::call`.
+    EmitAuditEvent(AuditEventEmitDto),
     // === Error ===
     Error(DriverRpcError),
 }
