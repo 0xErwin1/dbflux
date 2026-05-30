@@ -3804,6 +3804,61 @@ sso_region = us-east-1
         );
     }
 
+    // -----------------------------------------------------------------------
+    // W5 — S8: save_edit with wrong-type snapshot returns Saved, does not panic
+    // -----------------------------------------------------------------------
+
+    /// S8 / AwsSsoAuthProvider: passing a snapshot whose inner type is not
+    /// `AwsEditSnapshot` must return `Saved` and must not panic.
+    #[test]
+    fn sso_save_edit_wrong_type_snapshot_returns_saved() {
+        use dbflux_core::{AuthEditSnapshot, AuthSaveOutcome, DynAuthProvider};
+
+        let provider = sso_provider_with_config("");
+        let wrong_snapshot = AuthEditSnapshot::new(42u32);
+        let fields = HashMap::new();
+
+        let outcome = provider.save_edit("any-profile", &fields, &wrong_snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "AwsSsoAuthProvider::save_edit must return Saved on downcast failure; got {outcome:?}"
+        );
+    }
+
+    /// S8 / AwsSsoSessionAuthProvider: passing a snapshot whose inner type is
+    /// not `AwsEditSnapshot` must return `Saved` and must not panic.
+    #[test]
+    fn sso_session_save_edit_wrong_type_snapshot_returns_saved() {
+        use dbflux_core::{AuthEditSnapshot, AuthSaveOutcome, DynAuthProvider};
+
+        let provider = sso_session_provider_with_config("");
+        let wrong_snapshot = AuthEditSnapshot::new(42u32);
+        let fields = HashMap::new();
+
+        let outcome = provider.save_edit("any-profile", &fields, &wrong_snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "AwsSsoSessionAuthProvider::save_edit must return Saved on downcast failure; got {outcome:?}"
+        );
+    }
+
+    /// S8 / AwsSharedCredentialsAuthProvider: passing a snapshot whose inner
+    /// type is not `AwsEditSnapshot` must return `Saved` and must not panic.
+    #[test]
+    fn shared_credentials_save_edit_wrong_type_snapshot_returns_saved() {
+        use dbflux_core::{AuthEditSnapshot, AuthSaveOutcome, DynAuthProvider};
+
+        let provider = shared_provider_with_files("", "");
+        let wrong_snapshot = AuthEditSnapshot::new(42u32);
+        let fields = HashMap::new();
+
+        let outcome = provider.save_edit("any-profile", &fields, &wrong_snapshot);
+        assert!(
+            matches!(outcome, AuthSaveOutcome::Saved),
+            "AwsSharedCredentialsAuthProvider::save_edit must return Saved on downcast failure; got {outcome:?}"
+        );
+    }
+
     /// E5.3: Names-only enumeration never returns values that resemble AWS
     /// access keys, even when the credentials file contains them.
     #[test]

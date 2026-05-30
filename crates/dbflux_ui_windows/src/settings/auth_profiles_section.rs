@@ -222,6 +222,25 @@ fn dangling_fallback() -> DanglingMessage {
     }
 }
 
+fn resolve_mirror_label(edit_caps: Option<&AuthEditCapabilities>) -> String {
+    edit_caps
+        .map(|e| e.mirror_label.clone())
+        .unwrap_or_else(|| MIRROR_LABEL_FALLBACK.to_string())
+}
+
+fn resolve_success_text(edit_caps: Option<&AuthEditCapabilities>) -> String {
+    edit_caps
+        .map(|e| e.success_written.clone())
+        .unwrap_or_else(|| SUCCESS_WRITTEN_FALLBACK.to_string())
+}
+
+fn resolve_dangling(edit_caps: Option<&AuthEditCapabilities>, origin: &str) -> DanglingMessage {
+    edit_caps
+        .and_then(|e| e.dangling_messages.get(origin))
+        .cloned()
+        .unwrap_or_else(dangling_fallback)
+}
+
 /// Update `field_login_hint` and `provider_login_status` for a
 /// `FetchOptionsError` returned for `field_id`.
 ///
@@ -1320,17 +1339,13 @@ impl AuthProfilesSection {
                     self.profile_is_read_only = false;
                     self.profile_dangling_origin = None;
 
-                    let success_text = self
-                        .app_state
-                        .read(cx)
-                        .auth_provider_by_id(&profile.provider_id)
-                        .and_then(|p| {
-                            p.capabilities()
-                                .edit
-                                .as_ref()
-                                .map(|e| e.success_written.clone())
-                        })
-                        .unwrap_or_else(|| SUCCESS_WRITTEN_FALLBACK.to_string());
+                    let success_text = resolve_success_text(
+                        self.app_state
+                            .read(cx)
+                            .auth_provider_by_id(&profile.provider_id)
+                            .and_then(|p| p.capabilities().edit.clone())
+                            .as_ref(),
+                    );
                     self.provider_login_status = Some((success_text, true));
                     cx.notify();
                     return;
@@ -1468,17 +1483,13 @@ impl AuthProfilesSection {
                     self.load_profile_into_form(id, window, cx);
                 }
 
-                let success_text = self
-                    .app_state
-                    .read(cx)
-                    .auth_provider_by_id(&provider_id)
-                    .and_then(|p| {
-                        p.capabilities()
-                            .edit
-                            .as_ref()
-                            .map(|e| e.success_written.clone())
-                    })
-                    .unwrap_or_else(|| SUCCESS_WRITTEN_FALLBACK.to_string());
+                let success_text = resolve_success_text(
+                    self.app_state
+                        .read(cx)
+                        .auth_provider_by_id(&provider_id)
+                        .and_then(|p| p.capabilities().edit.clone())
+                        .as_ref(),
+                );
                 self.provider_login_status = Some((success_text, true));
                 cx.notify();
             }
@@ -2099,11 +2110,7 @@ impl AuthProfilesSection {
                 .flex_col()
                 .gap_3()
                 .when_some(dangling_origin, |content, origin| {
-                    let dangling = edit_caps
-                        .as_ref()
-                        .and_then(|e| e.dangling_messages.get(&origin))
-                        .cloned()
-                        .unwrap_or_else(dangling_fallback);
+                    let dangling = resolve_dangling(edit_caps.as_ref(), &origin);
                     let banner_text = dangling.title;
                     let hint_text = dangling.body;
 
@@ -2138,12 +2145,7 @@ impl AuthProfilesSection {
                         .flex_col()
                         .gap_1()
                         .child(Label::new("Source"))
-                        .child(Text::body(
-                            edit_caps
-                                .as_ref()
-                                .map(|e| e.mirror_label.clone())
-                                .unwrap_or_else(|| MIRROR_LABEL_FALLBACK.to_string()),
-                        )),
+                        .child(Text::body(resolve_mirror_label(edit_caps.as_ref()))),
                 )
                 .children(field_rows.into_iter().map(|(label, value)| {
                     div()
@@ -3486,6 +3488,186 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // W1 — S7: Provider without edit capabilities uses fallback strings
+    // -----------------------------------------------------------------------
+
+    /// When `capabilities().edit` is `None`, `resolve_mirror_label` returns
+    /// the fallback constant and the result contains no AWS-specific strings.
+    #[::core::prelude::v1::test]
+    fn no_edit_caps_mirror_label_returns_fallback() {
+        let result = resolve_mirror_label(None);
+        assert_eq!(
+            result, MIRROR_LABEL_FALLBACK,
+            "resolve_mirror_label must return the fallback when edit caps are absent"
+        );
+        assert!(
+            !result.contains("~/.aws/"),
+            "fallback mirror label must not contain AWS path"
+        );
+    }
+
+    /// When `capabilities().edit` is `None`, `resolve_success_text` returns
+    /// the fallback constant and the result contains no AWS-specific strings.
+    #[::core::prelude::v1::test]
+    fn no_edit_caps_success_text_returns_fallback() {
+        let result = resolve_success_text(None);
+        assert_eq!(
+            result, SUCCESS_WRITTEN_FALLBACK,
+            "resolve_success_text must return the fallback when edit caps are absent"
+        );
+        assert!(
+            !result.contains("~/.aws/"),
+            "fallback success text must not contain AWS path"
+        );
+    }
+
+    /// When `capabilities().edit` is `None`, `resolve_dangling` returns the
+    /// generic fallback message and does not panic.
+    #[::core::prelude::v1::test]
+    fn no_edit_caps_dangling_returns_fallback() {
+        let msg = resolve_dangling(None, "keyring-only");
+        let expected = dangling_fallback();
+        assert_eq!(
+            msg.title, expected.title,
+            "resolve_dangling must return fallback title when edit caps are absent"
+        );
+        assert_eq!(
+            msg.body, expected.body,
+            "resolve_dangling must return fallback body when edit caps are absent"
+        );
+        assert!(
+            !msg.title.contains("~/.aws/") && !msg.body.contains("~/.aws/"),
+            "fallback dangling message must not contain AWS path"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // W2 — S1: resolve_success_text reads capabilities.edit.success_written
+    // -----------------------------------------------------------------------
+
+    /// `resolve_success_text` returns the provider's `success_written` string
+    /// when `edit` capabilities are present, and falls back to the constant
+    /// when they are absent.
+    #[::core::prelude::v1::test]
+    fn resolve_success_text_reads_from_edit_caps() {
+        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use std::collections::HashMap;
+
+        let caps = AuthEditCapabilities {
+            mirror_label: "irrelevant".to_string(),
+            success_written: "TEST_SUCCESS_MARKER".to_string(),
+            name_field_hint: String::new(),
+            dangling_messages: HashMap::new(),
+        };
+
+        let with_caps = resolve_success_text(Some(&caps));
+        assert_eq!(
+            with_caps, "TEST_SUCCESS_MARKER",
+            "resolve_success_text must return capabilities.edit.success_written"
+        );
+
+        let without_caps = resolve_success_text(None);
+        assert_eq!(
+            without_caps, SUCCESS_WRITTEN_FALLBACK,
+            "resolve_success_text must return SUCCESS_WRITTEN_FALLBACK when edit is None"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // W3 — S4: resolve_mirror_label reads capabilities.edit.mirror_label
+    // -----------------------------------------------------------------------
+
+    /// `resolve_mirror_label` returns the provider's `mirror_label` string
+    /// when `edit` capabilities are present, and falls back to the constant
+    /// when they are absent.
+    #[::core::prelude::v1::test]
+    fn resolve_mirror_label_reads_from_edit_caps() {
+        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use std::collections::HashMap;
+
+        let caps = AuthEditCapabilities {
+            mirror_label: "TEST_MIRROR_MARKER".to_string(),
+            success_written: "irrelevant".to_string(),
+            name_field_hint: String::new(),
+            dangling_messages: HashMap::new(),
+        };
+
+        let with_caps = resolve_mirror_label(Some(&caps));
+        assert_eq!(
+            with_caps, "TEST_MIRROR_MARKER",
+            "resolve_mirror_label must return capabilities.edit.mirror_label"
+        );
+
+        let without_caps = resolve_mirror_label(None);
+        assert_eq!(
+            without_caps, MIRROR_LABEL_FALLBACK,
+            "resolve_mirror_label must return MIRROR_LABEL_FALLBACK when edit is None"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // W4 — S5 + S6: resolve_dangling dispatches through capabilities
+    // -----------------------------------------------------------------------
+
+    /// S5: `resolve_dangling` returns the provider's message for a known origin.
+    #[::core::prelude::v1::test]
+    fn resolve_dangling_returns_caps_message_for_known_origin() {
+        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use std::collections::HashMap;
+
+        let mut dangling_messages = HashMap::new();
+        dangling_messages.insert(
+            "keyring-only".to_string(),
+            DanglingMessage {
+                title: "TEST_KEYRING_TITLE".to_string(),
+                body: "TEST_KEYRING_BODY".to_string(),
+            },
+        );
+        let caps = AuthEditCapabilities {
+            mirror_label: String::new(),
+            success_written: String::new(),
+            name_field_hint: String::new(),
+            dangling_messages,
+        };
+
+        let msg = resolve_dangling(Some(&caps), "keyring-only");
+        assert_eq!(
+            msg.title, "TEST_KEYRING_TITLE",
+            "resolve_dangling must return title from capabilities for known origin"
+        );
+        assert_eq!(
+            msg.body, "TEST_KEYRING_BODY",
+            "resolve_dangling must return body from capabilities for known origin"
+        );
+    }
+
+    /// S6: `resolve_dangling` falls back to `dangling_fallback()` when the
+    /// origin key is absent from `capabilities.edit.dangling_messages`.
+    #[::core::prelude::v1::test]
+    fn resolve_dangling_falls_back_for_unknown_origin() {
+        use dbflux_core::{AuthEditCapabilities, DanglingMessage};
+        use std::collections::HashMap;
+
+        let caps = AuthEditCapabilities {
+            mirror_label: String::new(),
+            success_written: String::new(),
+            name_field_hint: String::new(),
+            dangling_messages: HashMap::new(),
+        };
+
+        let msg = resolve_dangling(Some(&caps), "unknown-foo-origin");
+        let expected = dangling_fallback();
+        assert_eq!(
+            msg.title, expected.title,
+            "resolve_dangling must return fallback title for unknown origin"
+        );
+        assert_eq!(
+            msg.body, expected.body,
+            "resolve_dangling must return fallback body for unknown origin"
+        );
     }
 
     /// E5.4: `build_form_rows` for a reflected profile never exposes the
