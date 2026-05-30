@@ -26,6 +26,7 @@ use dbflux_core::{
     StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
     Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, field, field_password, field_required,
     field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    ExecutionSourceContext, InstanceCatalog,
 };
 use dbflux_ssh::SshTunnel;
 
@@ -134,7 +135,9 @@ pub static REDIS_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMet
             | DriverCapabilities::KV_STREAM_DELETE.bits()
             | DriverCapabilities::AUTHENTICATION.bits()
             | DriverCapabilities::SSH_TUNNEL.bits()
-            | DriverCapabilities::SSL.bits(),
+            | DriverCapabilities::SSL.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
     ),
     default_port: Some(6379),
     uri_scheme: "redis".into(),
@@ -299,7 +302,7 @@ impl RedisDriver {
             .map_err(|e| format_redis_error(&e, params.host, params.port))?;
 
         Ok(Box::new(RedisConnection {
-            connection: Mutex::new(connection),
+            connection: Arc::new(Mutex::new(connection)),
             active_database: Mutex::new(params.database),
             _ssh_tunnel: params.ssh_tunnel,
         }))
@@ -332,7 +335,7 @@ impl RedisDriver {
             .map_err(|e| format_redis_uri_error(&e, uri))?;
 
         Ok(Box::new(RedisConnection {
-            connection: Mutex::new(connection),
+            connection: Arc::new(Mutex::new(connection)),
             active_database: Mutex::new(database),
             _ssh_tunnel: None,
         }))
@@ -840,7 +843,7 @@ fn non_empty(s: &str) -> Option<&str> {
 }
 
 pub struct RedisConnection {
-    connection: Mutex<redis::Connection>,
+    connection: Arc<Mutex<redis::Connection>>,
     active_database: Mutex<Option<u32>>,
     _ssh_tunnel: Option<SshTunnel>,
 }
@@ -911,7 +914,41 @@ impl Connection for RedisConnection {
         Ok(())
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        Some(Box::new(
+            crate::instance_catalog::RedisInstanceCatalog::new(Arc::clone(&self.connection)),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    let mut conn = self.connection.lock().map_err(|_| {
+                        DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_metric_series(
+                        &mut conn,
+                        metric_id,
+                    );
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    let mut conn = self.connection.lock().map_err(|_| {
+                        DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
+                    })?;
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &mut conn,
+                        metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
+
         let start = Instant::now();
         let parts = parse_command(req.sql.trim())?;
 

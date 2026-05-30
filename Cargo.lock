@@ -2694,6 +2694,7 @@ dependencies = [
 name = "dbflux_driver_redis"
 version = "0.6.0-dev.10"
 dependencies = [
+ "async-trait",
  "dbflux_core",
  "dbflux_ssh",
  "dbflux_test_support",
