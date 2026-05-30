@@ -187,6 +187,10 @@ pub enum EventActorType {
     Hook,
     /// A user script (Lua, Python, Bash, etc.).
     Script,
+    /// An external RPC driver service.
+    ExternalDriver,
+    /// An external RPC auth-provider service.
+    ExternalAuthProvider,
 }
 
 impl EventActorType {
@@ -199,6 +203,8 @@ impl EventActorType {
             EventActorType::McpClient => "mcp_client",
             EventActorType::Hook => "hook",
             EventActorType::Script => "script",
+            EventActorType::ExternalDriver => "external_driver",
+            EventActorType::ExternalAuthProvider => "external_auth_provider",
         }
     }
 
@@ -211,6 +217,8 @@ impl EventActorType {
             "mcp_client" => Some(EventActorType::McpClient),
             "hook" => Some(EventActorType::Hook),
             "script" => Some(EventActorType::Script),
+            "external_driver" => Some(EventActorType::ExternalDriver),
+            "external_auth_provider" => Some(EventActorType::ExternalAuthProvider),
             _ => None,
         }
     }
@@ -236,6 +244,10 @@ pub enum EventSourceId {
     /// System-level event.
     #[default]
     System,
+    /// An external RPC driver service.
+    ExternalDriver,
+    /// An external RPC auth-provider service.
+    ExternalAuthProvider,
 }
 
 impl EventSourceId {
@@ -247,6 +259,8 @@ impl EventSourceId {
             EventSourceId::Hook => "hook",
             EventSourceId::Script => "script",
             EventSourceId::System => "system",
+            EventSourceId::ExternalDriver => "external_driver",
+            EventSourceId::ExternalAuthProvider => "external_auth_provider",
         }
     }
 
@@ -258,6 +272,8 @@ impl EventSourceId {
             "hook" => Some(EventSourceId::Hook),
             "script" => Some(EventSourceId::Script),
             "system" => Some(EventSourceId::System),
+            "external_driver" => Some(EventSourceId::ExternalDriver),
+            "external_auth_provider" => Some(EventSourceId::ExternalAuthProvider),
             _ => None,
         }
     }
@@ -682,6 +698,44 @@ mod tests {
             EventSourceId::from_str_repr("hook"),
             Some(EventSourceId::Hook)
         );
+    }
+
+    #[test]
+    fn test_event_actor_type_external_variants_round_trip() {
+        for (variant, expected_str) in [
+            (EventActorType::ExternalDriver, "external_driver"),
+            (EventActorType::ExternalAuthProvider, "external_auth_provider"),
+        ] {
+            assert_eq!(variant.as_str(), expected_str);
+
+            let round_tripped = EventActorType::from_str_repr(expected_str)
+                .expect("from_str_repr must succeed for new variants");
+            assert_eq!(round_tripped, variant);
+
+            let json = serde_json::to_string(&variant).expect("serialize");
+            let deserialized: EventActorType =
+                serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(deserialized, variant);
+        }
+    }
+
+    #[test]
+    fn test_event_source_id_external_variants_round_trip() {
+        for (variant, expected_str) in [
+            (EventSourceId::ExternalDriver, "external_driver"),
+            (EventSourceId::ExternalAuthProvider, "external_auth_provider"),
+        ] {
+            assert_eq!(variant.as_str(), expected_str);
+
+            let round_tripped = EventSourceId::from_str_repr(expected_str)
+                .expect("from_str_repr must succeed for new variants");
+            assert_eq!(round_tripped, variant);
+
+            let json = serde_json::to_string(&variant).expect("serialize");
+            let deserialized: EventSourceId =
+                serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(deserialized, variant);
+        }
     }
 
     #[test]
